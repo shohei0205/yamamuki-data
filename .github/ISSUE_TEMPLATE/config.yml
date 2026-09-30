@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: アプリの不具合・要望
+    url: https://github.com/shohei0205/yamamuki/issues/new/choose
+    about: 山むきアプリそのものの不具合や要望は yamamuki リポジトリへ
+  - name: 山の名前や位置の誤り
+    url: https://www.openstreetmap.org/fixthemap
+    about: 山頂データは OpenStreetMap から作っている。誤りは OpenStreetMap で直すと、次のデータ更新で反映される

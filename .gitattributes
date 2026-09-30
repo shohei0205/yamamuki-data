@@ -1,0 +1,13 @@
+# 改行コードは LF にそろえる(OS やエディタ、各自の core.autocrlf に関係なく、コミット時とチェックアウト時に LF にする)。
+* text=auto eol=lf
+
+# Windows 用のスクリプトだけは CRLF。
+*.bat text eol=crlf
+
+# バイナリは改行を変換しない。
+*.png binary
+*.jpg binary
+*.webp binary
+*.jar binary
+*.gz binary
+*.pbf binary
