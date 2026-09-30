@@ -1,0 +1,6 @@
+# 生成の途中でできるファイル（元データと生成物は Releases に置き、git には入れない）
+*.osm.pbf
+*.gz
+/build/
+/dist/
+.DS_Store

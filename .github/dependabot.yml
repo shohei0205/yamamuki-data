@@ -1,0 +1,12 @@
+# 依存ライブラリの更新 PR を週 1 回自動で作る（yamamuki と同じ設定）。
+# 今は CI (.github/workflows/) で使う Actions だけが対象。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      timezone: Asia/Tokyo
+    groups:
+      actions:
+        patterns: ["*"]

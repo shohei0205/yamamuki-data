@@ -1,0 +1,14 @@
+# エディタが保存するときの改行コードと文字コード(Visual Studio・Android Studio・Xcode 16 以降は標準で読む。VS Code は拡張機能「EditorConfig for VS Code」が要る)。
+root = true
+
+[*]
+end_of_line = lf
+charset = utf-8
+insert_final_newline = true
+
+# Codex が読むときの文字化けを防ぐため、Markdown だけは BOM 付き。
+[*.md]
+charset = utf-8-bom
+
+[*.bat]
+end_of_line = crlf
