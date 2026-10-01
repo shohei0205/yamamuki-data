@@ -1,0 +1,80 @@
+name: 全国の山頂データを生成・検査
+
+on:
+  schedule:
+    # 毎月 1 日の日本時間 12:23。
+    - cron: '23 3 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: peaks
+
+env:
+  PYTHONUNBUFFERED: '1'
+  RELEASE_CHANNEL: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
+
+concurrency:
+  group: publish-peaks-${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      tag: ${{ steps.review.outputs.tag }}
+      sha256: ${{ steps.review.outputs.sha256 }}
+      auto_publish: ${{ steps.review.outputs.auto_publish }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: osmium を準備
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y osmium-tool
+      - name: テスト
+        run: python -m unittest discover -s tests -v
+      - name: Geofabrik の全国データを取得
+        timeout-minutes: 65
+        run: python -u scripts/download_source.py --max-seconds 3600
+      - name: 配布ファイルと manifest を生成
+        id: build
+        run: |
+          version="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python scripts/build_data.py build/japan-latest.osm.pbf --version "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: 前回と比較して下書き Release を作成
+        id: review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python -m scripts.release_data prepare --channel "$RELEASE_CHANNEL"
+
+  publish:
+    needs: generate
+    if: needs.generate.outputs.auto_publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 下書きのファイルを再検証して公開
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.generate.outputs.tag }}
+          EXPECTED_SHA256: ${{ needs.generate.outputs.sha256 }}
+        run: python -m scripts.release_data publish --channel "$RELEASE_CHANNEL" --tag "$RELEASE_TAG" --sha256 "$EXPECTED_SHA256"

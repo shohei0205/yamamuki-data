@@ -1,0 +1,253 @@
+"""GitHub に書き込まず、自動公開・手動公開・保留の分岐を確かめる。"""
+
+import os
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from scripts import release_data
+from test_check_release import dataset
+
+
+class ReleaseDataTests(unittest.TestCase):
+    def setUp(self):
+        self.current = dataset()
+        self.current[0].update(sha256="a" * 64, sizeBytes=123)
+        self.environment = patch.dict(os.environ, {"GH_REPO": "owner/repo", "GITHUB_SHA": "commit", "GITHUB_ACTOR": "tester", "GITHUB_ACTIONS": "false"})
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+
+    def run_publish(self, *, warnings=None, manual=False, expected=None, draft=True):
+        with patch.object(release_data, "gh", return_value=json.dumps({'draft': draft, 'prerelease': False})) as gh, \
+                patch.object(release_data, "fetch", return_value=self.current), \
+                patch.object(release_data, "previous_release", return_value=self.current), \
+                patch.object(release_data, "assess", return_value=warnings or []), \
+                patch.object(release_data, "update_latest") as update:
+            release_data.publish("peaks-test", expected or "a" * 64, manual=manual, reason="意図した減少を確認")
+            self.assertEqual(update.called, manual or not warnings)
+            return [call.args for call in gh.call_args_list]
+
+    def test_normal_data_published(self):
+        calls = self.run_publish()
+        self.assertIn(("release", "edit", "peaks-test", "--draft=false", "--latest=false"), calls)
+
+    def test_warning_keeps_draft(self):
+        calls = self.run_publish(warnings=["件数減少"])
+        self.assertFalse(any("--draft=false" in call for call in calls))
+
+    def test_manual_review_overrides_warning(self):
+        calls = self.run_publish(warnings=["初回", "件数減少"], manual=True)
+        self.assertIn(("release", "edit", "peaks-test", "--draft=false", "--latest=false"), calls)
+        self.assertFalse(any("upload" in call or "create" in call for call in calls))
+
+    def test_wrong_checksum_and_published_release_stop(self):
+        with self.assertRaises(ValueError):
+            self.run_publish(manual=True, expected="b" * 64)
+        with self.assertRaises(ValueError):
+            self.run_publish(draft=False)
+
+    def test_manual_reason_required(self):
+        with patch.object(release_data, "gh") as gh:
+            with self.assertRaises(ValueError):
+                release_data.publish("peaks-test", "a" * 64, manual=True)
+            gh.assert_not_called()
+
+    def test_corrupt_asset_and_baseline_failure_never_publish(self):
+        for method in ("fetch", "previous_release"):
+            with self.subTest(method=method), \
+                    patch.object(release_data, "gh", return_value='{"draft": true, "prerelease": false}') as gh, \
+                    patch.object(release_data, "fetch", return_value=self.current), \
+                    patch.object(release_data, "previous_release", return_value=self.current), \
+                    patch.object(release_data, method, side_effect=ValueError("検証失敗")):
+                with self.assertRaises(ValueError):
+                    release_data.publish("peaks-test", "a" * 64, manual=True, reason="確認済み")
+                self.assertFalse(any("--draft=false" in call.args for call in gh.call_args_list))
+
+    def test_prepare_first_release_or_failed_comparison_keeps_draft(self):
+        for failure in (False, True):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory, \
+                    patch.dict(os.environ, {"GITHUB_OUTPUT": str(Path(directory) / "output")}), \
+                    patch.object(release_data, "validate", return_value=self.current), \
+                    patch.object(release_data, "previous_release", return_value=None,
+                                 side_effect=RuntimeError("通信失敗") if failure else None), \
+                    patch.object(release_data, "gh") as gh:
+                release_data.prepare(directory)
+                self.assertIn("auto_publish=false", (Path(directory) / "output").read_text())
+                self.assertIn("--draft", gh.call_args.args)
+                self.assertNotIn("--draft=false", gh.call_args.args)
+
+    def test_baseline_lookup_distinguishes_absent_from_unavailable(self):
+        with patch.object(release_data, "gh", return_value="[[]]"):
+            self.assertIsNone(release_data.previous_release(Path("unused")))
+        with patch.object(release_data, "gh", side_effect=RuntimeError("HTTP 403")):
+            with self.assertRaises(RuntimeError):
+                release_data.previous_release(Path("unused"))
+
+    def test_invalid_tag_never_calls_github(self):
+        with patch.object(release_data, "gh") as gh:
+            with self.assertRaises(ValueError):
+                release_data.publish("--bad-tag", "a" * 64)
+            gh.assert_not_called()
+
+    def test_manual_can_repair_published_pointer(self):
+        calls = self.run_publish(manual=True, draft=False)
+        self.assertFalse(any("--draft=false" in call for call in calls))
+
+    def test_terrain_does_not_become_peak_baseline(self):
+        terrain = {"tag_name": "terrain-latest", "draft": False, "prerelease": False}
+        with patch.object(release_data, "gh", return_value=json.dumps([[terrain]])) as gh:
+            self.assertIsNone(release_data.previous_release(Path("unused")))
+            self.assertEqual(1, gh.call_count)
+
+    def test_pointer_requires_matching_published_peak_manifest(self):
+        entries = [{"tag_name": tag, "draft": False, "prerelease": False}
+                   for tag in ("peaks-latest", "peaks-test", "terrain-latest")]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "pointer").mkdir()
+            path = root / "pointer" / "manifest.json"
+            manifest = dict(self.current[0], version="test")
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with patch.object(release_data, "releases", return_value=entries), \
+                    patch.object(release_data, "gh"), \
+                    patch.object(release_data, "fetch", return_value=(manifest, [])) as fetch:
+                self.assertEqual(manifest, release_data.previous_release(root)[0])
+                self.assertEqual("peaks-test", fetch.call_args.args[0])
+                path.write_text(json.dumps(dict(manifest, sha256="b" * 64)), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    release_data.previous_release(root)
+                entries[1]["draft"] = True
+                with self.assertRaises(ValueError):
+                    release_data.previous_release(root)
+
+    def test_latest_only_uploads_manifest(self):
+        for entries in ([], [{"tag_name": "peaks-latest", "draft": False, "prerelease": False}]):
+            with self.subTest(entries=entries), tempfile.TemporaryDirectory() as temporary, \
+                    patch.object(release_data, "releases", return_value=entries), \
+                    patch.object(release_data, "gh") as gh:
+                release_data.update_latest(Path(temporary), self.current[0])
+                calls = [call.args for call in gh.call_args_list]
+                self.assertEqual(("release", "edit", "peaks-latest", "--draft=false", "--latest=false", "--prerelease=false"), calls[-1])
+                self.assertTrue(calls[0][3].endswith("manifest.json"))
+                self.assertFalse(any("terrain" in str(call) or "japan-mountains.json.gz" in str(call) for call in calls))
+
+    def test_reserved_pointer_tag_rejected(self):
+        for tag in ("peaks-latest", "terrain-test", "data-test"):
+            with self.subTest(tag=tag), self.assertRaises(ValueError):
+                release_data.check_tag(tag)
+
+    def test_published_repair_can_restore_missing_pointer_asset(self):
+        with patch.object(release_data, "gh", return_value='{"draft": false, "prerelease": false}'), \
+                patch.object(release_data, "fetch", return_value=self.current), \
+                patch.object(release_data, "previous_release", side_effect=RuntimeError("manifest 欠落")), \
+                patch.object(release_data, "update_latest") as update:
+            release_data.publish("peaks-test", "a" * 64, manual=True, reason="参照先更新の失敗を確認")
+            update.assert_called_once()
+
+    def test_failed_publication_never_updates_pointer(self):
+        def gh(*args):
+            if "--draft=false" in args:
+                raise RuntimeError("公開失敗")
+            return '{"draft": true, "prerelease": false}'
+        with patch.object(release_data, "gh", side_effect=gh), \
+                patch.object(release_data, "fetch", return_value=self.current), \
+                patch.object(release_data, "previous_release", return_value=None), \
+                patch.object(release_data, "update_latest") as update:
+            with self.assertRaises(RuntimeError):
+                release_data.publish("peaks-test", "a" * 64, manual=True, reason="確認済み")
+            update.assert_not_called()
+
+    def test_dev_preparation_creates_prerelease_draft(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(release_data, "validate", return_value=self.current), \
+                patch.object(release_data, "previous_release", return_value=None) as previous, \
+                patch.object(release_data, "gh") as gh:
+            release_data.prepare(directory, "dev")
+            self.assertEqual("dev", previous.call_args.args[1])
+            self.assertEqual("peaks-dev-test", gh.call_args.args[2])
+            self.assertIn("--prerelease=true", gh.call_args.args)
+            self.assertIn("--draft", gh.call_args.args)
+
+    def test_dev_publish_and_warning_use_only_dev_channel(self):
+        for warnings, manual in (([], False), (["更新なし"], False), (["件数減少"], True)):
+            with self.subTest(warnings=warnings, manual=manual), \
+                    patch.object(release_data, "gh", return_value='{"draft": true, "prerelease": true}') as gh, \
+                    patch.object(release_data, "fetch", return_value=self.current) as fetch, \
+                    patch.object(release_data, "previous_release", return_value=self.current) as previous, \
+                    patch.object(release_data, "assess", return_value=warnings), \
+                    patch.object(release_data, "update_latest") as update:
+                release_data.publish("peaks-dev-test", "a" * 64, channel="dev", manual=manual, reason="確認済み")
+                self.assertEqual("dev", fetch.call_args.args[2])
+                self.assertEqual("dev", previous.call_args.args[1])
+                self.assertEqual(manual or not warnings, update.called)
+                if update.called:
+                    self.assertEqual("dev", update.call_args.args[2])
+                self.assertFalse(any("peaks-test" in call.args for call in gh.call_args_list))
+
+    def test_cross_channel_tags_rejected_before_github(self):
+        for tag, channel in (("peaks-test", "dev"), ("peaks-dev-test", "stable"),
+                             ("peaks-dev-latest", "dev"), ("peaks-test", "unknown")):
+            with self.subTest(tag=tag, channel=channel), patch.object(release_data, "gh") as gh:
+                with self.assertRaises(ValueError):
+                    release_data.publish(tag, "a" * 64, channel=channel)
+                gh.assert_not_called()
+
+    def test_prerelease_mismatch_stops_before_downloading(self):
+        for channel, tag, prerelease in (("stable", "peaks-test", True), ("dev", "peaks-dev-test", False)):
+            with self.subTest(channel=channel), \
+                    patch.object(release_data, "gh", return_value=json.dumps(dict(draft=True, prerelease=prerelease))), \
+                    patch.object(release_data, "fetch") as fetch:
+                with self.assertRaises(ValueError):
+                    release_data.publish(tag, "a" * 64, channel=channel)
+                fetch.assert_not_called()
+
+    def test_both_channels_select_their_own_baseline(self):
+        entries = [{"tag_name": tag, "draft": False, "prerelease": dev}
+                   for tag, dev in (("peaks-latest", False), ("peaks-test", False),
+                                    ("peaks-dev-latest", True), ("peaks-dev-test", True))]
+        for channel, tag in (("stable", "peaks-test"), ("dev", "peaks-dev-test")):
+            with self.subTest(channel=channel), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / "pointer").mkdir()
+                (root / "pointer" / "manifest.json").write_text(json.dumps(self.current[0]), encoding="utf-8")
+                with patch.object(release_data, "releases", return_value=entries), \
+                        patch.object(release_data, "gh") as gh, \
+                        patch.object(release_data, "fetch", return_value=self.current) as fetch:
+                    release_data.previous_release(root, channel)
+                    self.assertEqual(tag, fetch.call_args.args[0])
+                    self.assertEqual(release_data.prefix(channel) + "latest", gh.call_args.args[2])
+
+    def test_dev_pointer_does_not_modify_stable(self):
+        for exists in (False, True):
+            entries = [dict(tag_name="peaks-latest", draft=False, prerelease=False)]
+            if exists:
+                entries.append(dict(tag_name="peaks-dev-latest", draft=False, prerelease=True))
+            with self.subTest(exists=exists), tempfile.TemporaryDirectory() as temporary, \
+                    patch.object(release_data, "releases", return_value=entries), \
+                    patch.object(release_data, "gh") as gh:
+                release_data.update_latest(Path(temporary), self.current[0], "dev")
+                for call in gh.call_args_list:
+                    self.assertEqual("peaks-dev-latest", call.args[2])
+                self.assertIn("--prerelease=true", gh.call_args.args)
+
+    def test_actions_branch_channel_mismatch_stops_before_io(self):
+        for branch, channel in (("main", "dev"), ("dev", "stable"), ("feature", "stable"),
+                                ("feature", "dev"), ("test", "dev"), ("test", "stable")):
+            with self.subTest(branch=branch, channel=channel), \
+                    patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_REF": "refs/heads/" + branch}), \
+                    patch.object(release_data, "gh") as gh, \
+                    patch.object(release_data, "validate") as validate:
+                with self.assertRaises(ValueError):
+                    release_data.prepare(Path("unused"), channel)
+                with self.assertRaises(ValueError):
+                    release_data.publish(release_data.release_tag("test", channel), "a" * 64, channel=channel)
+                gh.assert_not_called()
+                validate.assert_not_called()
+
+    def test_actions_branches_allow_only_their_channel(self):
+        for branch, channel in (("main", "stable"), ("dev", "dev")):
+            with self.subTest(branch=branch), \
+                    patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_REF": "refs/heads/" + branch}):
+                release_data.check_branch(channel)

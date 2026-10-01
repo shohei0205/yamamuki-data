@@ -3,4 +3,9 @@
 *.gz
 /build/
 /dist/
+__pycache__/
 .DS_Store
+
+# 山頂データの取得元・生成物
+/peaks/build/
+/peaks/dist/
