@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '確認済みの山頂タグ（公開済みなら参照先を復旧）（peaks- で始まる値）'
+        description: '確認した Release ページの URL または山頂タグ（公開済みなら参照先を復旧）'
         required: true
         type: string
       sha256:
-        description: '確認した gzip の SHA-256（下書きの説明に記載）'
-        required: true
+        description: '任意：確認した SHA-256（空欄なら Release の検査結果から自動取得）'
+        required: false
         type: string
       reason:
         description: '検査結果の確認内容・公開してよい理由'

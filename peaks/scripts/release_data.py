@@ -9,6 +9,7 @@ import re
 import subprocess
 import tempfile
 import zlib
+from urllib.parse import urlsplit
 
 from scripts.build_data import FILE_NAME
 from scripts.check_release import assess, report, validate
@@ -39,6 +40,35 @@ def releases():
     # 通信失敗や権限不足を「初回」と扱わない。
     pages = json.loads(gh("api", "--paginate", "--slurp", endpoint("releases?per_page=100")))
     return [release for page in pages for release in page]
+
+
+def find_release(target, channel="stable"):
+    """未公開のタグも扱える一覧 API から、指定した1件だけを選ぶ。"""
+    target = target.strip()
+    is_url = target.startswith("https://")
+    if is_url:
+        parsed = urlsplit(target)
+        start = f"/{os.environ['GH_REPO']}/releases/tag/"
+        if (parsed.netloc != "github.com" or parsed.query or parsed.fragment
+                or not parsed.path.startswith(start)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", parsed.path[len(start):])):
+            raise ValueError("このリポジトリの Release ページの URL を指定してください")
+    else:
+        check_tag(target, channel)
+    matches = [entry for entry in releases()
+               if (entry.get("html_url") == target if is_url else entry["tag_name"] == target)]
+    if len(matches) != 1:
+        raise ValueError("指定した Release を一意に取得できません。URL・タグと読み取り権限を確認してください")
+    check_tag(matches[0]["tag_name"], channel)
+    return matches[0]
+
+
+def reviewed_checksum(release):
+    """生成時の検査結果に記録した値を使い、手入力の転記を省く。"""
+    matches = re.findall(r"^- SHA-256: `([0-9a-f]{64})`$", release.get("body") or "", re.MULTILINE)
+    if len(matches) != 1:
+        raise ValueError("Release の検査結果から SHA-256 を取得できません。確認した値を明示してください")
+    return matches[0]
 
 
 def previous_release(directory, channel="stable"):
@@ -123,14 +153,18 @@ def prepare(directory, channel="stable"):
     logging.info("下書きの保存完了: %s（%s）", tag, "要確認・自動公開しません" if warnings else "検査合格・公開段階へ進みます")
 
 
-def publish(tag, expected_sha256, *, manual=False, reason="", channel="stable"):
+def publish(tag, expected_sha256="", *, manual=False, reason="", channel="stable"):
     check_branch(channel)
-    check_tag(tag, channel)
-    if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+    expected_sha256 = expected_sha256.strip()
+    if (expected_sha256 or not manual) and not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
         raise ValueError("確認した gzip の SHA-256 を指定してください")
     if manual and not reason.strip():
         raise ValueError("確認内容・公開理由を指定してください")
-    release = json.loads(gh("api", endpoint(f"releases/tags/{tag}")))
+    release = find_release(tag, channel)
+    tag = release["tag_name"]
+    if not expected_sha256:
+        expected_sha256 = reviewed_checksum(release)
+    logging.info("公開対象: %s、照合する SHA-256: %s", tag, expected_sha256)
     if release["prerelease"] != (channel == "dev"):
         raise ValueError("Release の正式版・開発版の区分が一致しません")
     if not release["draft"] and not manual:
@@ -177,7 +211,7 @@ def main():
     release = commands.add_parser("publish")
     release.add_argument("--channel", choices=("stable", "dev"), default="stable")
     release.add_argument("--tag", required=True)
-    release.add_argument("--sha256", required=True)
+    release.add_argument("--sha256", default="")
     release.add_argument("--manual", action="store_true")
     release.add_argument("--reason", default="")
     args = parser.parse_args()
