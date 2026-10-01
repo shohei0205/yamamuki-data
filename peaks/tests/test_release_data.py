@@ -14,7 +14,7 @@ from test_check_release import dataset
 class ReleaseDataTests(unittest.TestCase):
     def setUp(self):
         self.current = dataset()
-        self.current[0].update(sha256="a" * 64, sizeBytes=123)
+        self.current[0].update(sha256="a" * 64, sizeBytes=123, mountainCount=len(self.current[1]))
         self.environment = patch.dict(os.environ, {"GH_REPO": "owner/repo", "GITHUB_SHA": "commit", "GITHUB_ACTOR": "tester", "GITHUB_ACTIONS": "false"})
         self.environment.start()
         self.addCleanup(self.environment.stop)
@@ -129,7 +129,7 @@ class ReleaseDataTests(unittest.TestCase):
                     patch.object(release_data, "gh") as gh:
                 release_data.update_latest(Path(temporary), self.current[0])
                 calls = [call.args for call in gh.call_args_list]
-                self.assertEqual(("release", "edit", "peaks-latest", "--draft=false", "--latest=false", "--prerelease=false"), calls[-1])
+                self.assertEqual(("release", "edit", "peaks-latest", "--draft=false", "--latest=false", "--prerelease=false"), calls[-1][:6])
                 self.assertTrue(calls[0][3].endswith("manifest.json"))
                 self.assertFalse(any("terrain" in str(call) or "japan-mountains.json.gz" in str(call) for call in calls))
 
@@ -309,3 +309,19 @@ class ReleaseDataTests(unittest.TestCase):
             with self.subTest(branch=branch), \
                     patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_REF": "refs/heads/" + branch}):
                 release_data.check_branch(channel)
+
+    def test_latest_description_links_to_current_data_on_every_update(self):
+        for channel in ("stable", "dev"):
+            for exists in (False, True):
+                tag = release_data.prefix(channel) + "latest"
+                entries = [dict(tag_name=tag, prerelease=channel == "dev")] if exists else []
+                with self.subTest(channel=channel, exists=exists), tempfile.TemporaryDirectory() as temporary, \
+                        patch.object(release_data, "releases", return_value=entries), \
+                        patch.object(release_data, "gh") as gh:
+                    release_data.update_latest(Path(temporary), self.current[0], channel)
+                    args = gh.call_args.args
+                    notes = args[args.index("--notes") + 1]
+                    self.assertIn("https://github.com/owner/repo/releases/tag/" + release_data.prefix(channel) + "test", notes)
+                    self.assertIn("固定ページ", notes)
+                    self.assertIn("下書きに保留された場合は更新しません", notes)
+                    self.assertIn("--title", args)

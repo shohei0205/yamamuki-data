@@ -25,3 +25,6 @@ jobs:
           sudo apt-get install -y osmium-tool
       - name: 単体テストと小さな PBF での生成テスト
         run: python -m unittest discover -s tests -v
+      - name: 共通の手動公開入口のテスト
+        working-directory: .
+        run: python -m unittest discover -s release_tools/tests -v

@@ -1,10 +1,10 @@
-name: 確認済みの山頂データを公開
+name: 確認済みのデータを公開
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '確認した Release ページの URL または山頂タグ（公開済みなら参照先を復旧）'
+        description: '確認した Release ページの URL またはデータのタグ（公開済みなら参照先を復旧）'
         required: true
         type: string
       sha256:
@@ -19,39 +19,60 @@ on:
 permissions:
   contents: read
 
-defaults:
-  run:
-    working-directory: peaks
-
 env:
   PYTHONUNBUFFERED: '1'
   RELEASE_CHANNEL: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
 
-# 定期実行との同時公開を防ぐため、同じグループで実行する。
-concurrency:
-  group: publish-peaks-${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
-  cancel-in-progress: false
-
 jobs:
-  publish:
+  resolve:
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
+    # 下書きも一覧から取得するために必要。
     permissions:
       contents: write
+    outputs:
+      dataset: ${{ steps.target.outputs.dataset }}
+      tag: ${{ steps.target.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: 確認した下書きを再生成せずに公開
+      - name: Release からデータ種別を判定
+        id: target
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
+        run: >-
+          python -m release_tools.publish_reviewed resolve
+          --channel "$RELEASE_CHANNEL" --tag "$RELEASE_TAG"
+
+  publish:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    # 各種別の生成ワークフローと同じグループにし、異なる種別は独立させる。
+    concurrency:
+      group: publish-${{ needs.resolve.outputs.dataset }}-${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 確認したデータを種別ごとに再検証して公開
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          DATASET: ${{ needs.resolve.outputs.dataset }}
           EXPECTED_SHA256: ${{ inputs.sha256 }}
           REVIEW_REASON: ${{ inputs.reason }}
         run: >-
-          python -m scripts.release_data publish
-          --channel "$RELEASE_CHANNEL" --tag "$RELEASE_TAG" --sha256 "$EXPECTED_SHA256"
-          --manual --reason "$REVIEW_REASON"
+          python -m release_tools.publish_reviewed publish
+          --dataset "$DATASET" --channel "$RELEASE_CHANNEL"
+          --tag "$RELEASE_TAG" --sha256 "$EXPECTED_SHA256" --reason "$REVIEW_REASON"
