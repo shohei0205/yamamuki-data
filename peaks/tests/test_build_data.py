@@ -11,6 +11,8 @@ import unittest
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
+from scripts.download_source import save_source_info
+from scripts.build_data import verified_source_url
 from scripts.build_data import (
     FILE_NAME, build, normalize_timestamp, parse_elevation, read_mountains,
     write_distribution,
@@ -179,18 +181,49 @@ class BuildDataTests(unittest.TestCase):
         self.assertFalse((self.root / "output").exists())
 
     def test_missing_source_timestamp_stops_before_extraction(self):
+        pbf = self.root / "input.osm.pbf"
+        pbf.write_bytes(b"fixture")
+        self.save_fixture_source(pbf)
         with patch("scripts.build_data.subprocess.check_output", return_value=""), \
                 patch("scripts.build_data.subprocess.run") as extract:
             with self.assertRaises(ValueError):
                 build(self.root / "input.osm.pbf", self.root / "output", "test")
             extract.assert_not_called()
 
+    def save_fixture_source(self, pbf):
+        save_source_info(pbf, {"url": "https://download.geofabrik.de/asia/japan-260929.osm.pbf",
+                              "sizeBytes": pbf.stat().st_size,
+                              "md5": hashlib.md5(pbf.read_bytes()).hexdigest()})
+
+    def test_source_info_missing_or_mismatched_stops_generation(self):
+        pbf = self.root / "source.osm.pbf"
+        pbf.write_bytes(b"fixture")
+        with self.assertRaises(ValueError):
+            verified_source_url(pbf)
+        self.save_fixture_source(pbf)
+        self.assertTrue(verified_source_url(pbf).endswith("japan-260929.osm.pbf"))
+        pbf.write_bytes(b"changed")
+        with self.assertRaises(ValueError):
+            verified_source_url(pbf)
+        pbf.write_bytes(b"different size")
+        with self.assertRaises(ValueError):
+            verified_source_url(pbf)
+
+    def test_manifest_uses_provided_source_url(self):
+        url = "https://download.geofabrik.de/asia/japan-260929.osm.pbf"
+        manifest = write_distribution(read_mountains(self.xml)[0], self.root / "dated", "test",
+                                      TIMESTAMP, "2026-09-29T12:00:00Z", source_url=url)
+        self.assertEqual(url, manifest["sourceUrl"])
+        self.assertEqual(url, json.loads((self.root / "dated/manifest.json").read_text(encoding="utf-8"))["sourceUrl"])
+
     @unittest.skipUnless(shutil.which("osmium"), "osmium がないため、PBF の生成テストは CI で実行")
     def test_real_pbf_to_distribution(self):
         pbf = self.root / "fixture.osm.pbf"
         subprocess.run(["osmium", "cat", str(self.xml), "-o", str(pbf),
                         f"--output-header=osmosis_replication_timestamp={TIMESTAMP}"], check=True)
+        self.save_fixture_source(pbf)
         manifest = build(pbf, self.root / "output", "test")
+        self.assertEqual("https://download.geofabrik.de/asia/japan-260929.osm.pbf", manifest["sourceUrl"])
         self.assertEqual(4, manifest["mountainCount"])
         self.assertEqual(TIMESTAMP, manifest["sourceTimestamp"])
         self.assertEqual(read_mountains(self.xml)[0], json.loads(gzip.decompress((self.root / "output" / FILE_NAME).read_bytes())))

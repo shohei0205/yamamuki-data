@@ -117,7 +117,7 @@ def normalize_timestamp(value):
     return stamp.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp):
+def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
         raise ValueError("版は英数字・ピリオド・ハイフン・下線で指定してください")
     source_timestamp = normalize_timestamp(source_timestamp)
@@ -150,7 +150,7 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
             "mountainCount": len(mountains),
             "sourceTimestamp": source_timestamp,
             "latestMountainTimestamp": latest_mountain_timestamp,
-            "sourceUrl": SOURCE_URL,
+            "sourceUrl": source_url,
             "license": "ODbL-1.0",
             "attribution": "© OpenStreetMap contributors",
         }
@@ -162,8 +162,30 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
     return manifest
 
 
+def verified_source_url(pbf):
+    """保存済みの取得記録と PBF が一致することを確かめる。"""
+    pbf = Path(pbf)
+    path = Path(str(pbf) + ".source.json")
+    if not path.exists():
+        raise ValueError(f"取得記録がありません。download_source.py で取得してください: {path}")
+    source = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(source, dict):
+        raise ValueError("取得記録がオブジェクトではありません")
+    url = source.get("url")
+    if not isinstance(url, str) or not re.fullmatch(r"https://download\.geofabrik\.de/asia/japan-[0-9]{6}\.osm\.pbf", url):
+        raise ValueError("取得記録の URL が日付付き全国 PBF ではありません")
+    if type(source.get("sizeBytes")) is not int or pbf.stat().st_size != source["sizeBytes"]:
+        raise ValueError("取得記録と PBF のサイズが一致しません")
+    with pbf.open("rb") as stream:
+        if hashlib.file_digest(stream, "md5").hexdigest() != source.get("md5"):
+            raise ValueError("取得記録と PBF の MD5 が一致しません")
+    logging.info("取得記録と PBF の照合完了: %s", url)
+    return url
+
+
 def build(pbf, output_dir, version):
     started = time.monotonic()
+    source_url = verified_source_url(pbf)
     logging.info("全国データの生成を開始します: %s（版 %s）", pbf, version)
     logging.info("元データの日時を確認しています")
     # ダウンロード時刻ではなく、元の PBF が収録している OSM の日時を使う。
@@ -182,7 +204,7 @@ def build(pbf, output_dir, version):
         )
         logging.info("osmium の抽出完了")
         mountains, latest_timestamp = read_mountains(extracted)
-        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp)
+        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url)
     logging.info("全国データの生成完了（経過 %.1f 秒）", time.monotonic() - started)
     return manifest
 

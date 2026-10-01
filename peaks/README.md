@@ -46,7 +46,7 @@ gzip を展開すると、UTF-8 の JSON 配列になる。OSM ノード ID の�
 | `mountainCount` | 山の件数 |
 | `sourceTimestamp` | PBF ヘッダーの `osmosis_replication_timestamp`。UTC の日時（例: `2026-09-30T20:21:22Z`） |
 | `latestMountainTimestamp` | アセットに収録する山頂ノードの `timestamp`（OSM 上の最終編集日時）の最大値。UTC の日時。現在の全国データでは `2026-09-29T08:06:38Z` |
-| `sourceUrl` | `https://download.geofabrik.de/asia/japan-latest.osm.pbf` |
+| `sourceUrl` | 実際に取得・検証した日付付き全国 PBF の URL（例: `https://download.geofabrik.de/asia/japan-260929.osm.pbf`）。日付未指定時も、latest から確定した日付付き URL を記録する |
 | `license` | `ODbL-1.0` |
 | `attribution` | `© OpenStreetMap contributors` |
 
@@ -165,6 +165,8 @@ python -u scripts/download_source.py
 python scripts/build_data.py build/japan-latest.osm.pbf \
   --version local-20260930 --output-dir dist
 ```
+
+取得時に PBF の隣へ `<PBF のファイル名>.source.json` を保存し、URL・サイズ・MD5 を記録する。取得済みファイルを再利用した場合も記録を作る。生成時に記録と PBF を照合し、日付付き URL を manifest の `sourceUrl` に引き継ぐ。記録の欠落や不一致は生成を止める。既存の PBF に記録がない場合は、同じ対象日で取得コマンドを再実行すると、内容が一致すれば再ダウンロードせずに記録を作れる。
 
 元データの取得には数 GB の通信量と空き容量が必要。元データは `peaks/build/`、配布ファイルは `peaks/dist/` に保存し、どちらも git に入れない。
 

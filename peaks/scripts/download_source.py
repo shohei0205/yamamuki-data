@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 import re
 import time
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -157,6 +158,16 @@ def transfer(source, partial, *, timeout=60, deadline=None):
     logging.info("受信完了: %s バイト", format(offset, ","))
 
 
+def save_source_info(output, source):
+    """検証済み PBF と組になる取得記録を、生成処理に渡す。"""
+    path = Path(str(output) + ".source.json")
+    with tempfile.TemporaryDirectory(dir=output.parent) as directory:
+        temporary = Path(directory) / "source.json"
+        temporary.write_text(json.dumps(source, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+        temporary.replace(path)
+    logging.info("検証済みの取得元を保存しました: %s（%s）", path, source["url"])
+
+
 def download(output, *, attempts=6, retry_delay=15, max_seconds=3600, source_date=""):
     source_url = source_url_for_date(source_date)
     logging.info("取得対象: %s（日付指定: %s）", source_url, source_date or "なし・latest を使用")
@@ -179,6 +190,7 @@ def download(output, *, attempts=6, retry_delay=15, max_seconds=3600, source_dat
             stage = "保存済みファイルの確認"
             if matches(output, source):
                 logging.info("取得済みの同じデータを再利用します: %s", output)
+                save_source_info(output, source)
                 return source
             # 日付とチェックサムで途中ファイルを区別し、別の版を再利用しない。
             partial = output.with_name(f"{output.name}.{source['md5']}.part")
@@ -193,6 +205,7 @@ def download(output, *, attempts=6, retry_delay=15, max_seconds=3600, source_dat
             stage = "取得ファイルの保存"
             partial.replace(output)
             logging.info("取得完了・MD5 照合成功: %s (%s バイト)", output, format(source["sizeBytes"], ","))
+            save_source_info(output, source)
             return source
         except (*RETRY_ERRORS, ValueError) as exc:
             remaining = max(0, deadline - time.monotonic())
