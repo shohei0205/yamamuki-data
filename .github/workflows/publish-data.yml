@@ -2,6 +2,12 @@ name: 全国の山頂データを生成・検査
 
 on:
   workflow_dispatch:
+    inputs:
+      source_date:
+        description: '取得対象日（YYYY-MM-DD）。空欄は latest。実行当日分は未配布の場合があります'
+        required: false
+        default: ''
+        type: string
 
 # Actions の手動実行一覧に登録するため、dev と同じファイル名で main に置く。
 # Branch に dev を選ぶと、dev 側にある同名のワークフローが実行される。
