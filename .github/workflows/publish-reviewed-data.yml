@@ -1,10 +1,10 @@
-name: 確認済みの山頂データを公開
+name: 確認済みのデータを公開
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '確認した Release ページの URL または山頂タグ（公開済みなら参照先を復旧）'
+        description: '確認した Release ページの URL またはデータのタグ（公開済みなら参照先を復旧）'
         required: true
         type: string
       sha256:
