@@ -65,8 +65,14 @@ class PublishReviewedTests(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 entry.publish("peaks", "peaks-v1", "stable", "", reason)
 
-    def test_branch_dataset_and_reason_mismatch_stop_before_publish(self):
-        for dataset, reason in (("terrain", "確認済み"), ("peaks", "")):
+    def test_empty_reason_is_passed_to_publisher(self):
+        for reason in ("", "   "):
+            with self.subTest(reason=reason), patch.object(entry.subprocess, "run") as run:
+                entry.publish("peaks", "peaks-dev-v1", "dev", "", reason)
+                self.assertEqual(reason, run.call_args.args[0][-1])
+
+    def test_branch_and_dataset_mismatch_stop_before_publish(self):
+        for dataset, reason in (("terrain", "確認済み"), ("terrain", "")):
             with patch.object(entry.subprocess, "run") as run, self.assertRaises(ValueError):
                 entry.publish(dataset, "peaks-v1", "stable", "", reason)
             run.assert_not_called()
