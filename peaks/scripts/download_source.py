@@ -2,6 +2,7 @@
 
 import argparse
 from contextlib import contextmanager
+from datetime import date
 import hashlib
 import http.client
 import json
@@ -63,15 +64,29 @@ def request(url, *, method="GET", headers=None, timeout=60):
         raise
 
 
-def resolve_source():
+def source_url_for_date(source_date):
+    if not source_date:
+        return SOURCE_URL
+    if not re.fullmatch(r"20[0-9]{2}-[0-9]{2}-[0-9]{2}", source_date):
+        raise ValueError("取得対象日は YYYY-MM-DD（2000〜2099年）で指定してください")
+    try:
+        day = date.fromisoformat(source_date)
+    except ValueError as exc:
+        raise ValueError("取得対象日が存在しない日付です") from exc
+    return f"https://download.geofabrik.de/asia/japan-{day.strftime('%y%m%d')}.osm.pbf"
+
+
+def resolve_source(source_url=SOURCE_URL):
     logging.info("元データの日付付き URL とサイズを確認しています")
-    with request(SOURCE_URL, method="HEAD") as response:
+    with request(source_url, method="HEAD") as response:
         # latest の更新をまたいでも、異なる版のデータをつなげない。
         url = response.url.rstrip("/")
         parsed = urllib.parse.urlparse(url)
         if (parsed.scheme != "https" or parsed.netloc != "download.geofabrik.de"
                 or not re.fullmatch(r"/asia/japan-\d{6}\.osm\.pbf", parsed.path)):
             raise ValueError(f"日付付きの全国 PBF に転送されませんでした: {url}")
+        if source_url != SOURCE_URL and url != source_url:
+            raise ValueError(f"指定した日付と異なる URL に転送されました: {url}")
         size = int(response.headers["Content-Length"])
         if size <= 0:
             raise ValueError("元データのサイズが不正です")
@@ -142,7 +157,9 @@ def transfer(source, partial, *, timeout=60, deadline=None):
     logging.info("受信完了: %s バイト", format(offset, ","))
 
 
-def download(output, *, attempts=6, retry_delay=15, max_seconds=3600):
+def download(output, *, attempts=6, retry_delay=15, max_seconds=3600, source_date=""):
+    source_url = source_url_for_date(source_date)
+    logging.info("取得対象: %s（日付指定: %s）", source_url, source_date or "なし・latest を使用")
     logging.info("全国データの取得を開始します（全体の上限 %s 秒）", max_seconds)
     deadline = time.monotonic() + max_seconds
     output = Path(output)
@@ -157,7 +174,7 @@ def download(output, *, attempts=6, retry_delay=15, max_seconds=3600):
                 raise TimeoutError("ダウンロード全体の制限時間に達しました")
             if source is None:
                 stage = "取得先の日付・サイズ・MD5 の確認"
-                source = resolve_source()
+                source = resolve_source(source_url)
                 logging.info("取得元: %s", json.dumps(source, ensure_ascii=False))
             stage = "保存済みファイルの確認"
             if matches(output, source):
@@ -182,7 +199,7 @@ def download(output, *, attempts=6, retry_delay=15, max_seconds=3600):
             retry = isinstance(exc, RETRY_ERRORS) and attempt < attempts - 1 and remaining > 0
             log = logging.warning if retry else logging.error
             log("取得失敗: 段階=%s、試行=%s/%s、URL=%s、保存先=%s、%s: %s、残り %.1f 秒",
-                stage, attempt + 1, attempts, source["url"] if source else SOURCE_URL, output,
+                stage, attempt + 1, attempts, source["url"] if source else source_url, output,
                 type(exc).__name__, exc, remaining)
             if not retry:
                 reason = "再試行対象外" if not isinstance(exc, RETRY_ERRORS) else (
@@ -199,11 +216,16 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("build/japan-latest.osm.pbf"))
+    parser.add_argument("--source-date", default="", help="取得対象日 YYYY-MM-DD。未指定は latest")
     parser.add_argument("--max-seconds", type=int, default=3600)
     args = parser.parse_args()
     if args.max_seconds <= 0:
         parser.error("--max-seconds は正の整数で指定してください")
-    download(args.output, max_seconds=args.max_seconds)
+    try:
+        source_url_for_date(args.source_date)
+    except ValueError as exc:
+        parser.error(str(exc))
+    download(args.output, max_seconds=args.max_seconds, source_date=args.source_date)
 
 
 if __name__ == "__main__":
