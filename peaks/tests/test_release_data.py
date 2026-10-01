@@ -35,6 +35,32 @@ class ReleaseDataTests(unittest.TestCase):
     def test_normal_data_published(self):
         calls = self.run_publish()
         self.assertIn(("release", "edit", "peaks-test", "--draft=false", "--latest=false"), calls)
+        self.assertIn("[公開したリリースを開く](https://github.com/owner/repo/releases/tag/peaks-test)",
+                      (self.test_output / "summary.md").read_text(encoding="utf-8"))
+
+    def test_generated_release_link_uses_url_returned_by_github(self):
+        for warnings in ([], ["初回"]):
+            with self.subTest(warnings=warnings), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(release_data, "validate", return_value=self.current), \
+                    patch.object(release_data, "previous_release", return_value=self.current), \
+                    patch.object(release_data, "assess", return_value=warnings), \
+                    patch.object(release_data, "gh", return_value="https://github.com/owner/repo/releases/tag/untagged-123\n"):
+                summary_path = self.test_output / "summary.md"
+                summary_path.write_text("", encoding="utf-8")
+                release_data.prepare(directory, "dev")
+                summary = summary_path.read_text(encoding="utf-8")
+                self.assertIn("[生成したリリースを開く](https://github.com/owner/repo/releases/tag/untagged-123)", summary)
+                self.assertIn("peaks-dev-test", summary)
+                self.assertIn("下書きで保留" if warnings else "自動公開の段階", summary)
+
+    def test_failed_creation_does_not_add_release_link(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(release_data, "validate", return_value=self.current), \
+                patch.object(release_data, "previous_release", return_value=None), \
+                patch.object(release_data, "gh", side_effect=RuntimeError("作成失敗")):
+            with self.assertRaises(RuntimeError):
+                release_data.prepare(directory)
+            self.assertNotIn("生成したリリースを開く", (self.test_output / "summary.md").read_text(encoding="utf-8"))
 
     def test_warning_keeps_draft(self):
         calls = self.run_publish(warnings=["件数減少"])
@@ -83,7 +109,7 @@ class ReleaseDataTests(unittest.TestCase):
                     patch.object(release_data, "validate", return_value=self.current), \
                     patch.object(release_data, "previous_release", return_value=None,
                                  side_effect=RuntimeError("通信失敗") if failure else None), \
-                    patch.object(release_data, "gh") as gh:
+                    patch.object(release_data, "gh", return_value="https://github.com/owner/repo/releases/tag/untagged-123\n") as gh:
                 release_data.prepare(directory)
                 self.assertIn("auto_publish=false", (Path(directory) / "output").read_text())
                 self.assertIn("--draft", gh.call_args.args)
@@ -174,7 +200,7 @@ class ReleaseDataTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(release_data, "validate", return_value=self.current), \
                 patch.object(release_data, "previous_release", return_value=None) as previous, \
-                patch.object(release_data, "gh") as gh:
+                patch.object(release_data, "gh", return_value="https://github.com/owner/repo/releases/tag/untagged-123\n") as gh:
             release_data.prepare(directory, "dev")
             self.assertEqual("dev", previous.call_args.args[1])
             self.assertEqual("peaks-dev-test", gh.call_args.args[2])
