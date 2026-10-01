@@ -168,7 +168,7 @@ def prepare(directory, channel="stable"):
             logging.warning("前回公開版を比較できません: %s", exc)
             warnings = ["前回公開版の取得・検証に失敗したため、自動公開しません。Actions のログを確認してください"]
         notes = root / "notes.md"
-        write_report(notes, report(current, previous, warnings))
+        write_report(notes, report(current, previous, warnings).replace("## データの検査結果", "## データの検査結果（生成後）", 1))
         logging.info("下書き Release を作成し、2ファイルをアップロードします: %s", tag)
         gh("release", "create", tag, str(Path(directory) / FILE_NAME), str(Path(directory) / "manifest.json"),
            "--draft", "--target", os.environ["GITHUB_SHA"], "--title", f"全国の山データ ({channel}) {current[0]['version']}",
@@ -206,7 +206,7 @@ def publish(tag, expected_sha256="", *, manual=False, reason="", channel="stable
             # 公開済みの検証済みファイルを使い、破損・欠落した参照先だけを復旧する。
             previous = None
             warnings = ["前回の参照先を取得できないため、確認した公開済みの版で参照先を復旧します"]
-        contents = report(current, previous, warnings)
+        contents = report(current, previous, warnings).replace("## データの検査結果", "## データの検査結果（公開前の再検査）", 1)
         if manual:
             contents += f"\n## 手動公開の確認\n\n確認者: {os.environ.get('GITHUB_ACTOR', '不明')}\n\n{reason.strip() or '理由の記入なし'}\n"
         notes = root / "notes.md"
