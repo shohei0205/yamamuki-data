@@ -36,6 +36,21 @@ peaks/
 
 開発中の処理は `dev` で確認し、正式版に採用するときは変更を `main` に取り込む。実行タイミングと確認方法はデータごとに定める。
 
+正式版も開発版も、このリポジトリの同じ [Releases 一覧](https://github.com/shohei0205/yamamuki-data/releases) に公開する。`main`・`dev` は生成処理の実行元で、配布ファイルは各 Release の **Assets** に添付する。データの種類と正式版・開発版の違いは、Release のタグで区別する。
+
+山頂データでは、公開後に次の4種類の Release が並ぶ。`<version>` は生成ごとの版を表し、各版の Release は履歴として残す。
+
+| Release のタグ | 役割 | Assets に置くファイル |
+|---|---|---|
+| [`peaks-latest`](https://github.com/shohei0205/yamamuki-data/releases/tag/peaks-latest) | 正式版の最新版を案内する固定の参照先 | `manifest.json` のみ |
+| `peaks-<version>` | 正式版の各版 | `manifest.json` と `japan-mountains.json.gz` |
+| [`peaks-dev-latest`](https://github.com/shohei0205/yamamuki-data/releases/tag/peaks-dev-latest) | 開発版の最新版を案内する固定の参照先（Pre-release） | `manifest.json` のみ |
+| `peaks-dev-<version>` | 開発版の各版（Pre-release） | `manifest.json` と `japan-mountains.json.gz` |
+
+アプリが正式版を取得するときは、まず `peaks-latest` の `manifest.json` を読み、その `version` に対応する `peaks-<version>` の Assets からデータ本体を取得する。開発版は同じ手順で `peaks-dev-latest` → `peaks-dev-<version>` を使う。新しい版の公開後に固定の参照先の manifest を更新するため、アプリは毎回 Releases 一覧から最新版を探す必要がない。
+
+固定の参照先は初回の公開時に作成する。確認待ちの下書きはアプリの取得先に含めない。将来の地形データも同じ Releases 一覧に、山頂とは別のタグで追加する。取得 URL とファイル形式の詳細は [山頂データの仕様と運用](peaks/README.md) を参照する。
+
 ## 開発ルール
 
 作業の進め方は [AGENTS.md](AGENTS.md) を参照する。データを追加するときは種類ごとのフォルダにスクリプト・テスト・README をまとめ、この README のデータ一覧からリンクする。
