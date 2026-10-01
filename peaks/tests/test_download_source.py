@@ -1,6 +1,7 @@
 """中断・再開・取得先の更新があっても異なる PBF を混ぜないことを確かめる。"""
 
 import hashlib
+import json
 import io
 from pathlib import Path
 import tempfile
@@ -119,6 +120,7 @@ class DownloadSourceTests(unittest.TestCase):
             self.assertEqual({"Range": "bytes=3-"}, request.call_args.kwargs["headers"])
         self.assertEqual(self.data, self.output.read_bytes())
         self.assertFalse(self.partial.exists())
+        self.assertEqual(self.source, json.loads(Path(str(self.output) + ".source.json").read_text(encoding="utf-8")))
 
     def test_corrupt_download_never_replaces_previous_output(self):
         self.output.write_bytes(b"previous")
@@ -135,6 +137,7 @@ class DownloadSourceTests(unittest.TestCase):
                 patch("scripts.download_source.request") as request:
             download(self.output)
             request.assert_not_called()
+        self.assertEqual(self.source, json.loads(Path(str(self.output) + ".source.json").read_text(encoding="utf-8")))
 
     def test_other_version_partial_is_not_used(self):
         old = self.root / (self.output.name + ".old.part")
