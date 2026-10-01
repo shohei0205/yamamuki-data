@@ -100,6 +100,9 @@ Co-authored-by: Codex
 
 # 山頂データの単体テストと小さな PBF での生成テスト
 (cd peaks && python -m unittest discover -s tests -v)
+
+# データ種別共通の手動公開入口のテスト
+python -m unittest discover -s release_tools/tests -v
 ```
 
 - CI の「Text format」はすべての PR で動く。

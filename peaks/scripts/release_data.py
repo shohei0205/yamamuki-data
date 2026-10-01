@@ -95,23 +95,47 @@ def previous_release(directory, channel="stable"):
     return previous
 
 
+def latest_description(manifest, channel="stable"):
+    tag = release_tag(manifest["version"], channel)
+    endpoint("")  # リンクに使うリポジトリ名も検証する。
+    base = f"https://github.com/{os.environ['GH_REPO']}/releases"
+    label = "開発版（Pre-release）" if channel == "dev" else "正式版"
+    title = f"山頂データ・{label}の最新版"
+    notes = (
+        f"ここは山頂データの**{label}の最新版を案内する固定ページ**です。\n\n"
+        f"## 現在のデータ\n\n"
+        f"- [データ本体と検査結果を見る]({base}/tag/{tag})\n"
+        f"- 版: `{manifest['version']}`\n"
+        f"- 山頂数: {manifest['mountainCount']:,} 件\n"
+        f"- 元データの日時: {manifest['sourceTimestamp']}\n"
+        f"- 収録山頂の最新編集日時: {manifest.get('latestMountainTimestamp', '旧形式のため記録なし')}\n\n"
+        "## このページの役割\n\n"
+        "このページの Assets には、アプリが最新版を知るための `manifest.json` だけを置いています。"
+        "山頂データ本体は上のリンク先の Assets からダウンロードできます。\n\n"
+        "新しいデータを公開すると、このページの説明と `manifest.json` を更新します。"
+        "検査で下書きに保留された場合は更新しません。各版のデータは履歴として残ります。\n\n"
+        "© OpenStreetMap contributors — [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/)\n"
+    )
+    return title, notes
+
+
 def update_latest(directory, manifest, channel="stable"):
     latest_tag = prefix(channel) + "latest"
     # 検証済みの履歴版が公開された後だけ、山頂専用の参照先を更新する。
     latest = next((r for r in releases() if r["tag_name"] == latest_tag), None)
     if latest is not None and latest["prerelease"] != (channel == "dev"):
         raise ValueError("最新版参照の正式版・開発版の区分が一致しません")
+    title, notes = latest_description(manifest, channel)
     path = directory / "manifest.json"
     path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     if latest is None:
         gh("release", "create", latest_tag, str(path), "--draft", "--target", os.environ["GITHUB_SHA"],
-           "--title", f"山頂データの最新版参照 ({channel})", "--notes",
-           f"manifest.json の version に対応する {prefix(channel)}<version> のデータを取得してください。",
+           "--title", title, "--notes", notes,
            f"--prerelease={str(channel == 'dev').lower()}")
     else:
         gh("release", "upload", latest_tag, str(path), "--clobber")
     gh("release", "edit", latest_tag, "--draft=false", "--latest=false",
-       f"--prerelease={str(channel == 'dev').lower()}")
+       f"--prerelease={str(channel == 'dev').lower()}", "--title", title, "--notes", notes)
 
 
 def write_report(path, contents):
