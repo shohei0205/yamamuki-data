@@ -1,0 +1,18 @@
+name: Text format
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 外部からの PR でも動くので、トークンはリポジトリの読み取りだけに絞る。
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: 改行コードと BOM の確認
+        run: .github/scripts/check-text-format.sh
