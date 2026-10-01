@@ -7,6 +7,7 @@ import hashlib
 import http.client
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import time
@@ -168,7 +169,17 @@ def save_source_info(output, source):
     logging.info("検証済みの取得元を保存しました: %s（%s）", path, source["url"])
 
 
-def download(output, *, attempts=6, retry_delay=15, max_seconds=3600, source_date=""):
+def cache_values(source):
+    """日付と内容でキャッシュを区別し、latest の更新や同日の差し替えに対応する。"""
+    match = re.fullmatch(r"https://download.geofabrik.de/asia/japan-(\d{6})\.osm\.pbf", source["url"])
+    if not match or not re.fullmatch(r"[0-9a-f]{32}", source["md5"]):
+        raise ValueError("キャッシュ用の取得元情報が不正です")
+    stamp = match[1]
+    source_date = date.fromisoformat(f"20{stamp[:2]}-{stamp[2:4]}-{stamp[4:]}").isoformat()
+    return {"cache-key": f"osm-japan-v1-{stamp}-{source['md5']}", "source-date": source_date}
+
+
+def download(output, *, attempts=6, retry_delay=15, max_seconds=3600, source_date="", resolve_only=False):
     source_url = source_url_for_date(source_date)
     logging.info("取得対象: %s（日付指定: %s）", source_url, source_date or "なし・latest を使用")
     logging.info("全国データの取得を開始します（全体の上限 %s 秒）", max_seconds)
@@ -187,6 +198,8 @@ def download(output, *, attempts=6, retry_delay=15, max_seconds=3600, source_dat
                 stage = "取得先の日付・サイズ・MD5 の確認"
                 source = resolve_source(source_url)
                 logging.info("取得元: %s", json.dumps(source, ensure_ascii=False))
+            if resolve_only:
+                return source
             stage = "保存済みファイルの確認"
             if matches(output, source):
                 logging.info("取得済みの同じデータを再利用します: %s", output)
@@ -231,6 +244,7 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("build/japan-latest.osm.pbf"))
     parser.add_argument("--source-date", default="", help="取得対象日 YYYY-MM-DD。未指定は latest")
     parser.add_argument("--max-seconds", type=int, default=3600)
+    parser.add_argument("--resolve-only", action="store_true", help="取得元情報だけを確認し、PBF 本体は取得しない")
     args = parser.parse_args()
     if args.max_seconds <= 0:
         parser.error("--max-seconds は正の整数で指定してください")
@@ -238,7 +252,12 @@ def main():
         source_url_for_date(args.source_date)
     except ValueError as exc:
         parser.error(str(exc))
-    download(args.output, max_seconds=args.max_seconds, source_date=args.source_date)
+    source = download(args.output, max_seconds=args.max_seconds, source_date=args.source_date,
+                      resolve_only=args.resolve_only)
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+            for key, value in cache_values(source).items():
+                stream.write(f"{key}={value}\n")
 
 
 if __name__ == "__main__":

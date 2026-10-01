@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from unittest.mock import patch
 
-from scripts.download_source import download, resolve_source, transfer, request, source_url_for_date, SOURCE_URL
+from scripts.download_source import cache_values, download, resolve_source, transfer, request, source_url_for_date, SOURCE_URL
 
 
 class Response(io.BytesIO):
@@ -40,6 +40,31 @@ class DownloadSourceTests(unittest.TestCase):
         with patch("scripts.download_source.request", side_effect=responses) as request:
             self.assertEqual({**self.source, "sizeBytes": 123}, resolve_source())
             self.assertEqual(self.source["url"] + ".md5", request.call_args.args[0])
+
+    def test_metadata_lookup_does_not_download_pbf(self):
+        with patch("scripts.download_source.resolve_source", return_value=self.source), \
+                patch("scripts.download_source.transfer") as transfer:
+            self.assertEqual(self.source, download(self.output, resolve_only=True))
+            transfer.assert_not_called()
+            self.assertFalse(self.output.exists())
+            self.assertFalse(Path(str(self.output) + ".source.json").exists())
+
+    def test_cache_key_pins_date_and_checksum(self):
+        values = cache_values(self.source)
+        self.assertEqual("2026-09-29", values["source-date"])
+        self.assertIn("260929", values["cache-key"])
+        self.assertIn(self.source["md5"], values["cache-key"])
+        for changes in ({"md5": "a" * 32}, {"url": "https://download.geofabrik.de/asia/japan-260930.osm.pbf"}):
+            with self.subTest(changes=changes):
+                self.assertNotEqual(values["cache-key"], cache_values({**self.source, **changes})["cache-key"])
+
+    def test_corrupt_restored_file_is_downloaded_again(self):
+        self.output.write_bytes(b"x" * len(self.data))
+        with patch("scripts.download_source.resolve_source", return_value=self.source), \
+                patch("scripts.download_source.request", return_value=Response(self.data)) as request:
+            download(self.output)
+            request.assert_called_once()
+        self.assertEqual(self.data, self.output.read_bytes())
 
     def test_reject_latest_url_and_missing_checksum(self):
         with patch("scripts.download_source.request", return_value=Response(url="https://download.geofabrik.de/asia/japan-latest.osm.pbf")):
