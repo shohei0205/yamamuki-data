@@ -15,7 +15,10 @@ class ReleaseDataTests(unittest.TestCase):
     def setUp(self):
         self.current = dataset()
         self.current[0].update(sha256="a" * 64, sizeBytes=123, mountainCount=len(self.current[1]))
-        self.environment = patch.dict(os.environ, {"GH_REPO": "owner/repo", "GITHUB_SHA": "commit", "GITHUB_ACTOR": "tester", "GITHUB_ACTIONS": "false"})
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.test_output = Path(temporary.name)
+        self.environment = patch.dict(os.environ, {"GH_REPO": "owner/repo", "GITHUB_SHA": "commit", "GITHUB_ACTOR": "tester", "GITHUB_ACTIONS": "false", "GITHUB_STEP_SUMMARY": str(self.test_output / "summary.md"), "GITHUB_OUTPUT": str(self.test_output / "output")})
         self.environment.start()
         self.addCleanup(self.environment.stop)
 

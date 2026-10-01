@@ -39,6 +39,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: 実行パラメーターを Summary に表示
+        working-directory: .
+        env:
+          WORKFLOW_INPUTS: ${{ toJSON(inputs) }}
+        run: python -m release_tools.workflow_summary publish
       - name: Release からデータ種別を判定
         id: target
         env:
