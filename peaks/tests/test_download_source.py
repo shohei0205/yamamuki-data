@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from unittest.mock import patch
 
-from scripts.download_source import download, resolve_source, transfer, request
+from scripts.download_source import download, resolve_source, transfer, request, source_url_for_date, SOURCE_URL
 
 
 class Response(io.BytesIO):
@@ -48,6 +48,42 @@ class DownloadSourceTests(unittest.TestCase):
                 Response(headers={"Content-Length": "123"}, url=self.source["url"]), Response()]):
             with self.assertRaises(ValueError):
                 resolve_source()
+
+    def test_date_selects_fixed_url_and_empty_keeps_latest(self):
+        self.assertEqual(SOURCE_URL, source_url_for_date(""))
+        self.assertEqual(self.source["url"], source_url_for_date("2026-09-29"))
+        self.assertTrue(source_url_for_date("2024-02-29").endswith("japan-240229.osm.pbf"))
+
+    def test_invalid_date_stops_before_network(self):
+        for value in ("2026-02-29", "2026-9-29", "260929", "2100-01-01", "2026-09-29;echo bad"):
+            with self.subTest(value=value), patch("scripts.download_source.resolve_source") as resolve:
+                with self.assertRaises(ValueError):
+                    download(self.output, source_date=value)
+                resolve.assert_not_called()
+
+    def test_dated_source_uses_matching_checksum_url(self):
+        responses = [Response(headers={"Content-Length": "123"}, url=self.source["url"]),
+                     Response((self.source["md5"] + "  japan-260929.osm.pbf").encode())]
+        with patch("scripts.download_source.request", side_effect=responses) as req:
+            self.assertEqual({**self.source, "sizeBytes": 123}, resolve_source(self.source["url"]))
+            self.assertEqual([self.source["url"], self.source["url"] + ".md5"],
+                             [call.args[0] for call in req.call_args_list])
+
+    def test_dated_redirect_to_different_day_is_rejected(self):
+        with patch("scripts.download_source.request", return_value=Response(
+                url="https://download.geofabrik.de/asia/japan-260930.osm.pbf")):
+            with self.assertRaises(ValueError):
+                resolve_source(self.source["url"])
+
+    def test_missing_dated_source_never_falls_back_to_latest(self):
+        error = urllib.error.HTTPError(self.source["url"], 404, "Not Found", {}, None)
+        with patch("scripts.download_source.resolve_source", side_effect=error) as resolve, \
+                self.assertLogs(level="INFO") as logs:
+            with self.assertRaises(urllib.error.HTTPError):
+                download(self.output, source_date="2026-09-29", attempts=2, retry_delay=0)
+        self.assertEqual(2, resolve.call_count)
+        self.assertTrue(all(call.args == (self.source["url"],) for call in resolve.call_args_list))
+        self.assertIn(self.source["url"], "\n".join(logs.output))
 
     def test_resume_from_saved_bytes(self):
         self.partial.write_bytes(self.data[:3])
