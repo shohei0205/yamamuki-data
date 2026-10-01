@@ -182,8 +182,6 @@ def publish(tag, expected_sha256="", *, manual=False, reason="", channel="stable
     expected_sha256 = expected_sha256.strip()
     if (expected_sha256 or not manual) and not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
         raise ValueError("確認した gzip の SHA-256 を指定してください")
-    if manual and not reason.strip():
-        raise ValueError("確認内容・公開理由を指定してください")
     release = find_release(tag, channel)
     tag = release["tag_name"]
     if not expected_sha256:
@@ -210,7 +208,7 @@ def publish(tag, expected_sha256="", *, manual=False, reason="", channel="stable
             warnings = ["前回の参照先を取得できないため、確認した公開済みの版で参照先を復旧します"]
         contents = report(current, previous, warnings)
         if manual:
-            contents += f"\n## 手動公開の確認\n\n確認者: {os.environ.get('GITHUB_ACTOR', '不明')}\n\n{reason.strip()}\n"
+            contents += f"\n## 手動公開の確認\n\n確認者: {os.environ.get('GITHUB_ACTOR', '不明')}\n\n{reason.strip() or '理由の記入なし'}\n"
         notes = root / "notes.md"
         write_report(notes, contents)
         if release["draft"]:

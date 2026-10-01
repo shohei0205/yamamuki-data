@@ -70,8 +70,6 @@ def publish(dataset, tag, channel, sha256, reason):
     check_branch(channel)
     if dataset_for_tag(tag, channel) != dataset:
         raise ValueError("データ種別とタグが一致しません")
-    if not reason.strip():
-        raise ValueError("確認内容・公開理由を指定してください")
     directory, module = PUBLISHERS[dataset]
     # コマンドと作業場所は登録済みの値だけを使う。検証・公開は各種別が担当する。
     subprocess.run([sys.executable, "-m", module, "publish", "--channel", channel,

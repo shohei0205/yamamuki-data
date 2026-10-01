@@ -48,11 +48,19 @@ class ReleaseDataTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.run_publish(draft=False)
 
-    def test_manual_reason_required(self):
-        with patch.object(release_data, "gh") as gh:
-            with self.assertRaises(ValueError):
-                release_data.publish("peaks-test", "a" * 64, manual=True)
-            gh.assert_not_called()
+    def test_manual_reason_optional_and_recorded(self):
+        for reason in ("", "   ", "件数を確認"):
+            with self.subTest(reason=reason), \
+                    patch.object(release_data, "find_release", return_value=dict(tag_name="peaks-test", draft=True, prerelease=False)), \
+                    patch.object(release_data, "gh"), \
+                    patch.object(release_data, "fetch", return_value=self.current), \
+                    patch.object(release_data, "previous_release", return_value=None), \
+                    patch.object(release_data, "write_report") as report, \
+                    patch.object(release_data, "update_latest") as update:
+                release_data.publish("peaks-test", "a" * 64, manual=True, reason=reason)
+                update.assert_called_once()
+                self.assertIn("確認者: tester", report.call_args.args[1])
+                self.assertIn(reason.strip() or "理由の記入なし", report.call_args.args[1])
 
     def test_corrupt_asset_and_baseline_failure_never_publish(self):
         for method in ("fetch", "previous_release"):

@@ -12,8 +12,8 @@ on:
         required: false
         type: string
       reason:
-        description: '検査結果の確認内容・公開してよい理由'
-        required: true
+        description: '任意：検査結果の確認内容・公開してよい理由'
+        required: false
         type: string
 
 permissions:
