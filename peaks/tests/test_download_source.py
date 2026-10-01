@@ -6,9 +6,12 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+import urllib.error
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from unittest.mock import patch
 
-from scripts.download_source import download, resolve_source, transfer
+from scripts.download_source import download, resolve_source, transfer, request
 
 
 class Response(io.BytesIO):
@@ -113,6 +116,100 @@ class DownloadSourceTests(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 transfer(self.source, self.partial, deadline=time.monotonic() - 1)
         self.assertEqual(b"previous", self.output.read_bytes())
+
+
+class RequestLoggingTests(unittest.TestCase):
+    def test_redirected_head_404_records_both_urls_without_response_body(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_HEAD(self):
+                self.send_response(302 if self.path == "/latest" else 404)
+                if self.path == "/latest":
+                    self.send_header("Location", "/missing")
+                self.send_header("Retry-After", "30")
+                self.send_header("Set-Cookie", "private-cookie")
+                self.end_headers()
+
+            # urllib は転送時に HEAD を GET に変える場合がある。
+            do_GET = do_HEAD
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        worker = Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/latest"
+            with self.assertLogs(level="INFO") as logs:
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    with request(url, method="HEAD"):
+                        self.fail("404 は例外になる")
+            text = "\n".join(logs.output)
+            self.assertEqual(404, caught.exception.code)
+            for part in ("HEAD", url, "/missing", "HTTP 302", "HTTP 404", "Retry-After", "30"):
+                self.assertIn(part, text)
+            self.assertNotIn("private-cookie", text)
+        finally:
+            server.shutdown()
+            worker.join()
+            server.server_close()
+
+    def test_timeout_before_response_keeps_exception_and_url(self):
+        error = TimeoutError("接続待ちが終了")
+        with patch("scripts.download_source.urllib.request.build_opener") as opener, self.assertLogs(level="INFO") as logs:
+            opener.return_value.open.side_effect = error
+            with self.assertRaises(TimeoutError) as caught:
+                with request("https://example.test/file", headers={"Range": "bytes=3-"}):
+                    pass
+        self.assertIs(error, caught.exception)
+        text = "\n".join(logs.output)
+        for part in ("GET", "https://example.test/file", "bytes=3-", "TimeoutError", "HTTP=未取得"):
+            self.assertIn(part, text)
+
+    def test_read_timeout_records_received_response(self):
+        response = Response(status=206, url="https://example.test/dated")
+        with patch("scripts.download_source.urllib.request.build_opener") as opener, self.assertLogs(level="INFO") as logs:
+            opener.return_value.open.return_value = response
+            with self.assertRaises(TimeoutError):
+                with request("https://example.test/latest"):
+                    raise TimeoutError("本文の受信が停止")
+        self.assertTrue(response.closed)
+        text = "\n".join(logs.output)
+        self.assertIn("応答URL=https://example.test/dated", text)
+        self.assertIn("HTTP=206", text)
+        self.assertIn("本文の受信が停止", text)
+
+    def test_http_error_does_not_read_or_log_body(self):
+        body = io.BytesIO(b"private-response-body")
+        error = urllib.error.HTTPError("https://example.test/missing", 404, "Not Found", {}, body)
+        with patch("scripts.download_source.urllib.request.build_opener") as opener, self.assertLogs(level="INFO") as logs:
+            opener.return_value.open.side_effect = error
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                with request("https://example.test/latest"):
+                    pass
+        self.assertIs(error, caught.exception)
+        self.assertTrue(body.closed)
+        self.assertNotIn("private-response-body", "\n".join(logs.output))
+
+    def test_exhausted_retries_record_final_attempt_and_stage(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("scripts.download_source.resolve_source", side_effect=OSError("取得先不明")), \
+                self.assertLogs(level="INFO") as logs:
+            with self.assertRaises(OSError):
+                download(Path(directory) / "source.pbf", attempts=2, retry_delay=0)
+        text = "\n".join(logs.output)
+        for part in ("段階=取得先の日付・サイズ・MD5 の確認", "試行=1/2", "試行=2/2",
+                     "japan-latest.osm.pbf", "OSError", "試行回数の上限"):
+            self.assertIn(part, text)
+
+    def test_invalid_source_records_nonretryable_failure(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("scripts.download_source.resolve_source", side_effect=ValueError("不正な取得先")) as resolve, \
+                self.assertLogs(level="ERROR") as logs:
+            with self.assertRaises(ValueError):
+                download(Path(directory) / "source.pbf")
+        resolve.assert_called_once()
+        self.assertIn("再試行対象外", "\n".join(logs.output))
 
 
 if __name__ == "__main__":
