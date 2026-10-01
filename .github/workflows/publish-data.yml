@@ -1,0 +1,20 @@
+name: 全国の山頂データを生成・検査
+
+on:
+  workflow_dispatch:
+
+# Actions の手動実行一覧に登録するため、dev と同じファイル名で main に置く。
+# Branch に dev を選ぶと、dev 側にある同名のワークフローが実行される。
+permissions:
+  contents: read
+
+jobs:
+  select-dev:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: 開発版の実行ブランチを案内
+        run: |
+          echo 'このブランチには手動実行の入口だけを置いています。Run workflow の Branch に dev を選び、実行し直してください。' >> "$GITHUB_STEP_SUMMARY"
+          echo '::error::開発版を実行するには、Run workflow の Branch に dev を選んでください。'
+          exit 1
