@@ -85,7 +85,9 @@ Co-authored-by: Codex
 - 配るデータは OpenStreetMap 由来で、ODbL で利用・再配布している。README の「© OpenStreetMap contributors」の表示を消さない。
 - 生成したデータと元データ（`*.osm.pbf`）は git に入れず、Releases に置く。
 - `manifest.json` の形式を変えるときは `schemaVersion` を上げる。公開済みのアプリが読めなくなるので、yamamuki 側の対応と順番を決めてから出す。
-- Releases のファイル名と `releases/latest/download/` の URL はアプリに埋め込まれている。変えるときは yamamuki 側の対応を先に出す。
+- 山頂と地形は公開時期が異なるため、最新版の参照先をデータ種別ごとに分ける。山頂の正式版は `releases/download/peaks-latest/manifest.json` と `peaks-<version>`、開発版は `releases/download/peaks-dev-latest/manifest.json` と `peaks-dev-<version>` を使い、リポジトリ全体の `releases/latest` を使わない。アプリへの組み込み時もこの契約に合わせる。公開後に URL やファイル名を変える場合は、yamamuki 側の対応と順番を決める。
+
+- 正式版は `main`、開発版は `dev` のコードから生成・公開する。配布先は実行元ブランチで決め、手動の配布先選択で取り違えないようにする。
 - OpenStreetMap のサーバーやデータの配布元は共有の無料サービス。取得の回数や量を増やす変更は避け、増えるときは PR の説明に理由と量の目安を書く。
 
 ## 変更の確かめ方
@@ -95,9 +97,13 @@ Co-authored-by: Codex
 ```bash
 # 改行コードと BOM の確認
 .github/scripts/check-text-format.sh
+
+# 山頂データの単体テストと小さな PBF での生成テスト
+(cd peaks && python -m unittest discover -s tests -v)
 ```
 
 - CI の「Text format」はすべての PR で動く。
+- 山頂データのテストには Python 3.12 と osmium-tool を使う。osmium がない場合は PBF のテストがスキップされるため、CI では両方を用意してすべて実行する。
 - データを生成するスクリプトやその CI を足したら、その確かめ方をここに書き足す。
 - ロジックを変えたらテストを足す。テストを消したり飛ばしたりして通すことはしない。
 

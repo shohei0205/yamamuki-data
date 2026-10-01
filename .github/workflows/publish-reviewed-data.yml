@@ -1,0 +1,57 @@
+name: 確認済みの山頂データを公開
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '確認済みの山頂タグ（公開済みなら参照先を復旧）（peaks- で始まる値）'
+        required: true
+        type: string
+      sha256:
+        description: '確認した gzip の SHA-256（下書きの説明に記載）'
+        required: true
+        type: string
+      reason:
+        description: '検査結果の確認内容・公開してよい理由'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: peaks
+
+env:
+  PYTHONUNBUFFERED: '1'
+  RELEASE_CHANNEL: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
+
+# 定期実行との同時公開を防ぐため、同じグループで実行する。
+concurrency:
+  group: publish-peaks-${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 確認した下書きを再生成せずに公開
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          EXPECTED_SHA256: ${{ inputs.sha256 }}
+          REVIEW_REASON: ${{ inputs.reason }}
+        run: >-
+          python -m scripts.release_data publish
+          --channel "$RELEASE_CHANNEL" --tag "$RELEASE_TAG" --sha256 "$EXPECTED_SHA256"
+          --manual --reason "$REVIEW_REASON"

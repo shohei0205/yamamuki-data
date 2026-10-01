@@ -1,0 +1,27 @@
+name: 山頂データ生成のテスト
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: peaks
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: osmium を準備
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y osmium-tool
+      - name: 単体テストと小さな PBF での生成テスト
+        run: python -m unittest discover -s tests -v
