@@ -140,6 +140,10 @@ def update_latest(directory, manifest, channel="stable"):
 
 def write_report(path, contents):
     path.write_text(contents, encoding="utf-8-sig", newline="\n")
+    append_summary(contents)
+
+
+def append_summary(contents):
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
             stream.write(contents)
@@ -170,9 +174,12 @@ def prepare(directory, channel="stable"):
         notes = root / "notes.md"
         write_report(notes, report(current, previous, warnings).replace("## データの検査結果", "## データの検査結果（生成後）", 1))
         logging.info("下書き Release を作成し、2ファイルをアップロードします: %s", tag)
-        gh("release", "create", tag, str(Path(directory) / FILE_NAME), str(Path(directory) / "manifest.json"),
+        url = gh("release", "create", tag, str(Path(directory) / FILE_NAME), str(Path(directory) / "manifest.json"),
            "--draft", "--target", os.environ["GITHUB_SHA"], "--title", f"全国の山データ ({channel}) {current[0]['version']}",
-           "--notes-file", str(notes), f"--prerelease={str(channel == 'dev').lower()}")
+           "--notes-file", str(notes), f"--prerelease={str(channel == 'dev').lower()}").strip()
+        append_summary(f"\n## 生成したリリース\n\n[生成したリリースを開く]({url})\n\n"
+                       f"- タグ: `{tag}`\n"
+                       f"- 生成後の扱い: {'下書きで保留（手動確認が必要）' if warnings else '自動公開の段階へ進みます'}\n")
     output(tag=tag, sha256=current[0]["sha256"], auto_publish=str(not warnings).lower())
     logging.info("下書きの保存完了: %s（%s）", tag, "要確認・自動公開しません" if warnings else "検査合格・公開段階へ進みます")
 
@@ -220,6 +227,8 @@ def publish(tag, expected_sha256="", *, manual=False, reason="", channel="stable
         if release["draft"]:
             gh("release", "edit", tag, "--draft=false", "--latest=false")
         update_latest(root, current[0], channel)
+        append_summary(f"\n## 公開したリリース\n\n"
+                       f"[公開したリリースを開く](https://github.com/{os.environ['GH_REPO']}/releases/tag/{tag})\n")
         logging.info("公開完了: %s", tag)
 
 
