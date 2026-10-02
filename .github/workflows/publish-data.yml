@@ -102,15 +102,44 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      pages: write
+      id-token: write
+    # サイト全体を引き継ぐため、正式版・開発版の公開を直列にする。
+    concurrency:
+      group: publish-data-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Pages の設定を確認
+        uses: actions/configure-pages@v5
       - name: 下書きのファイルを再検証して公開
+        id: publication
         env:
+          PAGES_DIRECTORY: ${{ github.workspace }}/build/pages
+          PAGES_INITIALIZE: 'false'
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.generate.outputs.tag }}
           EXPECTED_SHA256: ${{ needs.generate.outputs.sha256 }}
         run: python -m scripts.release_data publish --channel "$RELEASE_CHANNEL" --tag "$RELEASE_TAG" --sha256 "$EXPECTED_SHA256"
+      - name: manifest の配布サイトを保存
+        if: steps.publication.outputs.pages_ready == 'true'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/pages
+      - name: manifest を Pages に配置
+        if: steps.publication.outputs.pages_ready == 'true'
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: 配置した manifest 一覧を確認
+        if: steps.publication.outputs.pages_ready == 'true'
+        working-directory: peaks
+        env:
+          GH_REPO: ${{ github.repository }}
+        run: python -m scripts.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"
