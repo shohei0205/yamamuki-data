@@ -30,7 +30,7 @@ gzip を展開すると、UTF-8 の JSON 配列になる。OSM ノード ID の�
 
 [Releases](https://github.com/shohei0205/yamamuki-data/releases) に、次の 2 ファイルを公開する。
 
-- [manifest.json](https://github.com/shohei0205/yamamuki-data/releases/download/peaks-latest/manifest.json)
+- [manifest.json](https://shohei0205.github.io/yamamuki-data/peaks/manifest.json)
 - データ本体は manifest の `version` と `fileName` から取得先を決める（下記参照）。
 
 `manifest.json` の形式（schemaVersion 3）:
@@ -58,31 +58,41 @@ schemaVersion 3 では、manifest に `latestMountainTimestamp` を追加した�
 
 元データの日付はダウンロード日時とは異なる。同じ元データで再実行すると、配布の `version` は変わる。
 
-Release のタグは `peaks-<version>`。manifest を取得後、`https://github.com/shohei0205/yamamuki-data/releases/download/peaks-<version>/<fileName>` から対応するファイルを取得する。`peaks-latest` は manifest だけを持ち、データ本体は各版に保存する。アプリでは展開前にサイズと SHA-256 を検証する。既存アプリへの読み込み機能の組み込みは、アプリ側の別作業となる。
+Release のタグは `peaks-<version>`。manifest を取得後、`https://github.com/shohei0205/yamamuki-data/releases/download/peaks-<version>/<fileName>` から対応するファイルを取得する。最新版の参照用 manifest は GitHub Pages に置き、データ本体は各版に保存する。アプリでは展開前にサイズと SHA-256 を検証する。既存アプリへの読み込み機能の組み込みは、アプリ側の別作業となる。
 
 山頂データは正式版と開発版の参照先を分ける。リポジトリ全体の `releases/latest` は使わない。
 
-| 配布先 | 最新 manifest を置くタグ | データ本体を置くタグ |
+| 配布先 | Pages のパス | データ本体を置くタグ |
 |---|---|---|
-| 正式版（`stable`） | `peaks-latest` | `peaks-<version>` |
-| 開発版（`dev`） | `peaks-dev-latest` | `peaks-dev-<version>` |
+| 正式版（`stable`） | `peaks/manifest.json` | `peaks-<version>` |
+| 開発版（`dev`） | `peaks-dev/manifest.json` | `peaks-dev-<version>` |
 
-開発版の manifest は `https://github.com/shohei0205/yamamuki-data/releases/download/peaks-dev-latest/manifest.json`、本体は `releases/download/peaks-dev-<version>/<fileName>` から取得する。manifest の形式は共通で、配布先はアプリ側で選び、その配布先のタグを組み立てる。開発版が無い・取得できない場合に正式版へ自動で切り替えない。開発版には参照用 Release も含めて GitHub の Pre-release を付ける。
+開発版の manifest は `https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json`、本体は `releases/download/peaks-dev-<version>/<fileName>` から取得する。manifest の形式は共通で変更しない。配布先はアプリ側で選び、その配布先のタグを組み立てる。開発版が無い・取得できない場合に正式版へ自動で切り替えない。開発版の履歴 Release には GitHub の Pre-release を付ける。
 
-件数・更新日時の比較、初回の手動確認、異常時の下書き保留、手動公開による確認、参照先の復旧は配布先ごとに独立して行う。開発版を正式版の比較基準にせず、開発版の公開で正式版の参照先を更新しない。`latest` と `dev-` で始まる版名はタグの衝突を防ぐため予約する。
+件数・更新日時の比較、初回の手動確認、異常時の下書き保留、手動公開、参照先の復旧は配布先ごとに独立して行う。開発版を正式版の比較基準にせず、開発版の公開で正式版の参照先を更新しない。タグの衝突を防ぐため、`latest` と `dev-` で始まる版名は予約する。
 
-履歴版を公開してから、選択した配布先の最新版 manifest を差し替える。固定ページの説明も毎回更新し、現在の履歴版へのリンク・件数・日時と、このページの役割を表示する。差し替え中は一時的に取得できない場合があるため、アプリは取得・検証に失敗したら保存済みのデータを維持して再試行する。参照先の更新に失敗した場合は、公開済みの同じ Release の URL またはタグと理由を手動公開ワークフローに指定して復旧する（古い版を指定すると意図的な差し戻しになる）。履歴版のデータ本体は再生成・再アップロードしない。`peaks-latest` と `peaks-dev-latest` はアセットを差し替えるため、リリースの不変化を適用しない運用が必要。
+履歴版の公開後、Actions で manifest のサイトを生成し、`upload-pages-artifact` と `deploy-pages` で GitHub Pages に直接配置する。ソースは `main`・`dev` に置き、配布専用ブランチや生成物のコミットは作らない。
+
+サイトには更新処理用の `catalog.json`（schemaVersion 1、`manifests` にパスと manifest の対応を保存）も置く。既存の一覧からサイト全体を作り直し、選択した配布先だけを置き換えるため、他方の配布先・将来の別種別を維持できる。アプリはこれまでどおり各パスの `manifest.json` を使い、一覧を読む必要はない。アプリ用 manifest の形式は変更しない。
+
+自動公開と手動公開は、正式版・開発版共通の `publish-data-pages` グループで直列化する。公開先の一覧と配置した内容が一致するまで最大55秒待ち、反映を確認してからジョブを完了する。一覧の取得や検証に失敗した場合は配置しない。404 の場合も通常の公開では停止し、初期化を明示した初回の手動公開だけが一覧を新しく作る。
+
+ファイルを削除してから上げ直す時間は生じない。キャッシュにより更新前の manifest が返る場合はあるが、履歴版を残すため、その manifest でも対応するデータ本体を取得できる。アプリは通信や検証に失敗したら保存済みデータを維持して再試行する。
+
+参照先の更新に失敗した場合は、公開済みの同じ Release の URL またはタグを手動公開ワークフローに指定して復旧する。古い版を指定すると意図的な差し戻しになる。履歴版のデータ本体は再生成・再アップロードしない。公開済みの履歴 Release には不変化を適用できる。
 
 ## 作り方
 
+利用開始時に、リポジトリの Settings → Pages → Build and deployment の Source を **GitHub Actions** にし、`github-pages` 環境の配置元として `main` と `dev` を許可する。
+
 [全国の山頂データを生成・検査](https://github.com/shohei0205/yamamuki-data/actions/workflows/publish-data.yml) は、毎月 1 日の UTC 03:23（日本時間 12:23）に `main` で動く。GitHub の混雑で開始が遅れる場合がある。
 
-手動で動かすときは Actions の「全国の山頂データを生成・検査」→「Run workflow」で正式版なら `main`、開発版なら `dev` を選ぶ。この2つ以外のブランチでは公開しない。リポジトリの `GITHUB_TOKEN` に `contents: write` を付与し、追加のトークンは使わない。
+手動で動かすときは Actions の「全国の山頂データを生成・検査」→「Run workflow」で正式版なら `main`、開発版なら `dev` を選ぶ。この2つ以外のブランチでは公開しない。公開ジョブの `GITHUB_TOKEN` に `contents: write`・`pages: write`・`id-token: write` を付与し、追加のトークンは使わない。
 
 1. 単体テストと、小さな PBF による生成テストを行う。
 2. Geofabrik の `japan-latest.osm.pbf` から日付付き URL を確定する。取得対象日を指定した場合は、その日付の URL を直接使い、全国データを取得する。途中で切れたら同じ版の続きから再開し、配布元の MD5 と照合する。Overpass API は使わない。
 3. `osmium tags-filter` で対象ノードだけを抽出し、配布ファイルと manifest を作る。
-4. 選択した配布先の前回 manifest（正式版は `peaks-latest`、開発版は `peaks-dev-latest`）を取得・検証し、全国と地域別の件数、元データの日時、形式の版を比較する。件数・前回との差・検査結果・圧縮サイズ・元データの日時・SHA-256 を、下書きの説明と Actions の実行概要に記録する。
+4. Pages の選択した配布先の前回 manifest（正式版は `peaks/manifest.json`、開発版は `peaks-dev/manifest.json`）を取得・検証し、全国と地域別の件数、元データの日時、形式の版を比較する。件数・前回との差・検査結果・圧縮サイズ・元データの日時・SHA-256 を、下書きの説明と Actions の実行概要に記録する。
 5. 両ファイルを下書き Release に添付する。検査に合格した場合だけ、別の公開ジョブが下書きのファイルをダウンロードし、再検証して公開する。履歴版を公開後、その配布先の最新版 manifest を更新する。
 
 Actions の各ステップでは、時刻付きで処理の開始・完了をログに出す。Python の出力はためずに随時表示する。
@@ -129,7 +139,7 @@ Actions の各ステップでは、時刻付きで処理の開始・完了をロ
 
 利用開始には、このワークフローを `main` と `dev` の両方に配置する。開発中の生成処理は `dev` で確認し、正式版に採用するときは変更を `main` へ取り込む。
 
-同じ配布先の生成・公開・手動復旧は共通の実行グループで直列化する。正式版と開発版は別のグループなので、互いの公開待ちにはならない。開発版から正式版への自動昇格は行わず、正式版が必要なときは `main` を選んで生成する。両方の初回は下書きに残るので、確認して手動公開する。
+生成は配布先ごとのグループで直列化する。公開・手動復旧・Pages の配置は正式版と開発版で共通のグループを使い、他の参照先の引き継ぎから配置まで順番に行う。開発版から正式版への自動昇格は行わず、正式版が必要なときは `main` を選んで生成する。両方の初回は下書きに残るので、確認して手動公開する。
 
 ### 取得対象日を指定する
 
@@ -153,7 +163,7 @@ Actions では取得前に配布元の日付付き URL・サイズ・MD5 を確�
 
 ### Summary で実行内容を確認する
 
-生成・検査では取得対象日、手動公開では入力した URL またはタグ・SHA-256・確認内容と公開理由を、処理の冒頭に Summary へ表示する。共通してブランチ・イベント・実行者・実行回数・配布先も表示する。空欄の場合は latest の取得・SHA-256 の自動取得・理由の未記入を明記する。
+生成・検査では取得対象日、手動公開では入力した URL またはタグ・SHA-256・確認内容と公開理由・Pages 初期化の指定を、処理の冒頭に Summary へ表示する。共通してブランチ・イベント・実行者・実行回数・配布先も表示する。空欄の場合は latest の取得・SHA-256 の自動取得・理由の未記入を明記する。
 
 実際の件数などは「データの検査結果（生成後）」と「データの検査結果（公開前の再検査）」で区別する。生成が完了すると「生成したリリース」に、GitHub が返した実際の URL・タグ・下書き保留か自動公開へ進むかを表示する。下書きの `untagged-...` URL もそのまま使う。公開が完了した場合は公開ジョブの Summary に公開後の URL も表示する。単体テストのダミーデータは Summary に出さない。過去の実行に保存された Summary はこの変更では書き換わらない。
 
@@ -164,9 +174,11 @@ Actions では取得前に配布元の日付付き URL・サイズ・MD5 を確�
 3. `tag` 欄に確認した Release ページの URL を貼り付け、確認内容・公開理由は必要に応じて入力する（空欄でも実行可能）。`untagged-...` を含む下書きの URL も使える。従来の対象タグ（正式版は `peaks-<version>`、開発版は `peaks-dev-<version>`）も指定できる。`sha256` 欄は空欄でよく、Release の検査結果から自動取得する。配布先とタグ、Pre-release の有無が一致しない場合は公開を止める。
 4. 下書きの2ファイルを取得・再検証し、検査結果に記録された SHA-256（明示した場合は入力値）と一致した場合に、警告を承認して公開する。公開者と理由を Release の説明に残し、空欄の場合は「理由の記入なし」と記録する。
 
+Pages に初めて配置するときだけ、`initialize_pages` を選ぶ。以後は選ばず、公開済みの一覧を引き継いで他の配布先を維持する。
+
 検査結果の SHA-256 が欠けている場合は自動取得できないため、確認した値を明示する。自動公開では引き続き生成ジョブが渡す SHA-256 を必須とする。
 
-この処理では再ダウンロード・再生成・アセットの差し替えを行わない。前回公開版との比較もやり直すため、通信失敗や前回ファイルの破損で比較できない場合は手動公開も停止する。定期実行と手動公開は共通の実行グループで直列に動かす。
+この処理では再ダウンロード・再生成・アセットの差し替えを行わない。前回公開版との比較もやり直すため、通信失敗や前回ファイルの破損で比較できない場合は手動公開も停止する。自動公開と手動公開のジョブは共通の実行グループで直列に動かす。
 
 検証を通すため、下書きは GitHub の公開ボタンから直接公開せず、このワークフローを使う。アプリ側が新形式に対応しているかの確認も、形式変更時の手動公開で行う。
 

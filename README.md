@@ -25,7 +25,7 @@ peaks/
 
 ## 配布の方針
 
-生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データと生成物は git に含めない。
+生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データとデータ本体は git に含めない。最新版を示す小さな `manifest.json` は、Actions の生成物として GitHub Pages に公開する。
 
 データの種類ごとに公開時期と最新版の参照先を分ける。正式版と開発版も独立して扱い、リポジトリ全体の `releases/latest` はアプリの参照先に使わない。具体的な URL とタグは各データの文書を参照する。山頂データの manifest には、実際に取得・検証した日付付き URL を `sourceUrl` として記録する。
 
@@ -38,18 +38,16 @@ peaks/
 
 正式版も開発版も、このリポジトリの同じ [Releases 一覧](https://github.com/shohei0205/yamamuki-data/releases) に公開する。`main`・`dev` は生成処理の実行元で、配布ファイルは各 Release の **Assets** に添付する。データの種類と正式版・開発版の違いは、Release のタグで区別する。
 
-山頂データでは、公開後に次の4種類の Release が並ぶ。`<version>` は生成ごとの版を表し、各版の Release は履歴として残す。
+山頂データ本体は、正式版の `peaks-<version>` と開発版の `peaks-dev-<version>` の Release に置く。各版の Assets は `manifest.json` と `japan-mountains.json.gz` で、公開後は差し替えない。
 
-| Release のタグ | 役割 | Assets に置くファイル |
-|---|---|---|
-| [`peaks-latest`](https://github.com/shohei0205/yamamuki-data/releases/tag/peaks-latest) | 正式版の最新版を案内する固定の参照先 | `manifest.json` のみ |
-| `peaks-<version>` | 正式版の各版 | `manifest.json` と `japan-mountains.json.gz` |
-| [`peaks-dev-latest`](https://github.com/shohei0205/yamamuki-data/releases/tag/peaks-dev-latest) | 開発版の最新版を案内する固定の参照先（Pre-release） | `manifest.json` のみ |
-| `peaks-dev-<version>` | 開発版の各版（Pre-release） | `manifest.json` と `japan-mountains.json.gz` |
+最新版を示す manifest は GitHub Pages に置く。`main`・`dev` のコードでサイトのファイルを生成して直接配置するため、配布専用ブランチは作らない。生成物も git に入れない。
 
-アプリが正式版を取得するときは、まず `peaks-latest` の `manifest.json` を読み、その `version` に対応する `peaks-<version>` の Assets からデータ本体を取得する。開発版は同じ手順で `peaks-dev-latest` → `peaks-dev-<version>` を使う。新しい版の公開後に固定の参照先の manifest を更新するため、アプリは毎回 Releases 一覧から最新版を探す必要がない。
+| 配布先 | アプリが読む固定 URL |
+|---|---|
+| 正式版 | `https://shohei0205.github.io/yamamuki-data/peaks/manifest.json` |
+| 開発版 | `https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json` |
 
-固定の参照先は初回の公開時に作成する。下書きの手動公開は Release ページの URL で指定でき（確認理由は任意）、SHA-256 の転記は不要（[手動公開の手順](peaks/README.md#確認済みの下書きを手動公開する)）。確認待ちの下書きはアプリの取得先に含めない。将来の地形データも同じ Releases 一覧に、山頂とは別のタグで追加する。取得 URL とファイル形式の詳細は [山頂データの仕様と運用](peaks/README.md) を参照する。
+アプリは manifest の `version` と `fileName` から、選択した配布先の版ごとの Release の取得先を組み立てる。履歴版を公開してから参照先を Pages の配置で更新し、途中でファイルを削除しない。確認待ちの下書きは参照先に含めない。正式版・開発版・将来の地形データは別のパスに置き、リポジトリ全体の Latest は参照しない。
 
 ## 確認済みデータの公開
 
@@ -57,9 +55,9 @@ Actions の「確認済みのデータを公開」を共通の入口とする。
 
 共通の振り分け処理は `release_tools/`、データ固有の検証・公開処理は各データのフォルダに置く。現時点で対応するのは山頂（`peaks`）のみ。将来は地形用の検証・公開処理を実装し、`release_tools/publish_reviewed.py` の登録表に追加する。地形専用の手動公開アクションを増やす必要はない。地形の生成アクションや公開時期は別に設定できる。
 
-同じ種別・配布先の生成と公開は共通の実行グループ `publish-<種別>-<stable|dev>` で直列化する。別の種別・配布先は独立して動く。未対応の種別や最新版参照タグを公開対象に指定すると停止する。
+山頂データの生成は配布先ごとに直列化する。自動公開と手動公開のジョブは共通の `publish-data-pages` グループで直列化し、既存のサイトを引き継いでから配置する。正式版・開発版は別のパスに保ち、片方の公開で他方の参照先を消さない。未対応の種別や最新版参照タグを公開対象に指定すると停止する。
 
-最新版の固定ページには、現在のデータ本体へのリンク・件数・日時を表示する。公開時に説明と `manifest.json` を更新し、下書きで保留された場合は更新しない。
+最新版 manifest の固定 URL と Pages の配置結果は公開ジョブの Summary に表示する。下書きで保留された場合は参照先を更新しない。
 
 両方の Actions（生成・検査と確認済みデータの公開）は、処理の冒頭に Summary へ実行パラメーターを表示する。未入力の場合の扱いも明記する。生成した Release へのリンクも Summary に表示し、下書きの確認へ移動できる。
 

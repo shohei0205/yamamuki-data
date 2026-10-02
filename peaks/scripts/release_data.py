@@ -8,7 +8,11 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 import zlib
+import uuid
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 from urllib.parse import urlsplit
 
 from scripts.build_data import FILE_NAME
@@ -71,21 +75,55 @@ def reviewed_checksum(release):
     return matches[0]
 
 
-def previous_release(directory, channel="stable"):
-    latest_tag = prefix(channel) + "latest"
-    entries = releases()
-    latest = next((r for r in entries if r["tag_name"] == latest_tag), None)
-    # 初回公開や初回の参照先作成失敗は、必ず手動確認に回す。
-    if latest is None or latest["draft"]:
+def manifest_path(channel):
+    prefix(channel)
+    return ("peaks" if channel == "stable" else "peaks-dev") + "/manifest.json"
+
+
+def pages_url():
+    endpoint("")
+    owner, repo = os.environ["GH_REPO"].split("/")
+    return f"https://{owner.lower()}.github.io/{repo}"
+
+
+def read_catalog():
+    # 更新直後の古いキャッシュを避け、サイト全体を1回の応答から引き継ぐ。
+    request = Request(f"{pages_url()}/catalog.json?update={uuid.uuid4().hex}",
+                      headers={"Cache-Control": "no-cache", "User-Agent": "yamamuki-data"})
+    try:
+        with urlopen(request, timeout=60) as response:
+            catalog = json.load(response)
+    except HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+    if not isinstance(catalog, dict) or catalog.get("schemaVersion") != 1:
+        raise ValueError("配布サイトの一覧の形式が不正です")
+    manifests = catalog.get("manifests")
+    if not isinstance(manifests, dict):
+        raise ValueError("配布サイトの manifest 一覧が不正です")
+    for path, manifest in manifests.items():
+        if (not re.fullmatch(r"[a-z][a-z0-9-]*/manifest\.json", path)
+                or not isinstance(manifest, dict)):
+            raise ValueError("配布サイトに不正な manifest のパスや内容があります")
+    return manifests
+
+
+def read_manifest(channel):
+    path = manifest_path(channel)
+    catalog = read_catalog()
+    if catalog is None:
         return None
-    if latest["prerelease"] != (channel == "dev"):
-        raise ValueError("最新版参照の正式版・開発版の区分が一致しません")
-    pointer = directory / "pointer"
-    gh("release", "download", latest_tag, "--pattern", "manifest.json", "--dir", str(pointer))
-    manifest = json.loads((pointer / "manifest.json").read_text(encoding="utf-8"))
+    return catalog.get(path)
+
+
+def previous_release(directory, channel="stable"):
+    manifest = read_manifest(channel)
+    # 初回公開は、必ず手動確認に回す。
+    if manifest is None:
+        return None
     tag = release_tag(manifest["version"], channel)
-    check_tag(tag, channel)
-    target = next((r for r in entries if r["tag_name"] == tag), None)
+    target = next((r for r in releases() if r["tag_name"] == tag), None)
     if target is None or target["draft"] or target["prerelease"] != (channel == "dev"):
         raise ValueError("山頂の参照先が公開済みの版ではありません")
     logging.info("前回の山頂公開版を取得しています: %s", tag)
@@ -95,47 +133,46 @@ def previous_release(directory, channel="stable"):
     return previous
 
 
-def latest_description(manifest, channel="stable"):
-    tag = release_tag(manifest["version"], channel)
-    endpoint("")  # リンクに使うリポジトリ名も検証する。
-    base = f"https://github.com/{os.environ['GH_REPO']}/releases"
-    label = "開発版（Pre-release）" if channel == "dev" else "正式版"
-    title = f"山頂データ・{label}の最新版"
-    notes = (
-        f"ここは山頂データの**{label}の最新版を案内する固定ページ**です。\n\n"
-        f"## 現在のデータ\n\n"
-        f"- [データ本体と検査結果を見る]({base}/tag/{tag})\n"
-        f"- 版: `{manifest['version']}`\n"
-        f"- 山頂数: {manifest['mountainCount']:,} 件\n"
-        f"- 元データの日時: {manifest['sourceTimestamp']}\n"
-        f"- 収録山頂の最新編集日時: {manifest.get('latestMountainTimestamp', '旧形式のため記録なし')}\n\n"
-        "## このページの役割\n\n"
-        "このページの Assets には、アプリが最新版を知るための `manifest.json` だけを置いています。"
-        "山頂データ本体は上のリンク先の Assets からダウンロードできます。\n\n"
-        "新しいデータを公開すると、このページの説明と `manifest.json` を更新します。"
-        "検査で下書きに保留された場合は更新しません。各版のデータは履歴として残ります。\n\n"
-        "© OpenStreetMap contributors — [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/)\n"
-    )
-    return title, notes
-
-
 def update_latest(directory, manifest, channel="stable"):
-    latest_tag = prefix(channel) + "latest"
-    # 検証済みの履歴版が公開された後だけ、山頂専用の参照先を更新する。
-    latest = next((r for r in releases() if r["tag_name"] == latest_tag), None)
-    if latest is not None and latest["prerelease"] != (channel == "dev"):
-        raise ValueError("最新版参照の正式版・開発版の区分が一致しません")
-    title, notes = latest_description(manifest, channel)
-    path = directory / "manifest.json"
-    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
-    if latest is None:
-        gh("release", "create", latest_tag, str(path), "--draft", "--target", os.environ["GITHUB_SHA"],
-           "--title", title, "--notes", notes,
-           f"--prerelease={str(channel == 'dev').lower()}")
-    else:
-        gh("release", "upload", latest_tag, str(path), "--clobber")
-    gh("release", "edit", latest_tag, "--draft=false", "--latest=false",
-       f"--prerelease={str(channel == 'dev').lower()}", "--title", title, "--notes", notes)
+    path = manifest_path(channel)
+    release_tag(manifest["version"], channel)
+    catalog = read_catalog()
+    if catalog is None:
+        if os.environ.get("PAGES_INITIALIZE") != "true":
+            raise ValueError("配布サイトの一覧を取得できません。初回公開だけ手動公開の初期化を指定してください")
+        catalog = {}
+    catalog[path] = manifest
+    destination = Path(os.environ.get("PAGES_DIRECTORY", "../build/pages"))
+    if destination.exists():
+        raise ValueError("Pages の出力先が既にあります。空の出力先を指定してください")
+    destination.mkdir(parents=True)
+    for target, contents in catalog.items():
+        file = destination / target
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(json.dumps(contents, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    (destination / "catalog.json").write_text(
+        json.dumps({"schemaVersion": 1, "manifests": catalog}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8", newline="\n")
+    (destination / ".nojekyll").write_text("", encoding="utf-8")
+    # Actions の Pages 配置が成功するまで「更新完了」とは扱わない。
+    output(pages_ready="true")
+    append_summary(f"\n## 配置する最新版の参照先\n\n[manifest.json を開く]({pages_url()}/{path})\n"
+                   "\nPages の配置結果は後続のステップで確認してください。\n")
+
+
+def verify_pages(directory):
+    expected = json.loads((directory / "catalog.json").read_text(encoding="utf-8"))["manifests"]
+    # 配置直後の反映を待ってから、次の公開ジョブに進ませる。
+    for attempt in range(12):
+        try:
+            if read_catalog() == expected:
+                append_summary("\n## Pages の配置結果\n\n成功: 公開先の manifest 一覧が配置内容と一致しました。\n")
+                return
+        except (OSError, ValueError):
+            logging.warning("Pages の反映をまだ確認できません", exc_info=True)
+        if attempt < 11:
+            time.sleep(5)
+    raise RuntimeError("Pages の配置内容を取得できません。次の公開前に配布サイトを確認してください")
 
 
 def write_report(path, contents):
@@ -245,11 +282,15 @@ def main():
     release.add_argument("--sha256", default="")
     release.add_argument("--manual", action="store_true")
     release.add_argument("--reason", default="")
+    pages = commands.add_parser("verify-pages")
+    pages.add_argument("--directory", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "prepare":
         prepare(args.directory, args.channel)
-    else:
+    elif args.command == "publish":
         publish(args.tag, args.sha256, manual=args.manual, reason=args.reason, channel=args.channel)
+    else:
+        verify_pages(args.directory)
 
 
 if __name__ == "__main__":

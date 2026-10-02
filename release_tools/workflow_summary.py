@@ -29,6 +29,7 @@ def render(kind, inputs, environment):
             ("対象の URL またはタグ（tag）", inputs.get("tag") or "未指定"),
             ("指定した SHA-256（sha256）", inputs.get("sha256") or "未指定（検査結果から自動取得）"),
             ("確認内容・公開理由（reason）", inputs.get("reason") or "未記入"),
+            ("Pages の初期化（initialize_pages）", "指定あり" if inputs.get("initialize_pages") is True else "指定なし"),
         ])
     else:
         raise ValueError("未対応のワークフローです")
