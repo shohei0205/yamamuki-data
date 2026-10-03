@@ -33,3 +33,10 @@ def check_branch(channel):
     expected = {"refs/heads/main": "stable", "refs/heads/dev": "dev"}.get(os.environ.get("GITHUB_REF"))
     if expected != channel:
         raise ValueError("正式版は main、開発版は dev ブランチから実行してください")
+
+
+def download_url(version, channel="stable"):
+    repo = os.environ.get("GH_REPO") or os.environ.get("GITHUB_REPOSITORY", "shohei0205/yamamuki-data")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        raise ValueError("リポジトリ名が不正です")
+    return f"https://github.com/{repo}/releases/download/{release_tag(version, channel)}/japan-mountains.json.gz"

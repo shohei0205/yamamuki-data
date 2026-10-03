@@ -68,7 +68,9 @@ class CheckReleaseTests(unittest.TestCase):
             rows = dataset(2)[1]
             write_distribution(rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
             self.assertEqual(rows, validate(root, tag="peaks-test")[1])
+            write_distribution(rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z", channel="dev")
             self.assertEqual(rows, validate(root, tag="peaks-dev-test", channel="dev")[1])
+            write_distribution(rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
             with self.assertRaises(ValueError):
                 validate(root, tag="peaks-dev-test", channel="stable")
             with self.assertRaises(ValueError):
@@ -114,3 +116,27 @@ class CheckReleaseTests(unittest.TestCase):
                     write_distribution(rows, directory, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
                     with self.assertRaises(ValueError):
                         validate(directory)
+
+
+class DownloadUrlTests(unittest.TestCase):
+    def test_urls_match_channel_and_reject_invalid_targets(self):
+        for channel, tag in (("stable", "peaks-test"), ("dev", "peaks-dev-test")):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                manifest = write_distribution(dataset(2)[1], root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z", channel=channel)
+                expected = f"https://github.com/shohei0205/yamamuki-data/releases/download/{tag}/{FILE_NAME}"
+                self.assertEqual(expected, manifest["downloadUrl"])
+                validate(root, tag=tag, channel=channel)
+                for value in (None, "https://example.com/data.gz", expected.replace("test", "other"), expected.replace("https:", "http:")):
+                    changed = dict(manifest, downloadUrl=value)
+                    (root / "manifest.json").write_text(json.dumps(changed), encoding="utf-8")
+                    with self.assertRaises(ValueError):
+                        validate(root, tag=tag, channel=channel)
+                changed = dict(manifest)
+                del changed["downloadUrl"]
+                (root / "manifest.json").write_text(json.dumps(changed), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    validate(root, channel=channel)
+                changed["schemaVersion"] = 3
+                (root / "manifest.json").write_text(json.dumps(changed), encoding="utf-8")
+                validate(root, channel=channel)
