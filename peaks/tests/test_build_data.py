@@ -148,7 +148,7 @@ class BuildDataTests(unittest.TestCase):
         raw = gzip.decompress(archive)
         self.assertEqual(mountains, json.loads(raw))
         self.assertEqual(manifest, json.loads((self.root / "manifest.json").read_text(encoding="utf-8")))
-        self.assertEqual(3, manifest["schemaVersion"])
+        self.assertEqual(4, manifest["schemaVersion"])
         self.assertEqual("20260930-1", manifest["version"])
         self.assertEqual(TIMESTAMP, manifest["sourceTimestamp"])
         self.assertEqual("2026-09-29T12:00:00Z", manifest["latestMountainTimestamp"])

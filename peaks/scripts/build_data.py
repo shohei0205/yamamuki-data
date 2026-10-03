@@ -1,6 +1,7 @@
 """osmium で抽出した山頂ノードを、全国版の配布ファイルにする。"""
 
 import argparse
+import os
 from datetime import datetime, timezone
 import gzip
 import hashlib
@@ -14,6 +15,12 @@ import tempfile
 import time
 from urllib.parse import quote
 import xml.etree.ElementTree as ET
+
+
+if __package__:
+    from scripts.release_channels import download_url
+else:
+    from release_channels import download_url
 
 
 SOURCE_URL = "https://download.geofabrik.de/asia/japan-latest.osm.pbf"
@@ -117,9 +124,10 @@ def normalize_timestamp(value):
     return stamp.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL):
+def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL, channel="stable"):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
         raise ValueError("版は英数字・ピリオド・ハイフン・下線で指定してください")
+    target_url = download_url(version, channel)
     source_timestamp = normalize_timestamp(source_timestamp)
     latest_mountain_timestamp = normalize_timestamp(latest_mountain_timestamp)
     if latest_mountain_timestamp > source_timestamp:
@@ -141,9 +149,10 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
             raise ValueError(f"圧縮後のサイズが {MAX_SIZE_BYTES} バイトを超えました。分割を検討してください")
         logging.info("SHA-256 を計算し、manifest を作成しています")
         manifest = {
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "version": version,
             "fileName": FILE_NAME,
+            "downloadUrl": target_url,
             "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
             "sizeBytes": size,
             "uncompressedSizeBytes": len(raw),
@@ -183,7 +192,7 @@ def verified_source_url(pbf):
     return url
 
 
-def build(pbf, output_dir, version):
+def build(pbf, output_dir, version, *, channel="stable"):
     started = time.monotonic()
     source_url = verified_source_url(pbf)
     logging.info("全国データの生成を開始します: %s（版 %s）", pbf, version)
@@ -204,7 +213,7 @@ def build(pbf, output_dir, version):
         )
         logging.info("osmium の抽出完了")
         mountains, latest_timestamp = read_mountains(extracted)
-        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url)
+        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel)
     logging.info("全国データの生成完了（経過 %.1f 秒）", time.monotonic() - started)
     return manifest
 
@@ -215,8 +224,9 @@ def main():
     parser.add_argument("pbf", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("dist"))
     parser.add_argument("--version", required=True)
+    parser.add_argument("--channel", choices=("stable", "dev"), default=os.environ.get("RELEASE_CHANNEL", "stable"))
     args = parser.parse_args()
-    manifest = build(args.pbf, args.output_dir, args.version)
+    manifest = build(args.pbf, args.output_dir, args.version, channel=args.channel)
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
 
 

@@ -31,14 +31,15 @@ gzip を展開すると、UTF-8 の JSON 配列になる。OSM ノード ID の�
 [Releases](https://github.com/shohei0205/yamamuki-data/releases) に、次の 2 ファイルを公開する。
 
 - [manifest.json](https://shohei0205.github.io/yamamuki-data/peaks/manifest.json)
-- データ本体は manifest の `version` と `fileName` から取得先を決める（下記参照）。
+- データ本体は manifest の `downloadUrl` から取得する。
 
-`manifest.json` の形式（schemaVersion 3）:
+`manifest.json` の形式（schemaVersion 4）:
 
 | 項目 | 内容 |
 |---|---|
-| `schemaVersion` | 形式の版。現在は整数の `3`。JSON 配列の形式も対象とする |
+| `schemaVersion` | 形式の版。現在は整数の `4`。JSON 配列の形式も対象とする |
 | `version` | 生成時の UTC 日時・Actions の実行 ID・再実行番号をつないだ文字列 |
+| `downloadUrl` | データ本体の取得 URL。正式版は `peaks-<version>`、開発版は `peaks-dev-<version>` の Release の gzip ファイルを指す |
 | `fileName` | `japan-mountains.json.gz` |
 | `sha256` | gzip ファイルそのものの SHA-256（小文字の16進数） |
 | `sizeBytes` | gzip ファイルのバイト数 |
@@ -58,7 +59,9 @@ schemaVersion 3 では、manifest に `latestMountainTimestamp` を追加した�
 
 元データの日付はダウンロード日時とは異なる。同じ元データで再実行すると、配布の `version` は変わる。
 
-Release のタグは `peaks-<version>`。manifest を取得後、`https://github.com/shohei0205/yamamuki-data/releases/download/peaks-<version>/<fileName>` から対応するファイルを取得する。最新版の参照用 manifest は GitHub Pages に置き、データ本体は各版に保存する。アプリでは展開前にサイズと SHA-256 を検証する。既存アプリへの読み込み機能の組み込みは、アプリ側の別作業となる。
+schemaVersion 4 では `downloadUrl` を追加した。山ごとの JSON の項目は版3から変更していない。版1〜3の検証も引き続き可能。新しく生成する版4では URL を必須とし、公開前にリポジトリ・版・配布先・ファイル名との一致を確認する。Release に添付する manifest と Pages に配置する manifest は同じ URL を持つ。
+
+Release のタグは `peaks-<version>`。アプリは manifest の `downloadUrl` から対応するファイルを取得する。最新版の参照用 manifest は GitHub Pages に置き、データ本体は各版に保存する。アプリでは展開前にサイズと SHA-256 を検証する。既存アプリへの読み込み機能の組み込みは、アプリ側の別作業となる。
 
 山頂データは正式版と開発版の参照先を分ける。リポジトリ全体の `releases/latest` は使わない。
 
@@ -67,13 +70,13 @@ Release のタグは `peaks-<version>`。manifest を取得後、`https://github
 | 正式版（`stable`） | `peaks/manifest.json` | `peaks-<version>` |
 | 開発版（`dev`） | `peaks-dev/manifest.json` | `peaks-dev-<version>` |
 
-開発版の manifest は `https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json`、本体は `releases/download/peaks-dev-<version>/<fileName>` から取得する。manifest の形式は共通で変更しない。配布先はアプリ側で選び、その配布先のタグを組み立てる。開発版が無い・取得できない場合に正式版へ自動で切り替えない。開発版の履歴 Release には GitHub の Pre-release を付ける。
+開発版の manifest は `https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json`、本体は manifest の `downloadUrl` から取得する。正式版と開発版で manifest の形式は共通とする。配布先はアプリ側で選ぶ。開発版が無い・取得できない場合に正式版へ自動で切り替えない。開発版の履歴 Release には GitHub の Pre-release を付ける。
 
 件数・更新日時の比較、初回の手動確認、異常時の下書き保留、手動公開、参照先の復旧は配布先ごとに独立して行う。開発版を正式版の比較基準にせず、開発版の公開で正式版の参照先を更新しない。タグの衝突を防ぐため、`latest` と `dev-` で始まる版名は予約する。
 
 履歴版の公開後、Actions で manifest のサイトを生成し、`upload-pages-artifact` と `deploy-pages` で GitHub Pages に直接配置する。ソースは `main`・`dev` に置き、配布専用ブランチや生成物のコミットは作らない。
 
-サイトには更新処理用の `catalog.json`（schemaVersion 1、`manifests` にパスと manifest の対応を保存）も置く。既存の一覧からサイト全体を作り直し、選択した配布先だけを置き換えるため、他方の配布先・将来の別種別を維持できる。アプリはこれまでどおり各パスの `manifest.json` を使い、一覧を読む必要はない。アプリ用 manifest の形式は変更しない。
+サイトには更新処理用の `catalog.json`（schemaVersion 1、`manifests` にパスと manifest の対応を保存）も置く。既存の一覧からサイト全体を作り直し、選択した配布先だけを置き換えるため、他方の配布先・将来の別種別を維持できる。アプリはこれまでどおり各パスの `manifest.json` を使い、一覧を読む必要はない。
 
 自動公開と手動公開は、正式版・開発版共通の `publish-data-pages` グループで直列化する。公開先の一覧と配置した内容が一致するまで最大55秒待ち、反映を確認してからジョブを完了する。一覧の取得や検証に失敗した場合は配置しない。404 の場合も通常の公開では停止し、初期化を明示した初回の手動公開だけが一覧を新しく作る。
 
@@ -193,6 +196,8 @@ python -u scripts/download_source.py
 python scripts/build_data.py build/japan-latest.osm.pbf \
   --version local-20260930 --output-dir dist
 ```
+
+開発版を手元で生成するときは、生成コマンドに `--channel dev` を指定する。省略時は `RELEASE_CHANNEL` の値、未設定なら正式版を使う。取得 URL のリポジトリは `GH_REPO`、未設定なら `GITHUB_REPOSITORY`、どちらも未設定なら `shohei0205/yamamuki-data` を使う。
 
 取得時に PBF の隣へ `<PBF のファイル名>.source.json` を保存し、URL・サイズ・MD5 を記録する。取得済みファイルを再利用した場合も記録を作る。生成時に記録と PBF を照合し、日付付き URL を manifest の `sourceUrl` に引き継ぐ。記録の欠落や不一致は生成を止める。既存の PBF に記録がない場合は、同じ対象日で取得コマンドを再実行すると、内容が一致すれば再ダウンロードせずに記録を作れる。
 

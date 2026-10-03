@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 
 from scripts.build_data import FILE_NAME, MAX_SIZE_BYTES
-from scripts.release_channels import release_tag
+from scripts.release_channels import download_url, release_tag
 
 
 MIN_COUNT = 10_000
@@ -36,7 +36,7 @@ def validate(directory, *, tag=None, channel="stable"):
     for key in ("mountainCount", "sizeBytes", "uncompressedSizeBytes"):
         if type(manifest.get(key)) is not int or manifest[key] <= 0:
             raise ValueError(f"{key} は正の整数で指定してください")
-    if type(manifest.get("schemaVersion")) is not int or manifest["schemaVersion"] not in (1, 2, 3):
+    if type(manifest.get("schemaVersion")) is not int or manifest["schemaVersion"] not in (1, 2, 3, 4):
         raise ValueError("未対応の schemaVersion です")
     version = manifest.get("version")
     if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
@@ -45,6 +45,9 @@ def validate(directory, *, tag=None, channel="stable"):
         raise ValueError("Release のタグと manifest の版が一致しません")
     if manifest.get("fileName") != FILE_NAME:
         raise ValueError("配布ファイル名が不正です")
+    if manifest["schemaVersion"] >= 4 or "downloadUrl" in manifest:
+        if manifest.get("downloadUrl") != download_url(version, channel):
+            raise ValueError("データ本体の取得 URL が Release の版や配布先と一致しません")
     source_time(manifest["sourceTimestamp"])
     if manifest["schemaVersion"] >= 3:
         latest = source_time(manifest.get("latestMountainTimestamp"))

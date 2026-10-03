@@ -196,7 +196,7 @@ def output(**values):
 def prepare(directory, channel="stable"):
     check_branch(channel)
     logging.info("生成した配布ファイルを検証しています")
-    current = validate(directory)
+    current = validate(directory, channel=channel)
     tag = release_tag(current[0]["version"], channel)
     check_tag(tag, channel)
     with tempfile.TemporaryDirectory() as temporary:
