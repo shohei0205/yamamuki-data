@@ -70,7 +70,7 @@ Release のタグは `peaks-<version>`。アプリは manifest の `downloadUrl`
 | 正式版（`stable`） | `peaks/manifest.json` | `peaks-<version>` |
 | 開発版（`dev`） | `peaks-dev/manifest.json` | `peaks-dev-<version>` |
 
-開発版の manifest は `https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json`、本体は manifest の `downloadUrl` から取得する。正式版と開発版で manifest の形式は共通とする。配布先はアプリ側で選ぶ。開発版が無い・取得できない場合に正式版へ自動で切り替えない。開発版の履歴 Release には GitHub の Pre-release を付ける。
+開発版の manifest は [https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json)、本体は manifest の `downloadUrl` から取得する。正式版と開発版で manifest の形式は共通とする。配布先はアプリ側で選ぶ。開発版が無い・取得できない場合に正式版へ自動で切り替えない。開発版の履歴 Release には GitHub の Pre-release を付ける。
 
 件数・更新日時の比較、初回の手動確認、異常時の下書き保留、手動公開、参照先の復旧は配布先ごとに独立して行う。開発版を正式版の比較基準にせず、開発版の公開で正式版の参照先を更新しない。タグの衝突を防ぐため、`latest` と `dev-` で始まる版名は予約する。
 

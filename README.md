@@ -44,8 +44,8 @@ peaks/
 
 | 配布先 | アプリが読む固定 URL |
 |---|---|
-| 正式版 | `https://shohei0205.github.io/yamamuki-data/peaks/manifest.json` |
-| 開発版 | `https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json` |
+| 正式版 | [https://shohei0205.github.io/yamamuki-data/peaks/manifest.json](https://shohei0205.github.io/yamamuki-data/peaks/manifest.json) |
+| 開発版 | [https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json) |
 
 アプリは manifest の `downloadUrl` から、選択した配布先のデータ本体を取得する。履歴版を公開してから参照先を Pages の配置で更新し、途中でファイルを削除しない。確認待ちの下書きは参照先に含めない。正式版・開発版・将来の地形データは別のパスに置き、リポジトリ全体の Latest は参照しない。
 
