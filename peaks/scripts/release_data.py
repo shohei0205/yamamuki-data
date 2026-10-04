@@ -1,6 +1,7 @@
 """下書きの作成と、確認済みの同じファイルの公開を分けて行う。"""
 
 import argparse
+from datetime import datetime, timezone
 import json
 import logging
 import os
@@ -17,7 +18,7 @@ from urllib.parse import urlsplit
 
 from scripts.build_data import FILE_NAME
 from scripts.check_release import assess, report, validate
-from scripts.release_channels import check_branch, check_tag, prefix, release_tag
+from scripts.release_channels import check_branch, check_tag, prefix, release_tag, download_url
 
 
 def gh(*arguments):
@@ -86,6 +87,30 @@ def pages_url():
     return f"https://{owner.lower()}.github.io/{repo}"
 
 
+class Catalog(dict):
+    """既存の manifest 一覧の使い方を保ち、公開履歴も同じ応答から引き継ぐ。"""
+
+    def __init__(self, manifests, histories=None):
+        super().__init__(manifests)
+        self.histories = histories or {}
+
+
+def history_entry(manifest, channel, *, snapshot=False):
+    tag = release_tag(manifest["version"], channel)
+    endpoint("")
+    repo = os.environ["GH_REPO"]
+    run = os.environ.get("GITHUB_RUN_ID")
+    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
+    return {
+        "kind": "snapshot" if snapshot else "publication",
+        "publishedAt": None if snapshot else datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "version": manifest["version"],
+        "releaseUrl": f"https://github.com/{repo}/releases/tag/{tag}",
+        "downloadUrl": manifest.get("downloadUrl") or download_url(manifest["version"], channel),
+        "actionsRunUrl": None if snapshot or not run else f"https://github.com/{repo}/actions/runs/{run}/attempts/{attempt}",
+    }
+
+
 def read_catalog():
     # 更新直後の古いキャッシュを避け、サイト全体を1回の応答から引き継ぐ。
     request = Request(f"{pages_url()}/catalog.json?update={uuid.uuid4().hex}",
@@ -106,7 +131,22 @@ def read_catalog():
         if (not re.fullmatch(r"[a-z][a-z0-9-]*/manifest\.json", path)
                 or not isinstance(manifest, dict)):
             raise ValueError("配布サイトに不正な manifest のパスや内容があります")
-    return manifests
+    histories = catalog.get("histories", {})
+    if not isinstance(histories, dict):
+        raise ValueError("公開履歴の一覧が不正です")
+    for path, entries in histories.items():
+        if (not re.fullmatch(r"[a-z][a-z0-9-]*/history\.json", path)
+                or path.replace("/history.json", "/manifest.json") not in manifests
+                or not isinstance(entries, list)
+                or not all(isinstance(entry, dict) and isinstance(entry.get("version"), str)
+                           and entry.get("kind") in ("snapshot", "publication")
+                           and isinstance(entry.get("releaseUrl"), str)
+                           and isinstance(entry.get("downloadUrl"), str)
+                           and (entry.get("publishedAt") is None or isinstance(entry["publishedAt"], str))
+                           and (entry.get("actionsRunUrl") is None or isinstance(entry["actionsRunUrl"], str))
+                           for entry in entries)):
+            raise ValueError("公開履歴のパスや内容が不正です")
+    return Catalog(manifests, histories)
 
 
 def read_manifest(channel):
@@ -141,6 +181,15 @@ def update_latest(directory, manifest, channel="stable"):
         if os.environ.get("PAGES_INITIALIZE") != "true":
             raise ValueError("配布サイトの一覧を取得できません。初回公開だけ手動公開の初期化を指定してください")
         catalog = {}
+    histories = {key: list(entries) for key, entries in getattr(catalog, "histories", {}).items()}
+    # 履歴機能の導入前の最新版も残す。分からない公開日時や実行 URL は補わない。
+    for previous_channel in ("stable", "dev"):
+        previous_path = manifest_path(previous_channel)
+        history_path = previous_path.replace("manifest.json", "history.json")
+        if previous_path in catalog and history_path not in histories:
+            histories[history_path] = [history_entry(catalog[previous_path], previous_channel, snapshot=True)]
+    history_path = path.replace("manifest.json", "history.json")
+    histories.setdefault(history_path, []).append(history_entry(manifest, channel))
     catalog[path] = manifest
     destination = Path(os.environ.get("PAGES_DIRECTORY", "../build/pages"))
     if destination.exists():
@@ -150,8 +199,12 @@ def update_latest(directory, manifest, channel="stable"):
         file = destination / target
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(json.dumps(contents, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    for target, entries in histories.items():
+        file = destination / target
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(json.dumps({"schemaVersion": 1, "entries": entries}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     (destination / "catalog.json").write_text(
-        json.dumps({"schemaVersion": 1, "manifests": catalog}, ensure_ascii=False, indent=2) + "\n",
+        json.dumps({"schemaVersion": 1, "manifests": catalog, "histories": histories}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8", newline="\n")
     (destination / ".nojekyll").write_text("", encoding="utf-8")
     # Actions の Pages 配置が成功するまで「更新完了」とは扱わない。
@@ -161,11 +214,13 @@ def update_latest(directory, manifest, channel="stable"):
 
 
 def verify_pages(directory):
-    expected = json.loads((directory / "catalog.json").read_text(encoding="utf-8"))["manifests"]
+    expected = json.loads((directory / "catalog.json").read_text(encoding="utf-8"))
     # 配置直後の反映を待ってから、次の公開ジョブに進ませる。
     for attempt in range(12):
         try:
-            if read_catalog() == expected:
+            actual = read_catalog()
+            if (actual == expected["manifests"]
+                    and getattr(actual, "histories", {}) == expected.get("histories", {})):
                 append_summary("\n## Pages の配置結果\n\n成功: 公開先の manifest 一覧が配置内容と一致しました。\n")
                 return
         except (OSError, ValueError):

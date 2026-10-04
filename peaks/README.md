@@ -84,6 +84,23 @@ Release のタグは `peaks-<version>`。アプリは manifest の `downloadUrl`
 
 参照先の更新に失敗した場合は、公開済みの同じ Release の URL またはタグを手動公開ワークフローに指定して復旧する。古い版を指定すると意図的な差し戻しになる。履歴版のデータ本体は再生成・再アップロードしない。公開済みの履歴 Release には不変化を適用できる。
 
+## 公開履歴
+
+Pages の `peaks/history.json`（正式版）と `peaks-dev/history.json`（開発版）に、最新版として公開した記録を古い順で残す。ファイルは `schemaVersion: 1` と `entries` の配列を持つ。
+
+| 項目 | 内容 |
+|---|---|
+| `kind` | 通常の公開は `publication`。履歴記録を始める時点の既存の最新版は `snapshot` |
+| `publishedAt` | 公開処理で履歴を生成した UTC 日時。配置の完了日時ではない。既存の最新版は日時を推測せず `null` |
+| `version` | データの版 |
+| `releaseUrl` | データ本体を保存した Release のページ |
+| `downloadUrl` | データ本体の取得 URL。旧形式では版と配布先から組み立てる |
+| `actionsRunUrl` | 公開した Actions の実行 URL（再実行番号付き）。既存の最新版や手元での生成は `null` |
+
+再公開や古い版への差し戻しも、その都度追加する。下書きで保留された場合や、Pages の配置に進む前に失敗した場合は公開サイトに履歴を追加しない。Pages の配置後に反映確認だけが失敗した場合は、配置された履歴が残る。
+
+履歴も `catalog.json` に含め、次回の配置で他の配布先の履歴と一緒に引き継ぐ。配置後は manifest と履歴の両方が生成内容と一致することを確認する。各版のアセット本体は Release に残し、Pages に複製しない。記録を始める前の公開日時や再公開の経緯は復元しない。
+
 ## 作り方
 
 利用開始時に、リポジトリの Settings → Pages → Build and deployment の Source を **GitHub Actions** にし、`github-pages` 環境の配置元として `main` と `dev` を許可する。
