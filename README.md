@@ -49,7 +49,7 @@ peaks/
 
 アプリは manifest の `downloadUrl` から、選択した配布先のデータ本体を取得する。履歴版を公開してから参照先を Pages の配置で更新し、途中でファイルを削除しない。確認待ちの下書きは参照先に含めない。正式版・開発版・将来の地形データは別のパスに置き、リポジトリ全体の Latest は参照しない。
 
-最新版として公開した記録は、Pages の `peaks/history.json`（正式版）と `peaks-dev/history.json`（開発版）に残す。公開日時・版・Release とデータ本体の URL・Actions の実行 URL を記録し、再公開や差し戻しも追える（[公開履歴の仕様](peaks/README.md#公開履歴)）。
+最新版として公開した記録は、Pages の [peaks/history.json](https://shohei0205.github.io/yamamuki-data/peaks/history.json)（正式版）と [peaks-dev/history.json](https://shohei0205.github.io/yamamuki-data/peaks-dev/history.json)（開発版）に残す。公開日時・版・Release とデータ本体の URL・Actions の実行 URL を記録し、再公開や差し戻しも追える（[公開履歴の仕様](peaks/README.md#公開履歴)）。
 
 ## 確認済みデータの公開
 
