@@ -152,3 +152,52 @@ class ManifestDistributionTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 release_data.verify_pages(self.test_output)
             self.assertEqual(12, read.call_count)
+
+
+    def test_history_records_republication_and_rollback_without_losing_other_channel(self):
+        original = {"peaks/manifest.json": dict(self.current[0], version="newer"),
+                    "peaks-dev/manifest.json": dict(self.current[0], version="older-dev")}
+        catalog = release_data.Catalog(original)
+        for attempt in ("1", "2"):
+            destination = self.test_output / ("history-" + attempt)
+            with patch.dict(os.environ, {"PAGES_DIRECTORY": str(destination), "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": attempt}), \
+                    patch.object(release_data, "read_catalog", return_value=catalog):
+                release_data.update_latest(self.test_output, self.current[0])
+            document = json.loads((destination / "catalog.json").read_text(encoding="utf-8"))
+            catalog = release_data.Catalog(document["manifests"], document["histories"])
+            history = json.loads((destination / "peaks/history.json").read_text(encoding="utf-8"))["entries"]
+            self.assertEqual(int(attempt) + 1, len(history))
+            self.assertEqual("newer", history[0]["version"])
+            self.assertEqual("snapshot", history[0]["kind"])
+            self.assertIsNone(history[0]["publishedAt"])
+            self.assertIsNone(history[0]["actionsRunUrl"])
+            self.assertEqual(self.current[0]["version"], history[-1]["version"])
+            self.assertEqual("publication", history[-1]["kind"])
+            self.assertTrue(history[-1]["publishedAt"].endswith("Z"))
+            self.assertEqual("https://github.com/owner/repo/actions/runs/123/attempts/" + attempt, history[-1]["actionsRunUrl"])
+            self.assertEqual("https://github.com/owner/repo/releases/tag/peaks-test", history[-1]["releaseUrl"])
+            self.assertEqual("https://github.com/owner/repo/releases/download/peaks-test/japan-mountains.json.gz", history[-1]["downloadUrl"])
+            dev = json.loads((destination / "peaks-dev/history.json").read_text(encoding="utf-8"))["entries"]
+            self.assertEqual(1, len(dev))
+            self.assertEqual("older-dev", dev[0]["version"])
+
+    def test_history_fetch_rejects_invalid_paths_and_contents(self):
+        entry = release_data.history_entry(self.current[0], "dev")
+        for histories in ([], {"../history.json": [entry]}, {"terrain/history.json": [entry]},
+                          {"peaks-dev/history.json": "invalid"}, {"peaks-dev/history.json": [{}]}):
+            document = {"schemaVersion": 1, "manifests": {"peaks-dev/manifest.json": self.current[0]}, "histories": histories}
+            with patch.object(release_data, "urlopen", return_value=io.BytesIO(json.dumps(document).encode())):
+                with self.assertRaises(ValueError):
+                    release_data.read_catalog()
+        document["histories"] = {"peaks-dev/history.json": [entry]}
+        with patch.object(release_data, "urlopen", return_value=io.BytesIO(json.dumps(document).encode())):
+            self.assertEqual(document["histories"], release_data.read_catalog().histories)
+
+    def test_verify_pages_checks_history_as_well_as_manifest(self):
+        manifests = {"peaks/manifest.json": self.current[0]}
+        histories = {"peaks/history.json": [release_data.history_entry(self.current[0], "stable")]}
+        (self.test_output / "catalog.json").write_text(json.dumps({"manifests": manifests, "histories": histories}), encoding="utf-8")
+        with patch.object(release_data, "read_catalog", side_effect=[release_data.Catalog(manifests), release_data.Catalog(manifests, histories)]), \
+                patch.object(release_data.time, "sleep") as sleep:
+            release_data.verify_pages(self.test_output)
+            sleep.assert_called_once_with(5)

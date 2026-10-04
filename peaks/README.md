@@ -70,7 +70,7 @@ Release のタグは `peaks-<version>`。アプリは manifest の `downloadUrl`
 | 正式版（`stable`） | `peaks/manifest.json` | `peaks-<version>` |
 | 開発版（`dev`） | `peaks-dev/manifest.json` | `peaks-dev-<version>` |
 
-開発版の manifest は `https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json`、本体は manifest の `downloadUrl` から取得する。正式版と開発版で manifest の形式は共通とする。配布先はアプリ側で選ぶ。開発版が無い・取得できない場合に正式版へ自動で切り替えない。開発版の履歴 Release には GitHub の Pre-release を付ける。
+開発版の manifest は [https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json)、本体は manifest の `downloadUrl` から取得する。正式版と開発版で manifest の形式は共通とする。配布先はアプリ側で選ぶ。開発版が無い・取得できない場合に正式版へ自動で切り替えない。開発版の履歴 Release には GitHub の Pre-release を付ける。
 
 件数・更新日時の比較、初回の手動確認、異常時の下書き保留、手動公開、参照先の復旧は配布先ごとに独立して行う。開発版を正式版の比較基準にせず、開発版の公開で正式版の参照先を更新しない。タグの衝突を防ぐため、`latest` と `dev-` で始まる版名は予約する。
 
@@ -83,6 +83,23 @@ Release のタグは `peaks-<version>`。アプリは manifest の `downloadUrl`
 ファイルを削除してから上げ直す時間は生じない。キャッシュにより更新前の manifest が返る場合はあるが、履歴版を残すため、その manifest でも対応するデータ本体を取得できる。アプリは通信や検証に失敗したら保存済みデータを維持して再試行する。
 
 参照先の更新に失敗した場合は、公開済みの同じ Release の URL またはタグを手動公開ワークフローに指定して復旧する。古い版を指定すると意図的な差し戻しになる。履歴版のデータ本体は再生成・再アップロードしない。公開済みの履歴 Release には不変化を適用できる。
+
+## 公開履歴
+
+Pages の `peaks/history.json`（正式版）と `peaks-dev/history.json`（開発版）に、最新版として公開した記録を古い順で残す。ファイルは `schemaVersion: 1` と `entries` の配列を持つ。
+
+| 項目 | 内容 |
+|---|---|
+| `kind` | 通常の公開は `publication`。履歴記録を始める時点の既存の最新版は `snapshot` |
+| `publishedAt` | 公開処理で履歴を生成した UTC 日時。配置の完了日時ではない。既存の最新版は日時を推測せず `null` |
+| `version` | データの版 |
+| `releaseUrl` | データ本体を保存した Release のページ |
+| `downloadUrl` | データ本体の取得 URL。旧形式では版と配布先から組み立てる |
+| `actionsRunUrl` | 公開した Actions の実行 URL（再実行番号付き）。既存の最新版や手元での生成は `null` |
+
+再公開や古い版への差し戻しも、その都度追加する。下書きで保留された場合や、Pages の配置に進む前に失敗した場合は公開サイトに履歴を追加しない。Pages の配置後に反映確認だけが失敗した場合は、配置された履歴が残る。
+
+履歴も `catalog.json` に含め、次回の配置で他の配布先の履歴と一緒に引き継ぐ。配置後は manifest と履歴の両方が生成内容と一致することを確認する。各版のアセット本体は Release に残し、Pages に複製しない。記録を始める前の公開日時や再公開の経緯は復元しない。
 
 ## 作り方
 
