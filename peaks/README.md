@@ -4,6 +4,13 @@
 
 全国の山頂データの形式、取得先、生成・検査・公開の手順をまとめる。
 
+| 配布先 | 最新版の manifest | 公開履歴 |
+|---|---|---|
+| 正式版 | [https://shohei0205.github.io/yamamuki-data/peaks/manifest.json](https://shohei0205.github.io/yamamuki-data/peaks/manifest.json) | [https://shohei0205.github.io/yamamuki-data/peaks/history.json](https://shohei0205.github.io/yamamuki-data/peaks/history.json) |
+| 開発版 | [https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json) | [https://shohei0205.github.io/yamamuki-data/peaks-dev/history.json](https://shohei0205.github.io/yamamuki-data/peaks-dev/history.json) |
+
+データ本体（`japan-mountains.json.gz`）は、各 manifest の `downloadUrl` から取得する。
+
 ## 配るもの
 
 Geofabrik の日本全国の OSM データから、`natural=peak` または `natural=volcano` の名前付きノードを抽出する。日本全体を `japan-mountains.json.gz` 1 ファイルにまとめる。way・relation と名前のないノードは含めない。名前は前後の空白を除き、`name:ja`、`name` の順に使う（`name:ja` だけのノードも含む）。
@@ -30,7 +37,7 @@ gzip を展開すると、UTF-8 の JSON 配列になる。OSM ノード ID の�
 
 [Releases](https://github.com/shohei0205/yamamuki-data/releases) に、次の 2 ファイルを公開する。
 
-- [manifest.json](https://shohei0205.github.io/yamamuki-data/peaks/manifest.json)
+- [https://shohei0205.github.io/yamamuki-data/peaks/manifest.json](https://shohei0205.github.io/yamamuki-data/peaks/manifest.json)
 - データ本体は manifest の `downloadUrl` から取得する。
 
 `manifest.json` の形式（schemaVersion 4）:
@@ -67,8 +74,8 @@ Release のタグは `peaks-<version>`。アプリは manifest の `downloadUrl`
 
 | 配布先 | Pages のパス | データ本体を置くタグ |
 |---|---|---|
-| 正式版（`stable`） | `peaks/manifest.json` | `peaks-<version>` |
-| 開発版（`dev`） | `peaks-dev/manifest.json` | `peaks-dev-<version>` |
+| 正式版（`stable`） | [https://shohei0205.github.io/yamamuki-data/peaks/manifest.json](https://shohei0205.github.io/yamamuki-data/peaks/manifest.json) | `peaks-<version>` |
+| 開発版（`dev`） | [https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json) | `peaks-dev-<version>` |
 
 開発版の manifest は [https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json)、本体は manifest の `downloadUrl` から取得する。正式版と開発版で manifest の形式は共通とする。配布先はアプリ側で選ぶ。開発版が無い・取得できない場合に正式版へ自動で切り替えない。開発版の履歴 Release には GitHub の Pre-release を付ける。
 
@@ -86,7 +93,7 @@ Release のタグは `peaks-<version>`。アプリは manifest の `downloadUrl`
 
 ## 公開履歴
 
-Pages の `peaks/history.json`（正式版）と `peaks-dev/history.json`（開発版）に、最新版として公開した記録を古い順で残す。ファイルは `schemaVersion: 1` と `entries` の配列を持つ。
+Pages の [https://shohei0205.github.io/yamamuki-data/peaks/history.json](https://shohei0205.github.io/yamamuki-data/peaks/history.json)（正式版）と [https://shohei0205.github.io/yamamuki-data/peaks-dev/history.json](https://shohei0205.github.io/yamamuki-data/peaks-dev/history.json)（開発版）に、最新版として公開した記録を古い順で残す。ファイルは `schemaVersion: 1` と `entries` の配列を持つ。
 
 | 項目 | 内容 |
 |---|---|

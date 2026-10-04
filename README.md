@@ -42,14 +42,7 @@ peaks/
 
 最新版を示す manifest は GitHub Pages に置く。`main`・`dev` のコードでサイトのファイルを生成して直接配置するため、配布専用ブランチは作らない。生成物も git に入れない。
 
-| 配布先 | アプリが読む固定 URL |
-|---|---|
-| 正式版 | [https://shohei0205.github.io/yamamuki-data/peaks/manifest.json](https://shohei0205.github.io/yamamuki-data/peaks/manifest.json) |
-| 開発版 | [https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json) |
-
-アプリは manifest の `downloadUrl` から、選択した配布先のデータ本体を取得する。履歴版を公開してから参照先を Pages の配置で更新し、途中でファイルを削除しない。確認待ちの下書きは参照先に含めない。正式版・開発版・将来の地形データは別のパスに置き、リポジトリ全体の Latest は参照しない。
-
-最新版として公開した記録は、Pages の [peaks/history.json](https://shohei0205.github.io/yamamuki-data/peaks/history.json)（正式版）と [peaks-dev/history.json](https://shohei0205.github.io/yamamuki-data/peaks-dev/history.json)（開発版）に残す。公開日時・版・Release とデータ本体の URL・Actions の実行 URL を記録し、再公開や差し戻しも追える（[公開履歴の仕様](peaks/README.md#公開履歴)）。
+データごとの manifest と公開履歴の URL、データ本体の取得方法は、各データの文書にまとめる。山頂データは [置き場所](peaks/README.md#置き場所)と[公開履歴](peaks/README.md#公開履歴)を参照する。
 
 ## 確認済みデータの公開
 
