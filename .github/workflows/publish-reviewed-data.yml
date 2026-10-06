@@ -11,23 +11,103 @@ on:
         description: '任意：確認した SHA-256（空欄なら Release の検査結果から自動取得）'
         required: false
         type: string
+      initialize_pages:
+        description: '初回公開だけ：Pages の配布サイトを初期化'
+        required: false
+        default: false
+        type: boolean
       reason:
         description: '任意：検査結果の確認内容・公開してよい理由'
         required: false
         type: string
 
-# Actions の手動実行一覧に登録するため、dev と同じファイル名で main に置く。
-# Branch に dev を選ぶと、dev 側にある同名のワークフローが実行される。
 permissions:
   contents: read
 
+env:
+  PYTHONUNBUFFERED: '1'
+  RELEASE_CHANNEL: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
+
 jobs:
-  select-dev:
+  resolve:
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
-    timeout-minutes: 1
+    timeout-minutes: 5
+    # 下書きも一覧から取得するために必要。
+    permissions:
+      contents: write
+    outputs:
+      dataset: ${{ steps.target.outputs.dataset }}
+      tag: ${{ steps.target.outputs.tag }}
     steps:
-      - name: 開発版の実行ブランチを案内
-        run: |
-          echo 'このブランチには手動実行の入口だけを置いています。Run workflow の Branch に dev を選び、実行し直してください。' >> "$GITHUB_STEP_SUMMARY"
-          echo '::error::開発版を実行するには、Run workflow の Branch に dev を選んでください。'
-          exit 1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 実行パラメーターを Summary に表示
+        working-directory: .
+        env:
+          WORKFLOW_INPUTS: ${{ toJSON(inputs) }}
+        run: python -m release_tools.workflow_summary publish
+      - name: Release からデータ種別を判定
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: >-
+          python -m release_tools.publish_reviewed resolve
+          --channel "$RELEASE_CHANNEL" --tag "$RELEASE_TAG"
+
+  publish:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    # サイト全体を引き継ぐため、正式版・開発版の公開を直列にする。
+    concurrency:
+      group: publish-data-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Pages の設定を確認
+        uses: actions/configure-pages@v5
+      - name: 確認したデータを種別ごとに再検証して公開
+        id: publication
+        env:
+          PAGES_DIRECTORY: ${{ github.workspace }}/build/pages
+          PAGES_INITIALIZE: ${{ inputs.initialize_pages == true && 'true' || 'false' }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          DATASET: ${{ needs.resolve.outputs.dataset }}
+          EXPECTED_SHA256: ${{ inputs.sha256 }}
+          REVIEW_REASON: ${{ inputs.reason }}
+        run: >-
+          python -m release_tools.publish_reviewed publish
+          --dataset "$DATASET" --channel "$RELEASE_CHANNEL"
+          --tag "$RELEASE_TAG" --sha256 "$EXPECTED_SHA256" --reason "$REVIEW_REASON"
+      - name: manifest の配布サイトを保存
+        if: steps.publication.outputs.pages_ready == 'true'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/pages
+      - name: manifest を Pages に配置
+        if: steps.publication.outputs.pages_ready == 'true'
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: 配置した manifest 一覧を確認
+        if: steps.publication.outputs.pages_ready == 'true'
+        working-directory: peaks
+        env:
+          GH_REPO: ${{ github.repository }}
+        run: python -m scripts.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"

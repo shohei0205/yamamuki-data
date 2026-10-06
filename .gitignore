@@ -3,7 +3,12 @@
 *.gz
 /build/
 /dist/
+__pycache__/
 .DS_Store
+
+# 山頂データの取得元・生成物
+/peaks/build/
+/peaks/dist/
 
 # AI ツールの個人のルール(AGENTS.md の「個人のルール」を参照)
 CLAUDE.local.md

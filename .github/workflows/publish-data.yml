@@ -1,6 +1,9 @@
 name: 全国の山頂データを生成・検査
 
 on:
+  schedule:
+    # 毎月 1 日の日本時間 12:23。
+    - cron: '23 3 1 * *'
   workflow_dispatch:
     inputs:
       source_date:
@@ -9,18 +12,134 @@ on:
         default: ''
         type: string
 
-# Actions の手動実行一覧に登録するため、dev と同じファイル名で main に置く。
-# Branch に dev を選ぶと、dev 側にある同名のワークフローが実行される。
 permissions:
   contents: read
 
+defaults:
+  run:
+    working-directory: peaks
+
+env:
+  PYTHONUNBUFFERED: '1'
+  RELEASE_CHANNEL: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
+
+concurrency:
+  group: publish-peaks-${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
+  cancel-in-progress: false
+
 jobs:
-  select-dev:
+  generate:
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
-    timeout-minutes: 1
+    timeout-minutes: 90
+    outputs:
+      tag: ${{ steps.review.outputs.tag }}
+      sha256: ${{ steps.review.outputs.sha256 }}
+      auto_publish: ${{ steps.review.outputs.auto_publish }}
+    permissions:
+      contents: write
     steps:
-      - name: 開発版の実行ブランチを案内
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 実行パラメーターを Summary に表示
+        working-directory: .
+        env:
+          WORKFLOW_INPUTS: ${{ toJSON(inputs) }}
+        run: python -m release_tools.workflow_summary generate
+      - name: osmium を準備
         run: |
-          echo 'このブランチには手動実行の入口だけを置いています。Run workflow の Branch に dev を選び、実行し直してください。' >> "$GITHUB_STEP_SUMMARY"
-          echo '::error::開発版を実行するには、Run workflow の Branch に dev を選んでください。'
-          exit 1
+          sudo apt-get update
+          sudo apt-get install -y osmium-tool
+      - name: テスト
+        run: python -m unittest discover -s tests -v
+      - name: 配布日と MD5 を確認
+        id: source
+        timeout-minutes: 5
+        env:
+          SOURCE_DATE: ${{ inputs.source_date }}
+        run: python -u scripts/download_source.py --resolve-only --max-seconds 240 --source-date "$SOURCE_DATE"
+      - name: 同じ全国 PBF をキャッシュから復元
+        id: pbf-cache
+        uses: actions/cache/restore@v4
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          path: peaks/build/japan-latest.osm.pbf
+          key: ${{ steps.source.outputs.cache-key }}
+      - name: 全国 PBF を検証し、未取得なら Geofabrik から取得
+        id: download
+        timeout-minutes: 65
+        env:
+          SOURCE_DATE: ${{ steps.source.outputs.source-date }}
+        run: python -u scripts/download_source.py --max-seconds 3600 --source-date "$SOURCE_DATE"
+      - name: 検証済み全国 PBF を次回用に保存
+        if: steps.pbf-cache.outputs.cache-hit != 'true' || steps.source.outputs.cache-key != steps.download.outputs.cache-key
+        uses: actions/cache/save@v4
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          path: peaks/build/japan-latest.osm.pbf
+          key: ${{ steps.download.outputs.cache-key }}
+      - name: 配布ファイルと manifest を生成
+        id: build
+        run: |
+          version="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python scripts/build_data.py build/japan-latest.osm.pbf --version "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: 前回と比較して下書き Release を作成
+        id: review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python -m scripts.release_data prepare --channel "$RELEASE_CHANNEL"
+
+  publish:
+    needs: generate
+    if: needs.generate.outputs.auto_publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    # サイト全体を引き継ぐため、正式版・開発版の公開を直列にする。
+    concurrency:
+      group: publish-data-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Pages の設定を確認
+        uses: actions/configure-pages@v5
+      - name: 下書きのファイルを再検証して公開
+        id: publication
+        env:
+          PAGES_DIRECTORY: ${{ github.workspace }}/build/pages
+          PAGES_INITIALIZE: 'false'
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.generate.outputs.tag }}
+          EXPECTED_SHA256: ${{ needs.generate.outputs.sha256 }}
+        run: python -m scripts.release_data publish --channel "$RELEASE_CHANNEL" --tag "$RELEASE_TAG" --sha256 "$EXPECTED_SHA256"
+      - name: manifest の配布サイトを保存
+        if: steps.publication.outputs.pages_ready == 'true'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/pages
+      - name: manifest を Pages に配置
+        if: steps.publication.outputs.pages_ready == 'true'
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: 配置した manifest 一覧を確認
+        if: steps.publication.outputs.pages_ready == 'true'
+        working-directory: peaks
+        env:
+          GH_REPO: ${{ github.repository }}
+        run: python -m scripts.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"
