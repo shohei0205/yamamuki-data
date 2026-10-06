@@ -40,8 +40,8 @@ jobs:
       dataset: ${{ steps.target.outputs.dataset }}
       tag: ${{ steps.target.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: 実行パラメーターを Summary に表示
@@ -75,12 +75,12 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Pages の設定を確認
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
       - name: 確認したデータを種別ごとに再検証して公開
         id: publication
         env:
@@ -98,13 +98,13 @@ jobs:
           --tag "$RELEASE_TAG" --sha256 "$EXPECTED_SHA256" --reason "$REVIEW_REASON"
       - name: manifest の配布サイトを保存
         if: steps.publication.outputs.pages_ready == 'true'
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v5
         with:
           path: build/pages
       - name: manifest を Pages に配置
         if: steps.publication.outputs.pages_ready == 'true'
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
       - name: 配置した manifest 一覧を確認
         if: steps.publication.outputs.pages_ready == 'true'
         working-directory: peaks
