@@ -94,7 +94,7 @@ release_tools/      データ種別共通の手動公開入口
 
 データセットと正式版・開発版ごとに最新版の manifest の URL を分ける。Release に添付する manifest と最新版として配置する manifest は同じ内容を使い、公開済みの版の本体は差し替えない。公開先の URL・Release タグ・ファイル名は各データセットの資料に記載する。
 
-スキーマファイルは種類ごとに保存する。manifest は `schemas/manifest/manifest-v<版>.schema.json`、地点データと地点カタログは同じ `schemas/points/` 内の `pointdata-v<版>.schema.json`・`catalog-v<版>.schema.json` に置く。manifest と地点データはそれぞれ必要なときに版を上げ、公開済みの版は原則変更しない。版5より前のスキーマファイルは未作成。
+スキーマファイルは種類ごとに保存する。manifest は `schemas/manifest/manifest-v<版>.schema.json`、地点データと地点カタログは同じ `schemas/points/` 内の `data-v<版>.schema.json`・`catalog-v<版>.schema.json` に置く。manifest と地点データはそれぞれ必要なときに版を上げ、公開済みの版は原則変更しない。版5より前のスキーマファイルは未作成。
 
 地点データの公開済み一覧とダウンロード URL・サイズ・ハッシュなどは 正式版の [points/catalog.json](https://shohei0205.github.io/yamamuki-data/points/catalog.json)、開発版の [points/catalog-dev.json](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) から取得できる。形式と使い方は [地点カタログの仕様](points/README.md#公開データのカタログ) を参照する。
 
