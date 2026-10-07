@@ -13,7 +13,7 @@
 
 ## 配るもの
 
-Geofabrik の日本全国の OSM データから、`natural=peak` または `natural=volcano` の名前付きノードを抽出する。日本全体を `japan-mountains.json.gz` 1 ファイルにまとめる。way・relation と名前のないノードは含めない。名前は前後の空白を除き、`name:ja`、`name` の順に使う（`name:ja` だけのノードも含む）。
+Geofabrik の日本全国の OSM データから、`natural=peak` または `natural=volcano` の名前付きノードを抽出する。日本全体を `japan-mountains.json.gz` 1 ファイルにまとめる。way・relation と名前のないノードは含めない。収録する地点の `type` は山頂を表す `peak` とし、火山ノードも同じ種別で出力する。名前は前後の空白を除き、`name:ja`、`name` の順に使う（`name:ja` だけのノードも含む）。
 
 地点ごとの JSON の形式は [地点データの共通仕様](../README.md#地点の形式)を参照する。OSM ノード ID の昇順に並べる。ふりがな・別名・解説リンク・標高は、以下の OSM タグから変換する。
 
@@ -216,9 +216,22 @@ python scripts/build_data.py build/japan-latest.osm.pbf \
 
 元データの取得には数 GB の通信量と空き容量が必要。元データは `points/osm_peaks/build/`、配布ファイルは `points/osm_peaks/dist/` に保存し、どちらも git に入れない。
 
+### 山頂に SVG を設定する
+
+`points/osm_peaks/graphics/` に `<assetId>.svg` と、地点 ID から assetId への対応表 `points.json` を置く。対応表の例は `{"3403990450":"fuji"}`。生成する地点の中から対応する ID に `graphic` を追加する。SVG を用意する場合は、この資料に画像の出典・作成者・利用条件も追記する。
+
+月次・手動の生成 Action は `graphics/points.json` がある場合に画像を取り込み、対応する地点の `graphic.svg` に SVG 本文を内蔵する。手元で生成する場合は次のように指定する（作業場所は `points/osm_peaks/`）。
+
+```bash
+python scripts/build_data.py build/japan-latest.osm.pbf --version local \
+  --graphics-directory graphics --graphics-map graphics/points.json
+```
+
+入力の SVG が欠けている場合は生成を止める。SVG 本文はデータ本体と一緒に圧縮し、公開前は取得した JSON 内の SVG を再検査する。配布するのは gzip と manifest の2ファイル。入力の SVG は git に保存し、生成した `dist/` はコミットしない。
+
 ## テスト
 
-Python 3.12 と osmium-tool を使い、単体テストと小さな PBF による生成テストを行う。CI（`.github/workflows/test.yml`）では push・PR 時に実行する。
+Python 3.12 と osmium-tool を使い、単体テストと小さな PBF による生成テストを行う。SVG の対応表・JSON への内蔵・倍率・未対応要素の拒否・公開前の再検査も単体テストで確認する。CI（`.github/workflows/test.yml`）では push・PR 時に実行する。
 
 テストは `points/osm_peaks/` 内で、外部通信を行わず次のコマンドで実行できる。osmium がない場合は PBF を使うテストだけをスキップする。Actions では osmium を入れてすべて実行する。
 

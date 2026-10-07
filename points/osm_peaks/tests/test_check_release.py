@@ -159,6 +159,19 @@ class CheckReleaseTests(unittest.TestCase):
         after[0]["dataSchemaVersion"] = 5
         self.assertTrue(any("dataSchemaVersion" in warning for warning in assess(after, before)))
 
+    def test_optional_point_type_and_future_types(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for value in ("peak", "parking", "trailhead", "landmark", "mountain_hut", "campsite", "water_source", "toilet", "viewpoint", "pass", "junction", "future_type", None, "", "Peak", " peak", 1, []):
+                rows = dataset(1)[1]
+                rows[0]["type"] = value
+                write_distribution(rows, directory, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
+                with self.subTest(value=value):
+                    if value in ("peak", "parking", "trailhead", "landmark", "mountain_hut", "campsite", "water_source", "toilet", "viewpoint", "pass", "junction", "future_type"):
+                        self.assertEqual(rows, validate(directory)[1])
+                    else:
+                        with self.assertRaises(ValueError):
+                            validate(directory)
+
     def test_ids_and_optional_osm_id(self):
         with tempfile.TemporaryDirectory() as directory:
             valid = [{}, {"osmId": 1}]

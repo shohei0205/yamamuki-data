@@ -59,11 +59,12 @@ class BuildDataTests(unittest.TestCase):
     def test_named_nodes_and_display_names(self):
         mountains = read_mountains(self.xml)[0]
         self.assertEqual(["1", "2", "5", "6"], [m["id"] for m in mountains])
-        self.assertEqual({"id": "1", "osmId": 1, "name": "富士山", "latitude": 35.3606,
+        self.assertEqual({"id": "1", "type": "peak", "osmId": 1, "name": "富士山", "latitude": 35.3606,
                           "longitude": 138.7274, "elevationM": 3776,
                           "nameReading": "ふじさん", "aliases": ["富岳", "芙蓉峰"],
                           "wikipediaUrl": "https://ja.wikipedia.org/wiki/%E5%AF%8C%E5%A3%AB%E5%B1%B1",
                           "wikidataUrl": "https://www.wikidata.org/wiki/Q39231"}, mountains[0])
+        self.assertTrue(all(mountain["type"] == "peak" for mountain in mountains))
         self.assertAlmostEqual(304.8, mountains[1]["elevationM"])
         self.assertEqual("標高不明の山", mountains[2]["name"])
         self.assertIsNone(mountains[2]["elevationM"])

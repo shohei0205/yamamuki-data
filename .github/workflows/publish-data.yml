@@ -86,7 +86,11 @@ jobs:
         id: build
         run: |
           version="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          python scripts/build_data.py build/japan-latest.osm.pbf --version "$version"
+          graphics_options=()
+          if [ -f graphics/points.json ]; then
+            graphics_options=(--graphics-directory graphics --graphics-map graphics/points.json)
+          fi
+          python scripts/build_data.py build/japan-latest.osm.pbf --version "$version" "${graphics_options[@]}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: 前回と比較して下書き Release を作成
         id: review

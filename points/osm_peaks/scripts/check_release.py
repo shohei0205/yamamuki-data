@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 
 from scripts.build_data import FILE_NAME, MAX_SIZE_BYTES
+from scripts.graphics import validate_graphics
 from scripts.release_channels import download_url, release_tag
 
 
@@ -86,6 +87,9 @@ def validate(directory, *, tag=None, channel="stable"):
         if not valid_id or identifier in seen:
             raise ValueError("山の ID が不正または重複しています")
         seen.add(identifier)
+        if data_version >= 5 and "type" in row:
+            if not isinstance(row["type"], str) or not re.fullmatch(r"[a-z][a-z0-9_]*", row["type"]):
+                raise ValueError("地点の種別の形式が不正です")
         if data_version >= 5 and "osmId" in row:
             osm_id = row["osmId"]
             if type(osm_id) is not int or osm_id <= 0:
@@ -111,6 +115,7 @@ def validate(directory, *, tag=None, channel="stable"):
             aliases = row.get("aliases", [] if data_version >= 5 else None)
             if not isinstance(aliases, list) or not all(isinstance(a, str) and a.strip() for a in aliases):
                 raise ValueError("別名の形式が不正です")
+    validate_graphics(rows)
     return manifest, rows
 
 

@@ -355,7 +355,7 @@ def prepare(directory, channel="stable"):
             warnings = ["前回公開版の取得・検証に失敗したため、自動公開しません。Actions のログを確認してください"]
         notes = root / "notes.md"
         write_report(notes, report(current, previous, warnings).replace("## データの検査結果", "## データの検査結果（生成後）", 1))
-        logging.info("下書き Release を作成し、2ファイルをアップロードします: %s", tag)
+        logging.info("下書き Release を作成し、SVG を内蔵したデータと manifest をアップロードします: %s", tag)
         url = gh("release", "create", tag, str(Path(directory) / FILE_NAME), str(Path(directory) / "manifest.json"),
            "--draft", "--target", os.environ["GITHUB_SHA"], "--title", f"全国の山データ ({channel}) {current[0]['version']}",
            "--notes-file", str(notes), f"--prerelease={str(channel == 'dev').lower()}").strip()
