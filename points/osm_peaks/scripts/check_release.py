@@ -39,6 +39,10 @@ def validate(directory, *, tag=None, channel="stable"):
             raise ValueError(f"{key} は正の整数で指定してください")
     if type(manifest.get("schemaVersion")) is not int or manifest["schemaVersion"] not in (1, 2, 3, 4, 5):
         raise ValueError("未対応の schemaVersion です")
+    # 旧 manifest は当時の山頂形式の版を使う。明示された版は独立して検査する。
+    data_version = manifest.get("dataSchemaVersion", manifest["schemaVersion"])
+    if type(data_version) is not int or data_version not in (1, 2, 3, 4, 5):
+        raise ValueError("未対応の dataSchemaVersion です")
     version = manifest.get("version")
     if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
         raise ValueError("版の形式が不正です")
@@ -73,7 +77,7 @@ def validate(directory, *, tag=None, channel="stable"):
     for row in rows:
         if not isinstance(row, dict):
             raise ValueError("山データがオブジェクトではありません")
-        if manifest["schemaVersion"] >= 5:
+        if data_version >= 5:
             identifier = row.get("id")
             valid_id = isinstance(identifier, str) and re.fullmatch(r"[1-9][0-9]*", identifier)
         else:
@@ -82,7 +86,7 @@ def validate(directory, *, tag=None, channel="stable"):
         if not valid_id or identifier in seen:
             raise ValueError("山の ID が不正または重複しています")
         seen.add(identifier)
-        if manifest["schemaVersion"] >= 5 and "osmId" in row:
+        if data_version >= 5 and "osmId" in row:
             osm_id = row["osmId"]
             if type(osm_id) is not int or osm_id <= 0:
                 raise ValueError("osmId は正の整数で指定してください")
@@ -95,16 +99,16 @@ def validate(directory, *, tag=None, channel="stable"):
             if type(value) not in (int, float) or not math.isfinite(value) or abs(value) > limit:
                 raise ValueError("山の座標が不正です")
         elevation = row.get("elevationM")
-        if (manifest["schemaVersion"] < 5 and "elevationM" not in row) or (elevation is not None and
+        if (data_version < 5 and "elevationM" not in row) or (elevation is not None and
                 (type(elevation) not in (int, float) or not math.isfinite(elevation))):
             raise ValueError("標高の形式が不正です")
-        if manifest["schemaVersion"] >= 2:
+        if data_version >= 2:
             for key in ("nameReading", "wikipediaUrl", "wikidataUrl"):
-                if key not in row and manifest["schemaVersion"] >= 5:
+                if key not in row and data_version >= 5:
                     continue
                 if key not in row or (row[key] is not None and not isinstance(row[key], str)):
                     raise ValueError(f"{key} の形式が不正です")
-            aliases = row.get("aliases", [] if manifest["schemaVersion"] >= 5 else None)
+            aliases = row.get("aliases", [] if data_version >= 5 else None)
             if not isinstance(aliases, list) or not all(isinstance(a, str) and a.strip() for a in aliases):
                 raise ValueError("別名の形式が不正です")
     return manifest, rows
@@ -138,6 +142,8 @@ def assess(current, previous=None):
         warnings.append(f"収録山頂の最新編集日時が前回公開版と同じです: {latest}。自動公開せず下書きに残します")
     if manifest["schemaVersion"] != old_manifest["schemaVersion"]:
         warnings.append("schemaVersion が前回公開版と異なります。アプリの対応を確認してください")
+    if manifest.get("dataSchemaVersion", manifest["schemaVersion"]) != old_manifest.get("dataSchemaVersion", old_manifest["schemaVersion"]):
+        warnings.append("dataSchemaVersion が前回公開版と異なります。アプリの対応を確認してください")
     return warnings
 
 

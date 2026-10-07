@@ -22,8 +22,8 @@ points/
     scripts/        OSM 山頂データの取得・生成・検査・公開
     tests/          OSM 山頂データのテスト
 schemas/
-  manifest/         manifest の版別スキーマ（v5.schema.json など）
-  points/           地点データの版別スキーマ（v5.schema.json など）
+  manifest/         manifest の版別スキーマ（manifest-v5.schema.json など）
+  points/           地点データと地点カタログの版別スキーマ
 release_tools/      データ種別共通の手動公開入口
 .github/workflows/ GitHub Actions の定義
 ```
@@ -57,9 +57,9 @@ release_tools/      データ種別共通の手動公開入口
 
 ## manifest.json
 
-このリポジトリで配布する各データセットに共通する、UTF-8（BOM なし）の JSON オブジェクト。データ本体の取得先・大きさ・ハッシュ・出典を記載する。`schemaVersion` は manifest 自体の形式の版を表す。現在は **版5**。データ本体のスキーマの版は独立して管理し、manifest の版と同じ番号であるとは限らない。使用するデータ本体の版は各データセットの仕様に記載する。データ本体の構造は種類ごとの仕様に従い、地点データは [points/README.md](points/README.md#地点の形式) に記載する。
+このリポジトリで配布する各データセットに共通する、UTF-8（BOM なし）の JSON オブジェクト。データ本体の取得先・大きさ・ハッシュ・出典を記載する。`schemaVersion` は manifest 自体の形式の版を表す。現在は **版5**。データ本体のスキーマの版は独立して管理し、manifest の版と同じ番号であるとは限らない。使用するデータ本体の版は `dataSchemaVersion` に記載する。データ本体の構造は種類ごとの仕様に従い、地点データは [points/README.md](points/README.md#地点の形式) に記載する。
 
-機械検証用の [manifest の版5](schemas/manifest/v5.schema.json)（JSON Schema Draft 2020-12）を用意している。地点データの manifest では同ファイルの `#/$defs/pointManifest` を使い、`pointCount` も必須として検査する。共通スキーマはデータ種別ごとの追加項目を許可する。版1〜4はこのスキーマの対象外で、既存の山頂検査処理で確認する。
+機械検証用の [manifest の版5](schemas/manifest/manifest-v5.schema.json)（JSON Schema Draft 2020-12）を用意している。地点データの manifest では同ファイルの `#/$defs/pointManifest` を使い、`pointCount` も必須として検査する。共通スキーマはデータ種別ごとの追加項目を許可する。版1〜4はこのスキーマの対象外で、既存の山頂検査処理で確認する。
 
 `format` の検査を有効にした検証ツールを使う。日時の前後関係・本体のサイズ・ハッシュ・件数・取得 URL と Release の一致は JSON Schema では照合できないため、公開処理で別途検証する。
 
@@ -68,6 +68,7 @@ release_tools/      データ種別共通の手動公開入口
 | 項目 | JSON の型 | 必須 | 内容・制約 |
 |---|---|---|---|
 | `schemaVersion` | integer | 必須 | 形式の版。新規生成は `5` |
+| `dataSchemaVersion` | integer | 新規生成では必須 | データ本体のスキーマの版。正の整数。manifest の `schemaVersion` と独立して管理する |
 | `version` | string | 必須 | データセットの配布版。英数字で始まり、英数字・ピリオド・ハイフン・下線で構成する |
 | `downloadUrl` | string | 必須 | この版の gzip データ本体を取得する HTTPS URL |
 | `fileName` | string | 必須 | gzip データ本体のファイル名。データセットごとに定める |
@@ -85,13 +86,15 @@ release_tools/      データ種別共通の手動公開入口
 
 日時は UTC の ISO 8601 形式（例: `2026-09-30T20:21:22Z`）で記載する。`latestPointTimestamp` は現地調査日・標高の測定日・生成日時ではない。両日時がある場合、`latestPointTimestamp` は `sourceTimestamp` 以下とする。手動作成のデータでも記録していない日時を推測して埋めない。データセットの仕様でこれらの任意項目を必須にできる。
 
+`dataSchemaVersion` の追加は既存項目を変更しないため、manifest の版は5のままとする。追加前のデータを検証できるよう、JSON Schema 上は省略を許可するが、新規生成では必ず記載する。
+
 ### 読み込みと公開
 
 利用するアプリは対応する `schemaVersion` を確認し、`downloadUrl` から本体を取得する。展開前に `sizeBytes` と `sha256`、展開後に `uncompressedSizeBytes` を照合し、地点データでは `pointCount` と配列の件数も照合する。通信や検証に失敗した場合は保存済みデータを維持する。
 
 データセットと正式版・開発版ごとに最新版の manifest の URL を分ける。Release に添付する manifest と最新版として配置する manifest は同じ内容を使い、公開済みの版の本体は差し替えない。公開先の URL・Release タグ・ファイル名は各データセットの資料に記載する。
 
-スキーマファイルは `schemas/<種類>/v<版>.schema.json` に保存する。manifest と地点データはそれぞれ必要なときに版を上げ、公開済みの版は原則変更しない。版5より前のスキーマファイルは未作成。
+スキーマファイルは種類ごとに保存する。manifest は `schemas/manifest/manifest-v<版>.schema.json`、地点データと地点カタログは同じ `schemas/points/` 内の `pointdata-v<版>.schema.json`・`catalog-v<版>.schema.json` に置く。manifest と地点データはそれぞれ必要なときに版を上げ、公開済みの版は原則変更しない。版5より前のスキーマファイルは未作成。
 
 ### 版の履歴（従来の山頂データからの移行）
 
@@ -107,7 +110,7 @@ release_tools/      データ種別共通の手動公開入口
 
 版5は旧版の読み込み処理と互換性がないため、利用するアプリの対応を確認してから公開する。山頂の最新版 manifest は `points/osm_peaks/`・`points/osm_peaks-dev/` から配る。既存の旧 URL は互換用に維持し、Release タグとファイル名は変更しない。形式を今後変更する場合も、アプリ側の対応と公開順を調整する。
 
-地点データの公開済み一覧とダウンロード URL・サイズ・ハッシュなどは [points/catalog.json](https://shohei0205.github.io/yamamuki-data/points/catalog.json) から取得できる。形式と使い方は [地点カタログの仕様](points/README.md#公開データのカタログ) を参照する。
+地点データの公開済み一覧とダウンロード URL・サイズ・ハッシュなどは 正式版の [points/catalog.json](https://shohei0205.github.io/yamamuki-data/points/catalog.json)、開発版の [points/catalog-dev.json](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) から取得できる。形式と使い方は [地点カタログの仕様](points/README.md#公開データのカタログ) を参照する。
 
 ## 確認済みデータの公開
 

@@ -122,10 +122,42 @@ class CheckReleaseTests(unittest.TestCase):
             original.update(sizeBytes=len(archive), uncompressedSizeBytes=len(raw),
                             sha256=hashlib.sha256(archive).hexdigest())
             original["schemaVersion"] = 2
+            original["dataSchemaVersion"] = 2
             del original["latestPointTimestamp"]
             original["mountainCount"] = original.pop("pointCount")
             path.write_text(json.dumps(original), encoding="utf-8")
             self.assertEqual(2, validate(root)[0]["schemaVersion"])
+
+    def test_data_schema_version_is_checked_independently(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = dataset(1)[1]
+            manifest = write_distribution(rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
+            self.assertEqual(5, manifest["dataSchemaVersion"])
+            for value in (None, True, "5", 0, 99):
+                (root / "manifest.json").write_text(json.dumps(dict(manifest, dataSchemaVersion=value)), encoding="utf-8")
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    validate(root)
+            # manifest の版が同じでも、本体の版が旧形式なら文字列 id を受け付けない。
+            (root / "manifest.json").write_text(json.dumps(dict(manifest, dataSchemaVersion=2)), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                validate(root)
+            old_rows = dataset(1)[1]
+            old_rows[0]["osmId"] = 1
+            del old_rows[0]["id"]
+            old_manifest = write_distribution(old_rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
+            old_manifest["dataSchemaVersion"] = 2
+            (root / "manifest.json").write_text(json.dumps(old_manifest), encoding="utf-8")
+            self.assertEqual(old_rows, validate(root)[1])
+            write_distribution(rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
+            legacy = dict(manifest)
+            del legacy["dataSchemaVersion"]
+            (root / "manifest.json").write_text(json.dumps(legacy), encoding="utf-8")
+            self.assertEqual(rows, validate(root)[1])
+        before, after = dataset(), dataset()
+        before[0]["dataSchemaVersion"] = 2
+        after[0]["dataSchemaVersion"] = 5
+        self.assertTrue(any("dataSchemaVersion" in warning for warning in assess(after, before)))
 
     def test_ids_and_optional_osm_id(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -207,6 +239,7 @@ class DownloadUrlTests(unittest.TestCase):
                 raw = json.dumps(rows).encode("utf-8")
                 archive = gzip.compress(raw)
                 (root / FILE_NAME).write_bytes(archive)
+                changed["dataSchemaVersion"] = 3
                 changed["mountainCount"] = changed.pop("pointCount")
                 changed["latestMountainTimestamp"] = changed.pop("latestPointTimestamp")
                 changed.update(schemaVersion=3, sizeBytes=len(archive),

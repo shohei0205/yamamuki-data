@@ -57,6 +57,7 @@ class ManifestDistributionTests(unittest.TestCase):
             catalog = json.loads((destination / "catalog.json").read_text(encoding="utf-8"))
             self.assertEqual(expected, catalog["manifests"])
             self.assertEqual(release_data.points_catalog(expected), json.loads((destination / "points/catalog.json").read_text(encoding="utf-8")))
+            self.assertEqual(release_data.points_catalog(expected, "dev"), json.loads((destination / "points/catalog-dev.json").read_text(encoding="utf-8")))
             self.assertTrue((destination / ".nojekyll").exists())
             self.assertFalse(any(p.suffix == ".gz" for p in destination.rglob("*")))
             self.assertIn("pages_ready=true", (self.test_output / "output").read_text())
@@ -68,22 +69,28 @@ class ManifestDistributionTests(unittest.TestCase):
                      "terrain/manifest.json": {}, "peaks/manifest.json": {}}
         catalog = release_data.points_catalog(manifests)
         self.assertEqual(1, catalog["schemaVersion"])
-        self.assertEqual([("curated_landmarks", "stable"), ("osm_peaks", "dev"), ("osm_peaks", "stable")],
+        self.assertEqual([("curated_landmarks", "stable"), ("osm_peaks", "stable")],
                          [(entry["id"], entry["channel"]) for entry in catalog["datasets"]])
         self.assertEqual("https://owner.github.io/repo/points/osm_peaks/manifest.json", catalog["datasets"][-1]["manifestUrl"])
+        legacy = release_data.points_catalog({"points/osm_peaks/manifest.json": {"schemaVersion": 4, "version": "legacy"}})["datasets"][0]
+        self.assertEqual(4, legacy["manifest"]["dataSchemaVersion"])
+        unknown = release_data.points_catalog({"points/landmarks/manifest.json": {"schemaVersion": 5}})["datasets"][0]
+        self.assertNotIn("dataSchemaVersion", unknown["manifest"])
         self.assertEqual([], release_data.points_catalog({})["datasets"])
+        development = release_data.points_catalog(manifests, "dev")
+        self.assertEqual([("osm_peaks", "dev")], [(entry["id"], entry["channel"]) for entry in development["datasets"]])
 
     def test_points_catalog_embeds_download_metadata_without_mutating_manifest(self):
         for channel in ("stable", "dev"):
             path = release_data.manifest_path(channel)
-            manifest = dict(self.current[0], fileName="japan-mountains.json.gz", uncompressedSizeBytes=456,
+            manifest = dict(self.current[0], dataSchemaVersion=5, fileName="japan-mountains.json.gz", uncompressedSizeBytes=456,
                             downloadUrl="https://example.com/data.gz", pointCount=10,
                             license="ODbL-1.0", attribution="© OpenStreetMap contributors")
-            entry = release_data.points_catalog({path: manifest})["datasets"][0]
+            entry = release_data.points_catalog({path: manifest}, channel)["datasets"][0]
             self.assertEqual(manifest, entry["manifest"])
             self.assertIsNot(manifest, entry["manifest"])
             del manifest["downloadUrl"]
-            entry = release_data.points_catalog({path: manifest})["datasets"][0]
+            entry = release_data.points_catalog({path: manifest}, channel)["datasets"][0]
             self.assertEqual(release_data.download_url(manifest["version"], channel), entry["manifest"]["downloadUrl"])
             self.assertNotIn("downloadUrl", manifest)
 
@@ -102,7 +109,8 @@ class ManifestDistributionTests(unittest.TestCase):
         self.assertEqual("older-dev", read("points/osm_peaks-dev/manifest.json")["version"])
         self.assertEqual(history[0], read("points/osm_peaks/history.json")["entries"][0])
         self.assertEqual(read("points/osm_peaks/history.json"), read("peaks/history.json"))
-        self.assertEqual(2, len(read("points/catalog.json")["datasets"]))
+        self.assertEqual(1, len(read("points/catalog.json")["datasets"]))
+        self.assertEqual(1, len(read("points/catalog-dev.json")["datasets"]))
         with patch.object(release_data, "read_catalog", return_value=original):
             self.assertEqual(original["peaks/manifest.json"], release_data.read_manifest("stable"))
 
@@ -115,6 +123,19 @@ class ManifestDistributionTests(unittest.TestCase):
                 patch.object(release_data, "read_points_catalog", side_effect=[{}, expected]), \
                 patch.object(release_data.time, "sleep") as sleep:
             release_data.verify_pages(self.test_output)
+            sleep.assert_called_once_with(5)
+
+    def test_verify_pages_checks_development_catalog_too(self):
+        (self.test_output / "catalog.json").write_text('{"manifests": {}}', encoding="utf-8")
+        (self.test_output / "points").mkdir()
+        expected = {"schemaVersion": 1, "datasets": []}
+        for filename in ("catalog.json", "catalog-dev.json"):
+            (self.test_output / "points" / filename).write_text(json.dumps(expected), encoding="utf-8")
+        with patch.object(release_data, "read_catalog", return_value={}), \
+                patch.object(release_data, "read_points_catalog", side_effect=[expected, {}, expected, expected]) as read, \
+                patch.object(release_data.time, "sleep") as sleep:
+            release_data.verify_pages(self.test_output)
+            self.assertEqual(["stable", "dev", "stable", "dev"], [call.args[0] for call in read.call_args_list])
             sleep.assert_called_once_with(5)
 
     def test_remove_dataset_preserves_other_channels_data_and_history(self):
@@ -134,6 +155,7 @@ class ManifestDistributionTests(unittest.TestCase):
             document = json.loads((destination / "catalog.json").read_text(encoding="utf-8"))
             self.assertEqual(set(manifests) - {target, legacy}, set(document["manifests"]))
             self.assertEqual(set(histories) - {target.replace("manifest.json", "history.json"), legacy.replace("manifest.json", "history.json")}, set(document["histories"]))
+            self.assertEqual(release_data.points_catalog(document["manifests"], "dev"), json.loads((destination / "points/catalog-dev.json").read_text(encoding="utf-8")))
             self.assertFalse((destination / target).exists())
             self.assertFalse((destination / legacy).exists())
             self.assertEqual(release_data.points_catalog(document["manifests"]), json.loads((destination / "points/catalog.json").read_text(encoding="utf-8")))

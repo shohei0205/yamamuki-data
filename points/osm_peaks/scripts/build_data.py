@@ -151,6 +151,7 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
         logging.info("SHA-256 を計算し、manifest を作成しています")
         manifest = {
             "schemaVersion": 5,
+            "dataSchemaVersion": 5,
             "version": version,
             "fileName": FILE_NAME,
             "downloadUrl": target_url,

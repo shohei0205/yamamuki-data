@@ -11,9 +11,16 @@
 
 ## 公開データのカタログ
 
-[points/catalog.json](https://shohei0205.github.io/yamamuki-data/points/catalog.json) から、公開済みの地点データすべてのダウンロードと検証に必要な情報を取得できる。正式版・開発版はそれぞれ別の項目として載る。まだ公開していないデータや地形など地点以外のデータは含めない。
+公開済みの地点データすべてのダウンロードと検証に必要な情報を、次のカタログから取得できる。
 
-機械検証用のスキーマは [points-catalog の版1](../schemas/points-catalog/v1.schema.json) を参照する。同じ `id` と `channel` の組は重複させない。
+| 配布先 | カタログ | 使用する項目 |
+|---|---|---|
+| 正式版 | [正式版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog.json) | `channel` が `stable` |
+| 開発版 | [開発版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) | `channel` が `dev` |
+
+正式版の `points/catalog.json` には `stable` のデータだけ、開発版の `points/catalog-dev.json` には `dev` のデータだけを収録する。アプリは利用する配布先のカタログを取得し、他方に自動で切り替えない。まだ公開していないデータや地形など地点以外のデータは含めない。
+
+機械検証用のスキーマは [地点カタログの版1](../schemas/points/catalog-v1.schema.json) を参照する。同じ `id` と `channel` の組は重複させない。
 
 | 項目 | 内容 |
 |---|---|
@@ -24,7 +31,7 @@
 | `datasets[].manifestUrl` | 対応する最新版 manifest の HTTPS URL（互換用・個別取得用） |
 | `datasets[].manifest` | manifest の内容。形式の版・データの版・`downloadUrl`・ファイル名・SHA-256・圧縮前後のサイズ・件数・出典などを含む |
 
-カタログは公開時にサイト全体の manifest 一覧から自動生成し、他の地点データと配布先を引き継ぐ。アプリは利用する配布先の項目を選び、同梱された `manifest.downloadUrl` から本体を取得する。manifest を別途取得する必要はない。`manifest.sizeBytes`・`manifest.sha256` で取得した gzip を検証し、展開後にサイズと件数を照合する。形式の版とデータの版も同梱情報から確認する。manifest とカタログは同じ Pages 配置で更新し、配置後に一致を確認する。生成物は git に含めない。サイト全体の更新用 `/catalog.json` とは別の、地点データの取得先を一覧するファイル。
+両カタログは公開・削除時にサイト全体の manifest 一覧から自動生成し、他の地点データと配布先を引き継ぐ。アプリは利用する配布先の項目を選び、同梱された `manifest.downloadUrl` から本体を取得する。manifest を別途取得する必要はない。`manifest.sizeBytes`・`manifest.sha256` で取得した gzip を検証し、展開後にサイズと件数を照合する。形式の版とデータの版も同梱情報から確認する。manifest とカタログは同じ Pages 配置で更新し、配置後に一致を確認する。生成物は git に含めない。サイト全体の更新用 `/catalog.json` とは別の、地点データの取得先を一覧するファイル。
 
 `manifest` は新規生成するカタログに必ず含める。追加前のカタログを読む場合に限り、省略されていたら `manifestUrl` から取得する。既存項目を維持した追加のため、カタログの版は1のままとする。
 
@@ -38,11 +45,21 @@ Actions の「地点データをカタログから削除」→「Run workflow」
 
 既存一覧の取得・検証に失敗した場合や対象がない場合は配置を中止する。公開と同じ `publish-data-pages` グループで直列化し、配置後にカタログと履歴の一致を確認する。削除済みデータを再度公開すれば一覧に戻る。定期生成があるデータは次回の公開時に再掲載されるため、継続して配布を止める場合は生成・公開の運用も変更する。
 
+### アプリで利用できるデータを判定する
+
+アプリは、カタログ自身の `schemaVersion` に対応していることを確認し、各データの `manifest.schemaVersion` と `manifest.dataSchemaVersion` をそれぞれ確認する。単純に「現在の版以下」と比較せず、アプリが対応すると明示した版の一覧に含まれるかで判定する。
+
+例えばカタログ版1・manifest 版5・地点データ版5に対応するアプリなら、各データの同梱 manifest が `"schemaVersion": 5`・`"dataSchemaVersion": 5` のときに利用できる。非対応の項目はダウンロードせず、対応しているほかのデータは利用できる。読み込みに失敗しても保存済みデータは消さない。
+
+`dataSchemaVersion` は新規生成の manifest に必ず含め、カタログにもそのまま同梱する。未記載の旧山頂データは、公開処理が従来の manifest 版1〜5に対応する地点データの版を補う。それ以外で版が不明な場合は、アプリは利用不可として扱い、manifest の版から本体の版を推測しない。
+
+この判定は読み込み側アプリで実装する契約であり、このリポジトリでは判定に必要な版の情報を生成・配布する。
+
 ## 地点の形式
 
 データ本体は gzip で圧縮した UTF-8（BOM なし）の JSON 配列とし、配列の各要素を1地点のオブジェクトとする。以下は山頂・ランドマーク・手動作成の地点に共通するスキーマで、現在の地点データのスキーマは版5で、山頂の新規生成もこの版を使う。地点データの版は manifest の版と独立して管理する。manifest の形式と版は [リポジトリ共通仕様](../README.md#manifestjson) に従う。
 
-機械検証用の [地点データの版5](../schemas/points/v5.schema.json)（JSON Schema Draft 2020-12）は、gzip 展開後の JSON 配列に適用する。配列は1地点以上とし、定義していない地点の項目は許可しない。データセット全体での `id` の重複、別名と表示名の一致、数値が有限であることは別途確認する。URL の `format` 検査も有効にする。
+機械検証用の [地点データの版5](../schemas/points/pointdata-v5.schema.json)（JSON Schema Draft 2020-12）は、gzip 展開後の JSON 配列に適用する。配列は1地点以上とし、定義していない地点の項目は許可しない。データセット全体での `id` の重複、別名と表示名の一致、数値が有限であることは別途確認する。URL の `format` 検査も有効にする。
 
 ### 項目
 
