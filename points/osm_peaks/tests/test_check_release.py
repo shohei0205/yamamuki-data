@@ -166,7 +166,7 @@ class CheckReleaseTests(unittest.TestCase):
                 rows[0]["type"] = value
                 write_distribution(rows, directory, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
                 with self.subTest(value=value):
-                    if value in ("peak", "parking", "trailhead", "landmark", "mountain_hut", "campsite", "water_source", "toilet", "viewpoint", "pass", "junction", "future_type"):
+                    if value in ("peak", "parking", "trailhead", "landmark", "mountain_hut", "campsite", "water_source", "toilet", "viewpoint", "pass", "junction", "future_type", None):
                         self.assertEqual(rows, validate(directory)[1])
                     else:
                         with self.assertRaises(ValueError):
@@ -174,9 +174,9 @@ class CheckReleaseTests(unittest.TestCase):
 
     def test_ids_and_optional_osm_id(self):
         with tempfile.TemporaryDirectory() as directory:
-            valid = [{}, {"osmId": 1}]
+            valid = [{}, {"osmId": 1}, {"osmId": None}]
             invalid = [{"id": value} for value in (None, 1, "", "0", "01", "osm:way:1", "curated:landmark:test")]
-            invalid += [{"osmId": value} for value in (None, True, 0, -1, "1", 2)]
+            invalid += [{"osmId": value} for value in (True, 0, -1, "1", 2)]
             for index, changes in enumerate(valid + invalid):
                 with self.subTest(changes=changes):
                     rows = dataset(1)[1]
@@ -203,7 +203,7 @@ class CheckReleaseTests(unittest.TestCase):
                         del rows[0][field]
                     write_distribution(rows, directory, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
                     self.assertEqual(rows, validate(directory)[1])
-            for field, value in (("elevationM", "high"), ("nameReading", 1), ("aliases", None),
+            for field, value in (("elevationM", "high"), ("nameReading", 1), ("aliases", "別名"),
                                  ("wikipediaUrl", []), ("wikidataUrl", False)):
                 with self.subTest(field=field):
                     rows = dataset(1)[1]

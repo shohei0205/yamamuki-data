@@ -35,6 +35,11 @@ class TestPoints(unittest.TestCase):
                     target.publish("test-1", Path("unused"))
                 gh.assert_not_called()
 
+    def test_optional_type_and_graphic_can_be_null(self):
+        row = {"id": "a", "name": "地点", "latitude": 35, "longitude": 138}
+        target.validate_rows([row])
+        target.validate_rows([{**row, "type": None, "graphic": None, "tags": None}])
+
     def test_invalid_rows(self):
         row = {"id": "a", "name": "地点", "type": "peak", "latitude": 35, "longitude": 138}
         for rows in ([], [row, row], [{**row, "tags": ["重複", "重複"]}], [{**row, "latitude": True}], [{**row, "longitude": 181}], [{**row, "graphic": {"svg": "<script/>"}}]):

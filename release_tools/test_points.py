@@ -32,7 +32,7 @@ def validate_rows(rows):
         seen.add(identifier)
         if not isinstance(row.get("name"), str) or not row["name"].strip():
             raise ValueError("地点名がありません")
-        if not isinstance(row.get("type"), str) or not re.fullmatch(r"[a-z][a-z0-9_]*", row["type"]):
+        if row.get("type") is not None and (not isinstance(row["type"], str) or not re.fullmatch(r"[a-z][a-z0-9_]*", row["type"])):
             raise ValueError("地点の種別が不正です")
         for key, limit in (("latitude", 90), ("longitude", 180)):
             value = row.get(key)

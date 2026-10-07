@@ -32,6 +32,17 @@ class GraphicsTests(unittest.TestCase):
         return write_distribution(self.rows, self.output, "test", "2026-09-29T20:00:00Z",
                                   "2026-09-29T12:00:00Z", channel=channel)
 
+    def test_null_optional_fields_round_trip(self):
+        for key in ("osmId", "type", "elevationM", "nameReading", "aliases", "tags", "wikipediaUrl", "wikidataUrl", "graphic"):
+            self.rows[0][key] = None
+        self.generate()
+        self.assertEqual(validate(self.output)[1], self.rows)
+
+    def test_null_scale_round_trip(self):
+        self.rows[0]["graphic"]["scale"] = None
+        self.generate()
+        self.assertEqual(validate(self.output)[1], self.rows)
+
     def test_distribution_contains_svg_without_extra_files(self):
         for channel in ("stable", "dev"):
             manifest = self.generate(channel)
@@ -55,10 +66,10 @@ class GraphicsTests(unittest.TestCase):
         self.assertNotIn("graphics", manifest)
 
     def test_inline_svg_and_scale_are_validated(self):
-        for scale in (1, 1.5, 0.5):
+        for scale in (None, 1, 1.5, 0.5):
             validate_graphics([dict(self.rows[0], graphic={"svg": SVG.decode("utf-8"), "scale": scale})])
         validate_graphics([dict(self.rows[0], graphic={"svg": SVG.decode("utf-8")})])
-        for value in (None, "fuji", {}, {"assetId": "fuji"}, {"svg": 1}, {"svg": "bad"},
+        for value in ("fuji", {}, {"assetId": "fuji"}, {"svg": 1}, {"svg": "bad"},
                       {"svg": SVG.decode("utf-8"), "scale": 0},
                       {"svg": SVG.decode("utf-8"), "scale": -1},
                       {"svg": SVG.decode("utf-8"), "scale": True},

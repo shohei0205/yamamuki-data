@@ -90,10 +90,10 @@ def validate(directory, *, tag=None, channel="stable"):
         if not valid_id or identifier in seen:
             raise ValueError("山の ID が不正または重複しています")
         seen.add(identifier)
-        if data_version >= 5 and "type" in row:
+        if data_version >= 5 and row.get("type") is not None:
             if not isinstance(row["type"], str) or not re.fullmatch(r"[a-z][a-z0-9_]*", row["type"]):
                 raise ValueError("地点の種別の形式が不正です")
-        if data_version >= 5 and "osmId" in row:
+        if data_version >= 5 and row.get("osmId") is not None:
             osm_id = row["osmId"]
             if type(osm_id) is not int or osm_id <= 0:
                 raise ValueError("osmId は正の整数で指定してください")
@@ -116,6 +116,8 @@ def validate(directory, *, tag=None, channel="stable"):
                 if key not in row or (row[key] is not None and not isinstance(row[key], str)):
                     raise ValueError(f"{key} の形式が不正です")
             aliases = row.get("aliases", [] if data_version >= 5 else None)
+            if aliases is None and data_version >= 5:
+                aliases = []
             if not isinstance(aliases, list) or not all(isinstance(a, str) and a.strip() for a in aliases):
                 raise ValueError("別名の形式が不正です")
     validate_tags(rows)

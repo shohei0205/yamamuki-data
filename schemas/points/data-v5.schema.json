@@ -22,7 +22,10 @@
           "pattern": "\\S"
         },
         "osmId": {
-          "type": "integer",
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 1
         },
         "name": {
@@ -57,7 +60,10 @@
           ]
         },
         "aliases": {
-          "type": "array",
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "type": "string",
             "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
@@ -89,7 +95,10 @@
           ]
         },
         "type": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "pattern": "^[a-z][a-z0-9_]*$",
           "description": "地点の種別。peak は山頂、parking は駐車場、trailhead は登山口、landmark は目印、mountain_hut は山小屋・避難小屋、campsite はキャンプ場・テント場、water_source は水場、toilet はトイレ、viewpoint は展望地点、pass は峠、junction は登山道の分岐。省略時は種別不明。将来の種別追加を許可する。",
           "examples": [
@@ -107,7 +116,10 @@
           ]
         },
         "graphic": {
-          "type": "object",
+          "type": [
+            "object",
+            "null"
+          ],
           "required": [
             "svg"
           ],
@@ -119,7 +131,10 @@
               "description": "SVG 本文。UTF-8 で100,000バイト以内。内容は別途検査する。"
             },
             "scale": {
-              "type": "number",
+              "type": [
+                "number",
+                "null"
+              ],
               "exclusiveMinimum": 0,
               "default": 1.0
             }
@@ -127,7 +142,10 @@
           "description": "任意の内蔵 SVG と表示倍率。省略時は画像なし。"
         },
         "tags": {
-          "type": "array",
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "type": "string",
             "pattern": "^\\S(?:[\\s\\S]*\\S)?$"

@@ -47,13 +47,15 @@ def validate_svg(contents):
 
 def validate_graphics(rows):
     for row in rows:
-        if "graphic" not in row:
+        if row.get("graphic") is None:
             continue
         graphic = row["graphic"]
         if (not isinstance(graphic, dict) or "svg" not in graphic
                 or not set(graphic) <= {"svg", "scale"} or not isinstance(graphic["svg"], str)):
             raise ValueError("graphic は SVG 文字列を持つオブジェクトで指定してください")
         validate_svg(graphic["svg"].encode("utf-8"))
-        scale = graphic.get("scale", 1.0)
+        scale = graphic.get("scale")
+        if scale is None:
+            scale = 1.0
         if type(scale) not in (int, float) or not math.isfinite(scale) or scale <= 0:
             raise ValueError("graphic.scale は有限の正の数で指定してください")
