@@ -1,0 +1,48 @@
+name: 地点 / テストデータ：開発版に公開
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    concurrency:
+      group: publish-data-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PAGES_DIRECTORY: ${{ github.workspace }}/build/pages
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: テスト
+        run: python -m unittest discover -s release_tools/tests -v
+      - uses: actions/configure-pages@v5
+      - name: テストデータを生成・検証して公開
+        run: |
+          version="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python -m release_tools.test_points publish --version "$version"
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/pages
+      - uses: actions/deploy-pages@v4
+        id: deployment
+      - name: 配置した一覧を確認
+        working-directory: points/osm_peaks
+        run: python -m scripts.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"

@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 
 from scripts.build_data import FILE_NAME, MAX_SIZE_BYTES
+from scripts.graphics import validate_graphics
+from scripts.point_tags import validate_tags
 from scripts.release_channels import download_url, release_tag
 
 
@@ -33,11 +35,18 @@ def validate(directory, *, tag=None, channel="stable"):
     manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         raise ValueError("manifest がオブジェクトではありません")
-    for key in ("mountainCount", "sizeBytes", "uncompressedSizeBytes"):
+    count_key = "pointCount" if manifest.get("schemaVersion") == 5 else "mountainCount"
+    for key in (count_key, "sizeBytes", "uncompressedSizeBytes"):
         if type(manifest.get(key)) is not int or manifest[key] <= 0:
             raise ValueError(f"{key} は正の整数で指定してください")
-    if type(manifest.get("schemaVersion")) is not int or manifest["schemaVersion"] not in (1, 2, 3, 4):
+    if type(manifest.get("schemaVersion")) is not int or manifest["schemaVersion"] not in (1, 2, 3, 4, 5):
         raise ValueError("未対応の schemaVersion です")
+    # 旧 manifest は当時の山頂形式の版を使う。明示された版は独立して検査する。
+    data_version = manifest.get("dataSchemaVersion", manifest["schemaVersion"])
+    if type(data_version) is not int or data_version not in (1, 2, 3, 4, 5):
+        raise ValueError("未対応の dataSchemaVersion です")
+    if "name" in manifest and (not isinstance(manifest["name"], str) or not manifest["name"].strip()):
+        raise ValueError("データセットの表示名が不正です")
     version = manifest.get("version")
     if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
         raise ValueError("版の形式が不正です")
@@ -50,7 +59,7 @@ def validate(directory, *, tag=None, channel="stable"):
             raise ValueError("データ本体の取得 URL が Release の版や配布先と一致しません")
     source_time(manifest["sourceTimestamp"])
     if manifest["schemaVersion"] >= 3:
-        latest = source_time(manifest.get("latestMountainTimestamp"))
+        latest = source_time(manifest.get("latestPointTimestamp" if manifest["schemaVersion"] >= 5 else "latestMountainTimestamp"))
         if latest > source_time(manifest["sourceTimestamp"]):
             raise ValueError("山頂の最終編集日時が元データの基準日時より新しくなっています")
     archive_path = directory / FILE_NAME
@@ -66,16 +75,30 @@ def validate(directory, *, tag=None, channel="stable"):
     if len(raw) > MAX_UNCOMPRESSED_BYTES or len(raw) != manifest.get("uncompressedSizeBytes"):
         raise ValueError("展開後のサイズが不正です")
     rows = json.loads(raw)
-    if not isinstance(rows, list) or not rows or len(rows) != manifest.get("mountainCount"):
+    if not isinstance(rows, list) or not rows or len(rows) != manifest.get(count_key):
         raise ValueError("山の件数が不正です")
     seen = set()
     for row in rows:
         if not isinstance(row, dict):
             raise ValueError("山データがオブジェクトではありません")
-        identifier = row.get("osmId")
-        if type(identifier) is not int or identifier <= 0 or identifier in seen:
+        if data_version >= 5:
+            identifier = row.get("id")
+            valid_id = isinstance(identifier, str) and re.fullmatch(r"[1-9][0-9]*", identifier)
+        else:
+            identifier = row.get("osmId")
+            valid_id = type(identifier) is int and identifier > 0
+        if not valid_id or identifier in seen:
             raise ValueError("山の ID が不正または重複しています")
         seen.add(identifier)
+        if data_version >= 5 and row.get("type") is not None:
+            if not isinstance(row["type"], str) or not re.fullmatch(r"[a-z][a-z0-9_]*", row["type"]):
+                raise ValueError("地点の種別の形式が不正です")
+        if data_version >= 5 and row.get("osmId") is not None:
+            osm_id = row["osmId"]
+            if type(osm_id) is not int or osm_id <= 0:
+                raise ValueError("osmId は正の整数で指定してください")
+            if identifier != str(osm_id):
+                raise ValueError("山頂の id と osmId が一致しません")
         if not isinstance(row.get("name"), str) or not row["name"].strip():
             raise ValueError("山の名前がありません")
         for key, limit in (("latitude", 90), ("longitude", 180)):
@@ -83,15 +106,22 @@ def validate(directory, *, tag=None, channel="stable"):
             if type(value) not in (int, float) or not math.isfinite(value) or abs(value) > limit:
                 raise ValueError("山の座標が不正です")
         elevation = row.get("elevationM")
-        if "elevationM" not in row or (elevation is not None and
+        if (data_version < 5 and "elevationM" not in row) or (elevation is not None and
                 (type(elevation) not in (int, float) or not math.isfinite(elevation))):
             raise ValueError("標高の形式が不正です")
-        if manifest["schemaVersion"] >= 2:
+        if data_version >= 2:
             for key in ("nameReading", "wikipediaUrl", "wikidataUrl"):
+                if key not in row and data_version >= 5:
+                    continue
                 if key not in row or (row[key] is not None and not isinstance(row[key], str)):
                     raise ValueError(f"{key} の形式が不正です")
-            if not isinstance(row.get("aliases"), list) or not all(isinstance(a, str) and a.strip() for a in row["aliases"]):
+            aliases = row.get("aliases", [] if data_version >= 5 else None)
+            if aliases is None and data_version >= 5:
+                aliases = []
+            if not isinstance(aliases, list) or not all(isinstance(a, str) and a.strip() for a in aliases):
                 raise ValueError("別名の形式が不正です")
+    validate_tags(rows)
+    validate_graphics(rows)
     return manifest, rows
 
 
@@ -117,12 +147,14 @@ def assess(current, previous=None):
             warnings.append(f"区画（北緯{cell[0]}度・東経{cell[1]}度から各1度）が20%以上減少: {count:,} → {after[cell]:,} 件")
     if source_time(manifest["sourceTimestamp"]) < source_time(old_manifest["sourceTimestamp"]):
         warnings.append("元データの日時が前回公開版より古くなっています")
-    latest = manifest.get("latestMountainTimestamp")
-    old_latest = old_manifest.get("latestMountainTimestamp")
+    latest = manifest.get("latestPointTimestamp" if manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
+    old_latest = old_manifest.get("latestPointTimestamp" if old_manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
     if latest is not None and old_latest is not None and source_time(latest) == source_time(old_latest):
         warnings.append(f"収録山頂の最新編集日時が前回公開版と同じです: {latest}。自動公開せず下書きに残します")
     if manifest["schemaVersion"] != old_manifest["schemaVersion"]:
         warnings.append("schemaVersion が前回公開版と異なります。アプリの対応を確認してください")
+    if manifest.get("dataSchemaVersion", manifest["schemaVersion"]) != old_manifest.get("dataSchemaVersion", old_manifest["schemaVersion"]):
+        warnings.append("dataSchemaVersion が前回公開版と異なります。アプリの対応を確認してください")
     return warnings
 
 
@@ -132,7 +164,7 @@ def report(current, previous, warnings):
              f"- 今回: {manifest['version']}、{len(rows):,} 件",
              f"- 前回: {previous[0]['version']}、{len(previous[1]):,} 件" if previous else "- 前回: 比較できず",
              f"- 元データの日時: {manifest['sourceTimestamp']}",
-             f"- 収録する山頂の最新編集日時: {manifest.get('latestMountainTimestamp', '旧形式のため記録なし')}",
+             f"- 収録する山頂の最新編集日時: {manifest.get('latestPointTimestamp', manifest.get('latestMountainTimestamp', '旧形式のため記録なし'))}",
              f"- gzip: {manifest['sizeBytes']:,} バイト",
              f"- SHA-256: `{manifest['sha256']}`", "",
              "### 確認事項", "", *([f"- {warning}" for warning in warnings] or ["- 件数と元データの日時に異常はありません"]), "",

@@ -19,8 +19,12 @@ import xml.etree.ElementTree as ET
 
 if __package__:
     from scripts.release_channels import download_url
+    from scripts.graphics import validate_graphics
+    from scripts.point_tags import validate_tags
 else:
     from release_channels import download_url
+    from graphics import validate_graphics
+    from point_tags import validate_tags
 
 
 SOURCE_URL = "https://download.geofabrik.de/asia/japan-latest.osm.pbf"
@@ -97,6 +101,8 @@ def read_mountains(path):
                 timestamp = normalize_timestamp(timestamp)
                 latest_timestamp = max(latest_timestamp or timestamp, timestamp)
                 mountains[osm_id] = {
+                    "id": str(osm_id),
+                    "type": "peak",
                     "osmId": osm_id,
                     "name": name,
                     "latitude": lat,
@@ -132,6 +138,8 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
     latest_mountain_timestamp = normalize_timestamp(latest_mountain_timestamp)
     if latest_mountain_timestamp > source_timestamp:
         raise ValueError("山頂の最終編集日時が元データの基準日時より新しくなっています")
+    validate_tags(mountains)
+    validate_graphics(mountains)
     logging.info("%s 件を JSON に変換しています", format(len(mountains), ","))
     raw = (json.dumps(mountains, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
     # ファイル名と生成時刻をヘッダーに含めず、同じ内容の圧縮結果をそろえる。
@@ -149,16 +157,18 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
             raise ValueError(f"圧縮後のサイズが {MAX_SIZE_BYTES} バイトを超えました。分割を検討してください")
         logging.info("SHA-256 を計算し、manifest を作成しています")
         manifest = {
-            "schemaVersion": 4,
+            "schemaVersion": 5,
+            "dataSchemaVersion": 5,
+            "name": "山頂",
             "version": version,
             "fileName": FILE_NAME,
             "downloadUrl": target_url,
             "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
             "sizeBytes": size,
             "uncompressedSizeBytes": len(raw),
-            "mountainCount": len(mountains),
+            "pointCount": len(mountains),
             "sourceTimestamp": source_timestamp,
-            "latestMountainTimestamp": latest_mountain_timestamp,
+            "latestPointTimestamp": latest_mountain_timestamp,
             "sourceUrl": source_url,
             "license": "ODbL-1.0",
             "attribution": "© OpenStreetMap contributors",
@@ -192,7 +202,7 @@ def verified_source_url(pbf):
     return url
 
 
-def build(pbf, output_dir, version, *, channel="stable"):
+def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None, graphics_map=None):
     started = time.monotonic()
     source_url = verified_source_url(pbf)
     logging.info("全国データの生成を開始します: %s（版 %s）", pbf, version)
@@ -213,6 +223,16 @@ def build(pbf, output_dir, version, *, channel="stable"):
         )
         logging.info("osmium の抽出完了")
         mountains, latest_timestamp = read_mountains(extracted)
+        if graphics_map is not None:
+            mappings = json.loads(Path(graphics_map).read_text(encoding="utf-8"))
+            if not isinstance(mappings, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in mappings.items()):
+                raise ValueError("画像の対応表は地点 id と assetId の対応で指定してください")
+            for mountain in mountains:
+                if mountain["id"] in mappings:
+                    asset_id = mappings[mountain["id"]]
+                    if not re.fullmatch(r"[a-z][a-z0-9_-]*", asset_id) or graphics_directory is None:
+                        raise ValueError("画像の対応表と SVG の保存先を確認してください")
+                    mountain["graphic"] = {"svg": (Path(graphics_directory) / f"{asset_id}.svg").read_text(encoding="utf-8")}
         manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel)
     logging.info("全国データの生成完了（経過 %.1f 秒）", time.monotonic() - started)
     return manifest
@@ -225,8 +245,10 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=Path("dist"))
     parser.add_argument("--version", required=True)
     parser.add_argument("--channel", choices=("stable", "dev"), default=os.environ.get("RELEASE_CHANNEL", "stable"))
+    parser.add_argument("--graphics-directory", type=Path)
+    parser.add_argument("--graphics-map", type=Path)
     args = parser.parse_args()
-    manifest = build(args.pbf, args.output_dir, args.version, channel=args.channel)
+    manifest = build(args.pbf, args.output_dir, args.version, channel=args.channel, graphics_directory=args.graphics_directory, graphics_map=args.graphics_map)
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
 
 
