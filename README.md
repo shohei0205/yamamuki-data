@@ -1,4 +1,23 @@
-﻿# yamamuki-data
+﻿# peaks正式版の復元用ブランチ
+
+このブランチは地点共通形式への変更前のmain（`50fcf9e`）を元に、リリース済みアプリのテスト向けに版4の山頂データを再生成する。
+
+Actionsの既存の山頂生成ワークフロー（`publish-data.yml`）で、実行ブランチに `codex/restore-peaks-stable` を選ぶ。手動実行だけを許可し、生成・検査後に正式版Releaseを公開してPagesを更新する。初回でもこの復元操作を手動確認として扱う。配布元の取得日を指定しない場合はlatestを使う。当時と同一のファイルの復元ではなく、当時の形式での再生成となる。
+
+- manifest: `https://shohei0205.github.io/yamamuki-data/peaks/manifest.json`
+- Releaseタグ: `peaks-<version>`
+- 本体: `japan-mountains.json.gz`
+- データ形式: 版4（整数osmId、mountainCountなど）
+
+テストは `peaks/` で `python -m unittest discover -s tests -v`、ルートで `python -m unittest discover -s release_tools/tests -v` を実行する。復元ブランチの配布先制限と地点カタログ・履歴の保持も確認する。
+
+現在のosm-peaksのmanifest・履歴と地点カタログは引き継ぐ。新しい地点カタログには互換用peaksを追加しない。公開処理は通常の公開と同じ `publish-data-pages` グループで直列化する。mainやdevにはこのブランチをマージしない。
+
+現在のmain/devの公開処理はpeaksパスを除外するため、その処理を再実行すると復元パスは削除される。テスト中に継続して併存させる場合は、main/dev側でも保持する変更が必要。
+
+---
+
+# yamamuki-data
 
 山むきアプリ（[shohei0205/yamamuki](https://github.com/shohei0205/yamamuki)）が使うデータを作って配るためのリポジトリ。
 

@@ -30,7 +30,7 @@ env:
 
 jobs:
   resolve:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
+    if: github.ref == 'refs/heads/codex/restore-peaks-stable'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     # 下書きも一覧から取得するために必要。

@@ -1,4 +1,4 @@
-name: 全国の山頂データを生成・検査
+name: 互換用 / peaks正式版：生成・公開
 
 on:
   schedule:
@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   generate:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
+    if: github.ref == 'refs/heads/codex/restore-peaks-stable' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     outputs:
@@ -97,7 +97,7 @@ jobs:
 
   publish:
     needs: generate
-    if: needs.generate.outputs.auto_publish == 'true'
+    if: needs.generate.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -127,7 +127,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.generate.outputs.tag }}
           EXPECTED_SHA256: ${{ needs.generate.outputs.sha256 }}
-        run: python -m scripts.release_data publish --channel "$RELEASE_CHANNEL" --tag "$RELEASE_TAG" --sha256 "$EXPECTED_SHA256"
+        run: python -m scripts.release_data publish --channel "$RELEASE_CHANNEL" --tag "$RELEASE_TAG" --sha256 "$EXPECTED_SHA256" --manual --reason "リリース済みアプリのテスト用にpeaks正式版を再生成"
       - name: manifest の配布サイトを保存
         if: steps.publication.outputs.pages_ready == 'true'
         uses: actions/upload-pages-artifact@v5

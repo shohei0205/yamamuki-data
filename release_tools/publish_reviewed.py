@@ -30,7 +30,7 @@ def dataset_for_tag(tag, channel):
 
 def check_branch(channel):
     if os.environ.get("GITHUB_ACTIONS") == "true":
-        expected = {"refs/heads/dev": "dev", "refs/heads/main": "stable"}.get(os.environ.get("GITHUB_REF"))
+        expected = {"refs/heads/dev": "dev", "refs/heads/main": "stable", "refs/heads/codex/restore-peaks-stable": "stable"}.get(os.environ.get("GITHUB_REF"))
         if expected != channel:
             raise ValueError("正式版は main、開発版は dev から実行してください")
 

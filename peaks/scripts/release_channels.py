@@ -30,7 +30,7 @@ def check_branch(channel):
     prefix(channel)
     if os.environ.get("GITHUB_ACTIONS") != "true":
         return
-    expected = {"refs/heads/main": "stable", "refs/heads/dev": "dev"}.get(os.environ.get("GITHUB_REF"))
+    expected = {"refs/heads/main": "stable", "refs/heads/codex/restore-peaks-stable": "stable", "refs/heads/dev": "dev"}.get(os.environ.get("GITHUB_REF"))
     if expected != channel:
         raise ValueError("正式版は main、開発版は dev ブランチから実行してください")
 

@@ -128,14 +128,14 @@ def read_catalog():
     if not isinstance(manifests, dict):
         raise ValueError("配布サイトの manifest 一覧が不正です")
     for path, manifest in manifests.items():
-        if (not re.fullmatch(r"[a-z][a-z0-9-]*/manifest\.json", path)
+        if (not re.fullmatch(r"(?:[a-z][a-z0-9_-]*/)+manifest\.json", path)
                 or not isinstance(manifest, dict)):
             raise ValueError("配布サイトに不正な manifest のパスや内容があります")
     histories = catalog.get("histories", {})
     if not isinstance(histories, dict):
         raise ValueError("公開履歴の一覧が不正です")
     for path, entries in histories.items():
-        if (not re.fullmatch(r"[a-z][a-z0-9-]*/history\.json", path)
+        if (not re.fullmatch(r"(?:[a-z][a-z0-9_-]*/)+history\.json", path)
                 or path.replace("/history.json", "/manifest.json") not in manifests
                 or not isinstance(entries, list)
                 or not all(isinstance(entry, dict) and isinstance(entry.get("version"), str)
@@ -173,6 +173,41 @@ def previous_release(directory, channel="stable"):
     return previous
 
 
+def points_catalog(manifests, selected_channel="stable"):
+    """公開済み地点データの取得先とダウンロード検証情報をまとめる。"""
+    prefix(selected_channel)
+    datasets = []
+    for path in sorted(manifests):
+        match = re.fullmatch(r"points/([a-z][a-z0-9_-]*)/manifest\.json", path)
+        if match:
+            name = match[1]
+            channel = "dev" if name.endswith("-dev") else "stable"
+            if channel != selected_channel:
+                continue
+            dataset_id = name[:-4] if channel == "dev" else name
+            manifest = dict(manifests[path])
+            # 従来の山頂は manifest の版で本体の形式も管理していた。
+            if (dataset_id == "osm-peaks" and "dataSchemaVersion" not in manifest
+                    and type(manifest.get("schemaVersion")) is int and manifest["schemaVersion"] in (1, 2, 3, 4, 5)):
+                manifest["dataSchemaVersion"] = manifest["schemaVersion"]
+            # 版1〜3の山頂 manifest にも、本体を直接取得できる URL を補う。
+            if dataset_id == "osm-peaks" and "downloadUrl" not in manifest and "version" in manifest:
+                manifest["downloadUrl"] = download_url(manifest["version"], channel)
+            display_name = manifest.get("name", "山頂" if dataset_id == "osm-peaks" else dataset_id)
+            if not isinstance(display_name, str) or not display_name.strip():
+                raise ValueError("データセットの表示名が不正です")
+            datasets.append({"id": dataset_id, "name": display_name.strip(),
+                             "manifestUrl": f"{pages_url()}/{path}", "manifest": manifest})
+    return {"schemaVersion": 1, "datasets": datasets}
+
+def read_points_catalog(channel="stable"):
+    prefix(channel)
+    filename = "catalog.json" if channel == "stable" else "catalog-dev.json"
+    request = Request(f"{pages_url()}/points/{filename}?update={uuid.uuid4().hex}",
+                      headers={"Cache-Control": "no-cache", "User-Agent": "yamamuki-data"})
+    with urlopen(request, timeout=60) as response:
+        return json.load(response)
+
 def update_latest(directory, manifest, channel="stable"):
     path = manifest_path(channel)
     release_tag(manifest["version"], channel)
@@ -206,6 +241,12 @@ def update_latest(directory, manifest, channel="stable"):
     (destination / "catalog.json").write_text(
         json.dumps({"schemaVersion": 1, "manifests": catalog, "histories": histories}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8", newline="\n")
+    points_directory = destination / "points"
+    points_directory.mkdir(exist_ok=True)
+    for selected_channel, filename in (("stable", "catalog.json"), ("dev", "catalog-dev.json")):
+        (points_directory / filename).write_text(
+            json.dumps(points_catalog(catalog, selected_channel), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8", newline="\n")
     (destination / ".nojekyll").write_text("", encoding="utf-8")
     # Actions の Pages 配置が成功するまで「更新完了」とは扱わない。
     output(pages_ready="true")
@@ -215,12 +256,18 @@ def update_latest(directory, manifest, channel="stable"):
 
 def verify_pages(directory):
     expected = json.loads((directory / "catalog.json").read_text(encoding="utf-8"))
+    expected_points = {}
+    for channel, filename in (("stable", "catalog.json"), ("dev", "catalog-dev.json")):
+        points_file = directory / "points" / filename
+        if points_file.exists():
+            expected_points[channel] = json.loads(points_file.read_text(encoding="utf-8"))
     # 配置直後の反映を待ってから、次の公開ジョブに進ませる。
     for attempt in range(12):
         try:
             actual = read_catalog()
             if (actual == expected["manifests"]
-                    and getattr(actual, "histories", {}) == expected.get("histories", {})):
+                    and getattr(actual, "histories", {}) == expected.get("histories", {})
+                    and all(read_points_catalog(channel) == contents for channel, contents in expected_points.items())):
                 append_summary("\n## Pages の配置結果\n\n成功: 公開先の manifest 一覧が配置内容と一致しました。\n")
                 return
         except (OSError, ValueError):
