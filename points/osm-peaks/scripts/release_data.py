@@ -158,6 +158,10 @@ def read_manifest(channel):
     return catalog.get(path, catalog.get(legacy))
 
 
+class MissingPreviousRelease(ValueError):
+    """公開サイトが指すReleaseが削除されている。"""
+
+
 def previous_release(directory, channel="stable"):
     manifest = read_manifest(channel)
     # 初回公開は、必ず手動確認に回す。
@@ -165,7 +169,9 @@ def previous_release(directory, channel="stable"):
         return None
     tag = release_tag(manifest["version"], channel)
     target = next((r for r in releases() if r["tag_name"] == tag), None)
-    if target is None or target["draft"] or target["prerelease"] != (channel == "dev"):
+    if target is None:
+        raise MissingPreviousRelease("前回の公開Releaseがありません。削除後の再開は手動公開の初期化を指定してください")
+    if target["draft"] or target["prerelease"] != (channel == "dev"):
         raise ValueError("山頂の参照先が公開済みの版ではありません")
     logging.info("前回の山頂公開版を取得しています: %s", tag)
     previous = fetch(tag, directory / "data", channel)
@@ -392,6 +398,11 @@ def publish(tag, expected_sha256="", *, manual=False, reason="", channel="stable
         try:
             previous = previous_release(root / "previous", channel)
             warnings = assess(current, previous)
+        except MissingPreviousRelease:
+            if not manual or os.environ.get("PAGES_INITIALIZE") != "true":
+                raise
+            previous = None
+            warnings = ["前回のReleaseがないため、初期化を指定した手動公開で配布を再開します"]
         except (RuntimeError, ValueError, OSError, KeyError, TypeError, EOFError, zlib.error):
             if release["draft"] or not manual:
                 raise

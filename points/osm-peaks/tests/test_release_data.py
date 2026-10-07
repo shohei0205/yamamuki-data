@@ -74,6 +74,30 @@ class ReleaseDataTests(unittest.TestCase):
                 release_data.prepare(directory)
             self.assertNotIn("生成したリリースを開く", (self.test_output / "summary.md").read_text(encoding="utf-8"))
 
+    def test_missing_previous_release_requires_manual_initialization(self):
+        for manual, initialize, error in ((True, "true", release_data.MissingPreviousRelease("削除済み")),
+                                          (True, "false", release_data.MissingPreviousRelease("削除済み")),
+                                          (False, "true", release_data.MissingPreviousRelease("削除済み")),
+                                          (True, "true", RuntimeError("通信失敗")),
+                                          (True, "true", ValueError("データ破損"))):
+            allowed = manual and initialize == "true" and isinstance(error, release_data.MissingPreviousRelease)
+            with self.subTest(manual=manual, initialize=initialize, error=type(error)), \
+                    patch.dict(os.environ, {"PAGES_INITIALIZE": initialize}), \
+                    patch.object(release_data, "find_release", return_value=dict(tag_name="osm-peaks-test", draft=True, prerelease=False)), \
+                    patch.object(release_data, "fetch", return_value=self.current), \
+                    patch.object(release_data, "previous_release", side_effect=error), \
+                    patch.object(release_data, "gh") as gh, \
+                    patch.object(release_data, "update_latest") as update:
+                if allowed:
+                    release_data.publish("osm-peaks-test", "a" * 64, manual=manual)
+                    update.assert_called_once()
+                    self.assertTrue(any("--draft=false" in call.args for call in gh.call_args_list))
+                else:
+                    with self.assertRaises(type(error)):
+                        release_data.publish("osm-peaks-test", "a" * 64, manual=manual)
+                    update.assert_not_called()
+                    gh.assert_not_called()
+
     def test_warning_keeps_draft(self):
         calls = self.run_publish(warnings=["件数減少"])
         self.assertFalse(any("--draft=false" in call for call in calls))
