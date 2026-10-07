@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 
 # 地形の検証・公開処理ができたら、ここに登録する。未対応の種別は公開しない。
-PUBLISHERS = {"peaks": ("peaks", "scripts.release_data")}
+PUBLISHERS = {"osm-peaks": ("points/osm-peaks", "scripts.release_data")}
 ROOT = Path(__file__).resolve().parents[1]
 
 

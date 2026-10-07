@@ -1,4 +1,4 @@
-name: 確認済みのデータを公開
+name: 共通：確認済みデータを公開
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ on:
         required: false
         type: string
       initialize_pages:
-        description: '初回公開だけ：Pages の配布サイトを初期化'
+        description: '初回・Release削除後の再開：Pages の配布サイトを初期化'
         required: false
         default: false
         type: boolean
@@ -107,7 +107,7 @@ jobs:
         uses: actions/deploy-pages@v5
       - name: 配置した manifest 一覧を確認
         if: steps.publication.outputs.pages_ready == 'true'
-        working-directory: peaks
+        working-directory: points/osm-peaks
         env:
           GH_REPO: ${{ github.repository }}
         run: python -m scripts.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"

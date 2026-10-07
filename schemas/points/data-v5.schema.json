@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "地点データ（版5）",
+  "description": "gzip 展開後の JSON 配列。id のデータセット内での一意性と、別名が表示名と異なることは別途検証する。",
+  "type": "array",
+  "minItems": 1,
+  "items": {
+    "$ref": "#/$defs/point"
+  },
+  "$defs": {
+    "point": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "latitude",
+        "longitude"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "osmId": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+        },
+        "latitude": {
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90
+        },
+        "longitude": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        },
+        "elevationM": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "nameReading": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "aliases": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+          },
+          "uniqueItems": true
+        },
+        "wikipediaUrl": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://[^/?#\\s]+"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wikidataUrl": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://[^/?#\\s]+"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "地点の種別。peak は山頂、parking は駐車場、trailhead は登山口、landmark は目印、mountain_hut は山小屋・避難小屋、campsite はキャンプ場・テント場、water_source は水場、toilet はトイレ、viewpoint は展望地点、pass は峠、junction は登山道の分岐。省略時は種別不明。将来の種別追加を許可する。",
+          "examples": [
+            "peak",
+            "parking",
+            "trailhead",
+            "landmark",
+            "mountain_hut",
+            "campsite",
+            "water_source",
+            "toilet",
+            "viewpoint",
+            "pass",
+            "junction"
+          ]
+        },
+        "graphic": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "svg"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "svg": {
+              "type": "string",
+              "minLength": 1,
+              "description": "SVG 本文。UTF-8 で100,000バイト以内。内容は別途検査する。"
+            },
+            "scale": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "exclusiveMinimum": 0,
+              "default": 1.0
+            }
+          },
+          "description": "任意の内蔵 SVG と表示倍率。省略時は画像なし。"
+        },
+        "tags": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+          },
+          "uniqueItems": true,
+          "description": "任意の分類ラベル。省略時は空配列。例: 日本百名山。"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

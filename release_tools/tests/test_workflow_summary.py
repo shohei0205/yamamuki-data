@@ -16,10 +16,10 @@ class WorkflowSummaryTests(unittest.TestCase):
                 self.assertNotIn("reason", summary)
 
     def test_publish_explicit_and_omitted_inputs(self):
-        summary = render("publish", {"tag": "peaks-dev-v1", "sha256": "a" * 64, "reason": "件数を確認"}, {})
-        for expected in ("peaks-dev-v1", "a" * 64, "件数を確認"):
+        summary = render("publish", {"tag": "osm-peaks-dev-v1", "sha256": "a" * 64, "reason": "件数を確認"}, {})
+        for expected in ("osm-peaks-dev-v1", "a" * 64, "件数を確認"):
             self.assertIn(expected, summary)
-        summary = render("publish", {"tag": "peaks-v1"}, {})
+        summary = render("publish", {"tag": "osm-peaks-v1"}, {})
         self.assertIn("未指定（検査結果から自動取得）", summary)
         self.assertIn("未記入", summary)
 

@@ -1,4 +1,4 @@
-name: Text format
+name: 共通：文字形式の確認
 
 on:
   push:

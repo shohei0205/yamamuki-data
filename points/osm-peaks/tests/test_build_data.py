@@ -58,12 +58,13 @@ class BuildDataTests(unittest.TestCase):
 
     def test_named_nodes_and_display_names(self):
         mountains = read_mountains(self.xml)[0]
-        self.assertEqual([1, 2, 5, 6], [m["osmId"] for m in mountains])
-        self.assertEqual({"osmId": 1, "name": "富士山", "latitude": 35.3606,
+        self.assertEqual(["1", "2", "5", "6"], [m["id"] for m in mountains])
+        self.assertEqual({"id": "1", "type": "peak", "osmId": 1, "name": "富士山", "latitude": 35.3606,
                           "longitude": 138.7274, "elevationM": 3776,
                           "nameReading": "ふじさん", "aliases": ["富岳", "芙蓉峰"],
                           "wikipediaUrl": "https://ja.wikipedia.org/wiki/%E5%AF%8C%E5%A3%AB%E5%B1%B1",
                           "wikidataUrl": "https://www.wikidata.org/wiki/Q39231"}, mountains[0])
+        self.assertTrue(all(mountain["type"] == "peak" for mountain in mountains))
         self.assertAlmostEqual(304.8, mountains[1]["elevationM"])
         self.assertEqual("標高不明の山", mountains[2]["name"])
         self.assertIsNone(mountains[2]["elevationM"])
@@ -148,14 +149,15 @@ class BuildDataTests(unittest.TestCase):
         raw = gzip.decompress(archive)
         self.assertEqual(mountains, json.loads(raw))
         self.assertEqual(manifest, json.loads((self.root / "manifest.json").read_text(encoding="utf-8")))
-        self.assertEqual(4, manifest["schemaVersion"])
+        self.assertEqual(5, manifest["schemaVersion"])
+        self.assertEqual("山頂", manifest["name"])
         self.assertEqual("20260930-1", manifest["version"])
         self.assertEqual(TIMESTAMP, manifest["sourceTimestamp"])
-        self.assertEqual("2026-09-29T12:00:00Z", manifest["latestMountainTimestamp"])
+        self.assertEqual("2026-09-29T12:00:00Z", manifest["latestPointTimestamp"])
         self.assertEqual(hashlib.sha256(archive).hexdigest(), manifest["sha256"])
         self.assertEqual(len(archive), manifest["sizeBytes"])
         self.assertEqual(len(raw), manifest["uncompressedSizeBytes"])
-        self.assertEqual(4, manifest["mountainCount"])
+        self.assertEqual(4, manifest["pointCount"])
         write_distribution(mountains, self.root / "again", "20260930-2", TIMESTAMP, "2026-09-29T12:00:00Z")
         self.assertEqual(archive, (self.root / "again" / FILE_NAME).read_bytes())
 
@@ -224,7 +226,7 @@ class BuildDataTests(unittest.TestCase):
         self.save_fixture_source(pbf)
         manifest = build(pbf, self.root / "output", "test")
         self.assertEqual("https://download.geofabrik.de/asia/japan-260929.osm.pbf", manifest["sourceUrl"])
-        self.assertEqual(4, manifest["mountainCount"])
+        self.assertEqual(4, manifest["pointCount"])
         self.assertEqual(TIMESTAMP, manifest["sourceTimestamp"])
         self.assertEqual(read_mountains(self.xml)[0], json.loads(gzip.decompress((self.root / "output" / FILE_NAME).read_bytes())))
 

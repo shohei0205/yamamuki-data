@@ -1,4 +1,4 @@
-name: 山頂データ生成のテスト
+name: 共通：データ処理のテスト
 
 on:
   push:
@@ -7,16 +7,27 @@ on:
 permissions:
   contents: read
 
-defaults:
-  run:
-    working-directory: peaks
-
 jobs:
-  test:
+  common:
+    name: 共通の公開処理
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: 公開入口と実行概要のテスト
+        run: python -m unittest release_tools.tests.test_publish_reviewed release_tools.tests.test_workflow_summary -v
+
+  osm-peaks:
+    name: 地点 / OSM山頂
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: points/osm-peaks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: osmium を準備
@@ -25,6 +36,31 @@ jobs:
           sudo apt-get install -y osmium-tool
       - name: 単体テストと小さな PBF での生成テスト
         run: python -m unittest discover -s tests -v
-      - name: 共通の手動公開入口のテスト
-        working-directory: .
-        run: python -m unittest discover -s release_tools/tests -v
+
+  test-points:
+    name: 地点 / テストデータ
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 架空データの生成・公開処理のテスト
+        run: python -m unittest release_tools.tests.test_test_points -v
+
+  test:
+    # dev の保護設定が要求するチェック名を維持する。
+    name: test
+    needs: [common, osm-peaks, test-points]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: すべてのテスト結果を確認
+        env:
+          COMMON_RESULT: ${{ needs.common.result }}
+          OSM_PEAKS_RESULT: ${{ needs.osm-peaks.result }}
+          TEST_POINTS_RESULT: ${{ needs.test-points.result }}
+        run: |
+          test "$COMMON_RESULT" = success
+          test "$OSM_PEAKS_RESULT" = success
+          test "$TEST_POINTS_RESULT" = success

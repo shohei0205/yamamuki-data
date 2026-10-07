@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "公開済み地点データのカタログ（版1）",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "datasets"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "datasets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "manifestUrl"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]*$"
+          },
+          "manifestUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://[^/?#\\s]+/"
+          },
+          "manifest": {
+            "type": "object",
+            "description": "ダウンロードと検証に必要な manifest の内容。",
+            "required": [
+              "schemaVersion",
+              "version",
+              "downloadUrl",
+              "fileName",
+              "sha256",
+              "sizeBytes",
+              "uncompressedSizeBytes",
+              "license",
+              "attribution"
+            ],
+            "properties": {
+              "schemaVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "version": {
+                "type": "string",
+                "minLength": 1
+              },
+              "downloadUrl": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https://[^/?#\\s]+"
+              },
+              "fileName": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "sizeBytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "uncompressedSizeBytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "license": {
+                "type": "string",
+                "minLength": 1
+              },
+              "attribution": {
+                "type": "string",
+                "minLength": 1
+              },
+              "dataSchemaVersion": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "データ本体のスキーマの版。新規生成時は必ず記載し、manifest の版とは独立して管理する。"
+              },
+              "name": {
+                "type": "string",
+                "pattern": "\\S",
+                "description": "データセットの表示名。新規生成時に記載する。"
+              }
+            },
+            "additionalProperties": true
+          },
+          "name": {
+            "type": "string",
+            "pattern": "\\S",
+            "description": "データセットの表示名。新規生成時に記載する。"
+          }
+        },
+        "description": "manifest は新規生成時に必ず含める。"
+      }
+    }
+  }
+}

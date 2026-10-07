@@ -1,4 +1,4 @@
-name: 全国の山頂データを生成・検査
+name: 地点 / OSM山頂：生成・検査
 
 on:
   schedule:
@@ -17,14 +17,14 @@ permissions:
 
 defaults:
   run:
-    working-directory: peaks
+    working-directory: points/osm-peaks
 
 env:
   PYTHONUNBUFFERED: '1'
   RELEASE_CHANNEL: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
 
 concurrency:
-  group: publish-peaks-${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
+  group: publish-osm-peaks-${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
   cancel-in-progress: false
 
 jobs:
@@ -66,7 +66,7 @@ jobs:
         timeout-minutes: 10
         continue-on-error: true
         with:
-          path: peaks/build/japan-latest.osm.pbf
+          path: points/osm-peaks/build/japan-latest.osm.pbf
           key: ${{ steps.source.outputs.cache-key }}
       - name: 全国 PBF を検証し、未取得なら Geofabrik から取得
         id: download
@@ -80,13 +80,17 @@ jobs:
         timeout-minutes: 10
         continue-on-error: true
         with:
-          path: peaks/build/japan-latest.osm.pbf
+          path: points/osm-peaks/build/japan-latest.osm.pbf
           key: ${{ steps.download.outputs.cache-key }}
       - name: 配布ファイルと manifest を生成
         id: build
         run: |
           version="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          python scripts/build_data.py build/japan-latest.osm.pbf --version "$version"
+          graphics_options=()
+          if [ -f graphics/points.json ]; then
+            graphics_options=(--graphics-directory graphics --graphics-map graphics/points.json)
+          fi
+          python scripts/build_data.py build/japan-latest.osm.pbf --version "$version" "${graphics_options[@]}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: 前回と比較して下書き Release を作成
         id: review
@@ -139,7 +143,7 @@ jobs:
         uses: actions/deploy-pages@v5
       - name: 配置した manifest 一覧を確認
         if: steps.publication.outputs.pages_ready == 'true'
-        working-directory: peaks
+        working-directory: points/osm-peaks
         env:
           GH_REPO: ${{ github.repository }}
         run: python -m scripts.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"
