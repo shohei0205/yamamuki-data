@@ -154,8 +154,7 @@ def read_manifest(channel):
     catalog = read_catalog()
     if catalog is None:
         return None
-    legacy = ("peaks" if channel == "stable" else "peaks-dev") + "/manifest.json"
-    return catalog.get(path, catalog.get(legacy))
+    return catalog.get(path)
 
 
 class MissingPreviousRelease(ValueError):
@@ -226,15 +225,6 @@ def update_latest(directory, manifest, channel="stable"):
             raise ValueError("配布サイトの一覧を取得できません。初回公開だけ手動公開の初期化を指定してください")
         catalog = {}
     histories = {key: list(entries) for key, entries in getattr(catalog, "histories", {}).items()}
-    # 旧 URL を維持したまま、既存の両配布先と履歴を新 URL に引き継ぐ。
-    for previous_channel in ("stable", "dev"):
-        legacy = ("peaks" if previous_channel == "stable" else "peaks-dev") + "/manifest.json"
-        current = manifest_path(previous_channel)
-        if legacy in catalog and current not in catalog:
-            catalog[current] = catalog[legacy]
-            old_history = legacy.replace("manifest.json", "history.json")
-            if old_history in histories:
-                histories.setdefault(current.replace("manifest.json", "history.json"), list(histories[old_history]))
     # 履歴機能の導入前の最新版も残す。分からない公開日時や実行 URL は補わない。
     for previous_channel in ("stable", "dev"):
         previous_path = manifest_path(previous_channel)
@@ -244,10 +234,6 @@ def update_latest(directory, manifest, channel="stable"):
     history_path = path.replace("manifest.json", "history.json")
     histories.setdefault(history_path, []).append(history_entry(manifest, channel))
     catalog[path] = manifest
-    legacy = ("peaks" if channel == "stable" else "peaks-dev") + "/manifest.json"
-    if legacy in catalog:
-        catalog[legacy] = manifest
-        histories[legacy.replace("manifest.json", "history.json")] = list(histories[history_path])
     write_site(catalog, histories)
     # Actions の Pages 配置が成功するまで「更新完了」とは扱わない。
     output(pages_ready="true")
@@ -257,6 +243,11 @@ def update_latest(directory, manifest, channel="stable"):
 
 def write_site(catalog, histories):
     """公開・削除で共通のサイト一式を生成する。"""
+    # 廃止したパスは公開・削除・テストデータ公開のいずれでも再配置しない。
+    catalog = {key: value for key, value in catalog.items()
+               if key.split("/", 1)[0] not in ("peaks", "peaks-dev")}
+    histories = {key: value for key, value in histories.items()
+                 if key.split("/", 1)[0] not in ("peaks", "peaks-dev")}
     destination = Path(os.environ.get("PAGES_DIRECTORY", Path(__file__).resolve().parents[3] / "build/pages"))
     if destination.exists():
         raise ValueError("Pages の出力先が既にあります。空の出力先を指定してください")
@@ -291,8 +282,6 @@ def remove_dataset(dataset, channel):
     if catalog is None:
         raise ValueError("既存のカタログを取得できないため削除を中止します")
     targets = [path]
-    if dataset == "osm-peaks":
-        targets.append(("peaks" if channel == "stable" else "peaks-dev") + "/manifest.json")
     if not any(target in catalog for target in targets):
         raise ValueError("指定したデータセット・配布先はカタログにありません")
     manifests = dict(catalog)
