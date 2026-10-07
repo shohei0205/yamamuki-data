@@ -6,14 +6,14 @@
 
 | 配布先 | 最新版の manifest | 公開履歴 |
 |---|---|---|
-| 正式版 | [https://shohei0205.github.io/yamamuki-data/points/osm_peaks/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm_peaks/manifest.json) | [https://shohei0205.github.io/yamamuki-data/points/osm_peaks/history.json](https://shohei0205.github.io/yamamuki-data/points/osm_peaks/history.json) |
-| 開発版 | [https://shohei0205.github.io/yamamuki-data/points/osm_peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm_peaks-dev/manifest.json) | [https://shohei0205.github.io/yamamuki-data/points/osm_peaks-dev/history.json](https://shohei0205.github.io/yamamuki-data/points/osm_peaks-dev/history.json) |
+| 正式版 | [https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json) | [https://shohei0205.github.io/yamamuki-data/points/osm-peaks/history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/history.json) |
+| 開発版 | [https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json) | [https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/history.json) |
 
-データ本体（`japan-mountains.json.gz`）は、各 manifest の `downloadUrl` から取得する。
+データ本体（`osm-peaks.json.gz`）は、各 manifest の `downloadUrl` から取得する。
 
 ## 配るもの
 
-Geofabrik の日本全国の OSM データから、`natural=peak` または `natural=volcano` の名前付きノードを抽出する。日本全体を `japan-mountains.json.gz` 1 ファイルにまとめる。way・relation と名前のないノードは含めない。収録する地点の `type` は山頂を表す `peak` とし、火山ノードも同じ種別で出力する。名前は前後の空白を除き、`name:ja`、`name` の順に使う（`name:ja` だけのノードも含む）。
+Geofabrik の日本全国の OSM データから、`natural=peak` または `natural=volcano` の名前付きノードを抽出する。日本全体を `osm-peaks.json.gz` 1 ファイルにまとめる。way・relation と名前のないノードは含めない。収録する地点の `type` は山頂を表す `peak` とし、火山ノードも同じ種別で出力する。名前は前後の空白を除き、`name:ja`、`name` の順に使う（`name:ja` だけのノードも含む）。
 
 地点ごとの JSON の形式は [地点データの共通仕様](../README.md#地点の形式)を参照する。OSM ノード ID の昇順に並べる。ふりがな・別名・解説リンク・標高は、以下の OSM タグから変換する。
 
@@ -32,7 +32,7 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 
 [Releases](https://github.com/shohei0205/yamamuki-data/releases) に、次の 2 ファイルを公開する。
 
-- [https://shohei0205.github.io/yamamuki-data/points/osm_peaks/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm_peaks/manifest.json)
+- [https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json)
 - データ本体は manifest の `downloadUrl` から取得する。
 
 manifest の項目・型・版の履歴は [リポジトリ共通の manifest.json](../../README.md#manifestjson) を参照する。
@@ -42,8 +42,8 @@ manifest の項目・型・版の履歴は [リポジトリ共通の manifest.js
 | 項目 | 山頂データでの値・取得方法 |
 |---|---|
 | `version` | 生成時の UTC 日時・Actions 実行 ID・再実行番号を連結 |
-| `fileName` | `japan-mountains.json.gz` |
-| `downloadUrl` | 正式版は `peaks-<version>`、開発版は `peaks-dev-<version>` の Release の gzip ファイル |
+| `fileName` | `osm-peaks.json.gz` |
+| `downloadUrl` | 正式版は `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>` の Release の gzip ファイル |
 | `pointCount` | 収録した名前付き山頂ノードの件数 |
 | `sourceTimestamp` | 全国 PBF ヘッダーの `osmosis_replication_timestamp` |
 | `latestPointTimestamp` | 収録する山頂ノードの OSM 最終編集日時の最大値。収録対象外のノードは集計しない |
@@ -53,16 +53,16 @@ manifest の項目・型・版の履歴は [リポジトリ共通の manifest.js
 
 元データと収録ノードの日時は必須とし、欠落・形式不正・収録ノードの日時が元データより新しい場合は生成・公開を止める。元データの日付はダウンロード日時ではない。同じ元データで再実行しても配布の `version` は変わる。
 
-Release のタグは `peaks-<version>`。アプリは manifest の `downloadUrl` から対応するファイルを取得する。最新版の参照用 manifest は GitHub Pages に置き、データ本体は各版に保存する。アプリでは展開前にサイズと SHA-256 を検証する。既存アプリへの読み込み機能の組み込みは、アプリ側の別作業となる。
+Release のタイトルとタグは同じ値とし、正式版は `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>` とする。アプリは manifest の `downloadUrl` から対応するファイルを取得する。最新版の参照用 manifest は GitHub Pages に置き、データ本体は各版に保存する。アプリでは展開前にサイズと SHA-256 を検証する。既存アプリへの読み込み機能の組み込みは、アプリ側の別作業となる。
 
 山頂データは正式版と開発版の参照先を分ける。公開済みの地点データ一覧は [地点カタログ](../README.md#公開データのカタログ) を参照する。リポジトリ全体の `releases/latest` は使わない。
 
 | 配布先 | Pages のパス | データ本体を置くタグ |
 |---|---|---|
-| 正式版（`stable`） | [https://shohei0205.github.io/yamamuki-data/points/osm_peaks/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm_peaks/manifest.json) | `peaks-<version>` |
-| 開発版（`dev`） | [https://shohei0205.github.io/yamamuki-data/points/osm_peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm_peaks-dev/manifest.json) | `peaks-dev-<version>` |
+| 正式版（`stable`） | [https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json) | `osm-peaks-<version>` |
+| 開発版（`dev`） | [https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json) | `osm-peaks-dev-<version>` |
 
-開発版の manifest は [https://shohei0205.github.io/yamamuki-data/points/osm_peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm_peaks-dev/manifest.json)、本体は manifest の `downloadUrl` から取得する。正式版と開発版で manifest の形式は共通とする。配布先はアプリ側で選ぶ。開発版が無い・取得できない場合に正式版へ自動で切り替えない。開発版の履歴 Release には GitHub の Pre-release を付ける。
+開発版の manifest は [https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json)、本体は manifest の `downloadUrl` から取得する。正式版と開発版で manifest の形式は共通とする。配布先はアプリ側で選ぶ。開発版が無い・取得できない場合に正式版へ自動で切り替えない。開発版の履歴 Release には GitHub の Pre-release を付ける。
 
 件数・更新日時の比較、初回の手動確認、異常時の下書き保留、手動公開、参照先の復旧は配布先ごとに独立して行う。開発版を正式版の比較基準にせず、開発版の公開で正式版の参照先を更新しない。タグの衝突を防ぐため、`latest` と `dev-` で始まる版名は予約する。
 
@@ -80,7 +80,7 @@ Release のタグは `peaks-<version>`。アプリは manifest の `downloadUrl`
 
 ## 公開履歴
 
-Pages の [https://shohei0205.github.io/yamamuki-data/points/osm_peaks/history.json](https://shohei0205.github.io/yamamuki-data/points/osm_peaks/history.json)（正式版）と [https://shohei0205.github.io/yamamuki-data/points/osm_peaks-dev/history.json](https://shohei0205.github.io/yamamuki-data/points/osm_peaks-dev/history.json)（開発版）に、最新版として公開した記録を古い順で残す。ファイルは `schemaVersion: 1` と `entries` の配列を持つ。
+Pages の [https://shohei0205.github.io/yamamuki-data/points/osm-peaks/history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/history.json)（正式版）と [https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/history.json)（開発版）に、最新版として公開した記録を古い順で残す。ファイルは `schemaVersion: 1` と `entries` の配列を持つ。
 
 | 項目 | 内容 |
 |---|---|
@@ -106,7 +106,7 @@ Pages の [https://shohei0205.github.io/yamamuki-data/points/osm_peaks/history.j
 1. 単体テストと、小さな PBF による生成テストを行う。
 2. Geofabrik の `japan-latest.osm.pbf` から日付付き URL を確定する。取得対象日を指定した場合は、その日付の URL を直接使い、全国データを取得する。途中で切れたら同じ版の続きから再開し、配布元の MD5 と照合する。Overpass API は使わない。
 3. `osmium tags-filter` で対象ノードだけを抽出し、配布ファイルと manifest を作る。
-4. Pages の選択した配布先の前回 manifest（正式版は `points/osm_peaks/manifest.json`、開発版は `points/osm_peaks-dev/manifest.json`）を取得・検証し、全国と地域別の件数、元データの日時、形式の版を比較する。件数・前回との差・検査結果・圧縮サイズ・元データの日時・SHA-256 を、下書きの説明と Actions の実行概要に記録する。
+4. Pages の選択した配布先の前回 manifest（正式版は `points/osm-peaks/manifest.json`、開発版は `points/osm-peaks-dev/manifest.json`）を取得・検証し、全国と地域別の件数、元データの日時、形式の版を比較する。件数・前回との差・検査結果・圧縮サイズ・元データの日時・SHA-256 を、下書きの説明と Actions の実行概要に記録する。
 5. 両ファイルを下書き Release に添付する。検査に合格した場合だけ、別の公開ジョブが下書きのファイルをダウンロードし、再検証して公開する。履歴版を公開後、その配布先の最新版 manifest を更新する。
 
 Actions の各ステップでは、時刻付きで処理の開始・完了をログに出す。Python の出力はためずに随時表示する。
@@ -161,7 +161,7 @@ Actions の各ステップでは、時刻付きで処理の開始・完了をロ
 
 Actions の実行日はデータの配布日とは限らず、当日分はまだ存在しない場合がある。配布済みの日付を指定する。対象が404の場合は失敗とし、別の日付への自動切り替えはしない。サイズと日付付き URL の MD5 を照合し、別の版の途中ファイルを混ぜない。古い日付を指定しても、公開前の日時・件数・同一更新日時の検査はそのまま行う。
 
-ローカルでは `points/osm_peaks/` 内で次のように指定する。
+ローカルでは `points/osm-peaks/` 内で次のように指定する。
 
 ```bash
 python -u scripts/download_source.py --source-date 2026-09-29
@@ -185,7 +185,7 @@ Actions では取得前に配布元の日付付き URL・サイズ・MD5 を確�
 
 1. Releases の下書きにある検査結果と必要なデータの差分を確認する。
 2. データ種別共通の Actions「共通：確認済みデータを公開」→「Run workflow」で正式版なら `main`、開発版なら `dev` を選ぶ。
-3. `tag` 欄に確認した Release ページの URL を貼り付け、確認内容・公開理由は必要に応じて入力する（空欄でも実行可能）。`untagged-...` を含む下書きの URL も使える。対象タグ（正式版は `peaks-<version>`、開発版は `peaks-dev-<version>`）も指定できる。`sha256` 欄は空欄でよく、Release の検査結果から自動取得する。配布先とタグ、Pre-release の有無が一致しない場合は公開を止める。
+3. `tag` 欄に確認した Release ページの URL を貼り付け、確認内容・公開理由は必要に応じて入力する（空欄でも実行可能）。`untagged-...` を含む下書きの URL も使える。対象タグ（正式版は `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>`）も指定できる。`sha256` 欄は空欄でよく、Release の検査結果から自動取得する。配布先とタグ、Pre-release の有無が一致しない場合は公開を止める。
 4. 下書きの2ファイルを取得・再検証し、検査結果に記録された SHA-256（明示した場合は入力値）と一致した場合に、警告を承認して公開する。公開者と理由を Release の説明に残し、空欄の場合は「理由の記入なし」と記録する。
 
 Pages に初めて配置するときだけ、`initialize_pages` を選ぶ。以後は選ばず、公開済みの一覧を引き継いで他の配布先を維持する。
@@ -198,11 +198,11 @@ Pages に初めて配置するときだけ、`initialize_pages` を選ぶ。以�
 
 ### 手元での生成
 
-以下のコマンドは `points/osm_peaks/` を作業ディレクトリにして実行する。Python 3.12 と osmium-tool が必要（Ubuntu では `sudo apt-get install osmium-tool`）。
+以下のコマンドは `points/osm-peaks/` を作業ディレクトリにして実行する。Python 3.12 と osmium-tool が必要（Ubuntu では `sudo apt-get install osmium-tool`）。
 
 ```bash
 # リポジトリのルートから移動する。
-cd points/osm_peaks
+cd points/osm-peaks
 python -u scripts/download_source.py
 python scripts/build_data.py build/japan-latest.osm.pbf \
   --version local-20260930 --output-dir dist
@@ -212,13 +212,13 @@ python scripts/build_data.py build/japan-latest.osm.pbf \
 
 取得時に PBF の隣へ `<PBF のファイル名>.source.json` を保存し、URL・サイズ・MD5 を記録する。取得済みファイルを再利用した場合も記録を作る。生成時に記録と PBF を照合し、日付付き URL を manifest の `sourceUrl` に引き継ぐ。記録の欠落や不一致は生成を止める。既存の PBF に記録がない場合は、同じ対象日で取得コマンドを再実行すると、内容が一致すれば再ダウンロードせずに記録を作れる。
 
-元データの取得には数 GB の通信量と空き容量が必要。元データは `points/osm_peaks/build/`、配布ファイルは `points/osm_peaks/dist/` に保存し、どちらも git に入れない。
+元データの取得には数 GB の通信量と空き容量が必要。元データは `points/osm-peaks/build/`、配布ファイルは `points/osm-peaks/dist/` に保存し、どちらも git に入れない。
 
 ### 山頂に SVG を設定する
 
-`points/osm_peaks/graphics/` に `<assetId>.svg` と、地点 ID から assetId への対応表 `points.json` を置く。対応表の例は `{"3403990450":"fuji"}`。生成する地点の中から対応する ID に `graphic` を追加する。SVG を用意する場合は、この資料に画像の出典・作成者・利用条件も追記する。
+`points/osm-peaks/graphics/` に `<assetId>.svg` と、地点 ID から assetId への対応表 `points.json` を置く。対応表の例は `{"3403990450":"fuji"}`。生成する地点の中から対応する ID に `graphic` を追加する。SVG を用意する場合は、この資料に画像の出典・作成者・利用条件も追記する。
 
-月次・手動の生成 Action は `graphics/points.json` がある場合に画像を取り込み、対応する地点の `graphic.svg` に SVG 本文を内蔵する。手元で生成する場合は次のように指定する（作業場所は `points/osm_peaks/`）。
+月次・手動の生成 Action は `graphics/points.json` がある場合に画像を取り込み、対応する地点の `graphic.svg` に SVG 本文を内蔵する。手元で生成する場合は次のように指定する（作業場所は `points/osm-peaks/`）。
 
 ```bash
 python scripts/build_data.py build/japan-latest.osm.pbf --version local \
@@ -231,7 +231,7 @@ python scripts/build_data.py build/japan-latest.osm.pbf --version local \
 
 Python 3.12 と osmium-tool を使い、単体テストと小さな PBF による生成テストを行う。SVG の対応表・JSON への内蔵・倍率・未対応要素の拒否・公開前の再検査も単体テストで確認する。CIの「共通：データ処理のテスト」（`.github/workflows/test.yml`）の「地点 / OSM山頂」ジョブで push・PR 時に実行する。
 
-テストは `points/osm_peaks/` 内で、外部通信を行わず次のコマンドで実行できる。osmium がない場合は PBF を使うテストだけをスキップする。Actions では osmium を入れてすべて実行する。
+テストは `points/osm-peaks/` 内で、外部通信を行わず次のコマンドで実行できる。osmium がない場合は PBF を使うテストだけをスキップする。Actions では osmium を入れてすべて実行する。
 
 ```bash
 python -m unittest discover -s tests -v

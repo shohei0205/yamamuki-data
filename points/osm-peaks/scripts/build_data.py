@@ -28,7 +28,7 @@ else:
 
 
 SOURCE_URL = "https://download.geofabrik.de/asia/japan-latest.osm.pbf"
-FILE_NAME = "japan-mountains.json.gz"
+FILE_NAME = "osm-peaks.json.gz"
 MAX_SIZE_BYTES = 5_000_000
 
 

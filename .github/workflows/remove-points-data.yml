@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       dataset:
-        description: '削除するデータセット名（例: osm_peaks）。main は正式版、dev は開発版を削除'
+        description: '削除するデータセット名（例: osm-peaks）。main は正式版、dev は開発版を削除'
         required: true
         type: string
 
@@ -28,7 +28,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     defaults:
       run:
-        working-directory: points/osm_peaks
+        working-directory: points/osm-peaks
     env:
       PYTHONUNBUFFERED: '1'
       GH_REPO: ${{ github.repository }}

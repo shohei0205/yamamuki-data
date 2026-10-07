@@ -6,7 +6,7 @@
 
 | 対象・取得元 | 状態 | 詳細 |
 |---|---|---|
-| OpenStreetMap の山頂 | 実装済み | [osm_peaks](osm_peaks/README.md) |
+| OpenStreetMap の山頂 | 実装済み | [osm-peaks](osm-peaks/README.md) |
 | 手動作成のテスト用地点 | 開発版限定 | [testdata](testdata/README.md) |
 | ランドマークなど | 将来追加予定・未実装 | 追加時に専用フォルダを作る |
 
@@ -15,7 +15,7 @@
 ```text
 points/
   README.md         地点データの一覧・共通形式
-  osm_peaks/
+  osm-peaks/
     README.md       OSM 山頂データの生成・公開手順
     scripts/        取得・生成・検査・公開
     tests/          山頂データのテスト
@@ -43,7 +43,7 @@ manifest の共通項目は [ルート README](../README.md#manifestjson) を参
 ## 変更の確かめ方
 
 - [共通の確認](../README.md#変更の確かめ方)
-- [山頂データのテスト](osm_peaks/README.md#テスト)
+- [山頂データのテスト](osm-peaks/README.md#テスト)
 - [テスト用地点のテスト](testdata/README.md#テスト)
 
 ## 公開データのカタログ
@@ -63,7 +63,7 @@ manifest の共通項目は [ルート README](../README.md#manifestjson) を参
 |---|---|
 | `schemaVersion` | カタログの形式の版。現在は整数の `1`。manifest・地点データの版とは独立 |
 | `datasets` | データセットの配列。公開済み地点データがない場合は `[]` |
-| `datasets[].id` | データセット名（例: `osm_peaks`）。地点の `id` と組み合わせて識別する |
+| `datasets[].id` | データセット名（例: `osm-peaks`）。地点の `id` と組み合わせて識別する |
 | `datasets[].name` | データセットの表示名（例: 山頂）。識別には `id` を使う |
 | `datasets[].manifestUrl` | 対応する最新版 manifest の HTTPS URL（個別取得用） |
 | `datasets[].manifest` | manifest の内容。形式の版・データの版・`downloadUrl`・ファイル名・SHA-256・圧縮前後のサイズ・件数・出典などを含む |
@@ -78,7 +78,7 @@ manifest の共通項目は [ルート README](../README.md#manifestjson) を参
 
 ### カタログから削除する
 
-Actions の「地点：カタログから削除」→「Run workflow」で、正式版なら `main`、開発版なら `dev` を選び、`dataset` に `osm_peaks` などのデータセット名を入力する。配布先は実行元ブランチで決まり、対象の配布先だけを削除する。
+Actions の「地点：カタログから削除」→「Run workflow」で、正式版なら `main`、開発版なら `dev` を選び、`dataset` に `osm-peaks` などのデータセット名を入力する。配布先は実行元ブランチで決まり、対象の配布先だけを削除する。
 
 地点カタログとサイト全体の一覧から対象を除き、その manifest・公開履歴の Pages ファイルも削除する。他のデータ・配布先・公開履歴、Release とデータ本体は保持する。
 
@@ -173,7 +173,7 @@ Actions の「地点：カタログから削除」→「Run workflow」で、正
 
 SVG はデータ本体の gzip に含まれるため、画像の追加ダウンロード・assetId・manifest の画像一覧は不要。カタログに同梱された manifest のサイズと SHA-256 で、SVG を含むデータ本体全体を検証する。同じ SVG を複数地点で使う場合も、それぞれの地点に本文を記載する。
 
-SVG は UTF-8 の静止画とし、有効な `viewBox` と SVG の名前空間を必須にする。SVG 本文はUTF-8で100,000バイト以内。固定の縦横サイズや縦横比は設けない。パス・基本図形・グループ・グラデーション・クリッピングを使用できる。文字はパスに変換し、スクリプト・アニメーション・外部参照・埋め込み画像・CSS・フォント依存は使用しない。詳細な許可要素・属性は [graphics.py](osm_peaks/scripts/graphics.py) に定義する。生成時と公開前に SVG の内容と倍率を検査する。
+SVG は UTF-8 の静止画とし、有効な `viewBox` と SVG の名前空間を必須にする。SVG 本文はUTF-8で100,000バイト以内。固定の縦横サイズや縦横比は設けない。パス・基本図形・グループ・グラデーション・クリッピングを使用できる。文字はパスに変換し、スクリプト・アニメーション・外部参照・埋め込み画像・CSS・フォント依存は使用しない。詳細な許可要素・属性は [graphics.py](osm-peaks/scripts/graphics.py) に定義する。生成時と公開前に SVG の内容と倍率を検査する。
 
 `graphic` は任意項目の追加なので地点データの版は据え置く。アプリ側では SVG 非対応・描画失敗時に `type` に応じた標準アイコンへ戻す。画像表示はアプリ側で別途実装する。SVG の著作権・利用条件は地点データとは別に確認し、取得元・作成者・利用条件を各データセットの資料に記載する。
 

@@ -7,7 +7,7 @@ import re
 def prefix(channel):
     if channel not in ("stable", "dev"):
         raise ValueError("配布先は stable または dev を指定してください")
-    return "peaks-" if channel == "stable" else "peaks-dev-"
+    return "osm-peaks-" if channel == "stable" else "osm-peaks-dev-"
 
 
 def release_tag(version, channel="stable"):
@@ -39,4 +39,4 @@ def download_url(version, channel="stable"):
     repo = os.environ.get("GH_REPO") or os.environ.get("GITHUB_REPOSITORY", "shohei0205/yamamuki-data")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise ValueError("リポジトリ名が不正です")
-    return f"https://github.com/{repo}/releases/download/{release_tag(version, channel)}/japan-mountains.json.gz"
+    return f"https://github.com/{repo}/releases/download/{release_tag(version, channel)}/osm-peaks.json.gz"

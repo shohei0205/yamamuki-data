@@ -75,14 +75,14 @@ class CheckReleaseTests(unittest.TestCase):
             root = Path(directory)
             rows = dataset(2)[1]
             write_distribution(rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
-            self.assertEqual(rows, validate(root, tag="peaks-test")[1])
+            self.assertEqual(rows, validate(root, tag="osm-peaks-test")[1])
             write_distribution(rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z", channel="dev")
-            self.assertEqual(rows, validate(root, tag="peaks-dev-test", channel="dev")[1])
+            self.assertEqual(rows, validate(root, tag="osm-peaks-dev-test", channel="dev")[1])
             write_distribution(rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
             with self.assertRaises(ValueError):
-                validate(root, tag="peaks-dev-test", channel="stable")
+                validate(root, tag="osm-peaks-dev-test", channel="stable")
             with self.assertRaises(ValueError):
-                validate(root, tag="peaks-other")
+                validate(root, tag="osm-peaks-other")
             manifest_path = root / "manifest.json"
             original = manifest_path.read_text(encoding="utf-8")
             for key, value in [("sha256", "0" * 64), ("pointCount", 10000),
@@ -225,7 +225,7 @@ class CheckReleaseTests(unittest.TestCase):
 
 class DownloadUrlTests(unittest.TestCase):
     def test_urls_match_channel_and_reject_invalid_targets(self):
-        for channel, tag in (("stable", "peaks-test"), ("dev", "peaks-dev-test")):
+        for channel, tag in (("stable", "osm-peaks-test"), ("dev", "osm-peaks-dev-test")):
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 manifest = write_distribution(dataset(2)[1], root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z", channel=channel)
