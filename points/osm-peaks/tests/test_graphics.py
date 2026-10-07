@@ -48,7 +48,7 @@ class GraphicsTests(unittest.TestCase):
             manifest = self.generate(channel)
             self.assertNotIn("graphics", manifest)
             self.assertEqual(self.rows, validate(self.output, channel=channel)[1])
-            self.assertEqual({"manifest.json", "japan-mountains.json.gz"}, {p.name for p in self.output.iterdir()})
+            self.assertEqual({"manifest.json", "osm-peaks.json.gz"}, {p.name for p in self.output.iterdir()})
             with patch.dict(release_data.os.environ, {"GH_REPO": "shohei0205/yamamuki-data"}):
                 entry = release_data.points_catalog({release_data.manifest_path(channel): manifest}, channel)["datasets"][0]
                 self.assertNotIn("graphics", entry["manifest"])
@@ -91,7 +91,7 @@ class GraphicsTests(unittest.TestCase):
         self.rows[0]["graphic"]["svg"] = SVG.decode("utf-8").replace("<path", "<script/><path")
         raw = json.dumps(self.rows).encode("utf-8")
         archive = gzip.compress(raw)
-        (self.output / "japan-mountains.json.gz").write_bytes(archive)
+        (self.output / "osm-peaks.json.gz").write_bytes(archive)
         manifest.update(sizeBytes=len(archive), uncompressedSizeBytes=len(raw), sha256=hashlib.sha256(archive).hexdigest())
         (self.output / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         with self.assertRaises(ValueError):
@@ -116,6 +116,6 @@ class GraphicsTests(unittest.TestCase):
         manifest = self.generate()
         with patch.object(release_data, "gh") as download, \
                 patch.object(release_data, "validate", return_value=(manifest, self.rows)):
-            release_data.fetch("peaks-test", self.root / "download")
+            release_data.fetch("osm-peaks-test", self.root / "download")
             self.assertEqual(1, download.call_count)
             self.assertNotIn("graphic-fuji.svg", download.call_args.args)

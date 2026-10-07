@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-24.04
     defaults:
       run:
-        working-directory: points/osm_peaks
+        working-directory: points/osm-peaks
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

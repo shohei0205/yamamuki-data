@@ -44,5 +44,5 @@ jobs:
       - uses: actions/deploy-pages@v4
         id: deployment
       - name: 配置した一覧を確認
-        working-directory: points/osm_peaks
+        working-directory: points/osm-peaks
         run: python -m scripts.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"

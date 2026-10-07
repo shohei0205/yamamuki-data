@@ -78,7 +78,7 @@ def reviewed_checksum(release):
 
 def manifest_path(channel):
     prefix(channel)
-    return ("points/osm_peaks" if channel == "stable" else "points/osm_peaks-dev") + "/manifest.json"
+    return ("points/osm-peaks" if channel == "stable" else "points/osm-peaks-dev") + "/manifest.json"
 
 
 def pages_url():
@@ -188,13 +188,13 @@ def points_catalog(manifests, selected_channel="stable"):
             dataset_id = name[:-4] if channel == "dev" else name
             manifest = dict(manifests[path])
             # 従来の山頂は manifest の版で本体の形式も管理していた。
-            if (dataset_id == "osm_peaks" and "dataSchemaVersion" not in manifest
+            if (dataset_id == "osm-peaks" and "dataSchemaVersion" not in manifest
                     and type(manifest.get("schemaVersion")) is int and manifest["schemaVersion"] in (1, 2, 3, 4, 5)):
                 manifest["dataSchemaVersion"] = manifest["schemaVersion"]
             # 版1〜3の山頂 manifest にも、本体を直接取得できる URL を補う。
-            if dataset_id == "osm_peaks" and "downloadUrl" not in manifest and "version" in manifest:
+            if dataset_id == "osm-peaks" and "downloadUrl" not in manifest and "version" in manifest:
                 manifest["downloadUrl"] = download_url(manifest["version"], channel)
-            display_name = manifest.get("name", "山頂" if dataset_id == "osm_peaks" else dataset_id)
+            display_name = manifest.get("name", "山頂" if dataset_id == "osm-peaks" else dataset_id)
             if not isinstance(display_name, str) or not display_name.strip():
                 raise ValueError("データセットの表示名が不正です")
             datasets.append({"id": dataset_id, "name": display_name.strip(),
@@ -285,7 +285,7 @@ def remove_dataset(dataset, channel):
     if catalog is None:
         raise ValueError("既存のカタログを取得できないため削除を中止します")
     targets = [path]
-    if dataset == "osm_peaks":
+    if dataset == "osm-peaks":
         targets.append(("peaks" if channel == "stable" else "peaks-dev") + "/manifest.json")
     if not any(target in catalog for target in targets):
         raise ValueError("指定したデータセット・配布先はカタログにありません")
@@ -360,7 +360,7 @@ def prepare(directory, channel="stable"):
         write_report(notes, report(current, previous, warnings).replace("## データの検査結果", "## データの検査結果（生成後）", 1))
         logging.info("下書き Release を作成し、SVG を内蔵したデータと manifest をアップロードします: %s", tag)
         url = gh("release", "create", tag, str(Path(directory) / FILE_NAME), str(Path(directory) / "manifest.json"),
-           "--draft", "--target", os.environ["GITHUB_SHA"], "--title", f"全国の山データ ({channel}) {current[0]['version']}",
+           "--draft", "--target", os.environ["GITHUB_SHA"], "--title", tag,
            "--notes-file", str(notes), f"--prerelease={str(channel == 'dev').lower()}").strip()
         append_summary(f"\n## 生成したリリース\n\n[生成したリリースを開く]({url})\n\n"
                        f"- タグ: `{tag}`\n"
