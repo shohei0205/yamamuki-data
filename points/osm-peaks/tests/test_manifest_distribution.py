@@ -109,7 +109,7 @@ class ManifestDistributionTests(unittest.TestCase):
             self.assertEqual(release_data.download_url(manifest["version"], channel), entry["manifest"]["downloadUrl"])
             self.assertNotIn("downloadUrl", manifest)
 
-    def test_publication_removes_legacy_paths_and_preserves_current_data(self):
+    def test_publication_preserves_both_compatibility_channels(self):
         original = {"peaks/manifest.json": dict(self.current[0], version="old"),
                     "peaks-dev/manifest.json": dict(self.current[0], version="old-dev"),
                     "points/osm-peaks/manifest.json": dict(self.current[0], version="stable"),
@@ -120,14 +120,34 @@ class ManifestDistributionTests(unittest.TestCase):
                 patch.object(release_data, "read_catalog", return_value=release_data.Catalog(original, histories)):
             release_data.update_latest(self.test_output, self.current[0])
         document = json.loads((destination / "catalog.json").read_text(encoding="utf-8"))
-        self.assertFalse((destination / "peaks").exists())
-        self.assertFalse((destination / "peaks-dev").exists())
-        self.assertEqual({"points/osm-peaks/manifest.json", "points/osm-peaks-dev/manifest.json"}, set(document["manifests"]))
+        self.assertTrue((destination / "peaks/manifest.json").exists())
+        self.assertTrue((destination / "peaks/history.json").exists())
+        self.assertEqual("old", document["manifests"]["peaks/manifest.json"]["version"])
+        self.assertTrue((destination / "peaks-dev/manifest.json").exists())
+        self.assertTrue((destination / "peaks-dev/history.json").exists())
+        self.assertEqual("old-dev", document["manifests"]["peaks-dev/manifest.json"]["version"])
+        self.assertEqual({"peaks/manifest.json", "peaks-dev/manifest.json", "points/osm-peaks/manifest.json", "points/osm-peaks-dev/manifest.json"}, set(document["manifests"]))
         self.assertEqual(self.current[0], document["manifests"]["points/osm-peaks/manifest.json"])
         self.assertEqual("dev", document["manifests"]["points/osm-peaks-dev/manifest.json"]["version"])
-        self.assertEqual({"points/osm-peaks/history.json", "points/osm-peaks-dev/history.json"}, set(document["histories"]))
+        self.assertEqual({"peaks/history.json", "peaks-dev/history.json", "points/osm-peaks/history.json", "points/osm-peaks-dev/history.json"}, set(document["histories"]))
         with patch.object(release_data, "read_catalog", return_value={"peaks/manifest.json": original["peaks/manifest.json"]}):
             self.assertIsNone(release_data.read_manifest("stable"))
+
+    def test_compatibility_stable_survives_each_channel_publication(self):
+        for channel in ("stable", "dev"):
+            compatibility = dict(self.current[0], version="compatibility")
+            path = "peaks/manifest.json"
+            history = [{"version": "compatibility", "kind": "publication"}]
+            destination = self.test_output / ("compatibility-" + channel)
+            with self.subTest(channel=channel), \
+                    patch.dict(os.environ, {"PAGES_DIRECTORY": str(destination)}), \
+                    patch.object(release_data, "read_catalog", return_value=release_data.Catalog({path: compatibility}, {"peaks/history.json": history})):
+                release_data.update_latest(self.test_output, self.current[0], channel)
+            self.assertEqual(compatibility, json.loads((destination / path).read_text(encoding="utf-8")))
+            self.assertEqual(history, json.loads((destination / "peaks/history.json").read_text(encoding="utf-8"))["entries"])
+            for filename in ("catalog.json", "catalog-dev.json"):
+                catalog = json.loads((destination / "points" / filename).read_text(encoding="utf-8"))
+                self.assertNotIn("peaks", [entry["id"] for entry in catalog["datasets"]])
 
     def test_verify_pages_waits_for_points_catalog(self):
         (self.test_output / "catalog.json").write_text('{"manifests": {}}', encoding="utf-8")
@@ -168,11 +188,12 @@ class ManifestDistributionTests(unittest.TestCase):
                 release_data.remove_dataset("osm-peaks", channel)
                 gh.assert_not_called()
             document = json.loads((destination / "catalog.json").read_text(encoding="utf-8"))
-            self.assertEqual(set(manifests) - {target, legacy}, set(document["manifests"]))
-            self.assertEqual(set(histories) - {target.replace("manifest.json", "history.json"), legacy.replace("manifest.json", "history.json")}, set(document["histories"]))
+            removed = {target}
+            self.assertEqual(set(manifests) - removed, set(document["manifests"]))
+            self.assertEqual(set(histories) - {path.replace("manifest.json", "history.json") for path in removed}, set(document["histories"]))
             self.assertEqual(release_data.points_catalog(document["manifests"], "dev"), json.loads((destination / "points/catalog-dev.json").read_text(encoding="utf-8")))
             self.assertFalse((destination / target).exists())
-            self.assertFalse((destination / legacy).exists())
+            self.assertTrue((destination / legacy).exists())
             self.assertEqual(release_data.points_catalog(document["manifests"]), json.loads((destination / "points/catalog.json").read_text(encoding="utf-8")))
 
     def test_remove_last_dataset_produces_empty_catalog(self):
