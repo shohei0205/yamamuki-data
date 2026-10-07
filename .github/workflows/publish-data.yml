@@ -39,8 +39,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: 実行パラメーターを Summary に表示
@@ -62,7 +62,7 @@ jobs:
         run: python -u scripts/download_source.py --resolve-only --max-seconds 240 --source-date "$SOURCE_DATE"
       - name: 同じ全国 PBF をキャッシュから復元
         id: pbf-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         timeout-minutes: 10
         continue-on-error: true
         with:
@@ -76,7 +76,7 @@ jobs:
         run: python -u scripts/download_source.py --max-seconds 3600 --source-date "$SOURCE_DATE"
       - name: 検証済み全国 PBF を次回用に保存
         if: steps.pbf-cache.outputs.cache-hit != 'true' || steps.source.outputs.cache-key != steps.download.outputs.cache-key
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         timeout-minutes: 10
         continue-on-error: true
         with:
@@ -112,12 +112,12 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Pages の設定を確認
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
       - name: 下書きのファイルを再検証して公開
         id: publication
         env:
@@ -130,13 +130,13 @@ jobs:
         run: python -m scripts.release_data publish --channel "$RELEASE_CHANNEL" --tag "$RELEASE_TAG" --sha256 "$EXPECTED_SHA256"
       - name: manifest の配布サイトを保存
         if: steps.publication.outputs.pages_ready == 'true'
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v5
         with:
           path: build/pages
       - name: manifest を Pages に配置
         if: steps.publication.outputs.pages_ready == 'true'
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
       - name: 配置した manifest 一覧を確認
         if: steps.publication.outputs.pages_ready == 'true'
         working-directory: peaks
