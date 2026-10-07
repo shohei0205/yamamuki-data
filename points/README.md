@@ -10,6 +10,42 @@
 | 手動作成のテスト用地点 | 開発版限定 | [testdata](testdata/README.md) |
 | ランドマークなど | 将来追加予定・未実装 | 追加時に専用フォルダを作る |
 
+## フォルダ構成
+
+```text
+points/
+  README.md         地点データの一覧・共通形式
+  osm_peaks/
+    README.md       OSM 山頂データの生成・公開手順
+    scripts/        取得・生成・検査・公開
+    tests/          山頂データのテスト
+  testdata/
+    README.md       開発版限定のテストデータの生成・公開手順
+    points.json     手動作成した架空の地点データ
+schemas/points/
+  data-v5.schema.json     地点データのスキーマ
+  catalog-v1.schema.json  地点カタログのスキーマ
+```
+
+取得元・対象ごとに専用フォルダを作り、収録条件・作成方法・配布先を各 README に記載する。スキーマはリポジトリ直下の `schemas/points/` に、`data-v<版>.schema.json`・`catalog-v<版>.schema.json` として保存する。
+
+## 地点データの manifest
+
+manifest の共通項目は [ルート README](../README.md#manifestjson) を参照する。地点データでは共通スキーマの `#/$defs/pointManifest` を使い、次の追加項目を検査する。
+
+| 項目 | JSON の型 | 必須 | 内容 |
+|---|---|---|---|
+| `pointCount` | integer | 必須 | JSON 配列に収録した地点数。正の整数 |
+| `latestPointTimestamp` | string | 任意 | 収録地点の元データ上の最終編集日時の最大値。不明なら省略 |
+
+展開後は `pointCount` と配列の件数を照合する。`latestPointTimestamp` は現地調査日・標高の測定日・生成日時ではない。`sourceTimestamp` もある場合はそれ以下とする。地点以外の件数・日時をこれらの項目に入れない。
+
+## 変更の確かめ方
+
+- [共通の確認](../README.md#変更の確かめ方)
+- [山頂データのテスト](osm_peaks/README.md#テスト)
+- [テスト用地点のテスト](testdata/README.md#テスト)
+
 ## 公開データのカタログ
 
 公開済みの地点データすべてのダウンロードと検証に必要な情報を、次のカタログから取得できる。
