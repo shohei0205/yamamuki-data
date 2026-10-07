@@ -12,7 +12,7 @@ on:
         required: false
         type: string
       initialize_pages:
-        description: '初回公開だけ：Pages の配布サイトを初期化'
+        description: '初回・Release削除後の再開：Pages の配布サイトを初期化'
         required: false
         default: false
         type: boolean
