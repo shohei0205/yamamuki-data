@@ -78,7 +78,7 @@ manifest の共通項目は [ルート README](../README.md#manifestjson) を参
 
 ### カタログから削除する
 
-Actions の「地点データをカタログから削除」→「Run workflow」で、正式版なら `main`、開発版なら `dev` を選び、`dataset` に `osm_peaks` などのデータセット名を入力する。配布先は実行元ブランチで決まり、対象の配布先だけを削除する。
+Actions の「地点：カタログから削除」→「Run workflow」で、正式版なら `main`、開発版なら `dev` を選び、`dataset` に `osm_peaks` などのデータセット名を入力する。配布先は実行元ブランチで決まり、対象の配布先だけを削除する。
 
 地点カタログとサイト全体の一覧から対象を除き、その manifest・公開履歴の Pages ファイルも削除する。他のデータ・配布先・公開履歴、Release とデータ本体は保持する。
 

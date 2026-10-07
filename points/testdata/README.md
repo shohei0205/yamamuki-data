@@ -6,7 +6,7 @@
 
 ## 開発版への公開
 
-Actions の「テスト用地点を開発版に公開」を、実行ブランチ `dev` で手動実行する。正式版からは実行できず、公開処理も `dev` 以外では停止する。通常の山頂データ公開で、既存の公開一覧を初期化しておく必要がある。
+Actions の「地点 / テストデータ：開発版に公開」を、実行ブランチ `dev` で手動実行する。正式版からは実行できず、公開処理も `dev` 以外では停止する。通常の山頂データ公開で、既存の公開一覧を初期化しておく必要がある。
 
 - データ本体: `testdata-dev-<version>` の Release の `test-points.json.gz`
 - manifest: `points/testdata-dev/manifest.json`
@@ -23,4 +23,4 @@ python -m unittest discover -s release_tools/tests -v
 python -m release_tools.test_points generate --version local-test
 ```
 
-単体テストでは、入力の形式、SVG、生成物の整合性、dev 以外での拒否、他のデータを残したカタログ更新を確かめる。ローカル生成物は `points/testdata/dist/` に出力する。CI の共通テストでも実行する。
+単体テストでは、入力の形式、SVG、生成物の整合性、dev 以外での拒否、他のデータを残したカタログ更新を確かめる。ローカル生成物は `points/testdata/dist/` に出力する。CIの「共通：データ処理のテスト」の「地点 / テストデータ」ジョブでも実行する。

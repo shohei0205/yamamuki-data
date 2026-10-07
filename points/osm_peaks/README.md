@@ -99,9 +99,9 @@ Pages の [https://shohei0205.github.io/yamamuki-data/points/osm_peaks/history.j
 
 利用開始時に、リポジトリの Settings → Pages → Build and deployment の Source を **GitHub Actions** にし、`github-pages` 環境の配置元として `main` と `dev` を許可する。
 
-[全国の山頂データを生成・検査](https://github.com/shohei0205/yamamuki-data/actions/workflows/publish-data.yml) は、毎月 1 日の UTC 03:23（日本時間 12:23）に `main` で動く。GitHub の混雑で開始が遅れる場合がある。
+[地点 / OSM山頂：生成・検査](https://github.com/shohei0205/yamamuki-data/actions/workflows/publish-data.yml) は、毎月 1 日の UTC 03:23（日本時間 12:23）に `main` で動く。GitHub の混雑で開始が遅れる場合がある。
 
-手動で動かすときは Actions の「全国の山頂データを生成・検査」→「Run workflow」で正式版なら `main`、開発版なら `dev` を選ぶ。この2つ以外のブランチでは公開しない。公開ジョブの `GITHUB_TOKEN` に `contents: write`・`pages: write`・`id-token: write` を付与し、追加のトークンは使わない。
+手動で動かすときは Actions の「地点 / OSM山頂：生成・検査」→「Run workflow」で正式版なら `main`、開発版なら `dev` を選ぶ。この2つ以外のブランチでは公開しない。公開ジョブの `GITHUB_TOKEN` に `contents: write`・`pages: write`・`id-token: write` を付与し、追加のトークンは使わない。
 
 1. 単体テストと、小さな PBF による生成テストを行う。
 2. Geofabrik の `japan-latest.osm.pbf` から日付付き URL を確定する。取得対象日を指定した場合は、その日付の URL を直接使い、全国データを取得する。途中で切れたら同じ版の続きから再開し、配布元の MD5 と照合する。Overpass API は使わない。
@@ -142,7 +142,7 @@ Actions の各ステップでは、時刻付きで処理の開始・完了をロ
 
 ### 正式版と開発版の実行方法
 
-月次実行は `main` から正式版（`stable`）を生成する。手動実行は Actions の「全国の山頂データを生成・検査」→「Run workflow」でブランチを選ぶ。
+月次実行は `main` から正式版（`stable`）を生成する。手動実行は Actions の「地点 / OSM山頂：生成・検査」→「Run workflow」でブランチを選ぶ。
 
 | 実行元ブランチ | 配布先 | 生成・公開に使う処理 |
 |---|---|---|
@@ -157,7 +157,7 @@ Actions の各ステップでは、時刻付きで処理の開始・完了をロ
 
 ### 取得対象日を指定する
 
-「全国の山頂データを生成・検査」の Run workflow で、`source_date` に `YYYY-MM-DD` を入力すると、`latest` の転送を使わず日付付き URL を直接取得する。例えば `2026-09-29` は `https://download.geofabrik.de/asia/japan-260929.osm.pbf` になる。空欄または月次実行では`latest` を使う。入力欄を表示するため、main 側の入口にも同じ入力項目が必要。
+「地点 / OSM山頂：生成・検査」の Run workflow で、`source_date` に `YYYY-MM-DD` を入力すると、`latest` の転送を使わず日付付き URL を直接取得する。例えば `2026-09-29` は `https://download.geofabrik.de/asia/japan-260929.osm.pbf` になる。空欄または月次実行では`latest` を使う。入力欄を表示するため、main 側の入口にも同じ入力項目が必要。
 
 Actions の実行日はデータの配布日とは限らず、当日分はまだ存在しない場合がある。配布済みの日付を指定する。対象が404の場合は失敗とし、別の日付への自動切り替えはしない。サイズと日付付き URL の MD5 を照合し、別の版の途中ファイルを混ぜない。古い日付を指定しても、公開前の日時・件数・同一更新日時の検査はそのまま行う。
 
@@ -184,7 +184,7 @@ Actions では取得前に配布元の日付付き URL・サイズ・MD5 を確�
 ### 確認済みの下書きを手動公開する
 
 1. Releases の下書きにある検査結果と必要なデータの差分を確認する。
-2. データ種別共通の Actions「確認済みのデータを公開」→「Run workflow」で正式版なら `main`、開発版なら `dev` を選ぶ。
+2. データ種別共通の Actions「共通：確認済みデータを公開」→「Run workflow」で正式版なら `main`、開発版なら `dev` を選ぶ。
 3. `tag` 欄に確認した Release ページの URL を貼り付け、確認内容・公開理由は必要に応じて入力する（空欄でも実行可能）。`untagged-...` を含む下書きの URL も使える。対象タグ（正式版は `peaks-<version>`、開発版は `peaks-dev-<version>`）も指定できる。`sha256` 欄は空欄でよく、Release の検査結果から自動取得する。配布先とタグ、Pre-release の有無が一致しない場合は公開を止める。
 4. 下書きの2ファイルを取得・再検証し、検査結果に記録された SHA-256（明示した場合は入力値）と一致した場合に、警告を承認して公開する。公開者と理由を Release の説明に残し、空欄の場合は「理由の記入なし」と記録する。
 
@@ -229,7 +229,7 @@ python scripts/build_data.py build/japan-latest.osm.pbf --version local \
 
 ## テスト
 
-Python 3.12 と osmium-tool を使い、単体テストと小さな PBF による生成テストを行う。SVG の対応表・JSON への内蔵・倍率・未対応要素の拒否・公開前の再検査も単体テストで確認する。CI（`.github/workflows/test.yml`）では push・PR 時に実行する。
+Python 3.12 と osmium-tool を使い、単体テストと小さな PBF による生成テストを行う。SVG の対応表・JSON への内蔵・倍率・未対応要素の拒否・公開前の再検査も単体テストで確認する。CIの「共通：データ処理のテスト」（`.github/workflows/test.yml`）の「地点 / OSM山頂」ジョブで push・PR 時に実行する。
 
 テストは `points/osm_peaks/` 内で、外部通信を行わず次のコマンドで実行できる。osmium がない場合は PBF を使うテストだけをスキップする。Actions では osmium を入れてすべて実行する。
 

@@ -1,4 +1,4 @@
-name: テスト用地点を開発版に公開
+name: 地点 / テストデータ：開発版に公開
 
 on:
   workflow_dispatch:

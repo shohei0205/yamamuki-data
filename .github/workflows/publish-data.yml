@@ -1,4 +1,4 @@
-name: 全国の山頂データを生成・検査
+name: 地点 / OSM山頂：生成・検査
 
 on:
   schedule:

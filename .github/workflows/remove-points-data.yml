@@ -1,4 +1,4 @@
-name: 地点データをカタログから削除
+name: 地点：カタログから削除
 
 on:
   workflow_dispatch:

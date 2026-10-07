@@ -1,4 +1,4 @@
-name: 確認済みのデータを公開
+name: 共通：確認済みデータを公開
 
 on:
   workflow_dispatch:
