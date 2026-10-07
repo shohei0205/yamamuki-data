@@ -150,6 +150,7 @@ class BuildDataTests(unittest.TestCase):
         self.assertEqual(mountains, json.loads(raw))
         self.assertEqual(manifest, json.loads((self.root / "manifest.json").read_text(encoding="utf-8")))
         self.assertEqual(5, manifest["schemaVersion"])
+        self.assertEqual("山頂", manifest["name"])
         self.assertEqual("20260930-1", manifest["version"])
         self.assertEqual(TIMESTAMP, manifest["sourceTimestamp"])
         self.assertEqual("2026-09-29T12:00:00Z", manifest["latestPointTimestamp"])

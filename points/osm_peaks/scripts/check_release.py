@@ -11,6 +11,7 @@ import re
 
 from scripts.build_data import FILE_NAME, MAX_SIZE_BYTES
 from scripts.graphics import validate_graphics
+from scripts.point_tags import validate_tags
 from scripts.release_channels import download_url, release_tag
 
 
@@ -44,6 +45,8 @@ def validate(directory, *, tag=None, channel="stable"):
     data_version = manifest.get("dataSchemaVersion", manifest["schemaVersion"])
     if type(data_version) is not int or data_version not in (1, 2, 3, 4, 5):
         raise ValueError("未対応の dataSchemaVersion です")
+    if "name" in manifest and (not isinstance(manifest["name"], str) or not manifest["name"].strip()):
+        raise ValueError("データセットの表示名が不正です")
     version = manifest.get("version")
     if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
         raise ValueError("版の形式が不正です")
@@ -115,6 +118,7 @@ def validate(directory, *, tag=None, channel="stable"):
             aliases = row.get("aliases", [] if data_version >= 5 else None)
             if not isinstance(aliases, list) or not all(isinstance(a, str) and a.strip() for a in aliases):
                 raise ValueError("別名の形式が不正です")
+    validate_tags(rows)
     validate_graphics(rows)
     return manifest, rows
 

@@ -20,9 +20,11 @@ import xml.etree.ElementTree as ET
 if __package__:
     from scripts.release_channels import download_url
     from scripts.graphics import validate_graphics
+    from scripts.point_tags import validate_tags
 else:
     from release_channels import download_url
     from graphics import validate_graphics
+    from point_tags import validate_tags
 
 
 SOURCE_URL = "https://download.geofabrik.de/asia/japan-latest.osm.pbf"
@@ -136,6 +138,7 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
     latest_mountain_timestamp = normalize_timestamp(latest_mountain_timestamp)
     if latest_mountain_timestamp > source_timestamp:
         raise ValueError("山頂の最終編集日時が元データの基準日時より新しくなっています")
+    validate_tags(mountains)
     validate_graphics(mountains)
     logging.info("%s 件を JSON に変換しています", format(len(mountains), ","))
     raw = (json.dumps(mountains, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
@@ -156,6 +159,7 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
         manifest = {
             "schemaVersion": 5,
             "dataSchemaVersion": 5,
+            "name": "山頂",
             "version": version,
             "fileName": FILE_NAME,
             "downloadUrl": target_url,

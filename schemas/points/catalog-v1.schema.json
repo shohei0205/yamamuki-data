@@ -18,7 +18,6 @@
         "type": "object",
         "required": [
           "id",
-          "channel",
           "manifestUrl"
         ],
         "additionalProperties": false,
@@ -26,12 +25,6 @@
           "id": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_-]*$"
-          },
-          "channel": {
-            "enum": [
-              "stable",
-              "dev"
-            ]
           },
           "manifestUrl": {
             "type": "string",
@@ -94,9 +87,19 @@
                 "type": "integer",
                 "minimum": 1,
                 "description": "データ本体のスキーマの版。新規生成時は必ず記載し、manifest の版とは独立して管理する。旧データとの互換性のためスキーマ上は省略を許可する。"
+              },
+              "name": {
+                "type": "string",
+                "pattern": "\\S",
+                "description": "データセットの表示名。新規生成時に記載する。旧データとの互換性のため省略を許可する。"
               }
             },
             "additionalProperties": true
+          },
+          "name": {
+            "type": "string",
+            "pattern": "\\S",
+            "description": "データセットの表示名。新規生成時に記載する。旧データとの互換性のため省略を許可する。"
           }
         },
         "description": "manifest は新規生成時に必ず含める。追加前のカタログとの互換性のため、スキーマ上は省略を許可する。"

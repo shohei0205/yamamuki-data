@@ -194,7 +194,10 @@ def points_catalog(manifests, selected_channel="stable"):
             # 版1〜3の山頂 manifest にも、本体を直接取得できる URL を補う。
             if dataset_id == "osm_peaks" and "downloadUrl" not in manifest and "version" in manifest:
                 manifest["downloadUrl"] = download_url(manifest["version"], channel)
-            datasets.append({"id": dataset_id, "channel": channel,
+            display_name = manifest.get("name", "山頂" if dataset_id == "osm_peaks" else dataset_id)
+            if not isinstance(display_name, str) or not display_name.strip():
+                raise ValueError("データセットの表示名が不正です")
+            datasets.append({"id": dataset_id, "name": display_name.strip(),
                              "manifestUrl": f"{pages_url()}/{path}", "manifest": manifest})
     return {"schemaVersion": 1, "datasets": datasets}
 

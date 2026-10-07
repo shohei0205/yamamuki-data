@@ -7,27 +7,28 @@
 | 対象・取得元 | 状態 | 詳細 |
 |---|---|---|
 | OpenStreetMap の山頂 | 実装済み | [osm_peaks](osm_peaks/README.md) |
+| 手動作成のテスト用地点 | 開発版限定 | [testdata](testdata/README.md) |
 | ランドマークなど | 将来追加予定・未実装 | 追加時に専用フォルダを作る |
 
 ## 公開データのカタログ
 
 公開済みの地点データすべてのダウンロードと検証に必要な情報を、次のカタログから取得できる。
 
-| 配布先 | カタログ | 使用する項目 |
-|---|---|---|
-| 正式版 | [正式版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog.json) | `channel` が `stable` |
-| 開発版 | [開発版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) | `channel` が `dev` |
+| 配布先 | カタログ |
+|---|---|
+| 正式版 | [正式版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog.json) |
+| 開発版 | [開発版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) |
 
-正式版の `points/catalog.json` には `stable` のデータだけ、開発版の `points/catalog-dev.json` には `dev` のデータだけを収録する。アプリは利用する配布先のカタログを取得し、他方に自動で切り替えない。まだ公開していないデータや地形など地点以外のデータは含めない。
+正式版の `points/catalog.json` には正式版のデータだけ、開発版の `points/catalog-dev.json` には開発版のデータだけを収録する。配布先は取得したカタログの URL で区別し、各データに `channel` は持たせない。アプリは利用する配布先のカタログを取得し、他方に自動で切り替えない。まだ公開していないデータや地形など地点以外のデータは含めない。
 
-機械検証用のスキーマは [地点カタログの版1](../schemas/points/catalog-v1.schema.json) を参照する。同じ `id` と `channel` の組は重複させない。
+機械検証用のスキーマは [地点カタログの版1](../schemas/points/catalog-v1.schema.json) を参照する。同じカタログ内の `id` は重複させない。
 
 | 項目 | 内容 |
 |---|---|
 | `schemaVersion` | カタログの形式の版。現在は整数の `1`。manifest・地点データの版とは独立 |
 | `datasets` | データセットの配列。公開済み地点データがない場合は `[]` |
 | `datasets[].id` | データセット名（例: `osm_peaks`）。地点の `id` と組み合わせて識別する |
-| `datasets[].channel` | 正式版は `stable`、開発版は `dev` |
+| `datasets[].name` | データセットの表示名（例: 山頂）。識別には `id` を使う |
 | `datasets[].manifestUrl` | 対応する最新版 manifest の HTTPS URL（互換用・個別取得用） |
 | `datasets[].manifest` | manifest の内容。形式の版・データの版・`downloadUrl`・ファイル名・SHA-256・圧縮前後のサイズ・件数・出典などを含む |
 
@@ -36,6 +37,8 @@
 `manifest` は新規生成するカタログに必ず含める。追加前のカタログを読む場合に限り、省略されていたら `manifestUrl` から取得する。既存項目を維持した追加のため、カタログの版は1のままとする。
 
 同梱情報は公開する manifest のコピーで、アプリ側で URL を組み立てない。`downloadUrl` がない旧版（版1〜3）の OSM 山頂についてのみ、公開処理で対応する Release の URL を補う。元の manifest は変更しない。旧版の件数は `mountainCount`、版5以降は `pointCount` で確認する。
+
+表示名は各データセットの manifest の `name` から取得する。山頂は「山頂」として生成し、正式版・開発版で同じ名前を使う。旧データで名前がない場合、OSM 山頂は「山頂」、その他はデータセット ID を表示名として補う。カタログ生成時は必ず `name` を出力するが、旧カタログでは省略されている可能性があるため、アプリはその場合に `id` を表示する。任意項目の追加として各形式の版は据え置く。
 
 ### カタログから削除する
 
@@ -63,12 +66,13 @@ Actions の「地点データをカタログから削除」→「Run workflow」
 
 ### 項目
 
-「必須」は項目自体を省略できないことを表す。必須項目は `id`・`name`・`latitude`・`longitude` の4つ。その他は省略できる。`elevationM`・`nameReading`・`wikipediaUrl`・`wikidataUrl` の省略は `null`、`aliases` の省略は `[]` と同じ意味とする。
+「必須」は項目自体を省略できないことを表す。必須項目は `id`・`name`・`latitude`・`longitude` の4つ。その他は省略できる。`elevationM`・`nameReading`・`wikipediaUrl`・`wikidataUrl` の省略は `null`、`aliases`・`tags` の省略は `[]` と同じ意味とする。
 
 | 項目 | JSON の型 | 必須 | 内容・制約 |
 |---|---|---|---|
 | `id` | string | 必須 | データセット内で一意な、空でない固定 ID。取得元の接頭辞は不要 |
 | `graphic` | object | 任意 | `svg` に SVG 本文、任意の `scale` に表示倍率を持たせる。省略時は画像なし |
+| `tags` | string の配列 | 任意 | 日本百名山などの分類ラベル。省略時は `[]`。空文字・前後の空白・重複は不可 |
 | `type` | string | 任意 | 地点の種別。`peak`（山頂）、`parking`（駐車場）、`trailhead`（登山口）、`landmark`（目印）など。省略時は種別不明 |
 | `osmId` | integer | 任意 | 関連する OSM ノードの正の整数 ID。関連付けがない場合は省略し、`null` は使わない |
 | `name` | string | 必須 | 空でない表示名 |
@@ -192,3 +196,9 @@ manifest は [リポジトリ共通仕様](../README.md#manifestjson) に従い�
 ## ライセンス
 
 現在の OSM 由来データの出典は **© OpenStreetMap contributors**。利用条件は [リポジトリのライセンス](../README.md#ライセンス)を参照する。別の取得元を追加する場合は、その利用条件と出典を各データの資料に明記する。
+
+## 地点のタグ
+
+`tags` は種別と独立した任意の分類ラベルで、1地点に複数付けられる。例: `"tags": ["日本百名山", "花の百名山"]`。文字列をそのまま識別に使い、大文字・小文字や表記の違いは別タグとして扱う。同じ分類には同じ表記を使う。タグの順番に意味は持たせない。タグがない場合は省略または `[]` とし、`null` は使わない。
+
+OSM の元タグをそのまま収録する項目ではない。データ作成者が分類を確認して付ける。既存の山頂データに日本百名山の判定を自動追加する処理は含まない。任意項目の追加のためスキーマの版は5のままとし、アプリは未知の項目・タグを無視できるようにする。

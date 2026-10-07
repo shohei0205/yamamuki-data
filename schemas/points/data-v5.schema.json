@@ -125,6 +125,15 @@
             }
           },
           "description": "任意の内蔵 SVG と表示倍率。省略時は画像なし。"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+          },
+          "uniqueItems": true,
+          "description": "任意の分類ラベル。省略時は空配列。例: 日本百名山。"
         }
       },
       "additionalProperties": false

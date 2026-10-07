@@ -69,16 +69,31 @@ class ManifestDistributionTests(unittest.TestCase):
                      "terrain/manifest.json": {}, "peaks/manifest.json": {}}
         catalog = release_data.points_catalog(manifests)
         self.assertEqual(1, catalog["schemaVersion"])
-        self.assertEqual([("curated_landmarks", "stable"), ("osm_peaks", "stable")],
-                         [(entry["id"], entry["channel"]) for entry in catalog["datasets"]])
+        self.assertEqual(["curated_landmarks", "osm_peaks"],
+                         [entry["id"] for entry in catalog["datasets"]])
         self.assertEqual("https://owner.github.io/repo/points/osm_peaks/manifest.json", catalog["datasets"][-1]["manifestUrl"])
         legacy = release_data.points_catalog({"points/osm_peaks/manifest.json": {"schemaVersion": 4, "version": "legacy"}})["datasets"][0]
         self.assertEqual(4, legacy["manifest"]["dataSchemaVersion"])
         unknown = release_data.points_catalog({"points/landmarks/manifest.json": {"schemaVersion": 5}})["datasets"][0]
         self.assertNotIn("dataSchemaVersion", unknown["manifest"])
+        self.assertTrue(all("channel" not in entry for entry in catalog["datasets"]))
         self.assertEqual([], release_data.points_catalog({})["datasets"])
         development = release_data.points_catalog(manifests, "dev")
-        self.assertEqual([("osm_peaks", "dev")], [(entry["id"], entry["channel"]) for entry in development["datasets"]])
+        self.assertEqual(["osm_peaks"], [entry["id"] for entry in development["datasets"]])
+        self.assertTrue(all("channel" not in entry for entry in development["datasets"]))
+
+    def test_points_catalog_names_use_manifest_and_preserve_other_data(self):
+        for channel in ("stable", "dev"):
+            suffix = "-dev" if channel == "dev" else ""
+            manifests = {f"points/osm_peaks{suffix}/manifest.json": {},
+                         f"points/landmarks{suffix}/manifest.json": {"name": "ランドマーク"},
+                         f"points/custom{suffix}/manifest.json": {}}
+            entries = release_data.points_catalog(manifests, channel)["datasets"]
+            self.assertEqual({"osm_peaks": "山頂", "landmarks": "ランドマーク", "custom": "custom"},
+                             {entry["id"]: entry["name"] for entry in entries})
+            for value in (None, "", "  ", 1):
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    release_data.points_catalog({f"points/landmarks{suffix}/manifest.json": {"name": value}}, channel)
 
     def test_points_catalog_embeds_download_metadata_without_mutating_manifest(self):
         for channel in ("stable", "dev"):

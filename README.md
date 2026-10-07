@@ -6,6 +6,7 @@
 
 | データ | 状態 | 詳細 |
 |---|---|---|
+| 架空のテスト用地点 | 開発版限定の手動公開 | [テストデータ](points/testdata/README.md) |
 | 山頂 | 生成・検査・公開の処理を実装 | [山頂データの仕様と運用](points/osm_peaks/README.md) |
 | ランドマークなどの地点 | 将来追加予定・未実装 | [地点データの共通仕様](points/README.md) |
 | 地形 | 将来追加予定・未実装 | 実装時に専用の文書を追加する |
@@ -69,6 +70,7 @@ release_tools/      データ種別共通の手動公開入口
 |---|---|---|---|
 | `schemaVersion` | integer | 必須 | 形式の版。新規生成は `5` |
 | `dataSchemaVersion` | integer | 新規生成では必須 | データ本体のスキーマの版。正の整数。manifest の `schemaVersion` と独立して管理する |
+| `name` | string | 任意 | データセットの表示名。地点カタログの各項目の `name` にも使用する |
 | `version` | string | 必須 | データセットの配布版。英数字で始まり、英数字・ピリオド・ハイフン・下線で構成する |
 | `downloadUrl` | string | 必須 | この版の gzip データ本体を取得する HTTPS URL |
 | `fileName` | string | 必須 | gzip データ本体のファイル名。データセットごとに定める |
