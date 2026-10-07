@@ -45,7 +45,7 @@ release_tools/     データ種別共通の公開入口
 
 このリポジトリで配布する各データセットに共通する、UTF-8（BOM なし）の JSON オブジェクト。データ本体の取得先・大きさ・ハッシュ・出典を記載する。`schemaVersion` は manifest 自体の形式の版を表す。現在は **版5**。データ本体のスキーマの版は独立して管理し、manifest の版と同じ番号であるとは限らない。使用するデータ本体の版は `dataSchemaVersion` に記載する。データ本体の構造は種類ごとの仕様に従い、地点データは [points/README.md](points/README.md#地点の形式) に記載する。
 
-機械検証用の [manifest の版5](schemas/manifest/manifest-v5.schema.json)（JSON Schema Draft 2020-12）を用意している。共通スキーマはデータ種別ごとの追加項目を許可する。版1〜4はこのスキーマの対象外とする。
+機械検証用の [manifest の版5](schemas/manifest/manifest-v5.schema.json)（JSON Schema Draft 2020-12）を用意している。共通スキーマはデータ種別ごとの追加項目を許可する。
 
 `format` の検査を有効にした検証ツールを使う。日時の前後関係・本体のサイズ・ハッシュ・件数・取得 URL と Release の一致は JSON Schema では照合できないため、公開処理で別途検証する。
 
@@ -69,15 +69,13 @@ release_tools/     データ種別共通の公開入口
 
 データ種別ごとの件数・更新日時などの追加項目と制約は、そのデータの仕様に記載する。日時は UTC の ISO 8601 形式（例: `2026-09-30T20:21:22Z`）を使い、記録していない日時を推測して埋めない。
 
-`dataSchemaVersion` の追加は既存項目を変更しないため、manifest の版は5のままとする。追加前のデータを検証できるよう、JSON Schema 上は省略を許可するが、新規生成では必ず記載する。
-
 ### 読み込みと公開
 
 利用するアプリは対応する `schemaVersion` を確認し、`downloadUrl` から本体を取得する。展開前に `sizeBytes` と `sha256`、展開後に `uncompressedSizeBytes` を照合し。データ種別ごとの件数なども各仕様に従って照合する。通信や検証に失敗した場合は保存済みデータを維持する。
 
 データセットと正式版・開発版ごとに最新版の manifest の URL を分ける。Release に添付する manifest と最新版として配置する manifest は同じ内容を使い、公開済みの版の本体は差し替えない。公開先の URL・Release タグ・ファイル名は各データセットの資料に記載する。
 
-スキーマファイルは種類ごとに保存する。manifest は `schemas/manifest/manifest-v<版>.schema.json` に置き、データ本体などのスキーマの置き場所は種類ごとの資料に記載する。それぞれ必要なときに独立して版を上げ、公開済みの版は原則変更しない。版5より前のスキーマファイルは未作成。
+スキーマファイルは種類ごとに保存する。manifest は `schemas/manifest/manifest-v<版>.schema.json` に置き、データ本体などのスキーマの置き場所は種類ごとの資料に記載する。それぞれ必要なときに独立して版を上げ、公開済みの版は原則変更しない。
 
 ## 確認済みデータの公開
 

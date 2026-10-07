@@ -33,7 +33,7 @@
           },
           "manifest": {
             "type": "object",
-            "description": "ダウンロードと検証に必要な manifest の内容。旧版の山頂には downloadUrl を補う。",
+            "description": "ダウンロードと検証に必要な manifest の内容。",
             "required": [
               "schemaVersion",
               "version",
@@ -86,12 +86,12 @@
               "dataSchemaVersion": {
                 "type": "integer",
                 "minimum": 1,
-                "description": "データ本体のスキーマの版。新規生成時は必ず記載し、manifest の版とは独立して管理する。旧データとの互換性のためスキーマ上は省略を許可する。"
+                "description": "データ本体のスキーマの版。新規生成時は必ず記載し、manifest の版とは独立して管理する。"
               },
               "name": {
                 "type": "string",
                 "pattern": "\\S",
-                "description": "データセットの表示名。新規生成時に記載する。旧データとの互換性のため省略を許可する。"
+                "description": "データセットの表示名。新規生成時に記載する。"
               }
             },
             "additionalProperties": true
@@ -99,10 +99,10 @@
           "name": {
             "type": "string",
             "pattern": "\\S",
-            "description": "データセットの表示名。新規生成時に記載する。旧データとの互換性のため省略を許可する。"
+            "description": "データセットの表示名。新規生成時に記載する。"
           }
         },
-        "description": "manifest は新規生成時に必ず含める。追加前のカタログとの互換性のため、スキーマ上は省略を許可する。"
+        "description": "manifest は新規生成時に必ず含める。"
       }
     }
   }
