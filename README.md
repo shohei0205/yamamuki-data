@@ -96,20 +96,6 @@ release_tools/      データ種別共通の手動公開入口
 
 スキーマファイルは種類ごとに保存する。manifest は `schemas/manifest/manifest-v<版>.schema.json`、地点データと地点カタログは同じ `schemas/points/` 内の `pointdata-v<版>.schema.json`・`catalog-v<版>.schema.json` に置く。manifest と地点データはそれぞれ必要なときに版を上げ、公開済みの版は原則変更しない。版5より前のスキーマファイルは未作成。
 
-### 版の履歴（従来の山頂データからの移行）
-
-版1〜4は従来の山頂データの形式。検査処理は引き続きこれらを受け付ける。
-
-| 版 | 変更内容 |
-|---|---|
-| 1 | 山頂の整数 `osmId`・名前・座標・標高と manifest の基本項目 |
-| 2 | 地点に `nameReading`・`aliases`・`wikipediaUrl`・`wikidataUrl` を追加 |
-| 3 | manifest に `latestMountainTimestamp` を追加 |
-| 4 | manifest に `downloadUrl` を追加 |
-| 5 | 必須識別子を文字列 `id` に変更。`osmId`・標高・読み仮名・別名・解説リンクを任意化。manifest の `mountainCount` を `pointCount`、`latestMountainTimestamp` を `latestPointTimestamp` に変更し、元データの URL と日時を共通仕様では任意化 |
-
-版5は旧版の読み込み処理と互換性がないため、利用するアプリの対応を確認してから公開する。山頂の最新版 manifest は `points/osm_peaks/`・`points/osm_peaks-dev/` から配る。既存の旧 URL は互換用に維持し、Release タグとファイル名は変更しない。形式を今後変更する場合も、アプリ側の対応と公開順を調整する。
-
 地点データの公開済み一覧とダウンロード URL・サイズ・ハッシュなどは 正式版の [points/catalog.json](https://shohei0205.github.io/yamamuki-data/points/catalog.json)、開発版の [points/catalog-dev.json](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) から取得できる。形式と使い方は [地点カタログの仕様](points/README.md#公開データのカタログ) を参照する。
 
 ## 確認済みデータの公開
