@@ -55,7 +55,7 @@ manifest の共通項目は [ルート README](../README.md#manifestjson) を参
 | 正式版 | [正式版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog.json) |
 | 開発版 | [開発版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) |
 
-正式版の `points/catalog.json` には正式版のデータだけ、開発版の `points/catalog-dev.json` には開発版のデータだけを収録する。配布先は取得したカタログの URL で区別し、各データに `channel` は持たせない。アプリは利用する配布先のカタログを取得し、他方に自動で切り替えない。まだ公開していないデータや地形など地点以外のデータは含めない。
+正式版の `points/catalog.json` には正式版のデータだけ、開発版の `points/catalog-dev.json` には開発版のデータだけを収録する。配布先は取得したカタログの URL で区別する。アプリは利用する配布先のカタログを取得し、他方に自動で切り替えない。まだ公開していないデータや地形など地点以外のデータは含めない。
 
 機械検証用のスキーマは [地点カタログの版1](../schemas/points/catalog-v1.schema.json) を参照する。同じカタログ内の `id` は重複させない。
 
