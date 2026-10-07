@@ -243,11 +243,6 @@ def update_latest(directory, manifest, channel="stable"):
 
 def write_site(catalog, histories):
     """公開・削除で共通のサイト一式を生成する。"""
-    # リリース済みアプリ向けのpeaks正式版は保持し、廃止した開発版だけを除外する。
-    catalog = {key: value for key, value in catalog.items()
-               if key.split("/", 1)[0] != "peaks-dev"}
-    histories = {key: value for key, value in histories.items()
-                 if key.split("/", 1)[0] != "peaks-dev"}
     destination = Path(os.environ.get("PAGES_DIRECTORY", Path(__file__).resolve().parents[3] / "build/pages"))
     if destination.exists():
         raise ValueError("Pages の出力先が既にあります。空の出力先を指定してください")
