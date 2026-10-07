@@ -47,3 +47,20 @@ jobs:
           python-version: '3.12'
       - name: 架空データの生成・公開処理のテスト
         run: python -m unittest release_tools.tests.test_test_points -v
+
+  test:
+    # dev の保護設定が要求するチェック名を維持する。
+    name: test
+    needs: [common, osm-peaks, test-points]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: すべてのテスト結果を確認
+        env:
+          COMMON_RESULT: ${{ needs.common.result }}
+          OSM_PEAKS_RESULT: ${{ needs.osm-peaks.result }}
+          TEST_POINTS_RESULT: ${{ needs.test-points.result }}
+        run: |
+          test "$COMMON_RESULT" = success
+          test "$OSM_PEAKS_RESULT" = success
+          test "$TEST_POINTS_RESULT" = success
