@@ -6,9 +6,9 @@
 __pycache__/
 .DS_Store
 
-# 山頂データの取得元・生成物
-/peaks/build/
-/peaks/dist/
+# 地点データごとの取得元・生成物
+/points/*/build/
+/points/*/dist/
 
 # AI ツールの個人のルール(AGENTS.md の「個人のルール」を参照)
 CLAUDE.local.md

@@ -78,7 +78,7 @@ def reviewed_checksum(release):
 
 def manifest_path(channel):
     prefix(channel)
-    return ("peaks" if channel == "stable" else "peaks-dev") + "/manifest.json"
+    return ("points/osm_peaks" if channel == "stable" else "points/osm_peaks-dev") + "/manifest.json"
 
 
 def pages_url():
@@ -128,14 +128,14 @@ def read_catalog():
     if not isinstance(manifests, dict):
         raise ValueError("配布サイトの manifest 一覧が不正です")
     for path, manifest in manifests.items():
-        if (not re.fullmatch(r"[a-z][a-z0-9-]*/manifest\.json", path)
+        if (not re.fullmatch(r"(?:[a-z][a-z0-9_-]*/)+manifest\.json", path)
                 or not isinstance(manifest, dict)):
             raise ValueError("配布サイトに不正な manifest のパスや内容があります")
     histories = catalog.get("histories", {})
     if not isinstance(histories, dict):
         raise ValueError("公開履歴の一覧が不正です")
     for path, entries in histories.items():
-        if (not re.fullmatch(r"[a-z][a-z0-9-]*/history\.json", path)
+        if (not re.fullmatch(r"(?:[a-z][a-z0-9_-]*/)+history\.json", path)
                 or path.replace("/history.json", "/manifest.json") not in manifests
                 or not isinstance(entries, list)
                 or not all(isinstance(entry, dict) and isinstance(entry.get("version"), str)
@@ -154,7 +154,8 @@ def read_manifest(channel):
     catalog = read_catalog()
     if catalog is None:
         return None
-    return catalog.get(path)
+    legacy = ("peaks" if channel == "stable" else "peaks-dev") + "/manifest.json"
+    return catalog.get(path, catalog.get(legacy))
 
 
 def previous_release(directory, channel="stable"):
@@ -173,6 +174,31 @@ def previous_release(directory, channel="stable"):
     return previous
 
 
+def points_catalog(manifests):
+    """公開済み地点データの取得先とダウンロード検証情報をまとめる。"""
+    datasets = []
+    for path in sorted(manifests):
+        match = re.fullmatch(r"points/([a-z][a-z0-9_-]*)/manifest\.json", path)
+        if match:
+            name = match[1]
+            channel = "dev" if name.endswith("-dev") else "stable"
+            dataset_id = name[:-4] if channel == "dev" else name
+            manifest = dict(manifests[path])
+            # 版1〜3の山頂 manifest にも、本体を直接取得できる URL を補う。
+            if dataset_id == "osm_peaks" and "downloadUrl" not in manifest and "version" in manifest:
+                manifest["downloadUrl"] = download_url(manifest["version"], channel)
+            datasets.append({"id": dataset_id, "channel": channel,
+                             "manifestUrl": f"{pages_url()}/{path}", "manifest": manifest})
+    return {"schemaVersion": 1, "datasets": datasets}
+
+
+def read_points_catalog():
+    request = Request(f"{pages_url()}/points/catalog.json?update={uuid.uuid4().hex}",
+                      headers={"Cache-Control": "no-cache", "User-Agent": "yamamuki-data"})
+    with urlopen(request, timeout=60) as response:
+        return json.load(response)
+
+
 def update_latest(directory, manifest, channel="stable"):
     path = manifest_path(channel)
     release_tag(manifest["version"], channel)
@@ -182,6 +208,15 @@ def update_latest(directory, manifest, channel="stable"):
             raise ValueError("配布サイトの一覧を取得できません。初回公開だけ手動公開の初期化を指定してください")
         catalog = {}
     histories = {key: list(entries) for key, entries in getattr(catalog, "histories", {}).items()}
+    # 旧 URL を維持したまま、既存の両配布先と履歴を新 URL に引き継ぐ。
+    for previous_channel in ("stable", "dev"):
+        legacy = ("peaks" if previous_channel == "stable" else "peaks-dev") + "/manifest.json"
+        current = manifest_path(previous_channel)
+        if legacy in catalog and current not in catalog:
+            catalog[current] = catalog[legacy]
+            old_history = legacy.replace("manifest.json", "history.json")
+            if old_history in histories:
+                histories.setdefault(current.replace("manifest.json", "history.json"), list(histories[old_history]))
     # 履歴機能の導入前の最新版も残す。分からない公開日時や実行 URL は補わない。
     for previous_channel in ("stable", "dev"):
         previous_path = manifest_path(previous_channel)
@@ -191,7 +226,20 @@ def update_latest(directory, manifest, channel="stable"):
     history_path = path.replace("manifest.json", "history.json")
     histories.setdefault(history_path, []).append(history_entry(manifest, channel))
     catalog[path] = manifest
-    destination = Path(os.environ.get("PAGES_DIRECTORY", "../build/pages"))
+    legacy = ("peaks" if channel == "stable" else "peaks-dev") + "/manifest.json"
+    if legacy in catalog:
+        catalog[legacy] = manifest
+        histories[legacy.replace("manifest.json", "history.json")] = list(histories[history_path])
+    write_site(catalog, histories)
+    # Actions の Pages 配置が成功するまで「更新完了」とは扱わない。
+    output(pages_ready="true")
+    append_summary(f"\n## 配置する最新版の参照先\n\n[manifest.json を開く]({pages_url()}/{path})\n"
+                   "\nPages の配置結果は後続のステップで確認してください。\n")
+
+
+def write_site(catalog, histories):
+    """公開・削除で共通のサイト一式を生成する。"""
+    destination = Path(os.environ.get("PAGES_DIRECTORY", Path(__file__).resolve().parents[3] / "build/pages"))
     if destination.exists():
         raise ValueError("Pages の出力先が既にあります。空の出力先を指定してください")
     destination.mkdir(parents=True)
@@ -206,21 +254,50 @@ def update_latest(directory, manifest, channel="stable"):
     (destination / "catalog.json").write_text(
         json.dumps({"schemaVersion": 1, "manifests": catalog, "histories": histories}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8", newline="\n")
+    points_directory = destination / "points"
+    points_directory.mkdir(exist_ok=True)
+    (points_directory / "catalog.json").write_text(
+        json.dumps(points_catalog(catalog), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8", newline="\n")
     (destination / ".nojekyll").write_text("", encoding="utf-8")
-    # Actions の Pages 配置が成功するまで「更新完了」とは扱わない。
+
+
+def remove_dataset(dataset, channel):
+    check_branch(channel)
+    if (not re.fullmatch(r"[a-z][a-z0-9_-]*", dataset) or dataset.endswith("-dev")):
+        raise ValueError("正式版のデータセット名を指定してください")
+    prefix(channel)
+    path = f"points/{dataset}{'-dev' if channel == 'dev' else ''}/manifest.json"
+    catalog = read_catalog()
+    if catalog is None:
+        raise ValueError("既存のカタログを取得できないため削除を中止します")
+    targets = [path]
+    if dataset == "osm_peaks":
+        targets.append(("peaks" if channel == "stable" else "peaks-dev") + "/manifest.json")
+    if not any(target in catalog for target in targets):
+        raise ValueError("指定したデータセット・配布先はカタログにありません")
+    manifests = dict(catalog)
+    histories = dict(getattr(catalog, "histories", {}))
+    for target in targets:
+        manifests.pop(target, None)
+        histories.pop(target.replace("manifest.json", "history.json"), None)
+    write_site(manifests, histories)
     output(pages_ready="true")
-    append_summary(f"\n## 配置する最新版の参照先\n\n[manifest.json を開く]({pages_url()}/{path})\n"
-                   "\nPages の配置結果は後続のステップで確認してください。\n")
+    append_summary(f"\n## カタログから削除\n\n- データセット: `{dataset}`\n- 配布先: `{channel}`\n"
+                   "- Release とデータ本体は保持します。Pages の配置後に削除が反映されます。\n")
 
 
 def verify_pages(directory):
     expected = json.loads((directory / "catalog.json").read_text(encoding="utf-8"))
+    points_file = directory / "points/catalog.json"
+    expected_points = json.loads(points_file.read_text(encoding="utf-8")) if points_file.exists() else None
     # 配置直後の反映を待ってから、次の公開ジョブに進ませる。
     for attempt in range(12):
         try:
             actual = read_catalog()
             if (actual == expected["manifests"]
-                    and getattr(actual, "histories", {}) == expected.get("histories", {})):
+                    and getattr(actual, "histories", {}) == expected.get("histories", {})
+                    and (expected_points is None or read_points_catalog() == expected_points)):
                 append_summary("\n## Pages の配置結果\n\n成功: 公開先の manifest 一覧が配置内容と一致しました。\n")
                 return
         except (OSError, ValueError):
@@ -339,11 +416,16 @@ def main():
     release.add_argument("--reason", default="")
     pages = commands.add_parser("verify-pages")
     pages.add_argument("--directory", type=Path, required=True)
+    removal = commands.add_parser("remove-dataset")
+    removal.add_argument("--dataset", required=True)
+    removal.add_argument("--channel", choices=("stable", "dev"), required=True)
     args = parser.parse_args()
     if args.command == "prepare":
         prepare(args.directory, args.channel)
     elif args.command == "publish":
         publish(args.tag, args.sha256, manual=args.manual, reason=args.reason, channel=args.channel)
+    elif args.command == "remove-dataset":
+        remove_dataset(args.dataset, args.channel)
     else:
         verify_pages(args.directory)
 

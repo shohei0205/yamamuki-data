@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "公開済み地点データのカタログ（版1）",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "datasets"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "datasets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "channel",
+          "manifestUrl"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]*$"
+          },
+          "channel": {
+            "enum": [
+              "stable",
+              "dev"
+            ]
+          },
+          "manifestUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://[^/?#\\s]+/"
+          },
+          "manifest": {
+            "type": "object",
+            "description": "ダウンロードと検証に必要な manifest の内容。旧版の山頂には downloadUrl を補う。",
+            "required": [
+              "schemaVersion",
+              "version",
+              "downloadUrl",
+              "fileName",
+              "sha256",
+              "sizeBytes",
+              "uncompressedSizeBytes",
+              "license",
+              "attribution"
+            ],
+            "properties": {
+              "schemaVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "version": {
+                "type": "string",
+                "minLength": 1
+              },
+              "downloadUrl": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https://[^/?#\\s]+"
+              },
+              "fileName": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "sizeBytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "uncompressedSizeBytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "license": {
+                "type": "string",
+                "minLength": 1
+              },
+              "attribution": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "description": "manifest は新規生成時に必ず含める。追加前のカタログとの互換性のため、スキーマ上は省略を許可する。"
+      }
+    }
+  }
+}

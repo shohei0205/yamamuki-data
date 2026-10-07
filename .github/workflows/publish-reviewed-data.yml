@@ -107,7 +107,7 @@ jobs:
         uses: actions/deploy-pages@v4
       - name: 配置した manifest 一覧を確認
         if: steps.publication.outputs.pages_ready == 'true'
-        working-directory: peaks
+        working-directory: points/osm_peaks
         env:
           GH_REPO: ${{ github.repository }}
         run: python -m scripts.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"

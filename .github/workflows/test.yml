@@ -9,7 +9,7 @@ permissions:
 
 defaults:
   run:
-    working-directory: peaks
+    working-directory: points/osm_peaks
 
 jobs:
   test:

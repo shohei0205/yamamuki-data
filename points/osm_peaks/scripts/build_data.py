@@ -97,6 +97,7 @@ def read_mountains(path):
                 timestamp = normalize_timestamp(timestamp)
                 latest_timestamp = max(latest_timestamp or timestamp, timestamp)
                 mountains[osm_id] = {
+                    "id": str(osm_id),
                     "osmId": osm_id,
                     "name": name,
                     "latitude": lat,
@@ -149,16 +150,16 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
             raise ValueError(f"圧縮後のサイズが {MAX_SIZE_BYTES} バイトを超えました。分割を検討してください")
         logging.info("SHA-256 を計算し、manifest を作成しています")
         manifest = {
-            "schemaVersion": 4,
+            "schemaVersion": 5,
             "version": version,
             "fileName": FILE_NAME,
             "downloadUrl": target_url,
             "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
             "sizeBytes": size,
             "uncompressedSizeBytes": len(raw),
-            "mountainCount": len(mountains),
+            "pointCount": len(mountains),
             "sourceTimestamp": source_timestamp,
-            "latestMountainTimestamp": latest_mountain_timestamp,
+            "latestPointTimestamp": latest_mountain_timestamp,
             "sourceUrl": source_url,
             "license": "ODbL-1.0",
             "attribution": "© OpenStreetMap contributors",

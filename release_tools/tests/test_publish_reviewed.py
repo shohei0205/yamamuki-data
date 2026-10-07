@@ -57,7 +57,7 @@ class PublishReviewedTests(unittest.TestCase):
         reason = "確認済み; $(command)"
         with patch.object(entry.subprocess, "run") as run:
             entry.publish("peaks", "peaks-dev-v1", "dev", "", reason)
-            self.assertEqual(entry.ROOT / "peaks", run.call_args.kwargs["cwd"])
+            self.assertEqual(entry.ROOT / "points" / "osm_peaks", run.call_args.kwargs["cwd"])
             self.assertNotIn("shell", run.call_args.kwargs)
             self.assertEqual(reason, run.call_args.args[0][-1])
             self.assertIn("--manual", run.call_args.args[0])

@@ -85,30 +85,20 @@ Co-authored-by: Codex GPT-6
 - 配るデータは OpenStreetMap 由来で、ODbL で利用・再配布している。README の「© OpenStreetMap contributors」の表示を消さない。
 - 生成したデータと元データ（`*.osm.pbf`）は git に入れず、Releases に置く。
 - `manifest.json` の形式を変えるときは `schemaVersion` を上げる。公開済みのアプリが読めなくなるので、yamamuki 側の対応と順番を決めてから出す。
-- 山頂と地形は公開時期が異なるため、最新版の参照先をデータ種別ごとに分ける。山頂の最新版 manifest は GitHub Pages の `peaks/manifest.json`（正式版）と `peaks-dev/manifest.json`（開発版）から配り、データ本体は `peaks-<version>` と `peaks-dev-<version>` の Release に置く。リポジトリ全体の `releases/latest` は使わない。Pages は Actions の生成物から直接配置し、配布専用ブランチや生成物のコミットは作らない。アプリへの組み込み時もこの契約に合わせる。公開後に URL やファイル名を変える場合は、yamamuki 側の対応と順番を決める。
+- 山頂と地形は公開時期が異なるため、最新版の参照先をデータ種別ごとに分ける。山頂の最新版 manifest は GitHub Pages の `points/osm_peaks/manifest.json`（正式版）と `points/osm_peaks-dev/manifest.json`（開発版）から配り、データ本体は `peaks-<version>` と `peaks-dev-<version>` の Release に置く。リポジトリ全体の `releases/latest` は使わない。Pages は Actions の生成物から直接配置し、配布専用ブランチや生成物のコミットは作らない。アプリへの組み込み時もこの契約に合わせる。公開後に URL やファイル名を変える場合は、yamamuki 側の対応と順番を決める。
 
 - 正式版は `main`、開発版は `dev` のコードから生成・公開する。配布先は実行元ブランチで決め、手動の配布先選択で取り違えないようにする。
 - OpenStreetMap のサーバーやデータの配布元は共有の無料サービス。取得の回数や量を増やす変更は避け、増えるときは PR の説明に理由と量の目安を書く。
 
 ## 変更の確かめ方
 
-コミットの前に、次を通す。CI（`.github/workflows/`）でも同じものを動かしている。
+コミットの前に、共通の確認と変更したデータに応じたテストを行う。具体的なコマンド・必要なツール・CI での実行範囲は、各 README の記述を参照する。手順の重複と更新漏れを避けるため、このファイルにはコマンドを転記しない。
 
-```bash
-# 改行コードと BOM の確認
-.github/scripts/check-text-format.sh
+- 共通の確認（改行コード・BOM、手動公開入口）: [ルート README の「変更の確かめ方」](README.md#変更の確かめ方)
+- 山頂データの単体テスト・小さな PBF での生成テスト: [山頂 README の「テスト」](points/osm_peaks/README.md#テスト)
 
-# 山頂データの単体テストと小さな PBF での生成テスト
-(cd peaks && python -m unittest discover -s tests -v)
-
-# データ種別共通の手動公開入口のテスト
-python -m unittest discover -s release_tools/tests -v
-```
-
-- CI の「Text format」はすべての PR で動く。
-- 山頂データのテストには Python 3.12 と osmium-tool を使う。osmium がない場合は PBF のテストがスキップされるため、CI では両方を用意してすべて実行する。
 - 公開ジョブでは Pages の配置後に公開先の manifest 一覧・公開履歴と配置内容の一致を確認する。公開ジョブ同士は、正式版・開発版を共通のグループで直列化する。
-- データを生成するスクリプトやその CI を足したら、その確かめ方をここに書き足す。
+- データを生成するスクリプトやその CI を足したら、その確かめ方を担当する README に記載し、この節から参照できるようにする。
 - ロジックを変えたらテストを足す。テストを消したり飛ばしたりして通すことはしない。
 
 ## ブランチと PR

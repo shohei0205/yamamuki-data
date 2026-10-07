@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "配布データの manifest（版5）",
+  "description": "リポジトリ共通の配布情報。地点データでは $defs/pointManifest を使用する。日時の前後関係と本体の整合性は別途検証する。",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "version",
+    "downloadUrl",
+    "fileName",
+    "sha256",
+    "sizeBytes",
+    "uncompressedSizeBytes",
+    "license",
+    "attribution"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 5,
+      "type": "integer"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "downloadUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://[^/?#\\s]+"
+    },
+    "fileName": {
+      "type": "string",
+      "pattern": "^[^/\\\\\\s]+\\.gz$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sizeBytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "uncompressedSizeBytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pointCount": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sourceTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+    },
+    "latestPointTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+    },
+    "sourceUrl": {
+      "type": "string",
+      "format": "uri"
+    },
+    "license": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "attribution": {
+      "type": "string",
+      "pattern": "\\S"
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "pointManifest": {
+      "description": "地点データ用。共通項目に加えて pointCount を必須とする。",
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "required": [
+            "pointCount"
+          ]
+        }
+      ]
+    }
+  }
+}

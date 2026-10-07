@@ -41,9 +41,9 @@ class ManifestDistributionTests(unittest.TestCase):
                         release_data.previous_release(Path("unused"), channel)
 
     def test_site_preserves_other_channels_and_data_types(self):
-        for channel, path in (("stable", "peaks/manifest.json"), ("dev", "peaks-dev/manifest.json")):
-            old = {"peaks/manifest.json": {"version": "old-stable"},
-                   "peaks-dev/manifest.json": {"version": "old-dev"},
+        for channel, path in (("stable", "points/osm_peaks/manifest.json"), ("dev", "points/osm_peaks-dev/manifest.json")):
+            old = {"points/osm_peaks/manifest.json": {"version": "old-stable"},
+                   "points/osm_peaks-dev/manifest.json": {"version": "old-dev"},
                    "terrain/manifest.json": {"version": "terrain"}}
             destination = self.test_output / channel
             with patch.dict(os.environ, {"PAGES_DIRECTORY": str(destination)}), \
@@ -56,9 +56,111 @@ class ManifestDistributionTests(unittest.TestCase):
                 self.assertEqual(manifest, json.loads((destination / target).read_text(encoding="utf-8")))
             catalog = json.loads((destination / "catalog.json").read_text(encoding="utf-8"))
             self.assertEqual(expected, catalog["manifests"])
+            self.assertEqual(release_data.points_catalog(expected), json.loads((destination / "points/catalog.json").read_text(encoding="utf-8")))
             self.assertTrue((destination / ".nojekyll").exists())
             self.assertFalse(any(p.suffix == ".gz" for p in destination.rglob("*")))
             self.assertIn("pages_ready=true", (self.test_output / "output").read_text())
+
+    def test_points_catalog_lists_all_points_channels_but_excludes_terrain(self):
+        manifests = {"points/osm_peaks/manifest.json": {},
+                     "points/osm_peaks-dev/manifest.json": {},
+                     "points/curated_landmarks/manifest.json": {},
+                     "terrain/manifest.json": {}, "peaks/manifest.json": {}}
+        catalog = release_data.points_catalog(manifests)
+        self.assertEqual(1, catalog["schemaVersion"])
+        self.assertEqual([("curated_landmarks", "stable"), ("osm_peaks", "dev"), ("osm_peaks", "stable")],
+                         [(entry["id"], entry["channel"]) for entry in catalog["datasets"]])
+        self.assertEqual("https://owner.github.io/repo/points/osm_peaks/manifest.json", catalog["datasets"][-1]["manifestUrl"])
+        self.assertEqual([], release_data.points_catalog({})["datasets"])
+
+    def test_points_catalog_embeds_download_metadata_without_mutating_manifest(self):
+        for channel in ("stable", "dev"):
+            path = release_data.manifest_path(channel)
+            manifest = dict(self.current[0], fileName="japan-mountains.json.gz", uncompressedSizeBytes=456,
+                            downloadUrl="https://example.com/data.gz", pointCount=10,
+                            license="ODbL-1.0", attribution="© OpenStreetMap contributors")
+            entry = release_data.points_catalog({path: manifest})["datasets"][0]
+            self.assertEqual(manifest, entry["manifest"])
+            self.assertIsNot(manifest, entry["manifest"])
+            del manifest["downloadUrl"]
+            entry = release_data.points_catalog({path: manifest})["datasets"][0]
+            self.assertEqual(release_data.download_url(manifest["version"], channel), entry["manifest"]["downloadUrl"])
+            self.assertNotIn("downloadUrl", manifest)
+
+    def test_migration_preserves_legacy_urls_other_channel_and_history(self):
+        original = {"peaks/manifest.json": dict(self.current[0], version="old"),
+                    "peaks-dev/manifest.json": dict(self.current[0], version="older-dev")}
+        history = [release_data.history_entry(original["peaks/manifest.json"], "stable", snapshot=True)]
+        destination = self.test_output / "migration"
+        with patch.dict(os.environ, {"PAGES_DIRECTORY": str(destination)}), \
+                patch.object(release_data, "read_catalog", return_value=release_data.Catalog(original, {"peaks/history.json": history})):
+            release_data.update_latest(self.test_output, self.current[0])
+        def read(path):
+            return json.loads((destination / path).read_text(encoding="utf-8"))
+        self.assertEqual(self.current[0], read("points/osm_peaks/manifest.json"))
+        self.assertEqual(self.current[0], read("peaks/manifest.json"))
+        self.assertEqual("older-dev", read("points/osm_peaks-dev/manifest.json")["version"])
+        self.assertEqual(history[0], read("points/osm_peaks/history.json")["entries"][0])
+        self.assertEqual(read("points/osm_peaks/history.json"), read("peaks/history.json"))
+        self.assertEqual(2, len(read("points/catalog.json")["datasets"]))
+        with patch.object(release_data, "read_catalog", return_value=original):
+            self.assertEqual(original["peaks/manifest.json"], release_data.read_manifest("stable"))
+
+    def test_verify_pages_waits_for_points_catalog(self):
+        (self.test_output / "catalog.json").write_text('{"manifests": {}}', encoding="utf-8")
+        (self.test_output / "points").mkdir()
+        expected = {"schemaVersion": 1, "datasets": []}
+        (self.test_output / "points/catalog.json").write_text(json.dumps(expected), encoding="utf-8")
+        with patch.object(release_data, "read_catalog", return_value={}), \
+                patch.object(release_data, "read_points_catalog", side_effect=[{}, expected]), \
+                patch.object(release_data.time, "sleep") as sleep:
+            release_data.verify_pages(self.test_output)
+            sleep.assert_called_once_with(5)
+
+    def test_remove_dataset_preserves_other_channels_data_and_history(self):
+        for channel in ("stable", "dev"):
+            target = release_data.manifest_path(channel)
+            other = release_data.manifest_path("dev" if channel == "stable" else "stable")
+            legacy = ("peaks" if channel == "stable" else "peaks-dev") + "/manifest.json"
+            manifests = {target: self.current[0], other: self.current[0], legacy: self.current[0],
+                         "points/landmarks/manifest.json": self.current[0], "terrain/manifest.json": {"version": "terrain"}}
+            histories = {path.replace("manifest.json", "history.json"): [] for path in manifests}
+            destination = self.test_output / ("remove-" + channel)
+            with patch.dict(os.environ, {"PAGES_DIRECTORY": str(destination)}), \
+                    patch.object(release_data, "read_catalog", return_value=release_data.Catalog(manifests, histories)), \
+                    patch.object(release_data, "gh") as gh:
+                release_data.remove_dataset("osm_peaks", channel)
+                gh.assert_not_called()
+            document = json.loads((destination / "catalog.json").read_text(encoding="utf-8"))
+            self.assertEqual(set(manifests) - {target, legacy}, set(document["manifests"]))
+            self.assertEqual(set(histories) - {target.replace("manifest.json", "history.json"), legacy.replace("manifest.json", "history.json")}, set(document["histories"]))
+            self.assertFalse((destination / target).exists())
+            self.assertFalse((destination / legacy).exists())
+            self.assertEqual(release_data.points_catalog(document["manifests"]), json.loads((destination / "points/catalog.json").read_text(encoding="utf-8")))
+
+    def test_remove_last_dataset_produces_empty_catalog(self):
+        destination = self.test_output / "remove-last"
+        with patch.dict(os.environ, {"PAGES_DIRECTORY": str(destination)}), \
+                patch.object(release_data, "read_catalog", return_value={"points/landmarks/manifest.json": self.current[0]}):
+            release_data.remove_dataset("landmarks", "stable")
+        self.assertEqual([], json.loads((destination / "points/catalog.json").read_text(encoding="utf-8"))["datasets"])
+
+    def test_remove_dataset_stops_on_missing_catalog_target_invalid_input_and_wrong_branch(self):
+        for dataset in ("../osm_peaks", "osm_peaks-dev", "", "points/osm_peaks"):
+            with self.subTest(dataset=dataset), patch.object(release_data, "read_catalog") as read:
+                with self.assertRaises(ValueError):
+                    release_data.remove_dataset(dataset, "stable")
+                read.assert_not_called()
+        for catalog in (None, {}):
+            with patch.object(release_data, "read_catalog", return_value=catalog), patch.object(release_data, "write_site") as write:
+                with self.assertRaises(ValueError):
+                    release_data.remove_dataset("osm_peaks", "stable")
+                write.assert_not_called()
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_REF": "refs/heads/main"}), \
+                patch.object(release_data, "read_catalog") as read:
+            with self.assertRaises(ValueError):
+                release_data.remove_dataset("osm_peaks", "dev")
+            read.assert_not_called()
 
     def test_initialization_requires_explicit_manual_setting(self):
         destination = self.test_output / "pages"
@@ -81,18 +183,20 @@ class ManifestDistributionTests(unittest.TestCase):
 
     def test_initialization_setting_does_not_reset_existing_catalog(self):
         destination = self.test_output / "pages"
-        old = {"peaks-dev/manifest.json": {"version": "previous-dev"}}
+        old = {"points/osm_peaks-dev/manifest.json": {"version": "previous-dev"}}
         with patch.dict(os.environ, {"PAGES_DIRECTORY": str(destination), "PAGES_INITIALIZE": "true"}), \
                 patch.object(release_data, "read_catalog", return_value=old):
             release_data.update_latest(self.test_output, self.current[0])
         catalog = json.loads((destination / "catalog.json").read_text(encoding="utf-8"))
-        self.assertEqual({"version": "previous-dev"}, catalog["manifests"]["peaks-dev/manifest.json"])
+        self.assertEqual({"version": "previous-dev"}, catalog["manifests"]["points/osm_peaks-dev/manifest.json"])
 
     def test_read_catalog_validates_paths_and_schema(self):
-        valid = {"schemaVersion": 1, "manifests": {"peaks/manifest.json": self.current[0]}}
+        valid = {"schemaVersion": 1, "manifests": {"points/osm_peaks/manifest.json": self.current[0]}}
         documents = [valid, {}, {"schemaVersion": 2}, {"schemaVersion": 1, "manifests": []},
                      {"schemaVersion": 1, "manifests": {"../manifest.json": {}}},
-                     {"schemaVersion": 1, "manifests": {"peaks/manifest.json": []}}]
+                     {"schemaVersion": 1, "manifests": {"points/../manifest.json": {}}},
+                     {"schemaVersion": 1, "manifests": {"points//osm_peaks/manifest.json": {}}},
+                     {"schemaVersion": 1, "manifests": {"points/osm_peaks/manifest.json": []}}]
         for document in documents:
             with self.subTest(document=document), \
                     patch.object(release_data, "urlopen", return_value=io.BytesIO(json.dumps(document).encode())) as read:
@@ -117,8 +221,8 @@ class ManifestDistributionTests(unittest.TestCase):
                 release_data.read_catalog()
 
     def test_read_selected_channel_without_old_release_fallback(self):
-        catalog = {"peaks/manifest.json": {"version": "stable"},
-                   "peaks-dev/manifest.json": {"version": "dev"},
+        catalog = {"points/osm_peaks/manifest.json": {"version": "stable"},
+                   "points/osm_peaks-dev/manifest.json": {"version": "dev"},
                    "terrain/manifest.json": {"version": "terrain"}}
         for channel in ("stable", "dev"):
             with patch.object(release_data, "read_catalog", return_value=catalog), \
@@ -140,8 +244,8 @@ class ManifestDistributionTests(unittest.TestCase):
             self.assertFalse((self.test_output / "output").exists())
 
     def test_verify_pages_waits_for_exact_catalog(self):
-        (self.test_output / "catalog.json").write_text(json.dumps({"manifests": {"peaks/manifest.json": self.current[0]}}), encoding="utf-8")
-        expected = {"peaks/manifest.json": self.current[0]}
+        (self.test_output / "catalog.json").write_text(json.dumps({"manifests": {"points/osm_peaks/manifest.json": self.current[0]}}), encoding="utf-8")
+        expected = {"points/osm_peaks/manifest.json": self.current[0]}
         with patch.object(release_data, "read_catalog", side_effect=[None, {}, expected]), patch.object(release_data.time, "sleep") as sleep:
             release_data.verify_pages(self.test_output)
             self.assertEqual(2, sleep.call_count)
@@ -155,8 +259,8 @@ class ManifestDistributionTests(unittest.TestCase):
 
 
     def test_history_records_republication_and_rollback_without_losing_other_channel(self):
-        original = {"peaks/manifest.json": dict(self.current[0], version="newer"),
-                    "peaks-dev/manifest.json": dict(self.current[0], version="older-dev")}
+        original = {"points/osm_peaks/manifest.json": dict(self.current[0], version="newer"),
+                    "points/osm_peaks-dev/manifest.json": dict(self.current[0], version="older-dev")}
         catalog = release_data.Catalog(original)
         for attempt in ("1", "2"):
             destination = self.test_output / ("history-" + attempt)
@@ -165,7 +269,7 @@ class ManifestDistributionTests(unittest.TestCase):
                 release_data.update_latest(self.test_output, self.current[0])
             document = json.loads((destination / "catalog.json").read_text(encoding="utf-8"))
             catalog = release_data.Catalog(document["manifests"], document["histories"])
-            history = json.loads((destination / "peaks/history.json").read_text(encoding="utf-8"))["entries"]
+            history = json.loads((destination / "points/osm_peaks/history.json").read_text(encoding="utf-8"))["entries"]
             self.assertEqual(int(attempt) + 1, len(history))
             self.assertEqual("newer", history[0]["version"])
             self.assertEqual("snapshot", history[0]["kind"])
@@ -177,25 +281,25 @@ class ManifestDistributionTests(unittest.TestCase):
             self.assertEqual("https://github.com/owner/repo/actions/runs/123/attempts/" + attempt, history[-1]["actionsRunUrl"])
             self.assertEqual("https://github.com/owner/repo/releases/tag/peaks-test", history[-1]["releaseUrl"])
             self.assertEqual("https://github.com/owner/repo/releases/download/peaks-test/japan-mountains.json.gz", history[-1]["downloadUrl"])
-            dev = json.loads((destination / "peaks-dev/history.json").read_text(encoding="utf-8"))["entries"]
+            dev = json.loads((destination / "points/osm_peaks-dev/history.json").read_text(encoding="utf-8"))["entries"]
             self.assertEqual(1, len(dev))
             self.assertEqual("older-dev", dev[0]["version"])
 
     def test_history_fetch_rejects_invalid_paths_and_contents(self):
         entry = release_data.history_entry(self.current[0], "dev")
         for histories in ([], {"../history.json": [entry]}, {"terrain/history.json": [entry]},
-                          {"peaks-dev/history.json": "invalid"}, {"peaks-dev/history.json": [{}]}):
-            document = {"schemaVersion": 1, "manifests": {"peaks-dev/manifest.json": self.current[0]}, "histories": histories}
+                          {"points/osm_peaks-dev/history.json": "invalid"}, {"points/osm_peaks-dev/history.json": [{}]}):
+            document = {"schemaVersion": 1, "manifests": {"points/osm_peaks-dev/manifest.json": self.current[0]}, "histories": histories}
             with patch.object(release_data, "urlopen", return_value=io.BytesIO(json.dumps(document).encode())):
                 with self.assertRaises(ValueError):
                     release_data.read_catalog()
-        document["histories"] = {"peaks-dev/history.json": [entry]}
+        document["histories"] = {"points/osm_peaks-dev/history.json": [entry]}
         with patch.object(release_data, "urlopen", return_value=io.BytesIO(json.dumps(document).encode())):
             self.assertEqual(document["histories"], release_data.read_catalog().histories)
 
     def test_verify_pages_checks_history_as_well_as_manifest(self):
-        manifests = {"peaks/manifest.json": self.current[0]}
-        histories = {"peaks/history.json": [release_data.history_entry(self.current[0], "stable")]}
+        manifests = {"points/osm_peaks/manifest.json": self.current[0]}
+        histories = {"points/osm_peaks/history.json": [release_data.history_entry(self.current[0], "stable")]}
         (self.test_output / "catalog.json").write_text(json.dumps({"manifests": manifests, "histories": histories}), encoding="utf-8")
         with patch.object(release_data, "read_catalog", side_effect=[release_data.Catalog(manifests), release_data.Catalog(manifests, histories)]), \
                 patch.object(release_data.time, "sleep") as sleep:

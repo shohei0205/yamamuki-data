@@ -6,7 +6,8 @@
 
 | データ | 状態 | 詳細 |
 |---|---|---|
-| 山頂 | 生成・検査・公開の処理を実装 | [山頂データの仕様と運用](peaks/README.md) |
+| 山頂 | 生成・検査・公開の処理を実装 | [山頂データの仕様と運用](points/osm_peaks/README.md) |
+| ランドマークなどの地点 | 将来追加予定・未実装 | [地点データの共通仕様](points/README.md) |
 | 地形 | 将来追加予定・未実装 | 実装時に専用の文書を追加する |
 
 データごとの収録対象、JSON の形式、ダウンロード先、生成・公開手順、検査基準は、それぞれの文書にまとめる。
@@ -14,12 +15,22 @@
 ## フォルダ構成
 
 ```text
-peaks/
-  README.md       山頂データの仕様・生成・公開手順
-  scripts/        山頂データの取得・生成・検査・公開
-  tests/          山頂データのテスト
+points/
+  README.md         地点データの共通形式・追加方針
+  osm_peaks/
+    README.md       OSM 山頂データの生成・公開手順
+    scripts/        OSM 山頂データの取得・生成・検査・公開
+    tests/          OSM 山頂データのテスト
+schemas/
+  manifest/         manifest の版別スキーマ（v5.schema.json など）
+  points/           地点データの版別スキーマ（v5.schema.json など）
+release_tools/      データ種別共通の手動公開入口
 .github/workflows/ GitHub Actions の定義
 ```
+
+地点 ID はデータセット内で一意な文字列（例: `"3403990450"`、`"example-tower"`）とし、アプリ側では「データセット名＋id」で区別する。山頂の新規生成は schemaVersion 5 で、旧版の整数 `osmId` から変更するため、利用するアプリの対応確認後に公開する。
+
+地点データの共通形式は [points/README.md](points/README.md) を参照する。取得元・対象ごとの生成処理は `points/` の下に置く。山頂の manifest は `points/osm_peaks/`、開発版は `points/osm_peaks-dev/` から配る。Release タグは従来の `peaks` を維持する。
 
 地形データの実装時は `terrain/` を追加する。Actions の定義は `.github/workflows/` に置き、データごとのフォルダを作業ディレクトリにして処理を実行する。
 
@@ -34,7 +45,7 @@ peaks/
 | `main` | 正式版 |
 | `dev` | 開発版（Pre-release） |
 
-開発中の処理は `dev` で確認し、正式版に採用するときは変更を `main` に取り込む。実行タイミングと確認方法はデータごとに定める。山頂データは手動実行時に取得対象日も指定できる（[取得対象日の指定](peaks/README.md#取得対象日を指定する)）。
+開発中の処理は `dev` で確認し、正式版に採用するときは変更を `main` に取り込む。実行タイミングと確認方法はデータごとに定める。山頂データは手動実行時に取得対象日も指定できる（[取得対象日の指定](points/osm_peaks/README.md#取得対象日を指定する)）。
 
 正式版も開発版も、このリポジトリの同じ [Releases 一覧](https://github.com/shohei0205/yamamuki-data/releases) に公開する。`main`・`dev` は生成処理の実行元で、配布ファイルは各 Release の **Assets** に添付する。データの種類と正式版・開発版の違いは、Release のタグで区別する。
 
@@ -42,7 +53,61 @@ peaks/
 
 最新版を示す manifest は GitHub Pages に置く。`main`・`dev` のコードでサイトのファイルを生成して直接配置するため、配布専用ブランチは作らない。生成物も git に入れない。
 
-データごとの manifest と公開履歴の URL、データ本体の取得方法は、各データの文書にまとめる。山頂データは [置き場所](peaks/README.md#置き場所)と[公開履歴](peaks/README.md#公開履歴)を参照する。
+データごとの manifest と公開履歴の URL、データ本体の取得方法は、各データの文書にまとめる。山頂データは [置き場所](points/osm_peaks/README.md#置き場所)と[公開履歴](points/osm_peaks/README.md#公開履歴)を参照する。
+
+## manifest.json
+
+このリポジトリで配布する各データセットに共通する、UTF-8（BOM なし）の JSON オブジェクト。データ本体の取得先・大きさ・ハッシュ・出典を記載する。`schemaVersion` は manifest 自体の形式の版を表す。現在は **版5**。データ本体のスキーマの版は独立して管理し、manifest の版と同じ番号であるとは限らない。使用するデータ本体の版は各データセットの仕様に記載する。データ本体の構造は種類ごとの仕様に従い、地点データは [points/README.md](points/README.md#地点の形式) に記載する。
+
+機械検証用の [manifest の版5](schemas/manifest/v5.schema.json)（JSON Schema Draft 2020-12）を用意している。地点データの manifest では同ファイルの `#/$defs/pointManifest` を使い、`pointCount` も必須として検査する。共通スキーマはデータ種別ごとの追加項目を許可する。版1〜4はこのスキーマの対象外で、既存の山頂検査処理で確認する。
+
+`format` の検査を有効にした検証ツールを使う。日時の前後関係・本体のサイズ・ハッシュ・件数・取得 URL と Release の一致は JSON Schema では照合できないため、公開処理で別途検証する。
+
+### 項目
+
+| 項目 | JSON の型 | 必須 | 内容・制約 |
+|---|---|---|---|
+| `schemaVersion` | integer | 必須 | 形式の版。新規生成は `5` |
+| `version` | string | 必須 | データセットの配布版。英数字で始まり、英数字・ピリオド・ハイフン・下線で構成する |
+| `downloadUrl` | string | 必須 | この版の gzip データ本体を取得する HTTPS URL |
+| `fileName` | string | 必須 | gzip データ本体のファイル名。データセットごとに定める |
+| `sha256` | string | 必須 | gzip ファイルそのものの SHA-256。小文字の16進数64文字 |
+| `sizeBytes` | integer | 必須 | gzip ファイルのバイト数。正の整数 |
+| `uncompressedSizeBytes` | integer | 必須 | 展開後の JSON のバイト数。正の整数 |
+| `pointCount` | integer | 地点データでは必須 | JSON 配列に収録した地点数。正の整数。地点以外のデータでは省略 |
+| `sourceTimestamp` | string | 任意 | 元データ全体の基準日時。取得日時とは区別する。不明なら省略 |
+| `latestPointTimestamp` | string | 地点データで任意 | 収録地点の元データ上の最終編集日時の最大値。不明なら省略 |
+| `sourceUrl` | string | 任意 | 元データの取得・参照 URL。特定できない場合は省略 |
+| `license` | string | 必須 | データセットの利用条件。OSM 由来では `ODbL-1.0` |
+| `attribution` | string | 必須 | 表示すべき出典。OSM 由来では `© OpenStreetMap contributors` |
+
+地点以外のデータに必要な件数・更新日時などの追加項目は、そのデータの仕様に記載する。`pointCount` や `latestPointTimestamp` に地点以外の情報を入れない。
+
+日時は UTC の ISO 8601 形式（例: `2026-09-30T20:21:22Z`）で記載する。`latestPointTimestamp` は現地調査日・標高の測定日・生成日時ではない。両日時がある場合、`latestPointTimestamp` は `sourceTimestamp` 以下とする。手動作成のデータでも記録していない日時を推測して埋めない。データセットの仕様でこれらの任意項目を必須にできる。
+
+### 読み込みと公開
+
+利用するアプリは対応する `schemaVersion` を確認し、`downloadUrl` から本体を取得する。展開前に `sizeBytes` と `sha256`、展開後に `uncompressedSizeBytes` を照合し、地点データでは `pointCount` と配列の件数も照合する。通信や検証に失敗した場合は保存済みデータを維持する。
+
+データセットと正式版・開発版ごとに最新版の manifest の URL を分ける。Release に添付する manifest と最新版として配置する manifest は同じ内容を使い、公開済みの版の本体は差し替えない。公開先の URL・Release タグ・ファイル名は各データセットの資料に記載する。
+
+スキーマファイルは `schemas/<種類>/v<版>.schema.json` に保存する。manifest と地点データはそれぞれ必要なときに版を上げ、公開済みの版は原則変更しない。版5より前のスキーマファイルは未作成。
+
+### 版の履歴（従来の山頂データからの移行）
+
+版1〜4は従来の山頂データの形式。検査処理は引き続きこれらを受け付ける。
+
+| 版 | 変更内容 |
+|---|---|
+| 1 | 山頂の整数 `osmId`・名前・座標・標高と manifest の基本項目 |
+| 2 | 地点に `nameReading`・`aliases`・`wikipediaUrl`・`wikidataUrl` を追加 |
+| 3 | manifest に `latestMountainTimestamp` を追加 |
+| 4 | manifest に `downloadUrl` を追加 |
+| 5 | 必須識別子を文字列 `id` に変更。`osmId`・標高・読み仮名・別名・解説リンクを任意化。manifest の `mountainCount` を `pointCount`、`latestMountainTimestamp` を `latestPointTimestamp` に変更し、元データの URL と日時を共通仕様では任意化 |
+
+版5は旧版の読み込み処理と互換性がないため、利用するアプリの対応を確認してから公開する。山頂の最新版 manifest は `points/osm_peaks/`・`points/osm_peaks-dev/` から配る。既存の旧 URL は互換用に維持し、Release タグとファイル名は変更しない。形式を今後変更する場合も、アプリ側の対応と公開順を調整する。
+
+地点データの公開済み一覧とダウンロード URL・サイズ・ハッシュなどは [points/catalog.json](https://shohei0205.github.io/yamamuki-data/points/catalog.json) から取得できる。形式と使い方は [地点カタログの仕様](points/README.md#公開データのカタログ) を参照する。
 
 ## 確認済みデータの公開
 
@@ -57,6 +122,8 @@ Actions の「確認済みのデータを公開」を共通の入口とする。
 両方の Actions（生成・検査と確認済みデータの公開）は、処理の冒頭に Summary へ実行パラメーターを表示する。未入力の場合の扱いも明記する。生成した Release へのリンクも Summary に表示し、下書きの確認へ移動できる。
 
 全国 PBF は Actions のキャッシュに保存し、同じ配布日・MD5 のデータを再利用する。配布元の情報と復元ファイルは毎回照合し、キャッシュがない場合や一致しない場合は再取得する。
+
+地点データの配布一覧から取り下げる場合は、手動 Actions「地点データをカタログから削除」を使う。操作と削除範囲は [地点カタログの削除手順](points/README.md#カタログから削除する) を参照する。
 
 ## ブランチのマージ方針
 
@@ -75,6 +142,24 @@ Actions の「確認済みのデータを公開」を共通の入口とする。
 正式版だけに修正を入れた場合は、`main` → `dev` の PR を作り、マージコミットで取り込む。これにより、次の開発・正式版公開にも修正と履歴を引き継ぐ。`dev` → `main` のマージ後も `dev` ブランチは削除しない。
 
 GitHub のリポジトリ設定では、マージコミットとスカッシュマージの両方を許可する。マージはユーザーが行い、エージェントは行わない。
+
+## 変更の確かめ方
+
+以下はリポジトリのルートから実行する。手動公開入口のテストには Python 3.12 を使い、外部通信は行わない。
+
+```bash
+# 改行コードと BOM の確認
+.github/scripts/check-text-format.sh
+
+# データ種別共通の手動公開入口のテスト
+python -m unittest discover -s release_tools/tests -v
+```
+
+CI の「Text format」はすべての PR で文字コード・改行を確認する。共通の手動公開入口のテストは `.github/workflows/test.yml` で push・PR 時に実行する。
+
+データ固有のテストは各 README を参照する。
+
+- [山頂データのテスト](points/osm_peaks/README.md#テスト)
 
 ## 開発ルール
 
