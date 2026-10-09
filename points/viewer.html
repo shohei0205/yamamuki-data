@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>地点データビューア：地点の確認</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+:root{font-family:system-ui,sans-serif;color:#24332e;background:#f4f7f5}*{box-sizing:border-box}body{margin:0;height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidden}header{padding:16px 22px;background:#fff;border-bottom:1px solid #dce4df;flex:none}h1{margin:0 0 6px;font-size:24px}p{margin:6px 0;line-height:1.6}header p{font-size:13px}a{color:#14634b}main{display:grid;grid-template-columns:minmax(280px,var(--list-width,44%)) 12px minmax(240px,1fr);gap:0;padding:16px;flex:1;min-height:0}.list-pane,.map-pane{min-width:0;min-height:0;display:flex;flex-direction:column}.map-pane{gap:8px}#map{flex:1;min-height:0;border:1px solid #bccdc3;border-radius:12px;background:#e8eee9}#message{font-size:12px;color:#65562d;margin:0}.tools{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin:0 0 10px}.tools label{flex:1;min-width:160px;font-size:13px}input{display:block;width:100%;margin-top:5px;padding:9px;border:1px solid #aabbaf;border-radius:6px;min-width:0}button{padding:9px 12px;border:1px solid #14634b;background:#fff;color:#14634b;border-radius:6px;cursor:pointer}#count{font-size:12px}.legend{font-size:12px;margin:0 0 10px}.legend span{display:block}.ok{color:#176b52}.review{color:#a35405}.missing{color:#ac3540}.table-wrap{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;background:#fff;border-radius:10px;border:1px solid #dce4df}table{border-collapse:separate;border-spacing:0;width:100%;white-space:nowrap;font-size:13px}th,td{padding:10px;text-align:left;border-bottom:1px solid #e5ebe7}th{position:sticky;top:0;background:#edf3ee;z-index:1}tr.selected{background:#fff0cd}.point-link{border:0;padding:0;text-decoration:none;background:transparent;font:inherit}footer{padding:7px 16px;font-size:11px;flex:none}.leaflet-popup-content{line-height:1.8}@media(max-width:760px){header{padding:10px 14px}h1{font-size:20px}header p:last-child{display:none}main{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,45%) minmax(0,1fr);padding:10px;gap:10px}.map-pane{grid-row:1}.list-pane{grid-row:2}.legend{display:none}.tools{margin-bottom:6px}.tools label{min-width:120px}footer{font-size:10px;padding:5px 10px}}
+select{display:block;width:100%;margin-top:5px;padding:9px;border:1px solid #aabbaf;border-radius:6px;background:#fff;font:inherit}.tools .tag-control{flex:1;min-width:130px}.json-panel{flex:none;max-height:48%;min-height:0;display:flex;flex-direction:column;border:1px solid #bccdc3;border-radius:8px;background:#fff;overflow:hidden}.json-heading{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;gap:8px}.json-heading h2{margin:0;font-size:14px}#point-json{margin:0;padding:12px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.6 ui-monospace,monospace;border-top:1px solid #dce4df}.json-panel[hidden]{display:none}@media(max-width:760px){.json-panel{max-height:42%}.tools .tag-control{min-width:100px}.tools{gap:6px}.tools label{font-size:11px}}
+.file-bar{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;padding:8px 16px;background:#edf3ee;flex:none;font-size:12px}.file-bar input{display:inline-block;width:auto;margin:0;padding:5px;border:0;max-width:260px}#load-status{overflow-wrap:anywhere}@media(max-width:760px){.file-bar{gap:3px;padding:5px 10px}.file-bar input{max-width:220px}#load-status{font-size:10px}}
+#csv-status{white-space:pre-wrap;max-height:70px;overflow:auto;width:100%;overflow-wrap:anywhere}#csv-status:empty{display:none}#applied-tags{padding:0 12px;font-size:12px;margin:0 0 8px}
+.tag-editor{padding:0 12px 8px;font-size:12px}.tag-editor #applied-tags{padding:0}.tag-add{display:flex;gap:6px;margin-top:6px}.tag-add input{margin:0;flex:1}.tag-add button{flex:none}#tag-chips{display:flex;flex-wrap:wrap;gap:5px}#tag-chips button{padding:4px 8px;font-size:12px}.exports{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center}.exports button,.exports select{font-size:12px;padding:6px}.exports select{width:auto;max-width:170px;margin:0}#save-status,#edit-status{overflow-wrap:anywhere;font-size:12px}#save-status{width:100%}
+button:disabled,select:disabled{color:#78817c;background:#e8ece9;border-color:#c9d0cb;cursor:not-allowed}
+.json-file-control{min-width:0}#json-file-help{font-size:11px;color:#52635a;margin:3px 0 0;max-width:370px}#load-status{display:block;margin-top:3px}#load-status:empty{display:none}
+#tag-builder{width:min(980px,94vw);max-height:88vh;overflow:auto;border:1px solid #bccdc3;border-radius:12px;padding:18px;color:#24332e}#tag-builder::backdrop{background:#0006}#tag-builder label{display:block;font-size:13px;margin:10px 0}#tag-builder p{font-size:12px}.builder-heading,.builder-actions{display:flex;align-items:center;gap:8px;justify-content:space-between}.builder-heading h2{margin:0;font-size:18px}#tag-builder textarea{width:100%;display:block;padding:8px;margin-top:5px;border:1px solid #aabbaf;border-radius:6px;resize:vertical;font:13px/1.5 ui-monospace,monospace}#builder-status{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;max-height:160px;overflow:auto}#builder-status:empty{display:none}
+#builder-review[hidden]{display:none}.builder-review-scroll{max-height:340px;overflow:auto;margin-bottom:8px;border:1px solid #dce4df}#builder-review table{white-space:normal;min-width:740px;table-layout:fixed}#builder-review th:first-child{width:26%}#builder-review th:nth-child(2){width:25%}#builder-review th:nth-child(3){width:42%}#builder-review th:last-child{width:7%}#builder-review td{vertical-align:top;overflow-wrap:anywhere}#builder-review input{padding:6px;margin:0 0 5px;font-size:12px}#builder-review select{font-size:12px;padding:6px}#builder-review input[type=checkbox]{width:auto}#builder-review .review-error{color:#9c3b16}#builder-review a{display:inline-block;margin-top:5px}
+#builder-review a[hidden]{display:none}
+.remove-filter-tag{margin-left:10px;padding:3px 6px;font-size:11px;color:#974325;border-color:#cba58f}.remove-filter-tag[hidden]{display:none}
+#pane-divider{cursor:col-resize;touch-action:none;position:relative;margin:0 2px;border-radius:4px}#pane-divider::after{content:'';position:absolute;top:0;bottom:0;left:3px;width:2px;background:#c2cec6}#pane-divider:hover,#pane-divider:focus-visible{background:#d0e4d6;outline:2px solid #176b52;outline-offset:-2px}body.resizing-panes{cursor:col-resize;user-select:none}@media(max-width:760px){#pane-divider{display:none}main{gap:10px}}
+.tag-add{flex-wrap:wrap}.tag-add input{min-width:140px}
+#csv-save-dialog{width:min(460px,94vw);border:1px solid #bccdc3;border-radius:12px;padding:18px;color:#24332e}#csv-save-dialog::backdrop{background:#0006}#csv-save-dialog label{display:block;margin:16px 0}#csv-save-dialog p{font-size:12px}#csv-save-status:empty{display:none}
+.source-data-label{margin:0;padding:6px 12px;font-size:11px;color:#52635a}
+#tag-csv-files[hidden]{display:none}
+#json-file[hidden]{display:none}#json-file-name{display:block;margin-top:3px;overflow-wrap:anywhere}#json-file-name:empty{display:none}
+#save-status:empty{display:none}
+#toast{position:fixed;bottom:32px;left:50%;transform:translateX(-50%);z-index:2000;max-width:min(600px,90vw);padding:12px 18px;border-radius:8px;background:#243e32;color:#fff;box-shadow:0 3px 14px #0003;font-size:13px;pointer-events:none}#toast[hidden]{display:none}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px}header h1{margin:0;min-width:0;overflow-wrap:anywhere}#open-help{flex:none}#help-dialog{width:min(560px,94vw);max-height:85vh;overflow:auto;border:1px solid #bccdc3;border-radius:12px;padding:18px;color:#24332e}#help-dialog::backdrop{background:#0006}#help-dialog p{font-size:14px;margin-top:16px}
+.list-pane tbody tr{cursor:pointer}.list-pane tbody tr:hover{background:#e8f2eb}.list-pane tbody tr.selected:hover{background:#fff0cd}
+.list-pane tbody:not(.tag-filtered) .remove-filter-tag{display:none}
+</style>
+</head>
+<body>
+<header><h1>地点データビューア</h1><button id="open-help" type="button">使い方</button></header>
+<dialog id="help-dialog" aria-labelledby="help-title"><form method="dialog" class="builder-heading"><h2 id="help-title">使い方</h2><button>閉じる</button></form><p>地点名を選ぶと地図と JSON 全文を表示します。JSON ファイルを選択して別の地点データも確認できます。</p><p>指定した地点データをもとに生成した一覧です。OSM の現在の登録内容はリンク先で確認してください。</p></dialog>
+<div class="file-bar"><div class="json-file-control"><button id="open-point-json" type="button">地点 JSON ファイルを開く</button><input id="json-file" type="file" accept=".json,.gz,application/json,application/gzip" hidden></div><button id="open-tag-csv" type="button">タグ CSV ファイルを開く</button><input id="tag-csv-files" type="file" accept=".csv,text/csv" multiple hidden><button id="clear-csv" type="button" disabled>タグ CSV をクリア</button><button id="open-tag-builder" type="button">タグ一括追加</button><button id="save-csv" type="button">タグ CSV を保存</button><span id="csv-status" role="status"></span><span id="save-status" role="status"></span></div>
+<main>
+<section class="list-pane" aria-label="地点の一覧">
+<div class="tools"><label>地点名・IDで絞り込み <input id="search" type="search" placeholder="地点名や ID"></label><label class="tag-control">タグで絞り込み<select id="tag-filter"><option value="all">すべてのタグ</option><option value="untagged">タグなし</option></select></label><button id="show-all" type="button" disabled>絞り込みを解除</button><span id="count"></span></div>
+
+<div class="table-wrap"><table><thead><tr><th>地点名</th><th>標高 (m)</th><th title="行政区域境界との照合による参考表示です。境界付近では実際と異なる場合があります。">所在地（参考）</th><th>緯度・経度</th><th>ID / osmId</th></tr></thead><tbody></tbody></table></div>
+</section>
+<div id="pane-divider" role="separator" aria-label="左ペインの幅" aria-orientation="vertical" aria-valuemin="280" aria-valuenow="500" tabindex="0"></div>
+<section class="map-pane" aria-label="地点の地図">
+<div id="map" aria-label="地点の位置を確認する地図"></div>
+<section id="json-panel" class="json-panel" aria-label="選択地点の詳細" hidden><div class="json-heading"><h2 id="json-title">地点の詳細</h2><button id="close-json" type="button">閉じる</button></div><div class="tag-editor"><p id="applied-tags"></p><div id="tag-chips"></div><div class="tag-add"><input id="new-tag" type="text" list="existing-tags" autocomplete="off" aria-label="追加するタグ" placeholder="タグを選択、または新しいタグ名を入力"><datalist id="existing-tags"></datalist><button id="add-tag" type="button">タグを追加</button></div><span id="edit-status" role="status"></span></div><p class="source-data-label">読み込んだ元データ（タグの編集は反映されません）</p><pre id="point-json" tabindex="0"></pre></section>
+<p id="message" role="status">地図を読み込んでいます。地図が表示されなくても一覧の OSM リンクは利用できます。</p>
+</section>
+</main>
+<dialog id="csv-save-dialog" aria-labelledby="csv-save-title"><form method="dialog" class="builder-heading"><h2 id="csv-save-title">タグ CSV を保存</h2><button>閉じる</button></form><label>保存するタグ<select id="export-tag" aria-label="保存するタグ"></select></label><p>選んだタグが付いている全地点を CSV に保存します。</p><button id="confirm-save-csv" type="button">保存先を選んで保存</button><p id="csv-save-status" role="status"></p></dialog>
+<dialog id="tag-builder" aria-labelledby="tag-builder-title">
+<form method="dialog" class="builder-heading"><h2 id="tag-builder-title">タグ一括追加</h2><button>閉じる</button></form>
+<p>先に地点 JSON を開き、山の一覧を入力してください。タグ名は追加するときに必要です。山名・別名で一致する地点を補完します。同名の候補が複数ある場合は、すべて対応表に追加します。</p>
+<label>タグ名<input id="builder-tag" type="text" list="builder-tags" autocomplete="off" placeholder="タグを選択、または新しいタグ名を入力"><datalist id="builder-tags"></datalist></label>
+<label>山名・osmId の一覧<textarea id="builder-input" rows="7" placeholder="羊蹄山&#10;204683948&#10;204683948,羊蹄山" aria-describedby="builder-help"></textarea></label>
+<p id="builder-help">1 行に 1 地点。山名のみ、osmId のみ、osmId と山名の 2 列に対応します。CSV または表計算ソフトからの貼り付けが使えます。見出しは省略できます。</p>
+<button id="builder-check" type="button">照合して補完</button>
+<pre id="builder-status" role="status"></pre>
+<section id="builder-review" hidden aria-label="照合結果の修正">
+<p>候補を選ぶと山名と osmId が入ります。候補がない行は検索するか直接修正してください。不要な行は「除外」にチェックを入れ、最後に再照合します。</p>
+<div class="builder-review-scroll"><table><thead><tr><th>行・状態</th><th>山名・osmId</th><th>候補を選択・検索</th><th>除外</th></tr></thead><tbody id="builder-review-rows"></tbody></table></div>
+<button id="builder-recheck" type="button">修正した内容で再照合</button>
+</section>
+<label>補完した対応表<textarea id="builder-result" rows="5" readonly></textarea></label>
+<p>確認が必要な行がある間は追加できません。修正欄で直して再照合するか、元の一覧を修正してください。</p>
+<div class="builder-actions"><button id="builder-apply" type="button" disabled>タグを一括追加</button></div>
+<p>追加したタグは (CSV) として表示します。同名タグの既存の地点を残して追記し、同じ osmId は重複させません。元の JSON は変更しません。</p>
+</dialog>
+<footer><span id="prefecture-status" role="status"></span> 境界：<a href="https://github.com/kyodo-official/japan-choropleth">共同通信社による加工データ</a>（国土交通省「<a href="https://nlftp.mlit.go.jp/ksj/gml/datalist/KsjTmplt-N03-2025.html">国土数値情報 行政区域データ 2025 年版</a>」、<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>）。OSM 由来の地点：© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>。地図ライブラリと背景地図の表示にはインターネット接続が必要です。</footer>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+// CSV の引用符・改行・BOM を扱い、タグ別対応表を検査する。
+function parseTagCsv(text, filename) {
+  const tag=filename.replace(/\.csv$/i,'');
+  if(!/\.csv$/i.test(filename)||!tag||tag.trim()!==tag)throw new Error(filename+': タグ名と拡張子 .csv を確認してください。');
+  const records=parseCsvRecords(text,filename);
+  const header=records.shift();if(header?.length)header[0]=header[0].replace(/^#/,'');
+  if(!header||header.length!==2||!header.includes('osmId')||!header.includes('name'))throw new Error(filename+': 列は osmId,name にしてください。');
+  const idColumn=header.indexOf('osmId'),nameColumn=header.indexOf('name'),seen=new Set();
+  const mappings=records.map((row,i)=>{const prefix=filename+': '+(i+2)+' 行目: ';if(row.length!==2)throw new Error(prefix+'列数が一致しません。');const id=row[idColumn],name=row[nameColumn];if(!/^[1-9][0-9]*$/.test(id))throw new Error(prefix+'osmId は正の整数にしてください。');if(!name||name.trim()!==name)throw new Error(prefix+'山名が空、または前後に空白があります。');if(seen.has(id))throw new Error(prefix+'osmId '+id+' が重複しています。');seen.add(id);return{osmId:id,name};});
+  return {tag,mappings};
+}
+
+// 穴のあるポリゴンと離島を含む複数ポリゴンを照合する。
+function ringContains(x,y,ring){let inside=false;for(let i=0,j=ring.length-1;i<ring.length;j=i++){const [ax,ay]=ring[j],[bx,by]=ring[i];const cross=(x-ax)*(by-ay)-(y-ay)*(bx-ax);if(Math.abs(cross)<1e-10&&x>=Math.min(ax,bx)-1e-10&&x<=Math.max(ax,bx)+1e-10&&y>=Math.min(ay,by)-1e-10&&y<=Math.max(ay,by)+1e-10)return true;if((ay>y)!==(by>y)&&x<(bx-ax)*(y-ay)/(by-ay)+ax)inside=!inside;}return inside;}
+function prefectureIndex(data){if(data.type!=='FeatureCollection')throw new Error('境界データの形式が不正です。');return data.features.flatMap(feature=>{const name=feature.properties?.nam_ja;if(typeof name!=='string')return [];const geometry=feature.geometry;const polygons=geometry.type==='MultiPolygon'?geometry.coordinates:geometry.type==='Polygon'?[geometry.coordinates]:[];return polygons.filter(polygon=>polygon.length&&polygon[0].length).map(rings=>{const bounds=[Infinity,Infinity,-Infinity,-Infinity];rings[0].forEach(([x,y])=>{bounds[0]=Math.min(bounds[0],x);bounds[1]=Math.min(bounds[1],y);bounds[2]=Math.max(bounds[2],x);bounds[3]=Math.max(bounds[3],y);});return{name,rings,bounds,municipality:feature.properties.municipalityLabel??''};});});}
+function findPrefectures(point,index){const x=point.longitude,y=point.latitude;if(!Number.isFinite(x)||!Number.isFinite(y))return '';const names=new Set();for(const {name,rings,bounds:[west,south,east,north]} of index){if(x<west||x>east||y<south||y>north)continue;if(ringContains(x,y,rings[0])&&!rings.slice(1).some(ring=>ringContains(x,y,ring)))names.add(name);}return [...names].join('・');}
+
+function parseCsvRecords(text,filename,delimiter=',') {
+  text=text.replace(/^\uFEFF/,'').replace(/\r\n/g,'\n').replace(/\r/g,'\n');
+  const records=[];let record=[],field='',quoted=false,closed=false;
+  function finishField(){record.push(field);field='';closed=false;}
+  function finishRecord(){const hasField=field!==''||record.length>0||closed;finishField();if(hasField)records.push(record);record=[];}
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(quoted){if(c==='"'){if(text[i+1]==='"'){field+='"';i++;}else{quoted=false;closed=true;}}else field+=c;}
+    else if(c===delimiter)finishField();
+    else if(c==='\n')finishRecord();
+    else if(c==='"'){if(field||closed)throw new Error(filename+': 引用符が不正です。');quoted=true;}
+    else {if(closed)throw new Error(filename+': 引用符の後の文字が不正です。');field+=c;}
+  }
+  if(quoted)throw new Error(filename+': 引用符が閉じていません。');
+  if(field||record.length||closed)finishRecord();
+  return records;
+}
+
+// TopoJSON の共有境界を展開し、近くの行政区域だけ調べる索引を作る。
+function municipalityIndex(data){
+  if(data.type!=='Topology'||!data.objects?.municipalities)throw new Error('市区町村境界データの形式が不正です。');
+  const arcs=data.arcs.map(arc=>{let x=0,y=0;return arc.map(coordinate=>{if(!data.transform)return coordinate;x+=coordinate[0];y+=coordinate[1];return[x*data.transform.scale[0]+data.transform.translate[0],y*data.transform.scale[1]+data.transform.translate[1]];});});
+  function ring(indices){const result=[];indices.forEach((id,i)=>{const arc=id<0?[...arcs[~id]].reverse():arcs[id];result.push(...(i?arc.slice(1):arc));});return result;}
+  const features=data.objects.municipalities.geometries.map(geometry=>({type:'Feature',properties:{nam_ja:geometry.properties.prefecture,municipalityLabel:geometry.properties.displayName||[geometry.properties.county,geometry.properties.municipality,geometry.properties.ward].filter(Boolean).join('')},geometry:{type:geometry.type,coordinates:geometry.type==='Polygon'?geometry.arcs.map(ring):geometry.type==='MultiPolygon'?geometry.arcs.map(polygon=>polygon.map(ring)):[]}}));
+  const polygons=prefectureIndex({type:'FeatureCollection',features});const grid=new Map();
+  for(const polygon of polygons){const [west,south,east,north]=polygon.bounds;for(let x=Math.floor(west*2);x<=Math.floor(east*2);x++)for(let y=Math.floor(south*2);y<=Math.floor(north*2);y++){const key=x+','+y;if(!grid.has(key))grid.set(key,[]);grid.get(key).push(polygon);}}
+  return grid;
+}
+function findMunicipalities(point,grid){const x=point.longitude,y=point.latitude;if(!Number.isFinite(x)||!Number.isFinite(y))return{prefecture:'',municipality:''};const prefectures=new Set(),municipalities=new Set();for(const polygon of grid.get(Math.floor(x*2)+','+Math.floor(y*2))??[]){const [west,south,east,north]=polygon.bounds;if(x<west||x>east||y<south||y>north)continue;if(ringContains(x,y,polygon.rings[0])&&!polygon.rings.slice(1).some(ring=>ringContains(x,y,ring))){prefectures.add(polygon.name);municipalities.add(polygon.municipality);}}return{prefecture:[...prefectures].join('・'),municipality:[...municipalities].join('・')};}
+
+// 山名・osmId の片方だけでも照合し、曖昧な行は確定しない。
+function completeTagList(text,base) {
+  const records=parseCsvRecords(text,'入力一覧',text.includes('\t')?'\t':',');
+  if(!records.length)throw new Error('山名または osmId を入力してください。');
+  const first=records[0].map((value,i)=>i===0?value.trim().replace(/^#/,''):value.trim());
+  const header=first.every(value=>['osmId','name'].includes(value))?(records.shift(),first):null;
+  if(header&&(new Set(header).size!==header.length||header.length>2))throw new Error('見出しは osmId,name にしてください。');
+  if(!records.length)throw new Error('見出しの下に山名または osmId を入力してください。');
+  const byId=new Map(),byName=new Map();
+  for(const point of base){if(!point.osmId)continue;if(!byId.has(point.osmId))byId.set(point.osmId,[]);byId.get(point.osmId).push(point);for(const name of new Set([point.pointName,...(point.source?.aliases??[])])){if(!byName.has(name))byName.set(name,[]);byName.get(name).push(point);}}
+  const mappings=[],issues=[],reviews=[],seen=new Set();
+  records.forEach((record,index)=>{
+    const line=index+(header?2:1),cells=record.map(value=>value.trim());
+    const review={line,osmId:'',name:'',candidates:[],issue:''};reviews.push(review);
+    const fail=message=>{review.issue=message;issues.push(line+' 行目: '+message);};
+    if(header){review.osmId=cells[header.indexOf('osmId')]??'';review.name=cells[header.indexOf('name')]??'';if(cells.length!==header.length){fail('列数が見出しと一致しません。');return;}}
+    else if(cells.length===1){if(/^[0-9]+$/.test(cells[0]))review.osmId=cells[0];else review.name=cells[0];}
+    else if(cells.length===2){if(/^[0-9]+$/.test(cells[1])&&cells[0]&&!/^[0-9]+$/.test(cells[0]))[review.name,review.osmId]=cells;else [review.osmId,review.name]=cells;}
+    else {review.name=cells.join(',');fail('山名と osmId の最大 2 列にしてください。');return;}
+    const id=review.osmId,name=review.name;
+    if(id&&!/^[1-9][0-9]*$/.test(id)){fail('osmId は正の整数にしてください。');return;}
+    if(!id&&!name){fail('山名または osmId が必要です。');return;}
+    const candidates=id?(byId.get(id)??[]):(byName.get(name)??[]);review.candidates=candidates;
+    if(!id&&candidates.length>1){
+      const unique=[...new Map(candidates.map(point=>[point.osmId,point])).values()];
+      if(unique.some(point=>seen.has(point.osmId))){fail('候補の osmId が別の行と重複しています。');return;}
+      for(const point of unique){seen.add(point.osmId);mappings.push({osmId:point.osmId,name:point.pointName});}
+      review.includedCount=unique.length;return;
+    }
+    if(candidates.length!==1){fail((id||name)+(candidates.length?' の候補が複数あります: '+candidates.map(p=>p.osmId+' / '+p.pointName+' / '+p.latitude+', '+p.longitude).join('、'):' が地点 JSON に見つかりません。'));return;}
+    const point=candidates[0];
+    if(name&&![point.pointName,...(point.source?.aliases??[])].includes(name)){fail(id+' の山名は「'+point.pointName+'」です。入力「'+name+'」を確認してください。');return;}
+    if(seen.has(point.osmId)){fail('osmId '+point.osmId+' が重複しています。');return;}
+    seen.add(point.osmId);review.osmId=point.osmId;review.name=point.pointName;mappings.push({osmId:point.osmId,name:point.pointName});
+  });
+  return {mappings,issues,reviews};
+}
+function tagCsvText(mappings){const quote=value=>'"'+String(value).replaceAll('"','""')+'"';return '\uFEFF#osmId,name\n'+mappings.map(row=>row.osmId+','+quote(row.name)).join('\n')+'\n';}
+function validTagFilename(tag){return !!tag&&tag.trim()===tag&&!Array.from(tag).some(c=>c.charCodeAt(0)<32||[60,62,58,34,47,92,124,63,42].includes(c.charCodeAt(0)))&&!/[. ]$/.test(tag)&&!/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:[.]|$)/i.test(tag);}
+
+// 元の地点 JSON は保持し、表示用タグだけを重ねる。
+function applyCsvTags(base, tables) {
+  const byId=new Map();base.forEach((point,i)=>{if(point.osmId){if(!byId.has(point.osmId))byId.set(point.osmId,[]);byId.get(point.osmId).push(i);}});
+  const result=base.map(point=>({...point,tags:[...point.tags]}));const warnings=[];const missing=[];let matches=0;
+  for(const table of tables.values())for(const row of table.mappings){const indices=byId.get(row.osmId);if(!indices){missing.push(table.tag+': '+row.osmId+' / '+row.name);continue;}for(const i of indices){const point=result[i];if(!point.tags.includes(table.tag))point.tags.push(table.tag);if(![point.pointName,...(point.source?.aliases??[])].includes(row.name))warnings.push(table.tag+': '+row.osmId+' / CSV: '+row.name+' / JSON: '+point.pointName);matches++;}}
+  if(missing.length)throw new Error('地点 JSON に存在しない ID があります。\n'+missing.join('\n'));
+  return{entries:result,warnings,matches};
+}
+function applyTagEdits(entries,edits){return entries.map((point,i)=>{const edit=edits.get(i);return edit?{...point,tags:[...new Set([...point.tags,...edit.add])].filter(tag=>!edit.remove.has(tag))}:point;});}
+if(typeof module!=='undefined')module.exports={parseTagCsv,applyCsvTags};
+
+let points=[];
+const savedTagStates=new Map();const dirtyTags=new Set();
+let basePoints=points;let csvTables=new Map();let tagEdits=new Map();
+let prefectures=null;let prefectureLoading=null;let prefectureFailed=false;const prefectureCache=new Map(),municipalityCache=new Map();let prefectureRun=0;
+const tagFilterIndex=new Map();
+let renderedEntries=null;
+let rows=[...document.querySelectorAll('tbody tr')];
+const markers=new Map();let map;let selectedIndex=null;let searchTimer;
+document.getElementById('open-help').addEventListener('click',()=>document.getElementById('help-dialog').showModal());
+const tagFilter=document.getElementById('tag-filter');
+const message=document.getElementById('message');
+function resizeMap(){if(map)map.invalidateSize({pan:false});}
+new ResizeObserver(resizeMap).observe(document.getElementById('map'));
+const paneDivider=document.getElementById('pane-divider');
+function setPaneWidth(width){const main=document.querySelector('main');const style=getComputedStyle(main);const available=main.clientWidth-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight);const max=Math.max(280,available-252);const value=Math.round(Math.max(280,Math.min(max,width)));main.style.setProperty('--list-width',value+'px');paneDivider.setAttribute('aria-valuenow',String(value));paneDivider.setAttribute('aria-valuemax',String(Math.round(max)));resizeMap();}
+function syncPaneWidth(){if(matchMedia('(max-width:760px)').matches)return;const width=document.querySelector('.list-pane').getBoundingClientRect().width;setPaneWidth(width);}
+paneDivider.addEventListener('pointerdown',event=>{if(event.button!==0)return;event.preventDefault();paneDivider.setPointerCapture(event.pointerId);document.body.classList.add('resizing-panes');});
+paneDivider.addEventListener('pointermove',event=>{if(!paneDivider.hasPointerCapture(event.pointerId))return;const main=document.querySelector('main');setPaneWidth(event.clientX-main.getBoundingClientRect().left-parseFloat(getComputedStyle(main).paddingLeft)-6);});
+for(const event of ['pointerup','pointercancel','lostpointercapture'])paneDivider.addEventListener(event,()=>document.body.classList.remove('resizing-panes'));
+paneDivider.addEventListener('keydown',event=>{const width=document.querySelector('.list-pane').getBoundingClientRect().width;const step=event.shiftKey?50:10;if(['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){event.preventDefault();setPaneWidth(event.key==='Home'?280:event.key==='End'?Infinity:width+(event.key==='ArrowLeft'?-step:step));}});
+window.addEventListener('resize',syncPaneWidth);requestAnimationFrame(syncPaneWidth);
+function closeJson(){document.getElementById('json-panel').hidden=true;if(selectedIndex!==null)rows[selectedIndex]?.classList.remove('selected');selectedIndex=null;resizeMap();}
+document.getElementById('close-json').addEventListener('click',closeJson);
+function markerRadius(){return points.length>1000?(map.getZoom()<8?2:map.getZoom()<11?4:7):7;}
+function selectRow(index){if(selectedIndex!==null&&selectedIndex!==index)rows[selectedIndex]?.classList.remove('selected');selectedIndex=index;rows[index]?.classList.add('selected');document.getElementById('json-title').textContent=points[index].pointName+'の詳細';document.getElementById('applied-tags').textContent='タグ: '+(points[index].tags.join('、')||'なし');document.getElementById('point-json').textContent=JSON.stringify(points[index].source,null,2);document.getElementById('point-json').scrollTop=0;renderTagEditor(index);document.getElementById('json-panel').hidden=false;resizeMap();}
+function revealRow(index){const container=document.querySelector('.table-wrap');const row=rows[index];const bounds=container.getBoundingClientRect();const target=row.getBoundingClientRect();const heading=container.querySelector('thead').getBoundingClientRect().height;if(target.top<bounds.top+heading||target.bottom>bounds.bottom){container.scrollTop+=target.top-bounds.top-heading-(container.clientHeight-heading-row.offsetHeight)/2;}}
+function fitVisible(){if(!map)return;const visible=points.filter((p,i)=>p.latitude!==null&&!rows[i].hidden);if(visible.length)map.fitBounds(visible.map(p=>[p.latitude,p.longitude]),{padding:[28,28],maxZoom:13,animate:false});}
+let toastTimer;function showToast(text){clearTimeout(toastTimer);const toast=document.getElementById('toast');toast.textContent=text;toast.hidden=false;toastTimer=setTimeout(()=>{toast.hidden=true;toast.textContent='';},5000);}
+function updateClearFilter(){document.getElementById('show-all').disabled=document.getElementById('search').value===''&&tagFilter.value==='all';}
+function filter(){updateClearFilter();const query=document.getElementById('search').value.toLocaleLowerCase(),value=tagFilter.value;document.querySelector('.list-pane tbody').classList.toggle('tag-filtered',value.startsWith('tag:'));const tagMatches=value==='all'?null:tagFilterIndex.get(value)??new Set();let count=0;rows.forEach((row,i)=>{const hidden=(tagMatches!==null&&!tagMatches.has(i))||(!!query&&!row._searchText.includes(query));if(row.hidden!==hidden){row.hidden=hidden;const marker=markers.get(i);if(marker){if(hidden)marker.remove();else marker.addTo(map);}}if(!hidden)count++;});if(selectedIndex!==null&&rows[selectedIndex].hidden){closeJson();if(map)map.closePopup();}document.getElementById('count').textContent=`${count} / ${rows.length} 件`;}
+function updateRowSearch(row){row._searchText=row.textContent.toLocaleLowerCase();}
+function locationLabel(point){const prefecture=prefectureLabel(point),municipality=municipalityLabel(point);return prefecture===municipality?prefecture:prefecture+' '+municipality;}
+function municipalityLabel(point){const key=point.latitude+','+point.longitude;if(municipalityCache.has(key))return municipalityCache.get(key)||'不明';return prefectureFailed?'未判定':'判定中…';}
+function prefectureLabel(point){const key=point.latitude+','+point.longitude;if(prefectureCache.has(key))return prefectureCache.get(key)||'不明';return prefectureFailed?'未判定':'判定中…';}
+async function updatePrefectures(){
+  if(!points.length)return;const run=++prefectureRun;
+  try{
+    if(!prefectures){if(prefectureFailed)return;if(!prefectureLoading){document.getElementById('prefecture-status').textContent='行政区域の境界データを取得しています…';prefectureLoading=fetch('https://raw.githubusercontent.com/kyodo-official/japan-choropleth/main/data/topojson/municipalities.topojson',{signal:AbortSignal.timeout(20000)}).then(response=>{if(!response.ok)throw new Error('境界データを取得できません。');return response.json();}).then(data=>{const index=municipalityIndex(data);if(!index.size)throw new Error('行政区域の境界がありません。');return index;});}prefectures=await prefectureLoading;}
+    if(run!==prefectureRun)return;
+    for(let start=0;start<points.length;start+=200){if(run!==prefectureRun)return;for(let i=start;i<Math.min(start+200,points.length);i++){const point=points[i],key=point.latitude+','+point.longitude;if(!prefectureCache.has(key)){const area=findMunicipalities(point,prefectures);prefectureCache.set(key,area.prefecture);municipalityCache.set(key,area.municipality);}const cell=rows[i]?.querySelector('.location-cell');if(cell){cell.textContent=locationLabel(point);updateRowSearch(rows[i]);}}if(start+200<points.length)await new Promise(resolve=>setTimeout(resolve,0));}
+    filter();document.getElementById('prefecture-status').textContent='都道府県・市区町村は座標からの参考判定です。県境付近では実際と異なる場合があります。';
+  }catch(error){prefectureFailed=true;for(let i=0;i<points.length;i++){const cell=rows[i]?.querySelector('.location-cell');if(cell){cell.textContent=locationLabel(points[i]);updateRowSearch(rows[i]);}}document.getElementById('prefecture-status').textContent='都道府県・市区町村を判定できません。通信環境を確認して HTML を再読み込みしてください。';}
+}
+function makeTable(entries){const fragment=document.createDocumentFragment();entries.forEach(p=>{const row=document.createElement('tr');const name=document.createElement('td');const button=document.createElement('button');button.type='button';button.className='point-link';button.textContent=p.name;name.append(button);const removeTag=document.createElement('button');removeTag.type='button';removeTag.className='remove-filter-tag';removeTag.textContent='このタグから削除';row._removeTag=removeTag;removeTag.addEventListener('click',()=>removeFilteredTag(p));name.append(removeTag);const idCell=document.createElement('td');if(p.osmId&&p.url){const link=document.createElement('a');link.href=p.url;link.textContent=p.osmId;link.setAttribute('aria-label',p.pointName+' の OSM を開く（'+p.osmId+'）');link.target='_blank';link.rel='noopener noreferrer';idCell.append(link);}else idCell.textContent=p.source?.id||'';row.append(name);const coordinates=p.latitude===null?'':`${p.latitude}, ${p.longitude}`;[p.elevation??'',locationLabel(p),coordinates].forEach(value=>{const cell=document.createElement('td');cell.textContent=value;if(row.children.length===2)cell.className='location-cell';row.append(cell);});row.append(idCell);updateRowSearch(row);fragment.append(row);});return fragment;}
+const csvIdSets=new WeakMap();const noCsvIds=new Set();function csvIds(table){if(!table)return noCsvIds;if(!csvIdSets.has(table))csvIdSets.set(table,new Set(table.mappings.map(row=>row.osmId)));return csvIdSets.get(table);}
+function tagFilterOptions(){tagFilterIndex.clear();tagFilterIndex.set('untagged',new Set());const options=[];for(let i=0;i<points.length;i++){const point=points[i];if(!point.tags.length)tagFilterIndex.get('untagged').add(i);for(const tag of point.tags)for(const origin of ['JSON','CSV'])if(hasTagOrigin(i,tag,origin)){const key='tag:'+origin+':'+tag;if(!tagFilterIndex.has(key))tagFilterIndex.set(key,new Set());tagFilterIndex.get(key).add(i);}}for(const origin of ['JSON','CSV']){const prefix='tag:'+origin+':';[...tagFilterIndex.keys()].filter(key=>key.startsWith(prefix)).sort((a,b)=>a.slice(prefix.length).localeCompare(b.slice(prefix.length),'ja')).forEach(key=>options.push([key,'('+origin+') '+key.slice(prefix.length)]));}return options;}
+function hasTagOrigin(index,tag,origin){if(!points[index].tags.includes(tag))return false;if(origin==='JSON')return basePoints[index]?.tags.includes(tag)??false;if(origin==='CSV')return (csvIds(csvTables.get(tag)).has(points[index].osmId))||(tagEdits.get(index)?.add.has(tag)??false);return false;}
+function matchesTagFilter(index,value){if(value==='all')return true;if(value==='untagged')return points[index].tags.length===0;const separator=value.indexOf(':',4);return hasTagOrigin(index,value.slice(separator+1),value.slice(4,separator));}
+function renderView(entries,rebuild=true){const reuse=renderedEntries!==null&&rows.length===entries.length&&points.length===entries.length&&points.every((point,i)=>point.source===entries[i].source);rebuild=rebuild&&!reuse;const fragment=rebuild?makeTable(entries):null;clearTimeout(searchTimer);closeJson();if(map)map.closePopup();if(!reuse){markers.forEach(marker=>marker.remove());markers.clear();}points=applyTagEdits(entries,tagEdits);if(rebuild)document.querySelector('tbody').replaceChildren(fragment);rows=[...document.querySelectorAll('tbody tr')];document.querySelector('.table-wrap').scrollTop=0;document.getElementById('search').value='';tagFilter.replaceChildren();[['all','すべてのタグ'],['untagged','タグなし'],...tagFilterOptions()].forEach(([value,text])=>{const option=document.createElement('option');option.value=value;option.textContent=text;tagFilter.append(option);});updateDirtyTags();refreshExportTags();document.getElementById('clear-csv').disabled=csvTables.size===0&&tagEdits.size===0;if(!reuse)points.forEach((p,i)=>{const activate=()=>{selectRow(i);const marker=markers.get(i);if(marker){map.panTo([p.latitude,p.longitude],{animate:false});marker.openPopup();}};rows[i].addEventListener('click',event=>{if(event.target.closest('a,button:not(.point-link),input,select,textarea'))return;if(window.getSelection()?.toString())return;activate();});if(!map||p.latitude===null)return;const content=document.createElement('div');const title=document.createElement('strong');title.textContent=p.pointName;content.append(title);const detail=document.createElement('p');detail.textContent=`${p.status} / ID: ${p.osmId||p.source?.id||'不明'} / 標高: ${p.elevation??'不明'} m`;content.append(detail);if(p.url){const link=document.createElement('a');link.href=p.url;link.textContent='OSM の地図・登録情報';link.target='_blank';link.rel='noopener noreferrer';content.append(link);}const marker=L.circleMarker([p.latitude,p.longitude],{radius:markerRadius(),weight:points.length>1000?1:3,color:p.review?'#a35405':'#176b52',fillOpacity:.85}).addTo(map).bindPopup(content).bindTooltip(p.pointName);marker.on('click',()=>{selectRow(i);revealRow(i);});markers.set(i,marker);});renderedEntries=entries;filter();if(!reuse)updatePrefectures();}
+function entriesFromJson(data){if(!Array.isArray(data))throw new Error('地点オブジェクトの JSON 配列を指定してください。');const ids=new Set();return data.map((p,i)=>{const prefix=`${i+1} 件目: `;if(!p||typeof p!=='object'||Array.isArray(p)||typeof p.id!=='string'||!p.id||typeof p.name!=='string'||!p.name.trim())throw new Error(prefix+'空でない id と name が必要です。');if(ids.has(p.id))throw new Error(prefix+'id が重複しています。');ids.add(p.id);if(!Number.isFinite(p.latitude)||Math.abs(p.latitude)>90||!Number.isFinite(p.longitude)||Math.abs(p.longitude)>180)throw new Error(prefix+'緯度・経度が不正です。');if(p.osmId!=null&&(!Number.isSafeInteger(p.osmId)||p.osmId<=0))throw new Error(prefix+'osmId は正の整数にしてください。');const tags=p.tags??[];if(!Array.isArray(tags)||tags.some(tag=>typeof tag!=='string'||!tag||tag.trim()!==tag)||new Set(tags).size!==tags.length)throw new Error(prefix+'tags は重複のない分類名の配列にしてください。');return{source:p,tags,osmId:p.osmId==null?'':String(p.osmId),name:p.name,pointName:p.name,status:'データ収録地点',latitude:p.latitude,longitude:p.longitude,elevation:p.elevationM??null,url:p.osmId==null?'':`https://www.openstreetmap.org/node/${p.osmId}`,review:false};});}
+const fileInput=document.getElementById('json-file');
+document.getElementById('open-point-json').addEventListener('click',()=>{if(!fileInput.disabled)fileInput.click();});
+fileInput.addEventListener('change',async()=>{const file=fileInput.files[0];if(!file)return;fileInput.disabled=true;document.getElementById('open-point-json').disabled=true;csvInput.disabled=true;document.getElementById('open-tag-csv').disabled=true;document.getElementById('clear-csv').disabled=true;showToast('地点 JSON を読み込んでいます…');try{let blob=file;const signature=new Uint8Array(await file.slice(0,2).arrayBuffer());if(signature[0]===31&&signature[1]===139){if(typeof DecompressionStream==='undefined')throw new Error('このブラウザでは gzip を展開できません。JSON に展開してから選択してください。');blob=await new Response(file.stream().pipeThrough(new DecompressionStream('gzip'))).blob();}const data=JSON.parse(await blob.text());const entries=entriesFromJson(data);invalidateBuilder();tagEdits=new Map();basePoints=entries;csvTables=new Map();renderView(entries);resetSavedTags();fitVisible();document.getElementById('csv-status').textContent='';document.querySelector('h1').textContent=file.name;document.title=file.name+'：地点の確認';showToast(`${file.name}：${entries.length} 件を読み込みました。`);}catch(error){showToast('JSON 読み込み失敗: '+error.message);}finally{fileInput.disabled=false;document.getElementById('open-point-json').disabled=false;csvInput.disabled=false;document.getElementById('open-tag-csv').disabled=false;document.getElementById('clear-csv').disabled=csvTables.size===0&&tagEdits.size===0;}});
+function tagState(tag,entries=points){return JSON.stringify(entries.filter(p=>p.tags.includes(tag)).map(p=>[p.source?.id??'',p.osmId,p.pointName]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b))));}
+function updateDirtyTags(){dirtyTags.clear();const tags=new Set([...savedTagStates.keys(),...points.flatMap(p=>p.tags)]);for(const tag of tags)if(tagState(tag)!==(savedTagStates.get(tag)??'[]'))dirtyTags.add(tag);}
+function resetSavedTags(){savedTagStates.clear();for(const tag of new Set(points.flatMap(p=>p.tags)))savedTagStates.set(tag,tagState(tag));updateDirtyTags();refreshExportTags();}
+window.addEventListener('beforeunload',event=>{if(!dirtyTags.size)return;event.preventDefault();event.returnValue='';});
+function refreshExportTags(){const select=document.getElementById('export-tag');const old=select.value;select.replaceChildren();[...new Set([...points.flatMap(p=>p.tags),...dirtyTags])].sort((a,b)=>a.localeCompare(b,'ja')).forEach(tag=>{const option=document.createElement('option');option.value=tag;option.textContent=tag;select.append(option);});if([...select.options].some(option=>option.value===old))select.value=old;const empty=select.options.length===0;if(empty){const option=document.createElement('option');option.value='';option.textContent='保存できるタグがありません';select.append(option);}select.disabled=empty;document.getElementById('save-csv').disabled=empty;}
+function renderTagEditor(index){const select=document.getElementById('existing-tags');select.replaceChildren();const available=[...new Set([...basePoints.flatMap(p=>p.tags),...csvTables.keys(),...points.flatMap(p=>p.tags)])].filter(tag=>!points[index].tags.includes(tag)).sort((a,b)=>a.localeCompare(b,'ja'));available.forEach(tag=>{const option=document.createElement('option');option.value=tag;option.textContent=tag;select.append(option);});const container=document.getElementById('tag-chips');container.replaceChildren();points[index].tags.forEach(tag=>{const button=document.createElement('button');button.type='button';button.textContent=tag+' ×';button.setAttribute('aria-label',tag+' を削除');button.addEventListener('click',()=>editTag(index,tag,false));container.append(button);});document.getElementById('edit-status').textContent='';}
+function removeFilteredTag(entry){
+  const value=tagFilter.value;if(!value.startsWith('tag:'))return;
+  const separator=value.indexOf(':',4),origin=value.slice(4,separator),tag=value.slice(separator+1);
+  const index=points.findIndex(point=>point.source===entry.source&&point.osmId===entry.osmId);if(index<0)return;
+  const search=document.getElementById('search').value,scroll=document.querySelector('.table-wrap').scrollTop;
+  let edit=tagEdits.get(index);if(!edit){edit={add:new Set(),remove:new Set()};tagEdits.set(index,edit);}edit.remove.add(tag);edit.add.delete(tag);
+  renderView(applyCsvTags(basePoints,csvTables).entries);
+  if(![...tagFilter.options].some(option=>option.value===value)){const option=document.createElement('option');option.value=value;option.textContent='('+origin+') '+tag;tagFilter.append(option);}
+  tagFilter.value=value;document.getElementById('search').value=search;filter();document.querySelector('.table-wrap').scrollTop=scroll;
+  document.getElementById('save-status').textContent=entry.pointName+' から '+tag+' を削除しました。CSV の保存で書き出せます。';
+}
+function editTag(index,tag,add){if(!tag||tag.trim()!==tag){document.getElementById('edit-status').textContent='タグ名は空にせず、前後の空白を除いてください。';return;}let edit=tagEdits.get(index);if(!edit){edit={add:new Set(),remove:new Set()};tagEdits.set(index,edit);}if(add){edit.add.add(tag);edit.remove.delete(tag);}else{edit.remove.add(tag);edit.add.delete(tag);}const entries=applyCsvTags(basePoints,csvTables).entries;renderView(entries);selectRow(index);document.getElementById('edit-status').textContent='表示用のタグを編集しました。保存ボタンから書き出せます。';}
+document.getElementById('add-tag').addEventListener('click',()=>{if(selectedIndex===null)return;editTag(selectedIndex,document.getElementById('new-tag').value,true);document.getElementById('new-tag').value='';});
+document.getElementById('new-tag').addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();document.getElementById('add-tag').click();}});
+let saving=false;
+async function saveFile(name,text,type){
+  const status=document.getElementById('save-status');
+  if(saving)return null;
+  saving=true;
+  try{
+    if(typeof window.showSaveFilePicker==='function'){
+      const mime=type.split(';')[0];const extension=name.endsWith('.csv')?'.csv':'.json';
+      let handle;
+      try{handle=await window.showSaveFilePicker({id:'point-viewer-'+extension.slice(1),suggestedName:name,types:[{description:'タグ対応表 CSV',accept:{[mime]:[extension]}}]});}
+      catch(error){if(error.name==='AbortError'){status.textContent='保存をキャンセルしました。';return null;}if(error.name!=='SecurityError'&&error.name!=='NotSupportedError')throw error;}
+      if(handle){const writable=await handle.createWritable();try{await writable.write(new Blob([text],{type}));await writable.close();}catch(error){try{await writable.abort();}catch{}throw error;}return 'saved';}
+    }
+    const url=URL.createObjectURL(new Blob([text],{type}));const link=document.createElement('a');link.href=url;link.download=name;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);return 'download';
+  }catch(error){status.textContent='保存に失敗しました: '+error.message;return null;}
+  finally{saving=false;}
+}
+function showSaveResult(result,message){if(result)document.getElementById('save-status').textContent=message+(result==='download'?'（保存先の選択に非対応のため、ブラウザのダウンロード設定を使います）':'');}
+document.getElementById('save-csv').addEventListener('click',()=>{refreshExportTags();document.getElementById('csv-save-status').textContent='';document.getElementById('csv-save-dialog').showModal();});
+document.getElementById('confirm-save-csv').addEventListener('click',async()=>{const tag=document.getElementById('export-tag').value;if(!tag)return;const targets=points.filter(p=>p.tags.includes(tag));if(targets.some(p=>!p.osmId)){document.getElementById('csv-save-status').textContent='このタグには osmId のない地点があるため、CSV に保存できません。';return;}if(Array.from(tag).some(c=>c.charCodeAt(0)<32||[60,62,58,34,47,92,124,63,42].includes(c.charCodeAt(0)))||/[. ]$/.test(tag)||/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:[.]|$)/i.test(tag)){document.getElementById('csv-save-status').textContent='このタグ名は CSV のファイル名に使えません。タグ名を変更してください。';return;}const unique=new Map();for(const p of targets)unique.set(p.osmId,p.pointName);const quote=value=>'"'+String(value).replaceAll('"','""')+'"';const csv='\uFEFF#osmId,name\n'+[...unique].map(([id,name])=>id+','+quote(name)).join('\n')+'\n';const savedState=tagState(tag);const result=await saveFile(tag+'.csv',csv,'text/csv;charset=utf-8');if(result){savedTagStates.set(tag,savedState);updateDirtyTags();refreshExportTags();}showSaveResult(result,tag+' の '+unique.size+' 件を CSV に保存しました。');document.getElementById('csv-save-status').textContent=document.getElementById('save-status').textContent;if(result)document.getElementById('csv-save-dialog').close();});
+const csvInput=document.getElementById('tag-csv-files');const csvStatus=document.getElementById('csv-status');
+document.getElementById('open-tag-csv').addEventListener('click',()=>{if(!csvInput.disabled)csvInput.click();});
+csvInput.addEventListener('change',async()=>{const files=[...csvInput.files];if(!files.length)return;csvInput.disabled=true;document.getElementById('open-tag-csv').disabled=true;fileInput.disabled=true;document.getElementById('open-point-json').disabled=true;document.getElementById('clear-csv').disabled=true;try{if(!basePoints.length)throw new Error('先に地点 JSON を読み込んでください。');const updated=new Map(csvTables);const selectedTags=new Set();for(const file of files){const table=parseTagCsv(await file.text(),file.name);if(selectedTags.has(table.tag))throw new Error('同じタグ名の CSV が複数選択されています。');selectedTags.add(table.tag);updated.set(table.tag,table);}const result=applyCsvTags(basePoints,updated);const previouslyDirty=new Set(dirtyTags);csvTables=updated;renderView(result.entries);for(const tag of selectedTags)if(!previouslyDirty.has(tag))savedTagStates.set(tag,tagState(tag));updateDirtyTags();refreshExportTags();const loadedTag=[...selectedTags].at(-1);const filterValue='tag:CSV:'+loadedTag;if(![...tagFilter.options].some(option=>option.value===filterValue)){const option=document.createElement('option');option.value=filterValue;option.textContent='(CSV) '+loadedTag;tagFilter.append(option);}tagFilter.value=filterValue;filter();showToast(`CSV ${updated.size} ファイル / ${result.matches} 件を照合しました。`);csvStatus.textContent=result.warnings.length?'山名の不一致（要確認）:\n'+result.warnings.join('\n'):'';}catch(error){csvStatus.textContent='CSV 読み込み失敗: '+error.message;}finally{csvInput.disabled=false;document.getElementById('open-tag-csv').disabled=false;fileInput.disabled=false;document.getElementById('open-point-json').disabled=false;document.getElementById('clear-csv').disabled=csvTables.size===0&&tagEdits.size===0;csvInput.value='';}});
+document.getElementById('clear-csv').addEventListener('click',()=>{if(!window.confirm('タグ CSV をクリアしますか？\n読み込んだ CSV のタグと、画面上で行ったタグの追加・削除を取り消します。\nJSON に元からあるタグは残ります。'))return;csvTables=new Map();tagEdits=new Map();renderView(basePoints);resetSavedTags();document.getElementById('clear-csv').disabled=true;csvStatus.textContent='';showToast('CSV のタグと編集内容をクリアしました。');});
+const builder=document.getElementById('tag-builder');let completedMappings=null;
+function invalidateBuilder(clearReview=true){if(clearReview){document.getElementById('builder-review').hidden=true;document.getElementById('builder-review-rows').replaceChildren();}completedMappings=null;document.getElementById('builder-result').value='';document.getElementById('builder-status').textContent='';document.getElementById('builder-apply').disabled=true;}
+document.getElementById('open-tag-builder').addEventListener('click',()=>{const list=document.getElementById('builder-tags');list.replaceChildren();[...new Set([...basePoints.flatMap(p=>p.tags),...csvTables.keys(),...points.flatMap(p=>p.tags)])].sort((a,b)=>a.localeCompare(b,'ja')).forEach(tag=>{const option=document.createElement('option');option.value=tag;list.append(option);});builder.showModal();});
+document.getElementById('builder-input').addEventListener('input',()=>invalidateBuilder());
+function renderBuilderReviews(reviews){
+  const body=document.getElementById('builder-review-rows');body.replaceChildren();document.getElementById('builder-review').hidden=false;
+  for(const review of reviews){
+    const tr=document.createElement('tr');tr.dataset.line=review.line;
+    const status=document.createElement('td');status.textContent=review.line+' 行目: '+(review.issue||(review.includedCount?'同名の候補 '+review.includedCount+' 件を追加':'確認済み'));if(review.issue)status.className='review-error';
+    const fields=document.createElement('td');const name=document.createElement('input'),id=document.createElement('input');name.value=review.name;id.value=review.osmId;name.className='review-name';id.className='review-id';name.setAttribute('aria-label',review.line+' 行目の山名');id.setAttribute('aria-label',review.line+' 行目の osmId');fields.append(name,id);
+    const choices=document.createElement('td');const select=document.createElement('select'),search=document.createElement('input'),link=document.createElement('a'),hint=document.createElement('span');select.setAttribute('aria-label',review.line+' 行目の候補');search.setAttribute('aria-label',review.line+' 行目の候補検索');search.placeholder='山名・別名・osmId で候補を探す';link.textContent='OSM で確認';link.target='_blank';link.rel='noopener noreferrer';link.hidden=true;
+    let candidates=[];
+    function fillCandidates(values){candidates=values.slice(0,30);select.replaceChildren();const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent=candidates.length?'候補を選んで確定':'候補がありません';select.append(placeholder);candidates.forEach((point,i)=>{const option=document.createElement('option');option.value=String(i);option.textContent=point.pointName+' / '+prefectureLabel(point)+' '+municipalityLabel(point)+' / '+point.osmId+' / '+(point.elevation??'不明')+' m / '+point.latitude+', '+point.longitude;select.append(option);});select.disabled=!candidates.length;hint.textContent=values.length>30?'先頭 30 件を表示。検索語を追加してください。':'';}
+    function edited(){invalidateBuilder(false);status.textContent=review.line+' 行目: 修正済み・再照合してください。';}
+    fillCandidates(review.candidates);
+    select.addEventListener('change',()=>{if(select.value==='')return;const point=candidates[Number(select.value)];name.value=point.pointName;id.value=point.osmId;link.href='https://www.openstreetmap.org/node/'+point.osmId;link.hidden=false;edited();});
+    search.addEventListener('input',()=>{const query=search.value.trim().normalize('NFKC').toLocaleLowerCase();fillCandidates(query?basePoints.filter(point=>point.osmId&&[point.pointName,point.osmId,...(point.source?.aliases??[])].some(value=>value.normalize('NFKC').toLocaleLowerCase().includes(query))):review.candidates);});
+    for(const field of [name,id])field.addEventListener('input',()=>{link.hidden=true;edited();});
+    if(review.osmId&&/^[1-9][0-9]*$/.test(review.osmId)){link.href='https://www.openstreetmap.org/node/'+review.osmId;link.hidden=false;}
+    choices.append(select,search,hint,link);
+    const remove=document.createElement('td'),checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.className='review-exclude';checkbox.setAttribute('aria-label',review.line+' 行目を除外');checkbox.addEventListener('change',edited);remove.append(checkbox);tr.append(status,fields,choices,remove);body.append(tr);
+  }
+}
+document.getElementById('builder-recheck').addEventListener('click',()=>{const mappings=[...document.querySelectorAll('#builder-review-rows tr')].filter(row=>!row.querySelector('.review-exclude').checked).map(row=>({osmId:row.querySelector('.review-id').value.trim(),name:row.querySelector('.review-name').value.trim()}));document.getElementById('builder-input').value=tagCsvText(mappings).replace(/^\uFEFF/,'');document.getElementById('builder-check').click();});
+document.getElementById('builder-check').addEventListener('click',()=>{invalidateBuilder();const status=document.getElementById('builder-status');try{if(!basePoints.length)throw new Error('先に地点 JSON を読み込んでください。');const result=completeTagList(document.getElementById('builder-input').value,basePoints);document.getElementById('builder-result').value=result.mappings.length?tagCsvText(result.mappings).split('\n').slice(1).join('\n'):'';status.textContent=result.mappings.length+' 件を照合しました。'+(result.issues.length?' 要確認 '+result.issues.length+' 件。修正欄で候補を選ぶか、山名・osmId を修正してください。':'すべての地点を確認できました。');if(result.issues.length){renderBuilderReviews(result.reviews);return;}completedMappings=result.mappings;document.getElementById('builder-apply').disabled=false;}catch(error){status.textContent=error.message;}});
+document.getElementById('builder-apply').addEventListener('click',()=>{if(!completedMappings)return;const tag=document.getElementById('builder-tag').value;if(!validTagFilename(tag)){document.getElementById('builder-status').textContent='CSV のファイル名に使えるタグ名を入力してください。';document.getElementById('builder-tag').focus();return;}const updated=new Map(csvTables);const merged=new Map((updated.get(tag)?.mappings??[]).map(row=>[row.osmId,row]));for(const row of completedMappings)merged.set(row.osmId,row);updated.set(tag,{tag,mappings:[...merged.values()]});for(let i=0;i<basePoints.length;i++)if(completedMappings.some(row=>row.osmId===basePoints[i].osmId))tagEdits.get(i)?.remove.delete(tag);const result=applyCsvTags(basePoints,updated);csvTables=updated;renderView(result.entries);document.getElementById('clear-csv').disabled=false;document.getElementById('export-tag').value=tag;tagFilter.value='tag:CSV:'+tag;filter();csvStatus.textContent='';showToast(tag+'：'+completedMappings.length+' 件をタグ対応表に追記しました。');builder.close();});
+if(typeof L!=='undefined'){map=L.map('map',{minZoom:2,maxZoom:18,preferCanvas:true}).setView([36.5,138],5);const tiles=L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',{minZoom:2,maxZoom:18,attribution:'<a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a>'}).addTo(map);tiles.on('tileerror',()=>{message.textContent='背景地図を読み込めません。地点のマーカーと一覧は利用できます。';});message.textContent='緑はデータ収録地点・照合済み、橙は要確認です。位置が判明していない行も一覧に残しています。';map.on('zoomend',()=>markers.forEach(marker=>marker.setRadius(markerRadius())));}else{message.textContent='地図ライブラリを読み込めません。通信環境を確認してください。一覧と JSON 全文は利用できます。';}
+document.getElementById('search').addEventListener('input',()=>{updateClearFilter();clearTimeout(searchTimer);searchTimer=setTimeout(filter,60);});tagFilter.addEventListener('change',()=>{clearTimeout(searchTimer);filter();});document.getElementById('show-all').addEventListener('click',()=>{clearTimeout(searchTimer);document.getElementById('search').value='';tagFilter.value='all';filter();});
+renderView(points);resetSavedTags();fitVisible();
+</script>
+</body>
+</html>

@@ -21,10 +21,12 @@ if __package__:
     from scripts.release_channels import download_url
     from scripts.graphics import validate_graphics
     from scripts.point_tags import validate_tags
+    from scripts.tag_csv import apply_tag_csvs, DEFAULT_TAGS_DIRECTORY
 else:
     from release_channels import download_url
     from graphics import validate_graphics
     from point_tags import validate_tags
+    from tag_csv import apply_tag_csvs, DEFAULT_TAGS_DIRECTORY
 
 
 SOURCE_URL = "https://download.geofabrik.de/asia/japan-latest.osm.pbf"
@@ -202,7 +204,7 @@ def verified_source_url(pbf):
     return url
 
 
-def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None, graphics_map=None):
+def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None, graphics_map=None, tags_directory=DEFAULT_TAGS_DIRECTORY):
     started = time.monotonic()
     source_url = verified_source_url(pbf)
     logging.info("全国データの生成を開始します: %s（版 %s）", pbf, version)
@@ -223,6 +225,7 @@ def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None
         )
         logging.info("osmium の抽出完了")
         mountains, latest_timestamp = read_mountains(extracted)
+        apply_tag_csvs(mountains, tags_directory)
         if graphics_map is not None:
             mappings = json.loads(Path(graphics_map).read_text(encoding="utf-8"))
             if not isinstance(mappings, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in mappings.items()):
@@ -247,8 +250,9 @@ def main():
     parser.add_argument("--channel", choices=("stable", "dev"), default=os.environ.get("RELEASE_CHANNEL", "stable"))
     parser.add_argument("--graphics-directory", type=Path)
     parser.add_argument("--graphics-map", type=Path)
+    parser.add_argument("--tags-directory", type=Path, default=DEFAULT_TAGS_DIRECTORY)
     args = parser.parse_args()
-    manifest = build(args.pbf, args.output_dir, args.version, channel=args.channel, graphics_directory=args.graphics_directory, graphics_map=args.graphics_map)
+    manifest = build(args.pbf, args.output_dir, args.version, channel=args.channel, graphics_directory=args.graphics_directory, graphics_map=args.graphics_map, tags_directory=args.tags_directory)
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
 
 

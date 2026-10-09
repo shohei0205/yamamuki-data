@@ -6,8 +6,12 @@ end_of_line = lf
 charset = utf-8
 insert_final_newline = true
 
-# Codex が読むときの文字化けを防ぐため、Markdown だけは BOM 付き。
+# Codex が読むときの文字化けを防ぐため、Markdown は BOM 付き。
 [*.md]
+charset = utf-8-bom
+
+# Excel でも文字化けせずに開けるよう、CSV は BOM 付き。
+[*.csv]
 charset = utf-8-bom
 
 [*.bat]

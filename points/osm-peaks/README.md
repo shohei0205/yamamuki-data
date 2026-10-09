@@ -231,6 +231,8 @@ python scripts/build_data.py build/japan-latest.osm.pbf --version local \
 
 Python 3.12 と osmium-tool を使い、単体テストと小さな PBF による生成テストを行う。SVG の対応表・JSON への内蔵・倍率・未対応要素の拒否・公開前の再検査も単体テストで確認する。CIの「共通：データ処理のテスト」（`.github/workflows/test.yml`）の「地点 / OSM山頂」ジョブで push・PR 時に実行する。
 
+共通ビューアの CSV 解析・タグ編集・保存内容の検査には Node.js も使う。Node.js がない場合は、そのテストをスキップする。
+
 テストは `points/osm-peaks/` 内で、外部通信を行わず次のコマンドで実行できる。osmium がない場合は PBF を使うテストだけをスキップする。Actions では osmium を入れてすべて実行する。
 
 ```bash
@@ -244,3 +246,15 @@ python -m unittest discover -s tests -v
 ### Releaseを削除した後に公開を再開する
 
 公開サイトのmanifestが指すReleaseを削除した場合、手動公開で「Pagesの配布サイトを初期化」を指定する。前回のReleaseが存在しない場合に限り、前回との比較を省いて確認済みデータの公開を再開する。新しいデータ本体のサイズ・ハッシュ・件数などの検査は行う。通信失敗やデータ破損は初期化を指定しても停止する。他のデータと配布先は引き継ぐ。
+
+## 分類タグの対応表
+
+山頂生成では [tags/ のタグ別 CSV](tags/README.md) を読み込み、osmId が一致する地点にファイル名のタグを付ける。既存の tags は保持し、スキーマの版は5のままとする。対応表の不正な値・重複 ID・収録されていない ID は生成エラー、山名の不一致は警告にする。
+
+同じツールで山名と osmId を双方向に補完し、OSM のリンク付き HTML を build/tags/ に生成できる。入力の CSV は変更せず、生成物は Git に保存しない。編集・検証・補完の手順は対応表の README を参照する。単体テストは既存のテストコマンドで実行し、タグの付与、双方向補完、候補が複数ある場合、入力の保持と生成結果への反映を確かめる。
+
+山頂データ全体を地図で確認する場合は、`python scripts/tag_csv.py --all --points build/osm-peaks.json` で `build/tags/osm-peaks.html` を生成する。CSV は不要で、生成した HTML を直接開いて確認できる。
+
+ブラウザで JSON を選んで表示する汎用ビューアは `python scripts/tag_csv.py --viewer` で生成できる。詳しくは [ファイル選択の手順](tags/README.md#ブラウザで地点データを選ぶ) を参照する。
+
+データを内蔵しない共通ビューアは [points/viewer.html](../viewer.html) に置く。地点 JSON とタグ CSV の読み込み、タグ編集と保存の手順は [地点データの README](../README.md#地点データをブラウザで確認する) を参照する。
