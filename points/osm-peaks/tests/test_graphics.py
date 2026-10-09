@@ -54,6 +54,8 @@ class GraphicsTests(unittest.TestCase):
                 self.assertNotIn("graphics", entry["manifest"])
 
     def test_build_applies_point_to_asset_map(self):
+        tags = self.root / "tags"
+        tags.mkdir()
         mappings = self.root / "points.json"
         mappings.write_text('{"1":"fuji"}', encoding="utf-8")
         rows = [{key: value for key, value in self.rows[0].items() if key != "graphic"}]
@@ -61,7 +63,7 @@ class GraphicsTests(unittest.TestCase):
                 patch("scripts.build_data.subprocess.check_output", return_value="2026-09-29T20:00:00Z"), \
                 patch("scripts.build_data.subprocess.run"), \
                 patch("scripts.build_data.read_mountains", return_value=(rows, "2026-09-29T12:00:00Z")):
-            manifest = build(self.root / "unused.pbf", self.output, "test", graphics_directory=self.source, graphics_map=mappings)
+            manifest = build(self.root / "unused.pbf", self.output, "test", graphics_directory=self.source, graphics_map=mappings, tags_directory=tags)
         self.assertEqual({"svg": SVG.decode("utf-8")}, rows[0]["graphic"])
         self.assertNotIn("graphics", manifest)
 
