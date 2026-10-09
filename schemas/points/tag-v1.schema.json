@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "タグ別対応表",
+  "type": "object",
+  "required": [
+    "tag",
+    "points"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "tag": {
+      "type": "string",
+      "pattern": "^\\S(?:.*\\S)?$"
+    },
+    "source": {
+      "type": "string"
+    },
+    "license": {
+      "type": "string"
+    },
+    "attribution": {
+      "type": "string"
+    },
+    "changes": {
+      "type": "string"
+    },
+    "points": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "osmId",
+          "name"
+        ],
+        "properties": {
+          "osmId": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^\\S(?:.*\\S)?$"
+          }
+        }
+      }
+    }
+  }
+}

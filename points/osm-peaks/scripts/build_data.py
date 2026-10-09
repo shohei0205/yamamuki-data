@@ -21,12 +21,12 @@ if __package__:
     from scripts.release_channels import download_url
     from scripts.graphics import validate_graphics
     from scripts.point_tags import validate_tags
-    from scripts.tag_csv import apply_tag_csvs, DEFAULT_TAGS_DIRECTORY
+    from scripts.tag_json import apply_tag_jsons, DEFAULT_TAGS_DIRECTORY
 else:
     from release_channels import download_url
     from graphics import validate_graphics
     from point_tags import validate_tags
-    from tag_csv import apply_tag_csvs, DEFAULT_TAGS_DIRECTORY
+    from tag_json import apply_tag_jsons, DEFAULT_TAGS_DIRECTORY
 
 
 SOURCE_URL = "https://download.geofabrik.de/asia/japan-latest.osm.pbf"
@@ -132,7 +132,7 @@ def normalize_timestamp(value):
     return stamp.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL, channel="stable"):
+def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL, channel="stable", tag_sources=None):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
         raise ValueError("版は英数字・ピリオド・ハイフン・下線で指定してください")
     target_url = download_url(version, channel)
@@ -175,6 +175,8 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
             "license": "ODbL-1.0",
             "attribution": "© OpenStreetMap contributors",
         }
+        if tag_sources:
+            manifest["tagSources"] = tag_sources
         manifest_path = Path(temporary) / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
         archive.replace(output_dir / FILE_NAME)
@@ -225,7 +227,7 @@ def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None
         )
         logging.info("osmium の抽出完了")
         mountains, latest_timestamp = read_mountains(extracted)
-        apply_tag_csvs(mountains, tags_directory)
+        tag_sources = apply_tag_jsons(mountains, tags_directory)
         if graphics_map is not None:
             mappings = json.loads(Path(graphics_map).read_text(encoding="utf-8"))
             if not isinstance(mappings, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in mappings.items()):
@@ -236,7 +238,7 @@ def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None
                     if not re.fullmatch(r"[a-z][a-z0-9_-]*", asset_id) or graphics_directory is None:
                         raise ValueError("画像の対応表と SVG の保存先を確認してください")
                     mountain["graphic"] = {"svg": (Path(graphics_directory) / f"{asset_id}.svg").read_text(encoding="utf-8")}
-        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel)
+        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel, tag_sources=tag_sources)
     logging.info("全国データの生成完了（経過 %.1f 秒）", time.monotonic() - started)
     return manifest
 

@@ -79,6 +79,35 @@
       "type": "string",
       "pattern": "\\S",
       "description": "データセットの表示名。新規生成時に記載する。"
+    },
+    "tagSources": {
+      "type": "array",
+      "description": "タグ対応表ごとの出典と利用条件。OSM の出典・ライセンスはトップレベルに記載する。",
+      "items": {
+        "type": "object",
+        "required": [
+          "tag"
+        ],
+        "properties": {
+          "tag": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "source": {
+            "type": "string"
+          },
+          "license": {
+            "type": "string"
+          },
+          "attribution": {
+            "type": "string"
+          },
+          "changes": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
     }
   },
   "additionalProperties": true,
