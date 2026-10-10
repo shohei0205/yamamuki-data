@@ -5,7 +5,7 @@
       "source": "Wikipedia「日本百名山」著書順の山の一覧（2026-10-10 参照） https://ja.wikipedia.org/w/index.php?title=日本百名山&oldid=111092405",
       "license": "山名一覧: CC BY-SA 4.0 https://creativecommons.org/licenses/by-sa/4.0/ ; 照合に用いた OpenStreetMap データ: ODbL 1.0 https://opendatacommons.org/licenses/odbl/1-0/",
       "attribution": "Wikipedia「日本百名山」の投稿者 https://ja.wikipedia.org/w/index.php?title=日本百名山&action=history ; © OpenStreetMap contributors https://www.openstreetmap.org/copyright",
-      "changes": "一覧の著書順を保持し、各山の山頂標識がある地点を優先して OpenStreetMap の osmId を付与する。最高地点と登山上の山頂が異なる場合は、山頂標識のある登山上の山頂を採用する。2026-10-10 に岩手山・鳥海山・燧ヶ岳・焼岳・富士山・大山の 6 件を変更した。利尻山・羊蹄山の標識位置との対応は確認待ち。note は照合用のメモ。採用地点と確認状況は SUPPLEMENTS.md および HYAKUMEIZAN_AUDIT.md を参照。"
+      "changes": "一覧の著書順を保持し、各山の山頂標識がある地点を優先して OpenStreetMap の osmId を付与する。最高地点と登山上の山頂が異なる場合は、山頂標識のある登山上の山頂を採用する。2026-10-10 に岩手山・鳥海山・燧ヶ岳・焼岳・富士山・大山の 6 件を変更した。利尻山・羊蹄山の標識位置との対応は確認待ち。note は照合用のメモ。採用地点と確認状況は notes/日本百名山.md を参照。"
     }
   },
   "points": [

@@ -218,7 +218,25 @@ OpenStreetMap 由来のデータは **© OpenStreetMap contributors** を表示�
 
 [supplements.json](supplements.json) 一つで全タグと補正を管理する。生成時は osmId で対応付け、タグの追記・表示名とよみがなの補正・別名の追加と削除・地点の除外を適用する。`--supplements` で別のファイルを指定できる。不正値・未知の ID・重複 ID・想定値の不一致は生成エラーにする。修正理由と管理用メモは補足ファイルに保持し、統合した地点データには注入しない。
 
-形式とビューアの操作は [補足 JSON](../README.md#補足-json-を開く)、日本百名山の採用地点と補完ツールは [補足の管理](SUPPLEMENTS.md) を参照する。
+日本百名山の 100 地点も同じ補足 JSON に収録する。共通形式は [補足 JSON の形式](../README.md#補足-json-の形式)、編集操作は [ビューアの編集手順](../README.md#補足を編集する) を参照する。
+
+### 山名と osmId の補完
+
+```bash
+PYTHONPATH=points/osm-peaks python -m scripts.supplements points/osm-peaks/supplements.json --points osm-peaks-source.json.gz --output points/osm-peaks/build/supplements.json
+```
+
+osmId がない行では `note` の山名・別名を完全一致で照合する。osmId があり `note` が空なら地点名をメモに補う。候補が複数ある場合は未解決とし、終了コード 1 を返す。形式の不備は終了コード 2。入力は変更せず、補足・補正・出典情報を出力へ引き継ぐ。補完には補足適用前の元データを使う。
+
+### 出典の管理
+
+出典・ライセンス・著作者表示・加工内容は、補足 JSON の `sources` に記録する。生成時は manifest.json の `supplementSources` に引き継がれる。詳しい属性は [補足 JSON の形式](../README.md#補足-json-の形式) を参照する。
+
+### タグごとの記録
+
+タグごとの記録は `notes/<タグ名>.md` に置く。新しいタグを追加するときも同じ命名にする。
+
+日本百名山の採用方針・地点の見直し・確認待ち事項・外部資料との照合結果は、[日本百名山タグの採用方針と検証記録](notes/日本百名山.md) にまとめる。現在の採用 osmId は [supplements.json](supplements.json) で管理する。
 
 ### アプリ用データと確認・編集用の添付
 
