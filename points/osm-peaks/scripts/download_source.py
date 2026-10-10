@@ -1,4 +1,4 @@
-"""全国 PBF を日付付き URL から取得し、中断時は続きから再開する。"""
+"""地域ごとの PBF を日付付き URL から取得し、中断時は続きから再開する。"""
 
 import argparse
 from contextlib import contextmanager
@@ -17,7 +17,12 @@ import urllib.parse
 import urllib.request
 
 
-SOURCE_URL = "https://download.geofabrik.de/asia/japan-latest.osm.pbf"
+if __package__:
+    from scripts.source_regions import SOURCES
+else:
+    from source_regions import SOURCES
+
+SOURCE_URL = SOURCES["japan"] + "-latest.osm.pbf"
 RETRY_ERRORS = (OSError, urllib.error.URLError, http.client.HTTPException)
 
 
@@ -66,28 +71,37 @@ def request(url, *, method="GET", headers=None, timeout=60):
         raise
 
 
-def source_url_for_date(source_date):
+def source_url_for_date(source_date, region="japan"):
+    base = SOURCES[region]
     if not source_date:
-        return SOURCE_URL
+        return base + "-latest.osm.pbf"
     if not re.fullmatch(r"20[0-9]{2}-[0-9]{2}-[0-9]{2}", source_date):
         raise ValueError("取得対象日は YYYY-MM-DD（2000〜2099年）で指定してください")
     try:
         day = date.fromisoformat(source_date)
     except ValueError as exc:
         raise ValueError("取得対象日が存在しない日付です") from exc
-    return f"https://download.geofabrik.de/asia/japan-{day.strftime('%y%m%d')}.osm.pbf"
+    return f"{base}-{day.strftime('%y%m%d')}.osm.pbf"
+
+
+def source_region(url):
+    for region, base in SOURCES.items():
+        if re.fullmatch(re.escape(base) + r"-(?:latest|[0-9]{6})\.osm\.pbf", url):
+            return region
+    raise ValueError("未対応の PBF の URL です")
 
 
 def resolve_source(source_url=SOURCE_URL):
+    region = source_region(source_url)
     logging.info("元データの日付付き URL とサイズを確認しています")
     with request(source_url, method="HEAD") as response:
         # latest の更新をまたいでも、異なる版のデータをつなげない。
         url = response.url.rstrip("/")
         parsed = urllib.parse.urlparse(url)
         if (parsed.scheme != "https" or parsed.netloc != "download.geofabrik.de"
-                or not re.fullmatch(r"/asia/japan-\d{6}\.osm\.pbf", parsed.path)):
-            raise ValueError(f"日付付きの全国 PBF に転送されませんでした: {url}")
-        if source_url != SOURCE_URL and url != source_url:
+                or not re.fullmatch(re.escape(SOURCES[region]) + r"-[0-9]{6}\.osm\.pbf", url)):
+            raise ValueError(f"日付付きの PBF に転送されませんでした: {url}")
+        if source_url != SOURCES[region] + "-latest.osm.pbf" and url != source_url:
             raise ValueError(f"指定した日付と異なる URL に転送されました: {url}")
         size = int(response.headers["Content-Length"])
         if size <= 0:
@@ -171,18 +185,19 @@ def save_source_info(output, source):
 
 def cache_values(source):
     """日付と内容でキャッシュを区別し、latest の更新や同日の差し替えに対応する。"""
-    match = re.fullmatch(r"https://download.geofabrik.de/asia/japan-(\d{6})\.osm\.pbf", source["url"])
+    region = source_region(source["url"])
+    match = re.fullmatch(re.escape(SOURCES[region]) + r"-([0-9]{6})\.osm\.pbf", source["url"])
     if not match or not re.fullmatch(r"[0-9a-f]{32}", source["md5"]):
         raise ValueError("キャッシュ用の取得元情報が不正です")
     stamp = match[1]
     source_date = date.fromisoformat(f"20{stamp[:2]}-{stamp[2:4]}-{stamp[4:]}").isoformat()
-    return {"cache-key": f"osm-japan-v1-{stamp}-{source['md5']}", "source-date": source_date}
+    return {"cache-key": f"osm-{region}-v1-{stamp}-{source['md5']}", "source-date": source_date}
 
 
-def download(output, *, attempts=6, retry_delay=15, max_seconds=3600, source_date="", resolve_only=False):
-    source_url = source_url_for_date(source_date)
+def download(output, *, attempts=6, retry_delay=15, max_seconds=3600, source_date="", resolve_only=False, region="japan"):
+    source_url = source_url_for_date(source_date, region)
     logging.info("取得対象: %s（日付指定: %s）", source_url, source_date or "なし・latest を使用")
-    logging.info("全国データの取得を開始します（全体の上限 %s 秒）", max_seconds)
+    logging.info("PBF の取得を開始します（全体の上限 %s 秒）", max_seconds)
     deadline = time.monotonic() + max_seconds
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -230,7 +245,7 @@ def download(output, *, attempts=6, retry_delay=15, max_seconds=3600, source_dat
             if not retry:
                 reason = "再試行対象外" if not isinstance(exc, RETRY_ERRORS) else (
                     "時間制限" if remaining <= 0 else "試行回数の上限")
-                logging.error("全国データの取得を終了します（%s）", reason)
+                logging.error("PBF の取得を終了します（%s）", reason)
                 raise
             delay = min(retry_delay, remaining)
             logging.warning("%.1f 秒待って再試行します (%s/%s)", delay, attempt + 2, attempts)
@@ -241,7 +256,8 @@ def download(output, *, attempts=6, retry_delay=15, max_seconds=3600, source_dat
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=Path("build/japan-latest.osm.pbf"))
+    parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--region", choices=tuple(SOURCES), default="japan")
     parser.add_argument("--source-date", default="", help="取得対象日 YYYY-MM-DD。未指定は latest")
     parser.add_argument("--max-seconds", type=int, default=3600)
     parser.add_argument("--resolve-only", action="store_true", help="取得元情報だけを確認し、PBF 本体は取得しない")
@@ -249,11 +265,12 @@ def main():
     if args.max_seconds <= 0:
         parser.error("--max-seconds は正の整数で指定してください")
     try:
-        source_url_for_date(args.source_date)
+        source_url_for_date(args.source_date, args.region)
     except ValueError as exc:
         parser.error(str(exc))
-    source = download(args.output, max_seconds=args.max_seconds, source_date=args.source_date,
-                      resolve_only=args.resolve_only)
+    output = args.output or Path("build") / ("japan-latest.osm.pbf" if args.region == "japan" else f"{args.region}.osm.pbf")
+    source = download(output, max_seconds=args.max_seconds, source_date=args.source_date,
+                      resolve_only=args.resolve_only, region=args.region)
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
             for key, value in cache_values(source).items():

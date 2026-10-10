@@ -30,7 +30,7 @@ jobs:
   generate:
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 150
     outputs:
       tag: ${{ steps.review.outputs.tag }}
       sha256: ${{ steps.review.outputs.sha256 }}
@@ -81,6 +81,62 @@ jobs:
         with:
           path: points/osm-peaks/build/japan-latest.osm.pbf
           key: ${{ steps.download.outputs.cache-key }}
+      - name: ロシア極東 PBF の配布日と MD5 を確認
+        id: far-eastern-fed-district-source
+        timeout-minutes: 5
+        env:
+          SOURCE_DATE: ${{ steps.source.outputs.source-date }}
+        run: python -u scripts/download_source.py --region far-eastern-fed-district --resolve-only --max-seconds 240 --source-date "$SOURCE_DATE"
+      - name: ロシア極東 PBF をキャッシュから復元
+        id: far-eastern-fed-district-cache
+        uses: actions/cache/restore@v4
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          path: points/osm-peaks/build/far-eastern-fed-district.osm.pbf
+          key: ${{ steps.far-eastern-fed-district-source.outputs.cache-key }}
+      - name: ロシア極東 PBF を検証し、未取得なら取得
+        id: far-eastern-fed-district-download
+        timeout-minutes: 20
+        env:
+          SOURCE_DATE: ${{ steps.source.outputs.source-date }}
+        run: python -u scripts/download_source.py --region far-eastern-fed-district --output build/far-eastern-fed-district.osm.pbf --max-seconds 900 --source-date "$SOURCE_DATE"
+      - name: 検証済みのロシア極東 PBF を次回用に保存
+        if: steps.far-eastern-fed-district-cache.outputs.cache-hit != 'true' || steps.far-eastern-fed-district-source.outputs.cache-key != steps.far-eastern-fed-district-download.outputs.cache-key
+        uses: actions/cache/save@v4
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          path: points/osm-peaks/build/far-eastern-fed-district.osm.pbf
+          key: ${{ steps.far-eastern-fed-district-download.outputs.cache-key }}
+      - name: 韓国 PBF の配布日と MD5 を確認
+        id: south-korea-source
+        timeout-minutes: 5
+        env:
+          SOURCE_DATE: ${{ steps.source.outputs.source-date }}
+        run: python -u scripts/download_source.py --region south-korea --resolve-only --max-seconds 240 --source-date "$SOURCE_DATE"
+      - name: 韓国 PBF をキャッシュから復元
+        id: south-korea-cache
+        uses: actions/cache/restore@v4
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          path: points/osm-peaks/build/south-korea.osm.pbf
+          key: ${{ steps.south-korea-source.outputs.cache-key }}
+      - name: 韓国 PBF を検証し、未取得なら取得
+        id: south-korea-download
+        timeout-minutes: 20
+        env:
+          SOURCE_DATE: ${{ steps.source.outputs.source-date }}
+        run: python -u scripts/download_source.py --region south-korea --output build/south-korea.osm.pbf --max-seconds 900 --source-date "$SOURCE_DATE"
+      - name: 検証済みの韓国 PBF を次回用に保存
+        if: steps.south-korea-cache.outputs.cache-hit != 'true' || steps.south-korea-source.outputs.cache-key != steps.south-korea-download.outputs.cache-key
+        uses: actions/cache/save@v4
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          path: points/osm-peaks/build/south-korea.osm.pbf
+          key: ${{ steps.south-korea-download.outputs.cache-key }}
       - name: 配布ファイルと manifest を生成
         id: build
         run: |

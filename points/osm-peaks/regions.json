@@ -1,0 +1,57 @@
+[
+  {
+    "id": "kunashiri",
+    "name": "国後島",
+    "source": "far-eastern-fed-district",
+    "bbox": [
+      145.35,
+      43.65,
+      146.65,
+      44.6
+    ]
+  },
+  {
+    "id": "etorofu",
+    "name": "択捉島",
+    "source": "far-eastern-fed-district",
+    "bbox": [
+      146.75,
+      44.35,
+      149.0,
+      45.55
+    ]
+  },
+  {
+    "id": "shikotan",
+    "name": "色丹島",
+    "source": "far-eastern-fed-district",
+    "bbox": [
+      146.5,
+      43.65,
+      146.95,
+      43.95
+    ]
+  },
+  {
+    "id": "habomai",
+    "name": "歯舞群島",
+    "source": "far-eastern-fed-district",
+    "bbox": [
+      145.85,
+      43.3,
+      146.5,
+      43.65
+    ]
+  },
+  {
+    "id": "takeshima",
+    "name": "竹島",
+    "source": "south-korea",
+    "bbox": [
+      131.84,
+      37.22,
+      131.89,
+      37.26
+    ]
+  }
+]

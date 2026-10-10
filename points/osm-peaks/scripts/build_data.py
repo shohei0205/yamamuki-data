@@ -21,10 +21,12 @@ if __package__:
     from scripts.release_channels import download_url
     from scripts.graphics import validate_graphics
     from scripts.point_tags import validate_tags
+    from scripts.source_regions import SOURCES, REGIONS, in_source_region, region_for
 else:
     from release_channels import download_url
     from graphics import validate_graphics
     from point_tags import validate_tags
+    from source_regions import SOURCES, REGIONS, in_source_region, region_for
 
 
 SOURCE_URL = "https://download.geofabrik.de/asia/japan-latest.osm.pbf"
@@ -74,7 +76,7 @@ def parse_elevation(raw):
     return value if math.isfinite(value) else None
 
 
-def read_mountains(path):
+def read_mountains(path, *, source=None, allow_empty=False, revisions=None):
     logging.info("抽出したノードを読み取っています: %s", path)
     mountains = {}
     latest_timestamp = None
@@ -87,10 +89,14 @@ def read_mountains(path):
             continue
         if node.tag == "node":
             tags = {tag.attrib["k"]: tag.attrib["v"] for tag in node.findall("tag")}
-            name = tags.get("name:ja", "").strip() or tags.get("name", "").strip()
+            japanese_name = tags.get("name:ja", "").strip()
+            name = japanese_name if source not in (None, "japan") else japanese_name or tags.get("name", "").strip()
             if tags.get("natural") in ("peak", "volcano") and name:
                 osm_id = int(node.attrib["id"])
                 lat, lon = float(node.attrib["lat"]), float(node.attrib["lon"])
+                if source is not None and not in_source_region(source, lat, lon):
+                    root.clear()
+                    continue
                 if osm_id <= 0 or not (-90 <= lat <= 90 and -180 <= lon <= 180):
                     raise ValueError(f"ノード {osm_id} の ID または座標が不正です")
                 if osm_id in mountains:
@@ -99,6 +105,8 @@ def read_mountains(path):
                 if not timestamp:
                     raise ValueError(f"ノード {osm_id} の最終編集日時がありません")
                 timestamp = normalize_timestamp(timestamp)
+                if revisions is not None:
+                    revisions[osm_id] = (int(node.attrib.get("version", "0")), timestamp)
                 latest_timestamp = max(latest_timestamp or timestamp, timestamp)
                 mountains[osm_id] = {
                     "id": str(osm_id),
@@ -116,7 +124,7 @@ def read_mountains(path):
                 if len(mountains) % 5000 == 0:
                     logging.info("名前付きの山頂を %s 件読み取りました", format(len(mountains), ","))
         root.clear()
-    if not mountains:
+    if not mountains and not allow_empty:
         raise ValueError("配布できる山頂がありません")
     logging.info("読み取り完了: %s 件", format(len(mountains), ","))
     logging.info("収録する山頂の最新編集日時: %s", latest_timestamp)
@@ -130,7 +138,7 @@ def normalize_timestamp(value):
     return stamp.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL, channel="stable"):
+def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL, channel="stable", source_pbfs=None):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
         raise ValueError("版は英数字・ピリオド・ハイフン・下線で指定してください")
     target_url = download_url(version, channel)
@@ -173,6 +181,8 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
             "license": "ODbL-1.0",
             "attribution": "© OpenStreetMap contributors",
         }
+        if source_pbfs is not None:
+            manifest["sourcePbfs"] = source_pbfs
         manifest_path = Path(temporary) / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
         archive.replace(output_dir / FILE_NAME)
@@ -181,7 +191,7 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
     return manifest
 
 
-def verified_source_url(pbf):
+def verified_source_url(pbf, region="japan"):
     """保存済みの取得記録と PBF が一致することを確かめる。"""
     pbf = Path(pbf)
     path = Path(str(pbf) + ".source.json")
@@ -191,8 +201,8 @@ def verified_source_url(pbf):
     if not isinstance(source, dict):
         raise ValueError("取得記録がオブジェクトではありません")
     url = source.get("url")
-    if not isinstance(url, str) or not re.fullmatch(r"https://download\.geofabrik\.de/asia/japan-[0-9]{6}\.osm\.pbf", url):
-        raise ValueError("取得記録の URL が日付付き全国 PBF ではありません")
+    if not isinstance(url, str) or not re.fullmatch(re.escape(SOURCES[region]) + r"-[0-9]{6}\.osm\.pbf", url):
+        raise ValueError("取得記録の URL が指定地域の日付付き PBF ではありません")
     if type(source.get("sizeBytes")) is not int or pbf.stat().st_size != source["sizeBytes"]:
         raise ValueError("取得記録と PBF のサイズが一致しません")
     with pbf.open("rb") as stream:
@@ -202,27 +212,55 @@ def verified_source_url(pbf):
     return url
 
 
-def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None, graphics_map=None):
+def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None, graphics_map=None, additional_pbfs=None):
     started = time.monotonic()
     source_url = verified_source_url(pbf)
-    logging.info("全国データの生成を開始します: %s（版 %s）", pbf, version)
-    logging.info("元データの日時を確認しています")
-    # ダウンロード時刻ではなく、元の PBF が収録している OSM の日時を使う。
-    timestamp = subprocess.check_output(
-        ["osmium", "fileinfo", "-g", "header.option.osmosis_replication_timestamp", str(pbf)],
-        text=True,
-    ).strip()
-    timestamp = normalize_timestamp(timestamp)
-    logging.info("元データの日時: %s", timestamp)
+    inputs = {"japan": Path(pbf)}
+    if additional_pbfs is not None:
+        if set(additional_pbfs) != set(SOURCES) - {"japan"}:
+            raise ValueError("ロシア極東と韓国の PBF を両方指定してください")
+        inputs.update(additional_pbfs)
+    merged, revisions, source_pbfs = {}, {}, []
     with tempfile.TemporaryDirectory() as temporary:
-        extracted = Path(temporary) / "mountains.osm"
-        logging.info("osmium で山頂・火山ノードを抽出しています")
-        subprocess.run(
-            ["osmium", "tags-filter", str(pbf), "n/natural=peak,volcano", "--omit-referenced", "--progress", "-o", str(extracted)],
-            check=True,
-        )
-        logging.info("osmium の抽出完了")
-        mountains, latest_timestamp = read_mountains(extracted)
+        for region, input_pbf in inputs.items():
+            url = source_url if region == "japan" else verified_source_url(input_pbf, region)
+            # 取得対象日をそろえ、別の日付のキャッシュを混ぜない。
+            if url[-14:] != source_url[-14:]:
+                raise ValueError("追加 PBF と全国 PBF の配布日が一致しません")
+            timestamp = normalize_timestamp(subprocess.check_output(
+                ["osmium", "fileinfo", "-g", "header.option.osmosis_replication_timestamp", str(input_pbf)],
+                text=True,
+            ).strip())
+            extracted = Path(temporary) / f"{region}.osm"
+            subprocess.run(
+                ["osmium", "tags-filter", str(input_pbf), "n/natural=peak,volcano",
+                 "--omit-referenced", "--progress", "-o", str(extracted)], check=True,
+            )
+            node_revisions = {}
+            rows, latest = read_mountains(extracted, source=None if region == "japan" else region,
+                                         allow_empty=region != "japan", revisions=node_revisions)
+            if latest is not None and latest > timestamp:
+                raise ValueError(f"{region} の山頂の編集日時が PBF の基準日時より新しくなっています")
+            info = (json.loads(Path(str(input_pbf) + ".source.json").read_text(encoding="utf-8"))
+                    if additional_pbfs is not None else {"url": url})
+            source_pbfs.append({**info, "sourceTimestamp": timestamp})
+            logging.info("取得元 %s: %s、基準日時 %s、対象山頂 %s 件", region, url, timestamp, len(rows))
+            for row in rows:
+                key = row["osmId"]
+                revision = node_revisions[key]
+                if key in merged and revision == revisions[key] and row != merged[key]:
+                    raise ValueError(f"同じ版のノード {key} の内容が取得元によって異なります")
+                if key not in merged or revision > revisions[key]:
+                    merged[key], revisions[key] = row, revision
+        mountains = [merged[key] for key in sorted(merged)]
+        latest_timestamp = max(revision[1] for revision in revisions.values())
+        timestamp = max(info["sourceTimestamp"] for info in source_pbfs)
+        if additional_pbfs is not None:
+            for region in REGIONS:
+                count = sum(region_for(row["latitude"], row["longitude"]) == region for row in mountains)
+                logging.info("追加範囲 %s: %s 件", region["name"], count)
+                if region["id"] in ("kunashiri", "etorofu") and count == 0:
+                    raise ValueError(f"{region['name']} の名前付き山頂が 0 件です")
         if graphics_map is not None:
             mappings = json.loads(Path(graphics_map).read_text(encoding="utf-8"))
             if not isinstance(mappings, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in mappings.items()):
@@ -233,7 +271,8 @@ def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None
                     if not re.fullmatch(r"[a-z][a-z0-9_-]*", asset_id) or graphics_directory is None:
                         raise ValueError("画像の対応表と SVG の保存先を確認してください")
                     mountain["graphic"] = {"svg": (Path(graphics_directory) / f"{asset_id}.svg").read_text(encoding="utf-8")}
-        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel)
+        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel,
+                                      source_pbfs=source_pbfs if additional_pbfs is not None else None)
     logging.info("全国データの生成完了（経過 %.1f 秒）", time.monotonic() - started)
     return manifest
 
@@ -245,10 +284,13 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=Path("dist"))
     parser.add_argument("--version", required=True)
     parser.add_argument("--channel", choices=("stable", "dev"), default=os.environ.get("RELEASE_CHANNEL", "stable"))
+    parser.add_argument("--far-eastern-pbf", type=Path, default=Path("build/far-eastern-fed-district.osm.pbf"))
+    parser.add_argument("--south-korea-pbf", type=Path, default=Path("build/south-korea.osm.pbf"))
     parser.add_argument("--graphics-directory", type=Path)
     parser.add_argument("--graphics-map", type=Path)
     args = parser.parse_args()
-    manifest = build(args.pbf, args.output_dir, args.version, channel=args.channel, graphics_directory=args.graphics_directory, graphics_map=args.graphics_map)
+    manifest = build(args.pbf, args.output_dir, args.version, channel=args.channel, graphics_directory=args.graphics_directory, graphics_map=args.graphics_map,
+                     additional_pbfs={"far-eastern-fed-district": args.far_eastern_pbf, "south-korea": args.south_korea_pbf})
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
 
 
