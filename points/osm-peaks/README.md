@@ -250,7 +250,7 @@ osmId がない行では `note` の山名・別名を完全一致で照合する
 | `supplements.json` | 全タグ・補正・除外と、ファイル全体の出典一覧 |
 | `supplement-manifest.json` | 上記の元データと補足の取得先・サイズ・SHA-256、Release の版、出典・ライセンス |
 
-補足用 manifest の形式は [版1](../../schemas/manifest/osm-peaks-supplement-v1.schema.json)。`base` と `supplements` にそれぞれ `fileName`・`downloadUrl`・`sizeBytes`・`sha256` を記載し、`distributionSha256` で既存の配布 gzip と結び付ける。`dataSchemaVersion` は元データの版、`sources` は補足の出典一覧。トップレベルの OSM の `license`・`attribution` も保持する。補足 manifest は Release に添付し、Pages の既存 manifest の参照先は変更しない。
+補足用 manifest の形式は [版1](../../schemas/manifest/supplement-v1.schema.json)。`base` と `supplements` にそれぞれ `fileName`・`downloadUrl`・`sizeBytes`・`sha256` を記載し、`distributionSha256` で既存の配布 gzip と結び付ける。`dataSchemaVersion` は元データの版、`sources` は補足の出典一覧。トップレベルの OSM の `license`・`attribution` も保持する。補足 manifest は Release に添付し、Pages の既存 manifest の参照先は変更しない。
 
 公開前にすべての添付を再取得し、サイズ・ハッシュ・URL・版・出典が一致することと、元データへ補足を適用して配布データを再現できることを検査する。補足のない過去の Release も検証できる。補足関連の添付が一部しかない Release は公開しない。
 
