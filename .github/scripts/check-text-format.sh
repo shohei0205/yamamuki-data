@@ -2,7 +2,7 @@
 # 改行コードと BOM が .gitattributes / .editorconfig の指定どおりかを確かめる。
 # - リポジトリに入っているテキストファイルは改行が LF(.bat もリポジトリ内は LF で、チェックアウト時に CRLF になる)
 # - Markdown は BOM 付き。ただしスキルの SKILL.md は BOM なし
-# - CSV は BOM 付き。それ以外のテキストファイルは BOM なし
+# - Markdown 以外のテキストファイルは BOM なし
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -28,10 +28,8 @@ while IFS= read -r path; do
       [[ "$head3" == "$bom" ]] && { echo "::error file=$path::SKILL.md には BOM を付けないでください。"; failed=1; } ;;
     *.md)
       [[ "$head3" != "$bom" ]] && { echo "::error file=$path::Markdown は UTF-8 BOM 付きで保存してください。"; failed=1; } ;;
-    *.csv)
-      [[ "$head3" != "$bom" ]] && { echo "::error file=$path::CSV は UTF-8 BOM 付きで保存してください。"; failed=1; } ;;
     *)
-      [[ "$head3" == "$bom" ]] && { echo "::error file=$path::Markdown と CSV 以外には BOM を付けないでください。"; failed=1; } ;;
+      [[ "$head3" == "$bom" ]] && { echo "::error file=$path::Markdown 以外には BOM を付けないでください。"; failed=1; } ;;
   esac
 done < <(git ls-files)
 
