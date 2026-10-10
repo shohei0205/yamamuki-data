@@ -80,16 +80,16 @@
       "pattern": "\\S",
       "description": "データセットの表示名。新規生成時に記載する。"
     },
-    "tagSources": {
-      "type": "array",
-      "description": "地点補足対応表ごとの出典と利用条件。タグなしの補足は name にファイル名の拡張子を除いた名前を記載する。",
-      "items": {
+    "supplementSources": {
+      "type": "object",
+      "description": "補足 JSON の sources に登録した出典 ID と出典情報。タグ名・ファイル名とは独立。",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^\\S(?:.*\\S)?$"
+      },
+      "additionalProperties": {
         "type": "object",
         "properties": {
-          "tag": {
-            "type": "string",
-            "pattern": "\\S"
-          },
           "source": {
             "type": "string"
           },
@@ -101,25 +101,9 @@
           },
           "changes": {
             "type": "string"
-          },
-          "name": {
-            "type": "string",
-            "pattern": "\\S"
           }
         },
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "required": [
-              "tag"
-            ]
-          },
-          {
-            "required": [
-              "name"
-            ]
-          }
-        ]
+        "additionalProperties": false
       }
     }
   },

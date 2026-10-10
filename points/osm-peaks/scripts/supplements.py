@@ -16,6 +16,15 @@ def text(value):
     return isinstance(value, str) and bool(value) and value == value.strip()
 
 
+def validate_supplement_sources(sources):
+    if not isinstance(sources, dict):
+        raise ValueError("supplementSources は出典 ID と出典情報の対応にしてください")
+    for identifier, metadata in sources.items():
+        if not text(identifier) or not isinstance(metadata, dict) or set(metadata) - METADATA or any(not isinstance(value, str) for value in metadata.values()):
+            raise ValueError("supplementSources の出典 ID または出典情報が不正です")
+    return sources
+
+
 def validate_supplements(data):
     if not isinstance(data, dict) or set(data) - {"schemaVersion", "sources", "points"} or type(data.get("schemaVersion")) is not int or data["schemaVersion"] != 1:
         raise ValueError("地点補足 JSON の schemaVersion は 1 にしてください")

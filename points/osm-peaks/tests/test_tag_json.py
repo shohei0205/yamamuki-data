@@ -65,8 +65,8 @@ class TagJsonTests(unittest.TestCase):
         sources = apply_tag_jsons(self.points, self.tags)
         self.assertEqual(sources, [{"name": "よみがな補足", "source": "確認資料"}])
         self.assertNotIn("tags", self.points[0])
-        from scripts.tag_json import validate_tag_sources
-        validate_tag_sources(sources)
+        from scripts.tag_json import validate_legacy_sources
+        validate_legacy_sources(sources)
 
     def test_conflicting_readings_are_atomic(self):
         self.tag_json([{"osmId": 204683948, "note": "羊蹄山", "nameReading": "ようていざん"}])
@@ -182,17 +182,17 @@ class TagJsonTests(unittest.TestCase):
 
         self.assertEqual(manifest["license"], "ODbL-1.0")
         self.assertEqual(manifest["attribution"], "© OpenStreetMap contributors")
-        self.assertEqual(manifest["tagSources"], [{"name": "よみがな補足", "source": "よみがな資料", "license": "CC0-1.0"}, {"tag": "日本百名山", "source": "固定リンク", "license": "CC BY-SA 4.0", "attribution": "投稿者", "changes": "ID を追加"}, {"tag": "花の百名山", "source": "別の出典", "license": "CC BY 4.0"}])
+        self.assertEqual(manifest["supplementSources"], {"よみがな補足": { "source": "よみがな資料", "license": "CC0-1.0"}, "日本百名山": { "source": "固定リンク", "license": "CC BY-SA 4.0", "attribution": "投稿者", "changes": "ID を追加"}, "花の百名山": { "source": "別の出典", "license": "CC BY 4.0"}})
 
 
         from scripts.check_release import validate
-        self.assertEqual(validate(self.root / "dist")[0]["tagSources"], manifest["tagSources"])
+        self.assertEqual(validate(self.root / "dist")[0]["supplementSources"], manifest["supplementSources"])
         saved_manifest = json.loads((self.root / "dist/manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(saved_manifest["tagSources"], manifest["tagSources"])
+        self.assertEqual(saved_manifest["supplementSources"], manifest["supplementSources"])
 
-    def test_manifest_tag_sources_validation(self):
-        from scripts.tag_json import validate_tag_sources
-        validate_tag_sources([{"tag": "分類", "source": "出典", "license": "CC BY-SA 4.0"}])
+    def test_legacy_sources_validation(self):
+        from scripts.tag_json import validate_legacy_sources
+        validate_legacy_sources([{"tag": "分類", "source": "出典", "license": "CC BY-SA 4.0"}])
         for sources in [None, {}, [{"tag": "分類", "name": "補足"}], [{"name": ""}], [{"tag": "分類", "license": []}], [{"tag": "分類"}, {"tag": "分類"}], [{"tag": ""}], [{"tag": "分類", "unknown": "値"}]]:
             with self.subTest(sources=sources), self.assertRaises(ValueError):
-                validate_tag_sources(sources)
+                validate_legacy_sources(sources)

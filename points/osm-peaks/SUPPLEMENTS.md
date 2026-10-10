@@ -67,4 +67,4 @@ osmId がない行では `note` の山名・別名を完全一致で照合する
 | 霧島山 | 韓国岳 |
 | 宮ノ浦岳 | 宮之浦岳 |
 
-山名一覧の出典・ライセンス・投稿者への帰属と、OpenStreetMap の出典・ライセンスは JSON 内に記録している。生成時は manifest.json の `tagSources` に引き継がれる。
+山名一覧の出典・ライセンス・投稿者への帰属と、OpenStreetMap の出典・ライセンスは JSON 内に記録している。生成時は manifest.json の `supplementSources` に引き継がれる。

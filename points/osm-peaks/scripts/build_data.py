@@ -22,13 +22,13 @@ if __package__:
     from scripts.graphics import validate_graphics
     from scripts.point_tags import validate_tags
     from scripts.tag_json import apply_tag_jsons
-    from scripts.supplements import DEFAULT_SUPPLEMENTS, read_supplements, apply_supplements, write_companions
+    from scripts.supplements import DEFAULT_SUPPLEMENTS, read_supplements, apply_supplements, write_companions, validate_supplement_sources
 else:
     from release_channels import download_url
     from graphics import validate_graphics
     from point_tags import validate_tags
     from tag_json import apply_tag_jsons
-    from supplements import DEFAULT_SUPPLEMENTS, read_supplements, apply_supplements, write_companions
+    from supplements import DEFAULT_SUPPLEMENTS, read_supplements, apply_supplements, write_companions, validate_supplement_sources
 
 
 SOURCE_URL = "https://download.geofabrik.de/asia/japan-latest.osm.pbf"
@@ -134,7 +134,9 @@ def normalize_timestamp(value):
     return stamp.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL, channel="stable", tag_sources=None):
+def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL, channel="stable", supplement_sources=None):
+    if supplement_sources is not None:
+        validate_supplement_sources(supplement_sources)
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
         raise ValueError("版は英数字・ピリオド・ハイフン・下線で指定してください")
     target_url = download_url(version, channel)
@@ -177,8 +179,8 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
             "license": "ODbL-1.0",
             "attribution": "© OpenStreetMap contributors",
         }
-        if tag_sources:
-            manifest["tagSources"] = tag_sources
+        if supplement_sources:
+            manifest["supplementSources"] = supplement_sources
         manifest_path = Path(temporary) / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
         archive.replace(output_dir / FILE_NAME)
@@ -231,8 +233,11 @@ def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None
         mountains, latest_timestamp = read_mountains(extracted)
         # 画像も元データに含め、補足適用前の値を別添付として保存する。
         supplements = read_supplements(supplements_path) if tags_directory is None else None
-        tag_sources = ([{"name": name, **metadata} for name, metadata in supplements.get("sources", {}).items()]
-                       if supplements is not None else apply_tag_jsons(mountains, tags_directory))
+        if supplements is not None:
+            supplement_sources = supplements.get("sources", {})
+        else:
+            supplement_sources = {row.get("name", row.get("tag")): {key: value for key, value in row.items() if key not in ("name", "tag")}
+                                  for row in apply_tag_jsons(mountains, tags_directory)}
         if graphics_map is not None:
             mappings = json.loads(Path(graphics_map).read_text(encoding="utf-8"))
             if not isinstance(mappings, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in mappings.items()):
@@ -246,7 +251,7 @@ def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None
         original = mountains
         if supplements is not None:
             mountains = apply_supplements(original, supplements)
-        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel, tag_sources=tag_sources)
+        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel, supplement_sources=supplement_sources)
         if supplements is not None:
             write_companions(output_dir, original, supplements, manifest)
     logging.info("全国データの生成完了（経過 %.1f 秒）", time.monotonic() - started)

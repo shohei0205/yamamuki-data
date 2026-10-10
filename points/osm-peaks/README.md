@@ -227,7 +227,7 @@ OpenStreetMap 由来のデータは **© OpenStreetMap contributors** を表示�
 | ファイル | 内容 |
 |---|---|
 | `osm-peaks.json.gz` | 補足マージ済みの地点データ。アプリが取得する唯一の地点 JSON |
-| `manifest.json` | アプリ向けの取得先・サイズ・ハッシュ。`tagSources` に補足の全出典を記録 |
+| `manifest.json` | アプリ向けの取得先・サイズ・ハッシュ。`supplementSources` に補足の全出典を記録 |
 | `osm-peaks-source.json.gz` | 補足マージ前のオリジナル地点データ。OSM からの変換処理は適用済み。確認・編集用 |
 | `supplements.json` | 全タグ・補正・除外と、ファイル全体の出典一覧 |
 | `supplement-manifest.json` | 上記の元データと補足の取得先・サイズ・SHA-256、Release の版、出典・ライセンス |

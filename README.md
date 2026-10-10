@@ -70,16 +70,14 @@ release_tools/     データ種別共通の公開入口
 | `sourceUrl` | string | 任意 | 元データの取得・参照 URL。特定できない場合は省略 |
 | `license` | string | 必須 | データセットの利用条件。OSM 由来では `ODbL-1.0` |
 | `attribution` | string | 必須 | 表示すべき出典。OSM 由来では `© OpenStreetMap contributors` |
-| `tagSources` | array | 任意 | 地点補足対応表ごとの出典情報を持つオブジェクトの配列。各属性は下表を参照 |
+| `supplementSources` | object | 任意 | 補足 JSON の `sources` と同じ、出典 ID と出典情報の対応。各属性は下表を参照 |
 
-地点補足対応表を使って生成した場合は、補足 JSON の `sources` に登録された出典情報を `tagSources` の別々の要素に保存する。出典 ID ごとに保持し、トップレベルの OSM の出典・ライセンスは上書きしない。対応表がない場合は `tagSources` を省略する。項目名はタグ専用だった時点から維持しており、よみがな・別名だけの補足もここに集約する。
+補足 JSON の `sources` に登録された出典情報を `supplementSources` にそのまま保存する。出典 ID はオブジェクトのキーとして保持し、タグ名やファイル名とは独立して扱う。出典情報がない場合は省略する。トップレベルの `sourceUrl`・`license`・`attribution` は元データの出典として保持する。
 
-`tagSources` の各要素は次の属性を持つ。`tag` と `name` のいずれか一方が必須。単一の補足 JSON から生成する場合は、`sources` の出典 ID を `name` に記録し、各出典に記載された属性を引き継ぐ。すべて文字列とし、対応表の識別名は配列内で重複させない。
+各出典 ID の値は、次の任意の文字列属性を持つオブジェクトとする。地点や補足項目ごとの出典は指定しない。
 
 | 属性 | 必須 | 内容・記載例 |
 |---|---|---|
-| `tag` | タグありの場合 | 対象の分類名。地点 JSON の `tags` に追加する値と同じ名前（例: `日本百名山`） |
-| `name` | 出典 ID を記録する場合 | 補足 JSON の `sources` に登録した出典 ID（例: `日本百名山`） |
 | `source` | 任意 | 一覧の作成に使った資料の名称・参照 URL。Wikipedia なら記事名と参照した版の固定リンクを記載する |
 | `license` | 任意 | 出典の資料に適用されるライセンスの名称・版・説明ページの URL（例: `CC BY-SA 4.0 https://creativecommons.org/licenses/by-sa/4.0/`） |
 | `attribution` | 任意 | 出典の利用条件に従って表示する著作者名・クレジット（例: `Wikipedia「日本百名山」の投稿者`） |

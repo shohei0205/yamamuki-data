@@ -105,13 +105,22 @@ class SupplementTests(unittest.TestCase):
         assets['assets'].pop()
         with patch.object(release_data,'gh',return_value=json.dumps(assets)),self.assertRaises(ValueError):release_data.fetch('osm-peaks-test',self.root)
 
+    def test_supplement_sources_validation(self):
+        from scripts.supplements import validate_supplement_sources
+        self.assertEqual(validate_supplement_sources({}), {})
+        validate_supplement_sources({'資料': {'source': '資料 URL', 'license': 'CC0'}})
+        for sources in [None, [], {'': {}}, {' 資料': {}}, {'資料': []}, {'資料': {'tag': '分類'}}, {'資料': {'license': []}}]:
+            with self.subTest(sources=sources), self.assertRaises(ValueError):
+                validate_supplement_sources(sources)
+
     def test_build_default_path_generates_complete_companion_set(self):
         from scripts.build_data import build
         path=self.root/'input-supplements.json'
         path.write_text(json.dumps(self.data,ensure_ascii=False),encoding='utf-8')
         with patch('scripts.build_data.verified_source_url',return_value='https://example.com/source'), patch('scripts.build_data.subprocess.check_output',return_value='2026-10-01T00:00:00Z'), patch('scripts.build_data.subprocess.run'), patch('scripts.build_data.read_mountains',return_value=(deepcopy(self.points),'2026-10-01T00:00:00Z')):
             manifest=build(self.root/'source.pbf',self.root/'dist','test',supplements_path=path)
-        self.assertEqual(manifest['tagSources'],[{'name':'資料',**self.data['sources']['資料']}])
+        self.assertEqual(manifest['supplementSources'],self.data['sources'])
+        self.assertNotIn('tagSources',manifest)
         with gzip.open(self.root/'dist/osm-peaks.json.gz','rt',encoding='utf-8') as f:
             integrated=json.load(f)
         validate_companions(self.root/'dist',manifest,integrated)

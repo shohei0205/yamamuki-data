@@ -12,7 +12,7 @@ import re
 from scripts.build_data import FILE_NAME, MAX_SIZE_BYTES
 from scripts.graphics import validate_graphics
 from scripts.point_tags import validate_tags
-from scripts.tag_json import validate_tag_sources
+from scripts.supplements import validate_supplement_sources
 from scripts.supplements import validate_companions
 from scripts.release_channels import download_url, release_tag
 
@@ -37,8 +37,8 @@ def validate(directory, *, tag=None, channel="stable"):
     manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         raise ValueError("manifest がオブジェクトではありません")
-    if "tagSources" in manifest:
-        validate_tag_sources(manifest["tagSources"])
+    if "supplementSources" in manifest:
+        validate_supplement_sources(manifest["supplementSources"])
     count_key = "pointCount" if manifest.get("schemaVersion") == 5 else "mountainCount"
     for key in (count_key, "sizeBytes", "uncompressedSizeBytes"):
         if type(manifest.get(key)) is not int or manifest[key] <= 0:

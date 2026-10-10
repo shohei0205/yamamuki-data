@@ -383,7 +383,7 @@ manifest は [リポジトリ共通仕様](../README.md#manifestjson) に従い�
 
 地点の補足情報は一つの JSON ファイルにまとめ、`schemaVersion`・`points` と、任意の出典一覧 `sources` を持つ。地点ごとにタグ・表示名・よみがな・別名・除外を指定する。[補足 JSON の形式](#補足-json-の形式) と [スキーマ](../schemas/points/supplements-v1.schema.json) を参照する。生成処理への組み込みと対応表の置き場所は、データセットごとの README に記載する。
 
-対応表を使って生成する場合は、各補足 JSON の出典情報を manifest.json の `tagSources` にまとめる。タグなしの補足は、ファイル名を `name` に記載する。元の地点データの出典とライセンスも残す。各属性の意味は [manifest の共通仕様](../README.md#項目) を参照する。タグと出典情報はいずれも任意項目の追加で、地点データと manifest のスキーマの版は 5 のままとする。
+対応表を使って生成する場合は、補足 JSON の `sources` を manifest.json の `supplementSources` にそのまま記録する。出典 ID はタグ名やファイル名とは独立して扱う。元の地点データの出典とライセンスも残す。各属性の意味は [manifest の共通仕様](../README.md#項目) を参照する。タグと出典情報はいずれも任意項目の追加で、地点データと manifest のスキーマの版は 5 のままとする。
 
 ## リリース済みアプリ向けの互換データ
 

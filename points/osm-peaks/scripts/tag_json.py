@@ -12,21 +12,21 @@ DEFAULT_OUTPUT_DIRECTORY = Path(__file__).resolve().parents[1] / "build" / "tags
 METADATA_KEYS = ("source", "license", "attribution", "changes")
 
 
-def validate_tag_sources(sources):
+def validate_legacy_sources(sources):
     if not isinstance(sources, list):
-        raise ValueError("tagSources は配列にしてください")
+        raise ValueError("旧形式の出典一覧 は配列にしてください")
     seen = set()
     for source in sources:
         if not isinstance(source, dict) or set(source) - {"tag", "name", *METADATA_KEYS}:
-            raise ValueError("tagSources の項目が不正です")
+            raise ValueError("旧形式の出典一覧 の項目が不正です")
         if ("tag" in source) == ("name" in source):
-            raise ValueError("tagSources は tag と name のいずれか一方を指定してください")
+            raise ValueError("旧形式の出典一覧 は tag と name のいずれか一方を指定してください")
         tag = source.get("tag", source.get("name"))
         if not isinstance(tag, str) or not tag.strip() or tag != tag.strip() or tag in seen:
-            raise ValueError("tagSources の識別名が不正または重複しています")
+            raise ValueError("旧形式の出典一覧 の識別名が不正または重複しています")
         seen.add(tag)
         if any(not isinstance(source[key], str) for key in METADATA_KEYS if key in source):
-            raise ValueError("tagSources の出典・ライセンス等は文字列にしてください")
+            raise ValueError("旧形式の出典一覧 の出典・ライセンス等は文字列にしてください")
 
 
 def read_tag_json(path, *, complete=False):
