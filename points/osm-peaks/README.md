@@ -73,7 +73,9 @@ Pages の初期設定、サイト全体の一覧・履歴の引き継ぎ、配�
 
 ## 作り方
 
-[地点 / OSM山頂：生成・検査](https://github.com/shohei0205/yamamuki-data/actions/workflows/publish-data.yml) は、毎月 1 日の UTC 03:23（日本時間 12:23）に `main` で動く。GitHub の混雑で開始が遅れる場合がある。
+利用開始時に、リポジトリの Settings → Pages → Build and deployment の Source を **GitHub Actions** にし、`github-pages` 環境の配置元として `main` と `dev` を許可する。
+
+[地点 / OSM山頂：生成・検査](https://github.com/shohei0205/yamamuki-data/actions/workflows/publish-data.yml) は、手動で実行したときだけ動く。以前は毎月 1 日の UTC 03:23（日本時間 12:23）に `main` で定期実行していたが、配信事故（[#44](https://github.com/shohei0205/yamamuki-data/issues/44)）を受けた運用の見直しが終わるまで止めている。
 
 手動で動かすときは Actions の「地点 / OSM山頂：生成・検査」→「Run workflow」で正式版なら `main`、開発版なら `dev` を選ぶ。この2つ以外のブランチでは公開しない。公開ジョブの `GITHUB_TOKEN` に `contents: write`・`pages: write`・`id-token: write` を付与し、追加のトークンは使わない。
 
