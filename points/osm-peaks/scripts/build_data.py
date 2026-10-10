@@ -21,10 +21,14 @@ if __package__:
     from scripts.release_channels import download_url
     from scripts.graphics import validate_graphics
     from scripts.point_tags import validate_tags
+    from scripts.tag_json import apply_tag_jsons
+    from scripts.supplements import DEFAULT_SUPPLEMENTS, read_supplements, apply_supplements, write_companions, validate_supplement_sources
 else:
     from release_channels import download_url
     from graphics import validate_graphics
     from point_tags import validate_tags
+    from tag_json import apply_tag_jsons
+    from supplements import DEFAULT_SUPPLEMENTS, read_supplements, apply_supplements, write_companions, validate_supplement_sources
 
 
 SOURCE_URL = "https://download.geofabrik.de/asia/japan-latest.osm.pbf"
@@ -130,7 +134,9 @@ def normalize_timestamp(value):
     return stamp.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL, channel="stable"):
+def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL, channel="stable", supplement_sources=None):
+    if supplement_sources is not None:
+        validate_supplement_sources(supplement_sources)
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
         raise ValueError("版は英数字・ピリオド・ハイフン・下線で指定してください")
     target_url = download_url(version, channel)
@@ -173,6 +179,8 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
             "license": "ODbL-1.0",
             "attribution": "© OpenStreetMap contributors",
         }
+        if supplement_sources:
+            manifest["supplementSources"] = supplement_sources
         manifest_path = Path(temporary) / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
         archive.replace(output_dir / FILE_NAME)
@@ -202,7 +210,7 @@ def verified_source_url(pbf):
     return url
 
 
-def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None, graphics_map=None):
+def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None, graphics_map=None, tags_directory=None, supplements_path=DEFAULT_SUPPLEMENTS):
     started = time.monotonic()
     source_url = verified_source_url(pbf)
     logging.info("全国データの生成を開始します: %s（版 %s）", pbf, version)
@@ -223,6 +231,13 @@ def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None
         )
         logging.info("osmium の抽出完了")
         mountains, latest_timestamp = read_mountains(extracted)
+        # 画像も元データに含め、補足適用前の値を別添付として保存する。
+        supplements = read_supplements(supplements_path) if tags_directory is None else None
+        if supplements is not None:
+            supplement_sources = supplements.get("sources", {})
+        else:
+            supplement_sources = {row.get("name", row.get("tag")): {key: value for key, value in row.items() if key not in ("name", "tag")}
+                                  for row in apply_tag_jsons(mountains, tags_directory)}
         if graphics_map is not None:
             mappings = json.loads(Path(graphics_map).read_text(encoding="utf-8"))
             if not isinstance(mappings, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in mappings.items()):
@@ -233,7 +248,12 @@ def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None
                     if not re.fullmatch(r"[a-z][a-z0-9_-]*", asset_id) or graphics_directory is None:
                         raise ValueError("画像の対応表と SVG の保存先を確認してください")
                     mountain["graphic"] = {"svg": (Path(graphics_directory) / f"{asset_id}.svg").read_text(encoding="utf-8")}
-        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel)
+        original = mountains
+        if supplements is not None:
+            mountains = apply_supplements(original, supplements)
+        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel, supplement_sources=supplement_sources)
+        if supplements is not None:
+            write_companions(output_dir, original, supplements, manifest)
     logging.info("全国データの生成完了（経過 %.1f 秒）", time.monotonic() - started)
     return manifest
 
@@ -247,8 +267,9 @@ def main():
     parser.add_argument("--channel", choices=("stable", "dev"), default=os.environ.get("RELEASE_CHANNEL", "stable"))
     parser.add_argument("--graphics-directory", type=Path)
     parser.add_argument("--graphics-map", type=Path)
+    parser.add_argument("--supplements", type=Path, default=DEFAULT_SUPPLEMENTS)
     args = parser.parse_args()
-    manifest = build(args.pbf, args.output_dir, args.version, channel=args.channel, graphics_directory=args.graphics_directory, graphics_map=args.graphics_map)
+    manifest = build(args.pbf, args.output_dir, args.version, channel=args.channel, graphics_directory=args.graphics_directory, graphics_map=args.graphics_map, supplements_path=args.supplements)
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
 
 

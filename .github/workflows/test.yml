@@ -19,6 +19,20 @@ jobs:
       - name: 公開入口と実行概要のテスト
         run: python -m unittest release_tools.tests.test_publish_reviewed release_tools.tests.test_workflow_summary -v
 
+  points-viewer:
+    name: 地点 / 共通ビューア
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 共通ビューアのテスト
+        run: python -m unittest discover -s points/tests -v
+
   osm-peaks:
     name: 地点 / OSM山頂
     runs-on: ubuntu-24.04
@@ -51,16 +65,18 @@ jobs:
   test:
     # dev の保護設定が要求するチェック名を維持する。
     name: test
-    needs: [common, osm-peaks, test-points]
+    needs: [common, points-viewer, osm-peaks, test-points]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - name: すべてのテスト結果を確認
         env:
           COMMON_RESULT: ${{ needs.common.result }}
+          POINTS_VIEWER_RESULT: ${{ needs.points-viewer.result }}
           OSM_PEAKS_RESULT: ${{ needs.osm-peaks.result }}
           TEST_POINTS_RESULT: ${{ needs.test-points.result }}
         run: |
           test "$COMMON_RESULT" = success
+          test "$POINTS_VIEWER_RESULT" = success
           test "$OSM_PEAKS_RESULT" = success
           test "$TEST_POINTS_RESULT" = success

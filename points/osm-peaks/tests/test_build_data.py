@@ -224,7 +224,9 @@ class BuildDataTests(unittest.TestCase):
         subprocess.run(["osmium", "cat", str(self.xml), "-o", str(pbf),
                         f"--output-header=osmosis_replication_timestamp={TIMESTAMP}"], check=True)
         self.save_fixture_source(pbf)
-        manifest = build(pbf, self.root / "output", "test")
+        supplements = self.root / "supplements.json"
+        supplements.write_text(json.dumps({"schemaVersion": 1, "sources": {}, "points": []}), encoding="utf-8")
+        manifest = build(pbf, self.root / "output", "test", supplements_path=supplements)
         self.assertEqual("https://download.geofabrik.de/asia/japan-260929.osm.pbf", manifest["sourceUrl"])
         self.assertEqual(4, manifest["pointCount"])
         self.assertEqual(TIMESTAMP, manifest["sourceTimestamp"])
