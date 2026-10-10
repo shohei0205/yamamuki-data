@@ -17,6 +17,7 @@ from urllib.request import Request, urlopen
 from urllib.parse import urlsplit
 
 from scripts.build_data import FILE_NAME
+from scripts.supplements import COMPANION_FILES
 from scripts.check_release import assess, report, validate
 from scripts.release_channels import check_branch, check_tag, prefix, release_tag, download_url
 
@@ -38,6 +39,13 @@ def endpoint(suffix):
 def fetch(tag, directory, channel="stable"):
     check_tag(tag, channel)
     gh("release", "download", tag, "--pattern", "manifest.json", "--pattern", FILE_NAME, "--dir", str(directory))
+    assets = json.loads(gh("release", "view", tag, "--json", "assets"))["assets"]
+    names = {asset["name"] for asset in assets}
+    if any(name in names for name in COMPANION_FILES):
+        if not all(name in names for name in COMPANION_FILES):
+            raise ValueError("Release の補足ファイルがそろっていません")
+        patterns = [part for name in COMPANION_FILES for part in ("--pattern", name)]
+        gh("release", "download", tag, *patterns, "--dir", str(directory))
     return validate(directory, tag=tag, channel=channel)
 
 
@@ -350,6 +358,7 @@ def prepare(directory, channel="stable"):
         write_report(notes, report(current, previous, warnings).replace("## データの検査結果", "## データの検査結果（生成後）", 1))
         logging.info("下書き Release を作成し、SVG を内蔵したデータと manifest をアップロードします: %s", tag)
         url = gh("release", "create", tag, str(Path(directory) / FILE_NAME), str(Path(directory) / "manifest.json"),
+           *[str(Path(directory) / name) for name in COMPANION_FILES if (Path(directory) / name).exists()],
            "--draft", "--target", os.environ["GITHUB_SHA"], "--title", tag,
            "--notes-file", str(notes), f"--prerelease={str(channel == 'dev').lower()}").strip()
         append_summary(f"\n## 生成したリリース\n\n[生成したリリースを開く]({url})\n\n"

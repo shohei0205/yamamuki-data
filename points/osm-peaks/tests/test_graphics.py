@@ -54,6 +54,8 @@ class GraphicsTests(unittest.TestCase):
                 self.assertNotIn("graphics", entry["manifest"])
 
     def test_build_applies_point_to_asset_map(self):
+        tags = self.root / "tags"
+        tags.mkdir()
         mappings = self.root / "points.json"
         mappings.write_text('{"1":"fuji"}', encoding="utf-8")
         rows = [{key: value for key, value in self.rows[0].items() if key != "graphic"}]
@@ -66,7 +68,7 @@ class GraphicsTests(unittest.TestCase):
                 patch("scripts.build_data.subprocess.check_output", return_value="2026-09-29T20:00:00Z"), \
                 patch("scripts.build_data.subprocess.run"), \
                 patch("scripts.build_data.read_mountains", side_effect=read_fixture):
-            manifest = build(self.root / "unused.pbf", self.output, "test", graphics_directory=self.source, graphics_map=mappings)
+            manifest = build(self.root / "unused.pbf", self.output, "test", graphics_directory=self.source, graphics_map=mappings, tags_directory=tags)
         self.assertEqual({"svg": SVG.decode("utf-8")}, rows[0]["graphic"])
         self.assertNotIn("graphics", manifest)
 
@@ -117,10 +119,10 @@ class GraphicsTests(unittest.TestCase):
             with self.subTest(contents=contents[:80]), self.assertRaises((ValueError, ET.ParseError)):
                 validate_svg(contents)
 
-    def test_fetch_only_downloads_data_and_manifest(self):
+    def test_fetch_old_release_downloads_data_and_manifest(self):
         manifest = self.generate()
-        with patch.object(release_data, "gh") as download, \
+        with patch.object(release_data, "gh", return_value='{"assets":[]}') as download, \
                 patch.object(release_data, "validate", return_value=(manifest, self.rows)):
             release_data.fetch("osm-peaks-test", self.root / "download")
-            self.assertEqual(1, download.call_count)
+            self.assertEqual(2, download.call_count)
             self.assertNotIn("graphic-fuji.svg", download.call_args.args)

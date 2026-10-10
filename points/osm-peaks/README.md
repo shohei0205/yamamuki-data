@@ -1,4 +1,4 @@
-﻿# 山頂データ
+﻿# OpenStreetMap の山頂データ
 
 [地点データの共通仕様に戻る](../README.md)
 
@@ -23,7 +23,7 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 
 地点ごとの JSON の形式は [地点データの共通仕様](../README.md#地点の形式)を参照する。OSM ノード ID の昇順に並べる。ふりがな・別名・解説リンク・標高は、以下の OSM タグから変換する。
 
-- `nameReading`: `name:ja-Hira` のふりがな。前後の空白を除く。未登録・空欄は `null`。推測による補完はしない。
+- `nameReading`: `name:ja-Hira` のふりがな。前後の空白を除く。未登録・空欄は `null`。推測による補完はしない。補足 JSON に指定があれば、そのよみがなを適用する。
 - `aliases`: `alt_name:ja`、`alt_name` の順に集めた別名の配列。セミコロンで分割し、前後の空白・空欄・表示名と同じ名前・重複を除く。未登録は `[]`。
 - `wikipediaUrl`: `wikipedia` の「言語:記事名」を HTTPS URL に変換した解説へのリンク。日本語・空白・記号を URL 用に変換し、記事内の節にも対応する。未登録・形式不正は `null`。
 - `wikidataUrl`: `wikidata` の項目 ID（例: `Q39231`）から作った HTTPS リンク。未登録・形式不正は `null`。
@@ -36,10 +36,7 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 
 ## 置き場所
 
-[Releases](https://github.com/shohei0205/yamamuki-data/releases) に、次の 2 ファイルを公開する。
-
-- [https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json)
-- データ本体は manifest の `downloadUrl` から取得する。
+[Releases](https://github.com/shohei0205/yamamuki-data/releases) に `manifest.json` と `osm-peaks.json.gz` を添付する。最新版を示す manifest と公開履歴は、冒頭の表にある Pages の URL から取得できる。
 
 manifest の項目・型・版の履歴は [リポジトリ共通の manifest.json](../../README.md#manifestjson) を参照する。
 
@@ -60,7 +57,7 @@ manifest の項目・型・版の履歴は [リポジトリ共通の manifest.js
 
 元データと収録ノードの日時は必須とし、欠落・形式不正・収録ノードの日時が元データより新しい場合は生成・公開を止める。元データの日付はダウンロード日時ではない。同じ元データで再実行しても配布の `version` は変わる。
 
-Release のタイトルとタグは同じ値とし、正式版は `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>` とする。アプリは manifest の `downloadUrl` から対応するファイルを取得する。最新版の参照用 manifest は GitHub Pages に置き、データ本体は各版に保存する。アプリでは展開前にサイズと SHA-256 を検証する。既存アプリへの読み込み機能の組み込みは、アプリ側の別作業となる。
+Release のタイトルとタグは同じ値とし、正式版は `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>` とする。取得・検証の契約は [共通の読み込みと公開](../../README.md#読み込みと公開) に従う。
 
 山頂データは正式版と開発版の参照先を分ける。公開済みの地点データ一覧は [地点カタログ](../README.md#公開データのカタログ) を参照する。リポジトリ全体の `releases/latest` は使わない。
 
@@ -69,38 +66,17 @@ Release のタイトルとタグは同じ値とし、正式版は `osm-peaks-<ve
 | 正式版（`stable`） | [https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json) | `osm-peaks-<version>` |
 | 開発版（`dev`） | [https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json) | `osm-peaks-dev-<version>` |
 
-開発版の manifest は [https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json)、本体は manifest の `downloadUrl` から取得する。正式版と開発版で manifest の形式は共通とする。配布先はアプリ側で選ぶ。開発版が無い・取得できない場合に正式版へ自動で切り替えない。開発版の履歴 Release には GitHub の Pre-release を付ける。
+正式版と開発版で manifest の形式は共通とし、開発版の履歴 Release は Pre-release とする。アプリで配布先を選ぶときの扱いは [地点カタログの説明](../README.md#公開データのカタログ) を参照する。
 
 件数・更新日時の比較、初回の手動確認、異常時の下書き保留、手動公開、参照先の復旧は配布先ごとに独立して行う。開発版を正式版の比較基準にせず、開発版の公開で正式版の参照先を更新しない。タグの衝突を防ぐため、`latest` と `dev-` で始まる版名は予約する。
 
-履歴版の公開後、Actions で manifest のサイトを生成し、`upload-pages-artifact` と `deploy-pages` で GitHub Pages に直接配置する。ソースは `main`・`dev` に置き、配布専用ブランチや生成物のコミットは作らない。
-
-サイトには更新処理用の `catalog.json`（schemaVersion 1、`manifests` にパスと manifest の対応を保存）も置く。既存の一覧からサイト全体を作り直し、選択した配布先だけを置き換えるため、他方の配布先・将来の別種別を維持できる。アプリはこれまでどおり各パスの `manifest.json` を使い、一覧を読む必要はない。
-
-自動公開と手動公開は、正式版・開発版共通の `publish-data-pages` グループで直列化する。公開先の一覧と配置した内容が一致するまで最大55秒待ち、反映を確認してからジョブを完了する。一覧の取得や検証に失敗した場合は配置しない。404 の場合も通常の公開では停止し、初期化を明示した初回の手動公開だけが一覧を新しく作る。
-
-ファイルを削除してから上げ直す時間は生じない。キャッシュにより更新前の manifest が返る場合はあるが、履歴版を残すため、その manifest でも対応するデータ本体を取得できる。アプリは通信や検証に失敗したら保存済みデータを維持して再試行する。
-
-参照先の更新に失敗した場合は、公開済みの同じ Release の URL またはタグを手動公開ワークフローに指定して復旧する。履歴版のデータ本体は再生成・再アップロードしない。公開済みの履歴 Release には不変化を適用できる。
+Pages の初期設定、サイト全体の一覧・履歴の引き継ぎ、配置確認、参照先の復旧は [共通の Pages 配置](../../README.md#pages-への配置と参照先の復旧) を参照する。
 
 山頂の生成時は地点の `id` と `osmId` の両方を出力し、OSM ノード ID の数値順に並べる。取得できない任意情報は`null`・`[]` として出力する。検査では任意項目の省略を許可し、`osmId` がある場合は `id` との一致を確認する。
 
 ## 公開履歴
 
-Pages の [https://shohei0205.github.io/yamamuki-data/points/osm-peaks/history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/history.json)（正式版）と [https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/history.json)（開発版）に、最新版として公開した記録を古い順で残す。ファイルは `schemaVersion: 1` と `entries` の配列を持つ。
-
-| 項目 | 内容 |
-|---|---|
-| `kind` | 通常の公開は `publication`。履歴記録を始める時点の既存の最新版は `snapshot` |
-| `publishedAt` | 公開処理で履歴を生成した UTC 日時。配置の完了日時ではない。既存の最新版は日時を推測せず `null` |
-| `version` | データの版 |
-| `releaseUrl` | データ本体を保存した Release のページ |
-| `downloadUrl` | データ本体の取得 URL |
-| `actionsRunUrl` | 公開した Actions の実行 URL（再実行番号付き）。既存の最新版や手元での生成は `null` |
-
-再公開や古い版への差し戻しも、その都度追加する。下書きで保留された場合や、Pages の配置に進む前に失敗した場合は公開サイトに履歴を追加しない。Pages の配置後に反映確認だけが失敗した場合は、配置された履歴が残る。
-
-履歴も `catalog.json` に含め、次回の配置で他の配布先の履歴と一緒に引き継ぐ。配置後は manifest と履歴の両方が生成内容と一致することを確認する。各版のアセット本体は Release に残し、Pages に複製しない。記録を始める前の公開日時や再公開の経緯は復元しない。
+山頂の公開履歴は、正式版の [history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/history.json) と開発版の [history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/history.json) に保存する。項目と記録のタイミングは [共通の公開履歴](../../README.md#公開履歴) を参照する。
 
 ## 作り方
 
@@ -190,24 +166,21 @@ Actions では取得前に配布元の日付付き URL・サイズ・MD5 を確�
 
 ### Summary で実行内容を確認する
 
-生成・検査では取得対象日、手動公開では入力した URL またはタグ・SHA-256・確認内容と公開理由・Pages 初期化の指定を、処理の冒頭に Summary へ表示する。共通してブランチ・イベント・実行者・実行回数・配布先も表示する。空欄の場合は latest の取得・SHA-256 の自動取得・理由の未記入を明記する。
+ブランチ・実行者・入力項目・公開先などの共通表示は [実行概要の確認](../../README.md#実行概要の確認) を参照する。山頂の生成では取得対象日を表示し、空欄なら latest を使うことを明記する。
 
-実際の件数などは「データの検査結果（生成後）」と「データの検査結果（公開前の再検査）」で区別する。生成が完了すると「生成したリリース」に、GitHub が返した実際の URL・タグ・下書き保留か自動公開へ進むかを表示する。下書きの `untagged-...` URL もそのまま使う。公開が完了した場合は公開ジョブの Summary に公開後の URL も表示する。単体テストのダミーデータは Summary に出さない。過去の実行に保存された Summary はこの変更では書き換わらない。
+実際の件数などは「データの検査結果（生成後）」と「データの検査結果（公開前の再検査）」で区別する。生成が完了すると「生成したリリース」に、GitHub が返した実際の URL・タグ・下書き保留か自動公開へ進むかを表示する。下書きの `untagged-...` URL もそのまま使う。
 
 ### 確認済みの下書きを手動公開する
 
-1. Releases の下書きにある検査結果と必要なデータの差分を確認する。
-2. データ種別共通の Actions「共通：確認済みデータを公開」→「Run workflow」で正式版なら `main`、開発版なら `dev` を選ぶ。
-3. `tag` 欄に確認した Release ページの URL を貼り付け、確認内容・公開理由は必要に応じて入力する（空欄でも実行可能）。`untagged-...` を含む下書きの URL も使える。対象タグ（正式版は `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>`）も指定できる。`sha256` 欄は空欄でよく、Release の検査結果から自動取得する。配布先とタグ、Pre-release の有無が一致しない場合は公開を止める。
-4. 下書きの2ファイルを取得・再検証し、検査結果に記録された SHA-256（明示した場合は入力値）と一致した場合に、警告を承認して公開する。公開者と理由を Release の説明に残し、空欄の場合は「理由の記入なし」と記録する。
+[共通の手動公開手順](../../README.md#確認済みデータの公開) に従い、確認した山頂 Release の URL またはタグを指定する。正式版のタグは `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>` とする。
 
-Pages に初めて配置するときだけ、`initialize_pages` を選ぶ。以後は選ばず、公開済みの一覧を引き継いで他の配布先を維持する。
+山頂の手動公開では下書きの 2 ファイルを取得・再検証し、検査結果に記録された SHA-256（明示した場合は入力値）と一致した場合に、件数の減少などの警告を承認して公開する。検査結果の SHA-256 が欠けている場合は、確認した値を明示する。自動公開では生成ジョブが渡す SHA-256 を必須とする。
 
-検査結果の SHA-256 が欠けている場合は自動取得できないため、確認した値を明示する。自動公開では引き続き生成ジョブが渡す SHA-256 を必須とする。
+再ダウンロード・再生成・アセットの差し替えは行わない。前回公開版との比較もやり直すため、通信失敗や前回ファイルの破損で比較できない場合は手動公開も停止する。形式変更時はアプリ側が新形式に対応しているかも確認する。
 
-この処理では再ダウンロード・再生成・アセットの差し替えを行わない。前回公開版との比較もやり直すため、通信失敗や前回ファイルの破損で比較できない場合は手動公開も停止する。自動公開と手動公開のジョブは共通の実行グループで直列に動かす。
+#### Release を削除した後に公開を再開する
 
-検証を通すため、下書きは GitHub の公開ボタンから直接公開せず、このワークフローを使う。アプリ側が新形式に対応しているかの確認も、形式変更時の手動公開で行う。
+公開サイトの manifest が指す山頂 Release を削除した場合、手動公開で「Pages の配布サイトを初期化」を指定する。前回の Release が存在しない場合に限り、前回との比較を省いて確認済みデータの公開を再開する。新しいデータ本体のサイズ・ハッシュ・件数などの検査は行う。通信失敗やデータ破損は初期化を指定しても停止する。他のデータと配布先は引き継ぐ。
 
 ### 手元での生成
 
@@ -259,8 +232,46 @@ python -m unittest discover -s tests -v
 
 ## ライセンス
 
-出典・利用条件は [README のライセンス](../../README.md#ライセンス)を参照。
+OpenStreetMap 由来のデータは **© OpenStreetMap contributors** を表示し、[Open Database License（ODbL）1.0](https://opendatacommons.org/licenses/odbl/1-0/) に従って利用・再配布する。[OpenStreetMap の著作権とライセンス](https://www.openstreetmap.org/copyright)を参照。
 
-### Releaseを削除した後に公開を再開する
+## 地点の補足対応表
 
-公開サイトのmanifestが指すReleaseを削除した場合、手動公開で「Pagesの配布サイトを初期化」を指定する。前回のReleaseが存在しない場合に限り、前回との比較を省いて確認済みデータの公開を再開する。新しいデータ本体のサイズ・ハッシュ・件数などの検査は行う。通信失敗やデータ破損は初期化を指定しても停止する。他のデータと配布先は引き継ぐ。
+[supplements.json](supplements.json) 一つで全タグと補正を管理する。生成時は osmId で対応付け、タグの追記・表示名とよみがなの補正・別名の追加と削除・地点の除外を適用する。`--supplements` で別のファイルを指定できる。不正値・未知の ID・重複 ID・想定値の不一致は生成エラーにする。修正理由と管理用メモは補足ファイルに保持し、統合した地点データには注入しない。
+
+日本百名山の 100 地点も同じ補足 JSON に収録する。共通形式は [補足 JSON の形式](../README.md#補足-json-の形式)、編集操作は [ビューアの編集手順](../README.md#補足を編集する) を参照する。
+
+### 山名と osmId の補完
+
+```bash
+PYTHONPATH=points/osm-peaks python -m scripts.supplements points/osm-peaks/supplements.json --points osm-peaks-source.json.gz --output points/osm-peaks/build/supplements.json
+```
+
+osmId がない行では `note` の山名・別名を完全一致で照合する。osmId があり `note` が空なら地点名をメモに補う。候補が複数ある場合は未解決とし、終了コード 1 を返す。形式の不備は終了コード 2。入力は変更せず、補足・補正・出典情報を出力へ引き継ぐ。補完には補足適用前の元データを使う。
+
+### 出典の管理
+
+出典・ライセンス・著作者表示・加工内容は、補足 JSON の `sources` に記録する。生成時は manifest.json の `supplementSources` に引き継がれる。詳しい属性は [補足 JSON の形式](../README.md#補足-json-の形式) を参照する。
+
+### タグごとの記録
+
+タグごとの記録は `notes/<タグ名>.md` に置く。新しいタグを追加するときも同じ命名にする。
+
+日本百名山の採用方針・地点の見直し・確認待ち事項・外部資料との照合結果は、[日本百名山タグの採用方針と検証記録](notes/日本百名山.md) にまとめる。現在の採用 osmId は [supplements.json](supplements.json) で管理する。
+
+### アプリ用データと確認・編集用の添付
+
+アプリは、現状の manifest の参照先から補足マージ済みの `osm-peaks.json.gz` 一つを取得する。ファイル名・取得 URL・manifest の版5を維持し、Android・iOS 側で補足をマージする処理は追加しない。マージ前のオリジナル JSON.gz と補足は、確認・編集用として同じ Release に添付する。
+
+| ファイル | 内容 |
+|---|---|
+| `osm-peaks.json.gz` | 補足マージ済みの地点データ。アプリが取得する唯一の地点 JSON |
+| `manifest.json` | アプリ向けの取得先・サイズ・ハッシュ。`supplementSources` に補足の全出典を記録 |
+| `osm-peaks-source.json.gz` | 補足マージ前のオリジナル地点データ。OSM からの変換処理は適用済み。確認・編集用 |
+| `supplements.json` | 全タグ・補正・除外と、ファイル全体の出典一覧 |
+| `supplement-manifest.json` | 上記の元データと補足の取得先・サイズ・SHA-256、Release の版、出典・ライセンス |
+
+補足用 manifest の形式は [版1](../../schemas/manifest/osm-peaks-supplement-v1.schema.json)。`base` と `supplements` にそれぞれ `fileName`・`downloadUrl`・`sizeBytes`・`sha256` を記載し、`distributionSha256` で既存の配布 gzip と結び付ける。`dataSchemaVersion` は元データの版、`sources` は補足の出典一覧。トップレベルの OSM の `license`・`attribution` も保持する。補足 manifest は Release に添付し、Pages の既存 manifest の参照先は変更しない。
+
+公開前にすべての添付を再取得し、サイズ・ハッシュ・URL・版・出典が一致することと、元データへ補足を適用して配布データを再現できることを検査する。補足のない過去の Release も検証できる。補足関連の添付が一部しかない Release は公開しない。
+
+由来を確認・編集するときは、ビューアで `osm-peaks-source.json.gz` を開き、続けて `supplements.json` を開く。統合済みの `osm-peaks.json.gz` だけでは補正前の値や項目ごとの由来は復元できない。確認・編集用の添付と補足 manifest はアプリの読み込み対象にしない。

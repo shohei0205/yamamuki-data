@@ -28,6 +28,8 @@ class SourceRegionTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        self.supplements = self.root / "supplements.json"
+        self.supplements.write_text('{"schemaVersion":1,"points":[]}', encoding="utf-8")
         self.pbfs, self.xmls = {}, {}
         fixtures = {
             "japan": node(1,35.36,138.72,"富士山"),
@@ -57,7 +59,7 @@ class SourceRegionTests(unittest.TestCase):
     def generate(self):
         with patch("scripts.build_data.subprocess.check_output",return_value=STAMP), \
                 patch("scripts.build_data.subprocess.run",side_effect=self.extract):
-            return build(self.pbfs["japan"],self.root/"out","test",additional_pbfs=self.additional())
+            return build(self.pbfs["japan"],self.root/"out","test",additional_pbfs=self.additional(), supplements_path=self.supplements)
 
     def rows(self):
         return json.loads(gzip.decompress((self.root/"out"/FILE_NAME).read_bytes()))
@@ -99,6 +101,18 @@ class SourceRegionTests(unittest.TestCase):
             # 日本 PBF では従来どおり name も使う。
             self.assertEqual(3, len(read_mountains(path)[0]))
 
+    def test_supplements_apply_after_sources_are_combined(self):
+        from scripts.supplements import validate_companions
+        supplement = {"schemaVersion": 1, "sources": {"資料": {"source": "試験用資料"}},
+                      "points": [{"osmId": 2, "aliases": ["追加した別名"], "expected": {"name": "爺爺岳"}}]}
+        self.supplements.write_text(json.dumps(supplement, ensure_ascii=False), encoding="utf-8")
+        manifest = self.generate()
+        rows = self.rows()
+        self.assertEqual(["追加した別名"], next(row for row in rows if row["osmId"] == 2)["aliases"])
+        self.assertEqual(3, len(manifest["sourcePbfs"]))
+        self.assertEqual(supplement["sources"], manifest["supplementSources"])
+        validate_companions(self.root / "out", manifest, rows)
+
     def test_zero_peaks_in_south_korea_is_valid(self):
         self.xmls["south-korea"].write_text('<osm/>',encoding="utf-8")
         self.assertEqual(3,self.generate()["pointCount"])
@@ -136,7 +150,7 @@ class SourceRegionTests(unittest.TestCase):
         with patch("scripts.build_data.subprocess.run",side_effect=subprocess.CalledProcessError(1,"osmium")), \
                 patch("scripts.build_data.subprocess.check_output",return_value=STAMP):
             with self.assertRaises(subprocess.CalledProcessError):
-                build(self.pbfs["japan"],self.root/"out","next",additional_pbfs=self.additional())
+                build(self.pbfs["japan"],self.root/"out","next",additional_pbfs=self.additional(), supplements_path=self.supplements)
         self.assertEqual(original,(self.root/"out"/FILE_NAME).read_bytes())
 
     def test_duplicate_uses_newer_node_version(self):
@@ -161,7 +175,7 @@ class SourceRegionTests(unittest.TestCase):
         with patch("scripts.build_data.subprocess.check_output",side_effect=[STAMP,"2026-09-30T00:00:00Z"]), \
                 patch("scripts.build_data.subprocess.run",side_effect=self.extract):
             with self.assertRaisesRegex(ValueError,"基準日時"):
-                build(self.pbfs["japan"],self.root/"out","test",additional_pbfs=self.additional())
+                build(self.pbfs["japan"],self.root/"out","test",additional_pbfs=self.additional(), supplements_path=self.supplements)
 
     def test_invalid_provenance_is_rejected_on_publication(self):
         original=self.generate()
@@ -225,6 +239,6 @@ class SourceRegionTests(unittest.TestCase):
             subprocess.run(["osmium","cat",str(self.xmls[source]),"-o",str(self.pbfs[source]),
                             f"--output-header=osmosis_replication_timestamp={STAMP}"],check=True)
             self.save_source(source)
-        manifest=build(self.pbfs["japan"],self.root/"out","test",additional_pbfs=self.additional())
+        manifest=build(self.pbfs["japan"],self.root/"out","test",additional_pbfs=self.additional(), supplements_path=self.supplements)
         self.assertEqual(4,manifest["pointCount"])
         validate(self.root/"out")
