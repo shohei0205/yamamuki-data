@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "osm-peaks 補足 manifest（版1）",
+  "title": "地点補足 manifest（版1）",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -40,7 +40,8 @@
       "additionalProperties": false,
       "properties": {
         "fileName": {
-          "const": "osm-peaks-source.json.gz"
+          "type": "string",
+          "pattern": "^[^/\\\\]+\\.json\\.gz$"
         },
         "downloadUrl": {
           "type": "string",
