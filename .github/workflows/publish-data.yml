@@ -1,9 +1,8 @@
 name: 地点 / OSM山頂：生成・検査
 
+# 毎月の定期実行は止めている（Issue #44 の配信事故を受けた運用の見直し中）。
+# 定期実行は main で動き、Pages 全体を作り直すため、0.5.0 が読む peaks/ を守る仕組みができるまで手動でだけ動かす。
 on:
-  schedule:
-    # 毎月 1 日の日本時間 12:23。
-    - cron: '23 3 1 * *'
   workflow_dispatch:
     inputs:
       source_date:
