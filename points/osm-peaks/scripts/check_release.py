@@ -13,6 +13,7 @@ from scripts.build_data import FILE_NAME, MAX_SIZE_BYTES
 from scripts.graphics import validate_graphics
 from scripts.point_tags import validate_tags
 from scripts.tag_json import validate_tag_sources
+from scripts.supplements import validate_companions
 from scripts.release_channels import download_url, release_tag
 
 
@@ -80,6 +81,7 @@ def validate(directory, *, tag=None, channel="stable"):
     rows = json.loads(raw)
     if not isinstance(rows, list) or not rows or len(rows) != manifest.get(count_key):
         raise ValueError("山の件数が不正です")
+    validate_companions(directory, manifest, rows)
     seen = set()
     for row in rows:
         if not isinstance(row, dict):

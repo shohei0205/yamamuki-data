@@ -1,9 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "タグ別対応表",
+  "title": "地点補足対応表",
   "type": "object",
   "required": [
-    "tag",
     "points"
   ],
   "additionalProperties": false,
@@ -30,8 +29,7 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "osmId",
-          "name"
+          "osmId"
         ],
         "properties": {
           "osmId": {
@@ -39,12 +37,55 @@
             "minimum": 1,
             "maximum": 9007199254740991
           },
-          "name": {
+          "nameReading": {
             "type": "string",
             "pattern": "^\\S(?:.*\\S)?$"
+          },
+          "aliases": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^\\S(?:.*\\S)?$"
+            }
+          },
+          "note": {
+            "type": "string",
+            "description": "対応表を編集する人向けの任意のメモ。地点名の変更や一致判定には使わず、配布する地点データには追加しない。"
           }
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "not": {
+          "required": [
+            "tag"
+          ]
+        }
+      },
+      "then": {
+        "properties": {
+          "points": {
+            "items": {
+              "anyOf": [
+                {
+                  "required": [
+                    "nameReading"
+                  ]
+                },
+                {
+                  "required": [
+                    "aliases"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
 }

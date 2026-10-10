@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "osm-peaks 補足 manifest（版1）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "version",
+    "dataSchemaVersion",
+    "distributionSha256",
+    "base",
+    "supplements",
+    "sources",
+    "license",
+    "attribution"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "dataSchemaVersion": {
+      "const": 5
+    },
+    "distributionSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "base": {
+      "type": "object",
+      "required": [
+        "fileName",
+        "downloadUrl",
+        "sizeBytes",
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "fileName": {
+          "const": "osm-peaks-source.json.gz"
+        },
+        "downloadUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "supplements": {
+      "type": "object",
+      "required": [
+        "fileName",
+        "downloadUrl",
+        "sizeBytes",
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "fileName": {
+          "const": "supplements.json"
+        },
+        "downloadUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "sources": {
+      "$ref": "../points/supplements-v1.schema.json#/properties/sources"
+    },
+    "license": {
+      "type": "string"
+    },
+    "attribution": {
+      "type": "string"
+    }
+  }
+}

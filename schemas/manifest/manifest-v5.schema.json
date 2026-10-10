@@ -82,12 +82,9 @@
     },
     "tagSources": {
       "type": "array",
-      "description": "タグ対応表ごとの出典と利用条件。OSM の出典・ライセンスはトップレベルに記載する。",
+      "description": "地点補足対応表ごとの出典と利用条件。タグなしの補足は name にファイル名の拡張子を除いた名前を記載する。",
       "items": {
         "type": "object",
-        "required": [
-          "tag"
-        ],
         "properties": {
           "tag": {
             "type": "string",
@@ -104,9 +101,25 @@
           },
           "changes": {
             "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "\\S"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "tag"
+            ]
+          },
+          {
+            "required": [
+              "name"
+            ]
+          }
+        ]
       }
     }
   },

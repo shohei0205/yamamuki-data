@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "単一の地点補足 JSON（版1）",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "points"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "sources": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^\\S(?:.*\\S)?$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "license": {
+            "type": "string"
+          },
+          "attribution": {
+            "type": "string"
+          },
+          "changes": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "points": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "osmId"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "osmId": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "note": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^\\S(?:.*\\S)?$"
+          },
+          "nameReading": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\S(?:.*\\S)?$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^\\S(?:.*\\S)?$"
+            }
+          },
+          "aliases": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^\\S(?:.*\\S)?$"
+            }
+          },
+          "aliasesRemove": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^\\S(?:.*\\S)?$"
+            }
+          },
+          "exclude": {
+            "type": "boolean"
+          },
+          "expected": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "nameReading": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "aliases": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "tagsRemove": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^\\S(?:.*\\S)?$"
+            }
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "name"
+            ]
+          },
+          {
+            "required": [
+              "nameReading"
+            ]
+          },
+          {
+            "required": [
+              "tags"
+            ]
+          },
+          {
+            "required": [
+              "aliases"
+            ]
+          },
+          {
+            "required": [
+              "aliasesRemove"
+            ]
+          },
+          {
+            "required": [
+              "exclude"
+            ]
+          },
+          {
+            "required": [
+              "tagsRemove"
+            ]
+          }
+        ],
+        "allOf": [
+          {
+            "if": {
+              "anyOf": [
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "exclude"
+                  ],
+                  "properties": {
+                    "exclude": {
+                      "const": true
+                    }
+                  }
+                },
+                {
+                  "required": [
+                    "nameReading"
+                  ],
+                  "properties": {
+                    "nameReading": {
+                      "type": "null"
+                    }
+                  }
+                },
+                {
+                  "required": [
+                    "aliasesRemove"
+                  ],
+                  "properties": {
+                    "aliasesRemove": {
+                      "minItems": 1
+                    }
+                  }
+                }
+              ]
+            },
+            "then": {
+              "required": [
+                "reason"
+              ],
+              "properties": {
+                "reason": {
+                  "type": "string",
+                  "pattern": "^\\S(?:.*\\S)?$"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "$comment": "osmId の重複、別名の追加・削除の競合、expected と元データの一致は生成処理で検査する。"
+}
