@@ -17,13 +17,40 @@ class ManifestDistributionTests(unittest.TestCase):
 
     def test_baseline_absent_and_unavailable(self):
         with patch.object(release_data, "read_manifest", return_value=None):
-            self.assertIsNone(release_data.previous_release(Path("unused")))
+            self.assertIsNone(release_data.previous_release(Path("unused"), "dev"))
         with patch.object(release_data, "read_manifest", side_effect=RuntimeError("HTTP 403")):
+            with self.assertRaises(RuntimeError):
+                release_data.previous_release(Path("unused"), "dev")
+        with patch.object(release_data, "releases", return_value=[]):
+            self.assertIsNone(release_data.previous_release(Path("unused")))
+        with patch.object(release_data, "releases", side_effect=RuntimeError("HTTP 403")):
             with self.assertRaises(RuntimeError):
                 release_data.previous_release(Path("unused"))
 
+    def test_stable_baseline_is_latest_published_release_without_review(self):
+        def entry(tag, **changes):
+            return dict(dict(tag_name=tag, draft=False, prerelease=False, body="\ufeff## データの検査結果"), **changes)
+        entries = [entry("osm-peaks-20261001T000000Z-1-1"),
+                   entry("osm-peaks-20261003T000000Z-1-1"),
+                   entry("osm-peaks-20261004T000000Z-1-1", body="\ufeff## 要確認\n\n- 件数減少"),
+                   entry("osm-peaks-20261005T000000Z-1-1", draft=True),
+                   entry("osm-peaks-dev-20261006T000000Z-1-1", prerelease=True),
+                   entry("peaks-20261007T000000Z-1-1"),
+                   entry("osm-peaks-20261002T000000Z-1-1")]
+        with patch.object(release_data, "read_manifest") as read, \
+                patch.object(release_data, "releases", return_value=entries), \
+                patch.object(release_data, "fetch", return_value=self.current) as fetch:
+            self.assertEqual(self.current, release_data.previous_release(Path("unused")))
+            # 正式版は Pages を見ない。
+            read.assert_not_called()
+            self.assertEqual(("osm-peaks-20261003T000000Z-1-1", Path("unused/data"), "stable"), fetch.call_args.args)
+        with patch.object(release_data, "releases", return_value=entries[2:6]), \
+                patch.object(release_data, "fetch") as fetch:
+            self.assertIsNone(release_data.previous_release(Path("unused")))
+            fetch.assert_not_called()
+
     def test_baseline_requires_matching_published_release(self):
-        for channel, tag in (("stable", "osm-peaks-test"), ("dev", "osm-peaks-dev-test")):
+        for channel, tag in (("dev", "osm-peaks-dev-test"),):
             entry = dict(tag_name=tag, draft=False, prerelease=channel == "dev")
             with self.subTest(channel=channel), \
                     patch.object(release_data, "read_manifest", return_value=self.current[0]) as read, \
