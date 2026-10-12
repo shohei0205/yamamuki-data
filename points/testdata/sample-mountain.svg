@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>雪をかぶった山</title>
+  <desc>透明な背景に、緑の山と白い雪を描いたサンプル画像。</desc>
+  <path d="M8 112 46 52 66 78 88 42 120 112Z" fill="#7db39a"/>
+  <path d="M16 112 64 16 112 112Z" fill="#176b52"/>
+  <path d="M64 16 43 58 55 52 64 62 73 52 85 58Z" fill="#f4f8f6"/>
+  <path d="M64 62 73 52 85 58 112 112H88Z" fill="#104c3b"/>
+  <path d="M16 112H112" fill="none" stroke="#104c3b" stroke-width="4" stroke-linecap="round"/>
+</svg>
