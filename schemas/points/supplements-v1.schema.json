@@ -129,6 +129,29 @@
               "type": "string",
               "pattern": "^\\S(?:.*\\S)?$"
             }
+          },
+          "graphic": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "required": [
+              "svg"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "svg": {
+                "type": "string",
+                "minLength": 1
+              },
+              "scale": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "exclusiveMinimum": 0
+              }
+            }
           }
         },
         "anyOf": [
@@ -165,6 +188,11 @@
           {
             "required": [
               "tagsRemove"
+            ]
+          },
+          {
+            "required": [
+              "graphic"
             ]
           }
         ],

@@ -26,6 +26,27 @@ assert.throws(()=>applySupplement(base,{...data,points:[{...data.points[0],osmId
         self.assertEqual(result.returncode,0,result.stderr.decode('utf-8',errors='replace'))
 
     @unittest.skipUnless(shutil.which('node'),'Node.js がありません')
+    def test_graphic_deletion_validation_and_export(self):
+        page=(Path(__file__).resolve().parents[1]/'viewer.html').read_text(encoding='utf-8')
+        source=page.split('<script>')[1].split('// 穴のあるポリゴン')[0]
+        source+='function exportSupplement('+page.split('function exportSupplement(',1)[1].split('function refreshSupplement',1)[0]
+        checks=r'''
+const assert=require('node:assert/strict');
+const originalGraphic={svg:'original',scale:2};
+const basePoints=[{osmId:'1',tags:[],source:{graphic:originalGraphic}}];
+const supplementDocument={schemaVersion:1,points:[{osmId:1,graphic:null}]};
+const tagEdits=new Map([[0,{add:new Set(),remove:new Set()}]]);
+assert.equal(applySupplement(basePoints,supplementDocument)[0].graphic,null);
+assert.equal(basePoints[0].source.graphic,originalGraphic);
+assert.equal(exportSupplement().points[0].graphic,null);
+assert.deepEqual(parseSupplement(JSON.stringify(exportSupplement())),supplementDocument);
+for(const graphic of [{},{svg:3},{svg:''},{svg:'x',extra:1},... [0,-1,true,'2',Infinity].map(scale=>({svg:'x',scale}))])assert.throws(()=>validateSupplement({schemaVersion:1,points:[{osmId:1,graphic}]}));
+assert.deepEqual(applySupplement(basePoints,{schemaVersion:1,points:[]})[0].source.graphic,originalGraphic);
+'''
+        result=subprocess.run([shutil.which('node'),'-e',source+checks],capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr.decode('utf-8',errors='replace'))
+
+    @unittest.skipUnless(shutil.which('node'),'Node.js がありません')
     def test_detail_describes_actual_changes(self):
         page=(Path(__file__).resolve().parents[1]/'viewer.html').read_text(encoding='utf-8')
         source='function supplementChangeLines('+page.split('function supplementChangeLines(',1)[1].split('function showSupplementOrigin',1)[0]
@@ -35,6 +56,22 @@ const source={name:'元の山',nameReading:'もと',tags:['残すタグ','旧タ
 const point={source,pointName:'新しい山',nameReading:null,tags:['残すタグ','日本百名山'],aliases:['新別名'],excluded:true};
 assert.deepEqual(supplementChangeLines(point,{reason:'資料を確認'}),['地点名: 元の山 → 新しい山','よみがな: もと → なし（削除）','タグを追加: 日本百名山','タグを削除: 旧タグ','別名を追加: 新別名','別名を削除: 旧別名','表示・配布対象から除外','理由: 資料を確認']);
 assert.deepEqual(supplementChangeLines({source,pointName:source.name,tags:source.tags},{}),['補足による変更なし']);
+'''
+        result=subprocess.run([shutil.which('node'),'-e',source+checks],capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr.decode('utf-8',errors='replace'))
+
+    @unittest.skipUnless(shutil.which('node'),'Node.js がありません')
+    def test_graphic_columns_use_effective_image_and_numeric_scale(self):
+        page=(Path(__file__).resolve().parents[1]/'viewer.html').read_text(encoding='utf-8')
+        source='function pointGraphic('+page.split('function pointGraphic(',1)[1].split('function appendGraphicCells',1)[0]
+        source+='function pointSortKey('+page.split('function pointSortKey(',1)[1].split('function sortPointRows',1)[0]
+        checks=r'''
+const assert=require('node:assert/strict');
+const points=[{source:{graphic:{svg:'original',scale:10}}},{source:{graphic:{svg:'original'}},graphic:{svg:'supplement',scale:2}},{source:{graphic:{svg:'original'}},graphic:null},{source:{graphic:{svg:'default'}}}];
+const sortKeys=new Map();let sortColumn=8;
+assert.equal(pointGraphic(points[0]).svg,'original');assert.equal(pointGraphic(points[1]).svg,'supplement');assert.equal(pointGraphic(points[2]),null);
+assert.deepEqual(points.map((_,index)=>pointSortKey(index)),[10,2,null,1]);
+assert.equal(graphicScaleText({}), '1.0倍');assert.equal(graphicScaleText({scale:2}), '2.0倍');assert.equal(graphicScaleText({scale:1.25}), '1.25倍');
 '''
         result=subprocess.run([shutil.which('node'),'-e',source+checks],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr.decode('utf-8',errors='replace'))

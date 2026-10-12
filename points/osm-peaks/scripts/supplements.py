@@ -6,8 +6,13 @@ import hashlib
 import json
 from pathlib import Path
 
+if __package__:
+    from .graphics import validate_graphics
+else:
+    from graphics import validate_graphics
+
 DEFAULT_SUPPLEMENTS = Path(__file__).resolve().parents[1] / "supplements.json"
-FIELDS = {"name", "nameReading", "aliases", "aliasesRemove", "tags", "tagsRemove", "exclude"}
+FIELDS = {"name", "nameReading", "aliases", "aliasesRemove", "tags", "tagsRemove", "exclude", "graphic"}
 METADATA = {"source", "license", "attribution", "changes"}
 COMPANION_FILES = ("osm-peaks-source.json.gz", "supplements.json", "supplement-manifest.json")
 
@@ -53,6 +58,8 @@ def validate_supplements(data):
             raise ValueError("補正する地点名は空でない文字列にしてください")
         if "nameReading" in row and row["nameReading"] is not None and not text(row["nameReading"]):
             raise ValueError("よみがなは空でない文字列または null にしてください")
+        if "graphic" in row:
+            validate_graphics([row])
         if "exclude" in row and type(row["exclude"]) is not bool:
             raise ValueError("exclude は真偽値にしてください")
         for key in ("tags", "tagsRemove", "aliases", "aliasesRemove"):
@@ -101,12 +108,12 @@ def apply_supplements(points, data):
             actual = point.get(key, [] if key == "aliases" else None)
             if actual != expected:
                 raise ValueError(f"osmId {identifier} の {key} が想定値と異なります。補正内容を確認してください")
-        for key in ("name", "nameReading"):
+        for key in ("name", "nameReading", "graphic"):
             if key in row:
                 if row[key] is None:
                     point.pop(key, None)
                 else:
-                    point[key] = row[key]
+                    point[key] = deepcopy(row[key])
         if "tags" in row or "tagsRemove" in row:
             point["tags"] = list(dict.fromkeys([v for v in (point.get("tags") or []) if v not in row.get("tagsRemove", [])] + row.get("tags", [])))
         if "aliases" in row or "aliasesRemove" in row:

@@ -30,6 +30,34 @@ class SupplementTests(unittest.TestCase):
         self.assertEqual(row['tags'],['分類A','分類B']);self.assertEqual(row['aliases'],['残す別名','追加別名'])
         for key in ['note','reason','references','expected']:self.assertNotIn(key,row)
 
+    def test_graphic_add_replace_remove_and_preserve_original(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M0 0L10 10"/></svg>'
+        graphic = {'svg': svg, 'scale': 1.5}
+        data = {'schemaVersion': 1, 'points': [{'osmId': 1, 'graphic': graphic}]}
+        original = deepcopy(self.points)
+        result = apply_supplements(self.points, data)
+        self.assertEqual(result[0]['graphic'], graphic)
+        result[0]['graphic']['scale'] = 3
+        self.assertEqual(data['points'][0]['graphic']['scale'], 1.5)
+        self.assertEqual(self.points, original)
+        self.points[0]['graphic'] = graphic
+        self.assertEqual(apply_supplements(self.points, {'schemaVersion': 1, 'points': []})[0]['graphic'], graphic)
+        data['points'][0]['graphic'] = {'svg': svg}
+        self.assertEqual(apply_supplements(self.points, data)[0]['graphic'], {'svg': svg})
+        data['points'][0]['graphic'] = None
+        self.assertNotIn('graphic', apply_supplements(self.points, data)[0])
+        self.assertEqual(self.points[0]['graphic'], graphic)
+
+    def test_graphic_rejects_invalid_or_active_svg(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"/>'
+        invalid = [{}, {'svg': 1}, {'svg': ''}, {'svg': svg, 'extra': 1}]
+        invalid += [{'svg': svg, 'scale': scale} for scale in (0, -1, True, '2', float('inf'))]
+        invalid += [{'svg': svg.replace('/>', body + '</svg>')} for body in (
+            '><script/>', '><image href="https://example.com/x"/>', '><path onclick="alert(1)"/>')]
+        for graphic in invalid:
+            with self.subTest(graphic=graphic), self.assertRaises(ValueError):
+                validate_supplements({'schemaVersion': 1, 'points': [{'osmId': 1, 'graphic': graphic}]})
+
     def test_omitted_values_and_empty_arrays_keep_original(self):
         result=apply_supplements(self.points,{'schemaVersion':1,'points':[{'osmId':1,'tags':[],'aliases':[]}]})
         self.assertEqual(result[0]['nameReading'],'誤り');self.assertEqual(result[0]['aliases'],self.points[0]['aliases'])
@@ -74,6 +102,16 @@ class SupplementTests(unittest.TestCase):
         self.assertEqual(companion['sources'],self.data['sources'])
         self.assertIn(manifest['version'],companion['supplements']['downloadUrl'])
         self.assertEqual(read_supplements(self.root/'supplements.json'),self.data)
+
+    def test_companions_reproduce_embedded_graphic(self):
+        graphic = {'svg': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>', 'scale': 1.5}
+        self.data['points'][0]['graphic'] = graphic
+        integrated, manifest, companion = self.distribution()
+        validate_companions(self.root, manifest, integrated)
+        self.assertEqual(integrated[0]['graphic'], graphic)
+        self.assertEqual(read_supplements(self.root/'supplements.json')['points'][0]['graphic'], graphic)
+        with gzip.open(self.root/COMPANION_FILES[0], 'rt', encoding='utf-8') as stream:
+            self.assertNotIn('graphic', json.load(stream)[0])
 
     def test_companion_tampering_missing_and_version_mismatch(self):
         for kind in ['tamper','missing','version','integrated']:
