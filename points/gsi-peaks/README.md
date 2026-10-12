@@ -39,7 +39,36 @@ Windows で公式 CSV の TLS を Python が扱えない場合は、Windows 標�
 | `manifest.json` | 件数、サイズ、ハッシュ、出典、取得した各ファイルの情報 |
 | `report.json` | 収録範囲、読み・標高の件数、資料間の相違、外字による除外 |
 
-manifest の `downloadUrl` は、将来同名の Release に配置する場合の URL。生成コマンドには公開処理はなく、生成データはまだ地点カタログへ登録していない。元データと生成物はコミットしない。
+manifest の `downloadUrl` は、将来同名の Release に配置する場合の URL。生成コマンドには公開処理はなく、生成データはまだ地点カタログへ登録していない。元データと途中生成物はコミットしない。公開用の地点 JSON と出典要約 JSON だけを、次の手順で取り込む。
+
+## 生成済み JSON をコミットして Release に公開する
+
+全国の元データ取得・地点生成は手元で行う。Git に入れる配布データは `points/gsi-peaks/gsi-peaks.json` と、その出典・取得日時の範囲・地点 JSON の SHA-256 を記録した `snapshot.json` だけとする。SQLite、`gsi-cache/`、gzip、全タイルの明細を含む manifest・report はコミットしない。
+
+生成後、次のコマンドで地点 JSON と小さな出典要約を取り込む。
+
+```bash
+python -m release_tools.gsi_peaks snapshot --source build/gsi-national-all
+git add points/gsi-peaks/gsi-peaks.json points/gsi-peaks/snapshot.json
+```
+
+両方を同じコミットで更新する。地点 JSON だけを編集すると SHA-256 が一致せず、公開処理は停止する。元データは手元で保管し、JSON の取り込み後も削除しない。
+
+取り込んだ変更を `dev` または `main` にマージしたあと、Actions の「地点 / 国土地理院山頂：JSON を Release に公開」から「Run workflow」で実行元ブランチを選ぶ。元データの取得・山頂の再抽出・標高補完は行わず、コミット済みの JSON を検証して gzip を作る。実行元が `dev` なら `gsi-peaks-dev-<version>` のプレリリース、`main` なら `gsi-peaks-<version>` の Release を作る。版には UTC 日時・実行番号・再実行番号を使う。
+
+Release の添付ファイルは `gsi-peaks.json`、`gsi-peaks.json.gz`、`manifest.json`、`snapshot.json`。下書きにアップロードしたあと、全ファイルを取り直してバイト列の一致を確認してから公開する。既存の Release は差し替えず、リポジトリ全体の Latest にも設定しない。この Action では Pages の manifest や地点カタログは更新しない。
+
+公開用ファイルの準備だけを手元で確認する場合は、次を実行する。外部通信は行わない。
+
+```bash
+python -m release_tools.gsi_peaks prepare --channel dev --version local-test
+```
+
+既定の出力先は `build/gsi-release/`。公開処理のテストは共通 CI でも実行する。
+
+```bash
+python -m unittest discover -s release_tools/tests -v
+```
 
 ## 全国の自然地名を全取得する
 

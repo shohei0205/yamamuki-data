@@ -199,7 +199,7 @@ CI の「共通：データ処理のテスト」（`.github/workflows/test.yml`�
 
 ## データを追加するとき
 
-`points/<取得元と対象>/` に `README.md`・`scripts/`・`tests/` をまとめる。例えば OSM のランドマークを追加する場合は `points/osm_landmarks/` とし、実装時にこの一覧とルートの一覧を更新する。生成物は各フォルダの `build/`・`dist/` に置き、git に含めない。
+`points/<取得元と対象>/` に `README.md`・`scripts/`・`tests/` をまとめる。例えば OSM のランドマークを追加する場合は `points/osm_landmarks/` とし、実装時にこの一覧とルートの一覧を更新する。生成物は各フォルダの `build/`・`dist/` に置き、git に含めない。例外として、国土地理院版の配布用地点 JSON と出典要約 JSON はコミットする。
 
 manifest は [リポジトリ共通仕様](../formats/manifest.md) に従い、公開 URL・ファイル名・元データの取得方法・公開時の件数基準はデータセットごとに定める。生成・公開処理の共通化は追加データの要件に応じて行う。
 
