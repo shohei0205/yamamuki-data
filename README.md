@@ -28,7 +28,9 @@ release_tools/     データ種別共通の公開入口
 
 ## 配布の方針
 
-生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データとデータ本体は git に含めない。最新版を示す小さな `manifest.json` は、Actions の生成物として GitHub Pages に公開する。
+生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データとデータ本体は git に含めない。開発版の最新版を示す小さな `manifest.json` は、Actions の生成物として GitHub Pages に公開する。
+
+正式版は Release を作るところまでで、Pages には公開しない。アプリ（yamamuki）がどの版を読むかは、yamamuki の PR で Release の manifest を選んで決める。アプリが読んでいる版のデータが消えないよう、公開した Release とその添付ファイルは削除・差し替えしない。
 
 データの種類ごとに公開時期と最新版の参照先を分ける。正式版と開発版も独立して扱い、リポジトリ全体の `releases/latest` はアプリの参照先に使わない。具体的な URL とタグは各データの文書を参照する。
 

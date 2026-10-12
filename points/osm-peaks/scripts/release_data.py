@@ -169,7 +169,35 @@ class MissingPreviousRelease(ValueError):
     """公開サイトが指すReleaseが削除されている。"""
 
 
+REVIEW_HEADING = "## 要確認"
+
+
+def needs_review(release):
+    return (release.get("body") or "").lstrip("\ufeff").startswith(REVIEW_HEADING)
+
+
+def stable_baseline(directory):
+    """正式版は Pages に出さないので、要確認でない最新の正式版 Release と比べる。"""
+    candidates = []
+    for release in releases():
+        if release["draft"] or release["prerelease"] or needs_review(release):
+            continue
+        try:
+            check_tag(release["tag_name"], "stable")
+        except ValueError:
+            continue
+        candidates.append(release["tag_name"])
+    # 版名は生成した UTC 日時で始まるので、タグの順が生成の順になる。
+    if not candidates:
+        return None
+    tag = max(candidates)
+    logging.info("前回の正式版 Release を取得しています: %s", tag)
+    return fetch(tag, directory / "data", "stable")
+
+
 def previous_release(directory, channel="stable"):
+    if channel == "stable":
+        return stable_baseline(directory)
     manifest = read_manifest(channel)
     # 初回公開は、必ず手動確認に回す。
     if manifest is None:
@@ -355,17 +383,29 @@ def prepare(directory, channel="stable"):
             logging.warning("前回公開版を比較できません: %s", exc)
             warnings = ["前回公開版の取得・検証に失敗したため、自動公開しません。Actions のログを確認してください"]
         notes = root / "notes.md"
-        write_report(notes, report(current, previous, warnings).replace("## データの検査結果", "## データの検査結果（生成後）", 1))
-        logging.info("下書き Release を作成し、SVG を内蔵したデータと manifest をアップロードします: %s", tag)
+        contents = report(current, previous, warnings).replace("## データの検査結果", "## データの検査結果（生成後）", 1)
+        stable = channel == "stable"
+        if stable and warnings:
+            # Release 一覧で目に入るよう、要確認の理由を本文の先頭に書く。
+            contents = f"{REVIEW_HEADING}\n\n" + "".join(f"- {warning}\n" for warning in warnings) + "\n" + contents
+        write_report(notes, contents)
+        # 正式版は Pages に出さず、そのまま Release にする。どれをアプリが読むかは yamamuki の PR で決める。
+        state = ["--latest=false"] if stable else ["--draft"]
+        logging.info("%s を作成し、SVG を内蔵したデータと manifest をアップロードします: %s",
+                     "Release" if stable else "下書き Release", tag)
         url = gh("release", "create", tag, str(Path(directory) / FILE_NAME), str(Path(directory) / "manifest.json"),
            *[str(Path(directory) / name) for name in COMPANION_FILES if (Path(directory) / name).exists()],
-           "--draft", "--target", os.environ["GITHUB_SHA"], "--title", tag,
-           "--notes-file", str(notes), f"--prerelease={str(channel == 'dev').lower()}").strip()
+           *state, "--target", os.environ["GITHUB_SHA"], "--title", tag,
+           "--notes-file", str(notes), f"--prerelease={str(not stable).lower()}").strip()
+        if stable:
+            handling = "Release に出しました（要確認。本文の先頭の理由を確認してください）" if warnings else "Release に出しました"
+        else:
+            handling = "下書きで保留（手動確認が必要）" if warnings else "自動公開の段階へ進みます"
         append_summary(f"\n## 生成したリリース\n\n[生成したリリースを開く]({url})\n\n"
                        f"- タグ: `{tag}`\n"
-                       f"- 生成後の扱い: {'下書きで保留（手動確認が必要）' if warnings else '自動公開の段階へ進みます'}\n")
-    output(tag=tag, sha256=current[0]["sha256"], auto_publish=str(not warnings).lower())
-    logging.info("下書きの保存完了: %s（%s）", tag, "要確認・自動公開しません" if warnings else "検査合格・公開段階へ進みます")
+                       f"- 生成後の扱い: {handling}\n")
+    output(tag=tag, sha256=current[0]["sha256"], auto_publish=str(not stable and not warnings).lower())
+    logging.info("Release の保存完了: %s（%s）", tag, "要確認" if warnings else "検査合格")
 
 
 def publish(tag, expected_sha256="", *, manual=False, reason="", channel="stable"):

@@ -88,6 +88,8 @@ Co-authored-by: Codex GPT-6
 - 山頂と地形は公開時期が異なるため、最新版の参照先をデータ種別ごとに分ける。山頂の最新版 manifest は GitHub Pages の `points/osm-peaks/manifest.json`（正式版）と `points/osm-peaks-dev/manifest.json`（開発版）から配り、データ本体は `osm-peaks-<version>` と `osm-peaks-dev-<version>` の Release に置く。リポジトリ全体の `releases/latest` は使わない。Pages は Actions の生成物から直接配置し、配布専用ブランチや生成物のコミットは作らない。アプリへの組み込み時もこの契約に合わせる。公開後に URL やファイル名を変える場合は、yamamuki 側の対応と順番を決める。
 
 - 正式版は `main`、開発版は `dev` のコードから生成・公開する。配布先は実行元ブランチで決め、手動の配布先選択で取り違えないようにする。
+- 正式版の生成は Release を作るところまでで、Pages には公開しない（正式版の `points/osm-peaks/manifest.json` は更新しない）。アプリがどの版を読むかは yamamuki の PR で決める。
+- 公開した Release とその添付ファイルは、削除も差し替えもしない。アプリが読んでいる版のデータが消えるため。直したいときは新しい版を作る。
 - OpenStreetMap のサーバーやデータの配布元は共有の無料サービス。取得の回数や量を増やす変更は避け、増えるときは PR の説明に理由と量の目安を書く。
 
 ## 変更の確かめ方

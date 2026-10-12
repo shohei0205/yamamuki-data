@@ -1,8 +1,11 @@
 name: 地点 / OSM山頂：生成・検査
 
-# 毎月の定期実行は止めている（Issue #44 の配信事故を受けた運用の見直し中）。
-# 定期実行は main で動き、Pages 全体を作り直すため、0.5.0 が読む peaks/ を守る仕組みができるまで手動でだけ動かす。
+# 正式版（main）は Release を作るところまでで、Pages には公開しない。アプリがどの版を読むかは yamamuki の PR で決める。
+# 開発版（dev）は検査に通ったら Pages の points/osm-peaks-dev/ に公開する。
 on:
+  schedule:
+    # 毎月 1 日の日本時間 12:23。main で正式版の Release を作る。
+    - cron: '23 3 1 * *'
   workflow_dispatch:
     inputs:
       source_date:
@@ -91,7 +94,7 @@ jobs:
           fi
           python scripts/build_data.py build/japan-latest.osm.pbf --version "$version" "${graphics_options[@]}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: 前回と比較して下書き Release を作成
+      - name: 前回と比較して Release を作成
         id: review
         env:
           GH_TOKEN: ${{ github.token }}
@@ -100,7 +103,8 @@ jobs:
 
   publish:
     needs: generate
-    if: needs.generate.outputs.auto_publish == 'true'
+    # Pages に公開するのは開発版だけ。正式版は生成ジョブで Release にして終わる。
+    if: needs.generate.outputs.auto_publish == 'true' && github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
