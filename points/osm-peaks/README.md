@@ -13,11 +13,11 @@
 
 ## 配るもの
 
-Geofabrik の日本全国の OSM データから、`natural=peak` または `natural=volcano` の名前付きノードを抽出する。ロシア極東の PBF から国後島・択捉島・色丹島・歯舞群島、韓国の PBF から竹島の範囲にある同じ条件のノードも補い、`osm-peaks.json.gz` 1 ファイルにまとめる。way・relation と名前のないノードは含めない。収録する地点の `type` は山頂を表す `peak` とし、火山ノードも同じ種別で出力する。名前は前後の空白を除き、日本 PBF では `name:ja`、`name` の順に使う（`name:ja` だけのノードも含む）。日本以外の PBF では、空欄でない `name:ja` があるノードだけを収録し、その値を名前に使う。
+Geofabrik の日本全国の OSM データから、`natural=peak` または `natural=volcano` の名前付きノードを抽出する。ロシア極東の PBF から国後島・択捉島・色丹島・歯舞群島の範囲にある同じ条件のノードも補い、`osm-peaks.json.gz` 1 ファイルにまとめる。way・relation と名前のないノードは含めない。収録する地点の `type` は山頂を表す `peak` とし、火山ノードも同じ種別で出力する。名前は前後の空白を除き、日本 PBF では `name:ja`、`name` の順に使う（`name:ja` だけのノードも含む）。日本以外の PBF では、空欄でない `name:ja` があるノードだけを収録し、その値を名前に使う。
 
-追加範囲は [regions.json](regions.json) の島ごとの矩形（西端の経度、南端の緯度、東端の経度、北端の緯度の順）で指定する。国名や行政境界のタグでは判定しない。竹島などに名前付き山頂ノードがなければ、その範囲の件数は 0 件になる。国後島・択捉島の日本語名付き山頂が 0 件の場合は欠落として生成を止める。尖閣諸島は既存の日本 PBF の収録分を使い、日本語名のない地点の名前は推測して補わない。
+追加範囲は [regions.json](regions.json) の島ごとの矩形（西端の経度、南端の緯度、東端の経度、北端の緯度の順）で指定する。国名や行政境界のタグでは判定しない。韓国 PBF は取得・取り込みの対象に含めない。国後島・択捉島の日本語名付き山頂が 0 件の場合は欠落として生成を止める。尖閣諸島は既存の日本 PBF の収録分を使い、日本語名のない地点の名前は推測して補わない。
 
-2026-10-03 配布分を確認すると、日本以外の PBF から追加する日本語名付き山頂は国後島 13 件、択捉島 37 件、色丹島 5 件、歯舞群島 0 件、竹島 4 件だった。爺爺岳（OSM ID `281896663`）には `name:ja` があり、統合後は 14,092 件になる。これらは確認時点の件数で、以後の生成では OSM の登録内容に従う。
+2026-10-03 配布分を確認すると、日本以外の PBF から追加する日本語名付き山頂は国後島 13 件、択捉島 37 件、色丹島 5 件、歯舞群島 0 件だった。爺爺岳（OSM ID `281896663`）には `name:ja` があり、統合後は 14,088 件になる。これらは確認時点の件数で、以後の生成では OSM の登録内容に従う。
 
 複数の取得元に同じ OSM ID があれば、ノードの版、編集日時の順で新しい方を使う。同じ版・編集日時で内容が異なる場合は生成を止める。
 
@@ -48,10 +48,10 @@ manifest の項目・型・版の履歴は [リポジトリ共通の manifest.js
 | `fileName` | `osm-peaks.json.gz` |
 | `downloadUrl` | 正式版は `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>` の Release の gzip ファイル |
 | `pointCount` | 収録した名前付き山頂ノードの件数 |
-| `sourceTimestamp` | 使用した 3 つの PBF ヘッダーの `osmosis_replication_timestamp` の最大値。各 PBF の収録ノードはそれぞれの基準日時以下であることも確認 |
+| `sourceTimestamp` | 使用した 2 つの PBF ヘッダーの `osmosis_replication_timestamp` の最大値。各 PBF の収録ノードはそれぞれの基準日時以下であることも確認 |
 | `latestPointTimestamp` | 収録する山頂ノードの OSM 最終編集日時の最大値。収録対象外のノードは集計しない |
 | `sourceUrl` | 実際に取得・検証した日付付き全国 PBF の URL。latest 指定でも確定した日付付き URL を記録 |
-| `sourcePbfs` | 使用した 3 つの PBF の日付付き URL・サイズ・MD5・`sourceTimestamp` の配列。追加範囲への対応前の版には存在しない |
+| `sourcePbfs` | 使用した 2 つの PBF の日付付き URL・サイズ・MD5・`sourceTimestamp` の配列。追加範囲への対応前の版には存在しない |
 | `license` | `ODbL-1.0` |
 | `attribution` | `© OpenStreetMap contributors` |
 
@@ -88,7 +88,7 @@ Pages の初期設定、サイト全体の一覧・履歴の引き継ぎ、配�
 
 1. 単体テストと、小さな PBF による生成テストを行う。
 2. Geofabrik の `japan-latest.osm.pbf` から日付付き URL を確定する。取得対象日を指定した場合は、その日付の URL を直接使い、全国データを取得する。途中で切れたら同じ版の続きから再開し、配布元の MD5 と照合する。Overpass API は使わない。
-3. 同じ配布日のロシア極東と韓国の PBF を取得・MD5 照合し、`osmium tags-filter` で山頂・火山ノードを抽出する。追加 PBF のノードは設定した範囲に絞り、日本のノードと統合して配布ファイルと manifest を作る。追加 PBF の取得や検証に失敗した場合は生成を止め、部分的なデータを公開しない。
+3. 同じ配布日のロシア極東の PBF を取得・MD5 照合し、`osmium tags-filter` で山頂・火山ノードを抽出する。追加 PBF のノードは設定した範囲に絞り、日本のノードと統合して配布ファイルと manifest を作る。追加 PBF の取得や検証に失敗した場合は生成を止め、部分的なデータを公開しない。
 4. Pages の選択した配布先の前回 manifest（正式版は `points/osm-peaks/manifest.json`、開発版は `points/osm-peaks-dev/manifest.json`）を取得・検証し、全国と地域別の件数、元データの日時、形式の版を比較する。件数・前回との差・検査結果・圧縮サイズ・元データの日時・SHA-256 を、下書きの説明と Actions の実行概要に記録する。
 5. 両ファイルを下書き Release に添付する。検査に合格した場合だけ、別の公開ジョブが下書きのファイルをダウンロードし、再検証して公開する。履歴版を公開後、その配布先の最新版 manifest を更新する。
 
@@ -104,7 +104,7 @@ Actions の各ステップでは、時刻付きで処理の開始・完了をロ
 
 ダウンロードは通信待ち60秒、最大6回（15秒間隔）の試行、全体60分の制限を設ける。Actions は取得ステップ65分、生成ジョブ150分、公開ジョブ15分で打ち切る。途中ファイルは元データの MD5 ごとに保存し、別の版のデータをつなげない。Range に対応しない応答では先頭から取り直す。通信待ちや再試行で失敗した場合は、同じコマンドを再実行すれば途中ファイルを再利用できる（配布元が同じ版の場合）。Actions の別実行には途中ファイルを引き継がない。
 
-追加 PBF の取得はそれぞれ全体15分、Actions の取得ステップ20分で打ち切る。日本 PBF の配布日を両方に指定し、その日の追加 PBF が未配布なら失敗とする。日付を自動でずらして生成しない。
+追加 PBF の取得はそれぞれ全体15分、Actions の取得ステップ20分で打ち切る。日本 PBF の配布日を追加 PBF に指定し、その日の追加 PBF が未配布なら失敗とする。日付を自動でずらして生成しない。
 
 ### 自動公開と確認待ち
 
@@ -160,7 +160,7 @@ Actions では取得前に配布元の日付付き URL・サイズ・MD5 を確�
 
 キャッシュがない・復元に失敗した・ファイルが破損した場合は Geofabrik から取得する。検証済みの PBF は生成処理より前に保存するので、後続の生成や公開に失敗しても次回に再利用できる。キャッシュの保存に失敗してもデータの生成は続ける。復元は完全一致のキーだけを指定し、別の日付を代用しない。
 
-追加 PBF も取得元の地域・配布日・MD5 ごとにキャッシュし、復元後に照合する。2026-10-10 時点の配布ページの目安では、ロシア極東は約 371 MB、韓国は約 275 MB。日本 PBF に加えて合計約 646 MB の取得・保存が必要になる。実際のサイズと取得時間はログで確認する。
+追加 PBF も取得元の地域・配布日・MD5 ごとにキャッシュし、復元後に照合する。2026-10-10 時点の配布ページの目安では、ロシア極東は約 371 MB。日本 PBF に加えて約 371 MB の取得・保存が必要になる。実際のサイズと取得時間はログで確認する。
 
 これは Geofabrik からの大容量転送を減らす仕組みで、GitHub のキャッシュからの転送は発生する。キャッシュは容量や利用状況により削除されるため、永続保存ではない。ブランチ間の共有範囲は GitHub のキャッシュ規則に従う。詳細は [GitHub のキャッシュの説明](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching) を参照する。
 
@@ -193,8 +193,6 @@ python -u scripts/download_source.py
 # 日本 PBF の .source.json に記録された URL と同じ配布日を指定する。
 python -u scripts/download_source.py --region far-eastern-fed-district \
   --source-date YYYY-MM-DD --output build/far-eastern-fed-district.osm.pbf
-python -u scripts/download_source.py --region south-korea \
-  --source-date YYYY-MM-DD --output build/south-korea.osm.pbf
 python scripts/build_data.py build/japan-latest.osm.pbf \
   --version local-20260930 --output-dir dist
 ```
@@ -203,7 +201,7 @@ python scripts/build_data.py build/japan-latest.osm.pbf \
 
 取得時に PBF の隣へ `<PBF のファイル名>.source.json` を保存し、URL・サイズ・MD5 を記録する。取得済みファイルを再利用した場合も記録を作る。生成時に記録と PBF を照合し、日付付き URL を manifest の `sourceUrl` に引き継ぐ。記録の欠落や不一致は生成を止める。既存の PBF に記録がない場合は、同じ対象日で取得コマンドを再実行すると、内容が一致すれば再ダウンロードせずに記録を作れる。
 
-生成コマンドは追加 PBF も必須とする。保存先を変える場合は `--far-eastern-pbf` と `--south-korea-pbf` で指定する。`sourceUrl` は従来どおり日本 PBF の URL とし、全取得元は `sourcePbfs` に記録する。manifest と本体の形式の版は変えない。
+生成コマンドは追加 PBF も必須とする。保存先を変える場合は `--far-eastern-pbf` で指定する。`sourceUrl` は従来どおり日本 PBF の URL とし、全取得元は `sourcePbfs` に記録する。manifest と本体の形式の版は変えない。
 
 元データの取得には数 GB の通信量と空き容量が必要。元データは `points/osm-peaks/build/`、配布ファイルは `points/osm-peaks/dist/` に保存し、どちらも git に入れない。
 
@@ -222,7 +220,7 @@ python scripts/build_data.py build/japan-latest.osm.pbf --version local \
 
 ## テスト
 
-Python 3.12 と osmium-tool を使い、単体テストと小さな PBF による生成テストを行う。追加 PBF の URL・チェックサム・キャッシュの分離、対象範囲、名前の優先順位、OSM ID の統合、追加取得の失敗・配布日の不一致、地域別の減少、小さな 3 つの PBF を統合した配布ファイルも確認する。SVG の対応表・JSON への内蔵・倍率・未対応要素の拒否・公開前の再検査も単体テストで確認する。CIの「共通：データ処理のテスト」（`.github/workflows/test.yml`）の「地点 / OSM山頂」ジョブで push・PR 時に実行する。
+Python 3.12 と osmium-tool を使い、単体テストと小さな PBF による生成テストを行う。追加 PBF の URL・チェックサム・キャッシュの分離、対象範囲、名前の優先順位、OSM ID の統合、追加取得の失敗・配布日の不一致、地域別の減少、小さな 2 つの PBF を統合した配布ファイルも確認する。SVG の対応表・JSON への内蔵・倍率・未対応要素の拒否・公開前の再検査も単体テストで確認する。CIの「共通：データ処理のテスト」（`.github/workflows/test.yml`）の「地点 / OSM山頂」ジョブで push・PR 時に実行する。
 
 テストは `points/osm-peaks/` 内で、外部通信を行わず次のコマンドで実行できる。osmium がない場合は PBF を使うテストだけをスキップする。Actions では osmium を入れてすべて実行する。
 

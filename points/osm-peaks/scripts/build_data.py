@@ -226,7 +226,7 @@ def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None
     inputs = {"japan": Path(pbf)}
     if additional_pbfs is not None:
         if set(additional_pbfs) != set(SOURCES) - {"japan"}:
-            raise ValueError("ロシア極東と韓国の PBF を両方指定してください")
+            raise ValueError("ロシア極東の PBF を指定してください")
         inputs.update(additional_pbfs)
     merged, revisions, source_pbfs = {}, {}, []
     with tempfile.TemporaryDirectory() as temporary:
@@ -305,13 +305,12 @@ def main():
     parser.add_argument("--version", required=True)
     parser.add_argument("--channel", choices=("stable", "dev"), default=os.environ.get("RELEASE_CHANNEL", "stable"))
     parser.add_argument("--far-eastern-pbf", type=Path, default=Path("build/far-eastern-fed-district.osm.pbf"))
-    parser.add_argument("--south-korea-pbf", type=Path, default=Path("build/south-korea.osm.pbf"))
     parser.add_argument("--graphics-directory", type=Path)
     parser.add_argument("--graphics-map", type=Path)
     parser.add_argument("--supplements", type=Path, default=DEFAULT_SUPPLEMENTS)
     args = parser.parse_args()
     manifest = build(args.pbf, args.output_dir, args.version, channel=args.channel, graphics_directory=args.graphics_directory, graphics_map=args.graphics_map,
-                     supplements_path=args.supplements, additional_pbfs={"far-eastern-fed-district": args.far_eastern_pbf, "south-korea": args.south_korea_pbf})
+                     supplements_path=args.supplements, additional_pbfs={"far-eastern-fed-district": args.far_eastern_pbf})
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
 
 

@@ -70,7 +70,7 @@ def validate(directory, *, tag=None, channel="stable"):
     if "sourcePbfs" in manifest:
         from scripts.download_source import source_region
         sources = manifest["sourcePbfs"]
-        if not isinstance(sources, list) or len(sources) != 3:
+        if not isinstance(sources, list) or len(sources) != 2:
             raise ValueError("追加 PBF を含む取得元記録が不正です")
         regions, dates, timestamps = set(), set(), []
         for source in sources:
@@ -86,7 +86,7 @@ def validate(directory, *, tag=None, channel="stable"):
             if not isinstance(source.get("md5"), str) or not re.fullmatch(r"[0-9a-f]{32}", source["md5"]):
                 raise ValueError("PBF の MD5 が不正です")
             timestamps.append(source_time(source.get("sourceTimestamp")))
-        if regions != {"japan", "far-eastern-fed-district", "south-korea"} or len(dates) != 1:
+        if regions != {"japan", "far-eastern-fed-district"} or len(dates) != 1:
             raise ValueError("取得元の地域または配布日が一致しません")
         if max(timestamps) != source_time(manifest["sourceTimestamp"]):
             raise ValueError("元データ全体の基準日時が PBF の記録と一致しません")
