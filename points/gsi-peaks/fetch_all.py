@@ -48,7 +48,8 @@ def open_database(path, bbox):
     database.execute("CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     database.execute("""CREATE TABLE IF NOT EXISTS tiles (
         number INTEGER PRIMARY KEY, status INTEGER NOT NULL CHECK(status IN (200,404)),
-        body BLOB, metadata TEXT NOT NULL)""")
+        body BLOB, metadata NOT NULL)""")
+    database.execute("CREATE TABLE IF NOT EXISTS missing_metadata (id INTEGER PRIMARY KEY, metadata TEXT UNIQUE NOT NULL)")
     expected = json.dumps({"bbox": list(bbox), "zoom": 15, "urlTemplate": NATURAL_URL}, sort_keys=True)
     row = database.execute("SELECT value FROM config WHERE key='scan'").fetchone()
     if row and row[0] != expected:
@@ -57,6 +58,34 @@ def open_database(path, bbox):
     database.execute("INSERT OR IGNORE INTO config VALUES ('scan', ?)", (expected,))
     database.commit()
     return database
+
+
+def store_tile(database, result, area, references):
+    """404 の URL を番号から復元し、共通の取得記録を一度だけ保存する。"""
+    number, status, body, metadata = result
+    if status == 404:
+        details = json.loads(metadata)
+        x, y = tile_at(number, area)
+        if details.get("url") == NATURAL_URL.format(x=x, y=y):
+            del details["url"]
+            template = json.dumps(details, ensure_ascii=False, sort_keys=True)
+            if template not in references:
+                database.execute("INSERT OR IGNORE INTO missing_metadata(metadata) VALUES (?)", (template,))
+                references[template] = database.execute(
+                    "SELECT id FROM missing_metadata WHERE metadata=?", (template,)).fetchone()[0]
+            metadata = references[template]
+    database.execute("INSERT INTO tiles VALUES (?,?,?,?)", (number, status, body, metadata))
+
+
+def restore_metadata(database, number, status, metadata, area):
+    # 旧形式は JSON の文字列、新形式の 404 は共通記録の番号。
+    if status == 404 and (isinstance(metadata, int) or metadata.isdigit()):
+        row = database.execute("SELECT metadata FROM missing_metadata WHERE id=?", (metadata,)).fetchone()
+        details = json.loads(row[0])
+        x, y = tile_at(number, area)
+        details["url"] = NATURAL_URL.format(x=x, y=y)
+        return details
+    return json.loads(metadata)
 
 
 def missing_numbers(database, start, stop):
@@ -133,6 +162,7 @@ def status_file(output, **state):
 def scan(database, area, output, workers):
     total = (area[2] - area[0] + 1) * (area[3] - area[1] + 1)
     completed, positive = database.execute("SELECT count(*),coalesce(sum(status=200),0) FROM tiles").fetchone()
+    references = {}
     started_count, started = completed, time.monotonic()
     last = started
     print(f"全国取得を開始: {completed}/{total} タイル、同時接続 {workers}", flush=True)
@@ -151,7 +181,7 @@ def scan(database, area, output, workers):
             futures = [executor.submit(fetch, number, area) for number in pending]
             for future in as_completed(futures):
                 result = future.result()
-                database.execute("INSERT INTO tiles VALUES (?,?,?,?)", result)
+                store_tile(database, result, area, references)
                 completed += 1
                 positive += result[1] == 200
                 if time.monotonic() - last >= 10:
@@ -225,7 +255,7 @@ def finish(database, database_path, area, output, cache_path, version, total, po
               "scan": {"complete": True, "zoom": 15, "tileBounds": list(area), "totalTiles": total,
                        "existingTiles": positive, "missingTiles": total - positive,
                        "databaseFile": str(database_path.resolve()), "databaseSha256": digest,
-                       "missingTileDetails": "404 を含む全応答の取得日時は SQLite tiles テーブルに保存"}}
+                       "missingTileDetails": "404 を含む全応答の取得日時は SQLite に保存（404 の共通記録は missing_metadata）"}}
     manifest = write(points, report, output, version)
     status_file(output, phase="complete", completedTiles=total, totalTiles=total, pointCount=len(points),
                 readingCount=report["readingCount"], elevationCount=report["elevationCount"], sizeBytes=manifest["sizeBytes"])

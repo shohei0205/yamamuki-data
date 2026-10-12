@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import fetch_all
+from compact_cache import compact
 from download import Cache
 
 
@@ -37,6 +38,37 @@ class AllTilesTests(unittest.TestCase):
             db.close()
             with self.assertRaises(ValueError):
                 fetch_all.open_database(path, (130, 30, 140, 40))
+
+    def test_compact_preserves_sources_metadata_and_resume(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source, target = root / 'old.db', root / 'new.db'
+            db = fetch_all.open_database(source, fetch_all.NATIONAL_BBOX)
+            area = fetch_all.bounds(fetch_all.NATIONAL_BBOX)
+            payload = gzip.compress(b'original GeoJSON bytes')
+            records = []
+            for number, status in ((0, 404), (1, 404), (2, 200)):
+                x, y = fetch_all.tile_at(number, area)
+                metadata = {'url': fetch_all.NATURAL_URL.format(x=x, y=y),
+                            'status': status, 'fetchedAt': '2026-10-12T04:00:00Z',
+                            'etag': None, 'extra': 'preserved'}
+                records.append(metadata)
+                db.execute('INSERT INTO tiles VALUES (?,?,?,?)',
+                           (number, status, payload if status == 200 else None, json.dumps(metadata)))
+            db.commit()
+            db.close()
+            compact(source, target)
+            db = fetch_all.open_database(target, fetch_all.NATIONAL_BBOX)
+            self.assertEqual(db.execute('SELECT count(*) FROM missing_metadata').fetchone()[0], 1)
+            for number, status, body, metadata in db.execute('SELECT * FROM tiles ORDER BY number'):
+                self.assertEqual(fetch_all.restore_metadata(db, number, status, metadata, area), records[number])
+                if status == 200:
+                    self.assertEqual(body, payload)
+            self.assertEqual(fetch_all.missing_numbers(db, 0, 5), [3, 4])
+            db.close()
+            compact(target, root / 'again.db')
+            with self.assertRaises(ValueError):
+                compact(source, target)
 
     def test_finish_refuses_incomplete_scan(self):
         with tempfile.TemporaryDirectory() as folder:

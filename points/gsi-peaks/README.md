@@ -59,6 +59,16 @@ python points/gsi-peaks/fetch_all.py
 
 取得した元データは生成後も削除しない。自然地名の GeoJSON は `build/gsi-national-all/natural-tiles.sqlite3` の `tiles.body` に gzip で可逆圧縮して保存する。解凍すると取得時の元のバイト列に戻り、SHA-256 で一致を確認できる。山岳一覧の CSV と標高タイルの元データは `build/gsi-cache/` の `.data` に保存する。両方の保存先を保管すると、取得時と同じ入力から再生成できる。これらは Git の管理対象外。
 
+404 は URL を区画番号から復元し、同じ取得日時・応答ヘッダーなどを `missing_metadata` テーブルに一度だけ保存する。`tiles.metadata` は、200 では従来の JSON、404 では共通記録の番号になる。`fetch_all.restore_metadata` で旧形式・新形式のどちらからも URL を含む取得記録を復元できる。GeoJSON 本体は変更しない。
+
+旧形式の SQLite はそのまま読み込める。容量を減らす場合は取得・生成を停止し、次のコマンドで別ファイルへ変換する。
+
+```bash
+python points/gsi-peaks/compact_cache.py build/gsi-national-all/natural-tiles.sqlite3 build/gsi-national-all/natural-tiles.compact.sqlite3
+```
+
+変換処理は全区画の GeoJSON の圧縮バイト列と、URL・取得日時などの記録が元と一致することを確認する。成功したあと、変換後のファイルを元の `natural-tiles.sqlite3` と入れ替える。元ファイルは変換処理では変更しない。変換が失敗した場合は出力先の途中ファイルを削除してから再実行する。
+
 全取得と最初の生成が完了したあと、次のコマンドで通信せずに再生成できる。必要な元データが欠けている場合は停止し、オンラインで別のデータを混ぜない。
 
 ```bash
