@@ -6,7 +6,7 @@
 
 | 対象・取得元 | 状態 | 詳細 |
 |---|---|---|
-| OpenStreetMap の山頂 | 実装済み | [osm-peaks](osm-peaks/README.md) |
+| OpenStreetMap の山頂 | 全国 JSON を生成・検査し、正式版・開発版を Release で配布。開発版の最新版 manifest は Pages で公開 | [osm-peaks](osm-peaks/README.md) |
 | 国土地理院の山頂 | コミット済み JSON から Release を作成 | [gsi-peaks](gsi-peaks/README.md) |
 | 手動作成のテスト用地点 | 開発版限定 | [testdata](testdata/README.md) |
 | ランドマークなど | 将来追加予定・未実装 | 追加時に専用フォルダを作る |
