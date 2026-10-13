@@ -18,6 +18,7 @@ points/
   README.md         地点データの一覧・共通形式
   viewer.html       地点データの共通ビューア
   tests/            共通ビューアのテスト
+  formats/          形式の版ごとの説明と変更履歴（data-v<版>.md）
   osm-peaks/
     README.md       OSM 山頂データの生成・公開手順
     scripts/        取得・生成・検査・公開
@@ -191,6 +192,8 @@ Actions の「地点：カタログから削除」→「Run workflow」で、正
 ## 地点の形式
 
 データ本体は gzip で圧縮した UTF-8（BOM なし）の JSON 配列とし、配列の各要素を1地点のオブジェクトとする。以下は山頂・ランドマーク・手動作成の地点に共通するスキーマで、現在の地点データのスキーマは版5で、山頂の新規生成もこの版を使う。地点データの版は manifest の版と独立して管理する。manifest の形式と版は [リポジトリ共通仕様](../README.md#manifestjson) に従う。
+
+版ごとの形式と変更履歴は、[版5](formats/data-v5.md) と [版4](formats/data-v4.md) にまとめている。形式を変えたときは、同じ PR で `formats/` の文書と変更履歴を更新する。公開した版の文書は消さない。
 
 機械検証用の [地点データの版5](../schemas/points/data-v5.schema.json)（JSON Schema Draft 2020-12）は、gzip 展開後の JSON 配列に適用する。配列は1地点以上とし、定義していない地点の項目は許可しない。データセット全体での `id` の重複、別名と表示名の一致、数値が有限であることは別途確認する。URL の `format` 検査も有効にする。
 

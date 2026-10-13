@@ -34,7 +34,7 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 
 [Releases](https://github.com/shohei0205/yamamuki-data/releases) に `manifest.json` と `osm-peaks.json.gz` を添付する。最新版を示す manifest と公開履歴は、冒頭の表にある Pages の URL から取得できる。
 
-manifest の項目・型・版の履歴は [リポジトリ共通の manifest.json](../../README.md#manifestjson) を参照する。
+manifest の項目・型は [リポジトリ共通の manifest.json](../../README.md#manifestjson) を、形式の版ごとの説明と変更履歴は [地点データフォーマット](../formats/data-v5.md) を参照する。版4 のときの配り方（`peaks/`・`peaks-<version>`・`japan-mountains.json.gz`）は [版4](../formats/data-v4.md) にある。
 
 山頂データでは次の値・取得方法を使う。
 

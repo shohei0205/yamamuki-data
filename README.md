@@ -51,7 +51,7 @@ release_tools/     データ種別共通の公開入口
 
 ## manifest.json
 
-このリポジトリで配布する各データセットに共通する、UTF-8（BOM なし）の JSON オブジェクト。データ本体の取得先・大きさ・ハッシュ・出典を記載する。`schemaVersion` は manifest 自体の形式の版を表す。現在は **版5**。データ本体のスキーマの版は独立して管理し、manifest の版と同じ番号であるとは限らない。使用するデータ本体の版は `dataSchemaVersion` に記載する。データ本体の構造は種類ごとの仕様に従い、地点データは [points/README.md](points/README.md#地点の形式) に記載する。
+このリポジトリで配布する各データセットに共通する、UTF-8（BOM なし）の JSON オブジェクト。データ本体の取得先・大きさ・ハッシュ・出典を記載する。`schemaVersion` は manifest 自体の形式の版を表す。現在は **版5**。データ本体のスキーマの版は独立して管理し、manifest の版と同じ番号であるとは限らない。使用するデータ本体の版は `dataSchemaVersion` に記載する。データ本体の構造は種類ごとの仕様に従い、地点データは [points/README.md](points/README.md#地点の形式) に記載する。版ごとの形式と変更履歴は [地点データフォーマット](points/formats/data-v5.md) にまとめている。
 
 機械検証用の [manifest の版5](schemas/manifest/manifest-v5.schema.json)（JSON Schema Draft 2020-12）を用意している。共通スキーマはデータ種別ごとの追加項目を許可する。
 
