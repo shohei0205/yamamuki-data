@@ -32,6 +32,12 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 
 圧縮後のサイズが 5,000,000 バイトを超える場合は公開を止め、分割を検討する。データが空、ID が重複、座標が不正、元データの日付が取得できない場合も公開しない。
 
+## ID の作り方と維持方針
+
+`id` は OSM ノード番号を先頭に 0 を付けない文字列にする。`osmId` にも同じノード番号を数値で出力する（例: `id` が `"123456"`、`osmId` が `123456`）。
+
+同じ OSM ノードなら、名前や位置が更新されても ID を維持する。OSM 上で別のノードに置き換わると、同じ山でも ID が変わる。[地点データの共通仕様](../formats/data.md#id-とデータセット)に従い、ID の維持は努力義務とし、永続性を保証しない。
+
 ## 置き場所
 
 [Releases](https://github.com/shohei0205/yamamuki-data/releases) に `manifest.json` と `osm-peaks.json.gz` を添付する。開発版の最新版 manifest は冒頭の表、公開履歴は「公開履歴」の節から取得できる。正式版は Release の manifest を使う。
