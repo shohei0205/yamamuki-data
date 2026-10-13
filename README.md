@@ -11,6 +11,8 @@
 
 収録対象、データ本体の形式、ダウンロード先、生成・公開手順、検査基準は、種類ごとの文書にまとめる。
 
+国土地理院の山頂 JSON を Release に配布する Action は [GSI 山頂の公開手順](points/gsi-peaks/README.md)を参照する。Actions の「地点 / 国土地理院山頂：JSON を Release に公開」から起動できる。
+
 ## 地点データビューア
 
 [地点データビューアの HTML](points/viewer.html) を保存してブラウザで開くと、地点データの確認と補足 JSON の編集ができる。[使い方](points/README.md#地点データをブラウザで確認する)を参照する。
@@ -28,7 +30,7 @@ release_tools/     データ種別共通の公開入口
 
 ## 配布の方針
 
-生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データとデータ本体は git に含めない。開発版の最新版を示す小さな `manifest.json` は、Actions の生成物として GitHub Pages に公開する。
+生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データとデータ本体は原則として git に含めない。国土地理院版は生成済みの地点 JSON と出典要約 JSON だけをコミットし、Action で Release を作る。開発版の最新版を示す小さな `manifest.json` は、Actions の生成物として GitHub Pages に公開する。
 
 正式版は Release を作るところまでで、Pages には公開しない。アプリ（yamamuki）がどの版を読むかは、yamamuki の PR で Release の manifest を選んで決める。アプリが読んでいる版のデータが消えないよう、公開した Release とその添付ファイルは削除・差し替えしない。
 
@@ -189,7 +191,7 @@ GitHub のリポジトリ設定では、マージコミットとスカッシュ�
 python -m unittest discover -s release_tools/tests -v
 ```
 
-CI の「共通：文字形式の確認」はすべての PR で文字コード・改行を確認する。「共通：データ処理のテスト」（`.github/workflows/test.yml`）は push・PR 時に、共通の公開処理・地点の共通ビューア・OSM 山頂・テスト用地点を別のジョブで確認する。データ種別を追加するときもこのActionにジョブを追加する。必須チェックの `test` ジョブは各テストの結果を集約し、すべて成功した場合だけ成功する。ジョブを追加するときは `test` の依存先と結果確認にも追加する。
+CI の「共通：文字形式の確認」はすべての PR で文字コード・改行を確認する。「共通：データ処理のテスト」（`.github/workflows/test.yml`）は push・PR 時に、共通の公開処理・地点の共通ビューア・OSM 山頂・国土地理院山頂・テスト用地点を別のジョブで確認する。データ種別を追加するときもこのActionにジョブを追加する。必須チェックの `test` ジョブは各テストの結果を集約し、すべて成功した場合だけ成功する。ジョブを追加するときは `test` の依存先と結果確認にも追加する。
 
 データ固有のテストは各 README を参照する。
 

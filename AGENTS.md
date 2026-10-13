@@ -83,7 +83,7 @@ Co-authored-by: Codex GPT-6
 ## データの扱い
 
 - 配るデータは OpenStreetMap 由来で、ODbL で利用・再配布している。README の「© OpenStreetMap contributors」の表示を消さない。
-- 生成したデータと元データ（`*.osm.pbf`）は git に入れず、Releases に置く。
+- 生成したデータと元データ（`*.osm.pbf`）は git に入れず、Releases に置く。例外として、国土地理院版は生成済みの `points/gsi-peaks/gsi-peaks.json` と出典要約 `points/gsi-peaks/snapshot.json` をコミットし、Action はそれらから Release を作る。SQLite と元データのキャッシュはコミットしない。
 - `manifest.json` の形式を変えるときは `schemaVersion` を上げる。公開済みのアプリが読めなくなるので、yamamuki 側の対応と順番を決めてから出す。
 - 山頂と地形は公開時期が異なるため、最新版の参照先をデータ種別ごとに分ける。山頂の最新版 manifest は GitHub Pages の `points/osm-peaks/manifest.json`（正式版）と `points/osm-peaks-dev/manifest.json`（開発版）から配り、データ本体は `osm-peaks-<version>` と `osm-peaks-dev-<version>` の Release に置く。リポジトリ全体の `releases/latest` は使わない。Pages は Actions の生成物から直接配置し、配布専用ブランチや生成物のコミットは作らない。アプリへの組み込み時もこの契約に合わせる。公開後に URL やファイル名を変える場合は、yamamuki 側の対応と順番を決める。
 
@@ -98,6 +98,7 @@ Co-authored-by: Codex GPT-6
 
 - 共通の確認（改行コード・BOM、手動公開入口）: [ルート README の「変更の確かめ方」](README.md#変更の確かめ方)
 - 地点の共通ビューアのテスト: [地点 README の「共通ビューアのテスト」](points/README.md#共通ビューアのテスト)
+- 国土地理院の山頂 JSON の Release 公開テスト: [GSI 山頂 README の「テスト」](points/gsi-peaks/README.md#テスト)
 - テスト用地点の生成・公開テスト: [テスト用地点 README の「テスト」](points/testdata/README.md#テスト)
 - 山頂データの単体テスト・小さな PBF での生成テスト: [山頂 README の「テスト」](points/osm-peaks/README.md#テスト)
 
@@ -171,6 +172,6 @@ AI ツールが起こしやすい失敗を防ぐための指示。人の作業�
 
 ## やってはいけないこと
 
-- 生成物や元データ、手元の設定をコミットしない（`*.osm.pbf`、`*.gz`、`build/`、`dist/` など。`.gitignore` を参照）。
+- 国土地理院版の上記 2 つの JSON を除き、生成物や元データ、手元の設定をコミットしない（`*.osm.pbf`、`*.gz`、`build/`、`dist/` など。`.gitignore` を参照）。
 - API キーなどの秘密情報をコミットしない。
 - 依存ライブラリの更新は、機能の変更と同じ PR に混ぜない。
