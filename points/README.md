@@ -36,14 +36,7 @@ points/
 
 ## 地点データの manifest
 
-manifest の共通項目は [ルート README](../README.md#manifestjson) を参照する。地点データでは共通スキーマの `#/$defs/pointManifest` を使い、次の追加項目を検査する。
-
-| 項目 | JSON の型 | 必須 | 内容 |
-|---|---|---|---|
-| `pointCount` | integer | 必須 | JSON 配列に収録した地点数。正の整数 |
-| `latestPointTimestamp` | string または null | 任意 | 収録地点の元データ上の最終編集日時の最大値。不明なら省略 |
-
-展開後は `pointCount` と配列の件数を照合する。`latestPointTimestamp` は現地調査日・標高の測定日・生成日時ではない。`sourceTimestamp` もある場合はそれ以下とする。地点以外の件数・日時をこれらの項目に入れない。
+manifest の共通項目は [ルート README](../README.md#manifestjson) を参照する。地点データでは共通スキーマの `#/$defs/pointManifest` を使い、件数 `pointCount` と最終編集日時 `latestPointTimestamp` を足す。項目の意味と制約は [地点データフォーマット (版5) の「manifest」](formats/data-v5.md#manifest) にある。
 
 ## 変更の確かめ方
 
@@ -192,120 +185,13 @@ Actions の「地点：カタログから削除」→「Run workflow」で、正
 
 ## 地点の形式
 
-データ本体は gzip で圧縮した UTF-8（BOM なし）の JSON 配列とし、配列の各要素を1地点のオブジェクトとする。以下は山頂・ランドマーク・手動作成の地点に共通するスキーマで、現在の地点データのスキーマは版5で、山頂の新規生成もこの版を使う。地点データの版は manifest の版と独立して管理する。manifest の形式と版は [リポジトリ共通仕様](../README.md#manifestjson) に従う。
+データ本体は gzip で圧縮した UTF-8（BOM なし）の JSON 配列で、1 要素が 1 地点。山頂・ランドマーク・手で作る地点に共通の形式で、今の版は5。山頂の新規生成もこの版を使う。地点データの版は manifest の版とは別に数える。
 
-版ごとの形式と変更履歴は、[版5](formats/data-v5.md) と [版4](formats/data-v4.md) にまとめている。形式を変えたときは、同じ PR で `formats/` の文書と変更履歴を更新する。公開した版の文書は消さない。
+項目・種別・ID・グラフィックの決まりと例は、[地点データフォーマット (版5)](formats/data-v5.md#データ本体) にまとめている。前の形式は [版4](formats/data-v4.md) にある。機械検証用のスキーマは [地点データの版5](schemas/data-v5.schema.json)（JSON Schema Draft 2020-12）。
 
-機械検証用の [地点データの版5](schemas/data-v5.schema.json)（JSON Schema Draft 2020-12）は、gzip 展開後の JSON 配列に適用する。配列は1地点以上とし、定義していない地点の項目は許可しない。データセット全体での `id` の重複、別名と表示名の一致、数値が有限であることは別途確認する。URL の `format` 検査も有効にする。
-
-### 項目
-
-「必須」は項目自体を省略できないことを表す。必須項目は `id`・`name`・`latitude`・`longitude` の4つで、`null` は許可しない。すべての任意項目は省略と `null` を同じ意味として扱う。`aliases`・`tags` は空配列、`type` は種別不明、`graphic` は画像なし、`graphic.scale` は `1.0` として扱う。
-
-| 項目 | JSON の型 | 必須 | 内容・制約 |
-|---|---|---|---|
-| `id` | string | 必須 | データセット内で一意な、空でない固定 ID。取得元の接頭辞は不要 |
-| `graphic` | object または null | 任意 | `svg` に SVG 本文、任意の `scale` に表示倍率を持たせる。省略時は画像なし |
-| `tags` | string の配列 または null | 任意 | 日本百名山などの分類ラベル。省略時は `[]`。空文字・前後の空白・重複は不可 |
-| `type` | string または null | 任意 | 地点の種別。`peak`（山頂）、`parking`（駐車場）、`trailhead`（登山口）、`landmark`（目印）など。省略時は種別不明 |
-| `osmId` | integer または null | 任意 | 関連する OSM ノードの正の整数 ID。関連付けがない場合は省略または `null` |
-| `name` | string | 必須 | 空でない表示名 |
-| `latitude` | number | 必須 | WGS 84 の緯度（度）。−90 以上90 以下 |
-| `longitude` | number | 必須 | WGS 84 の経度（度）。−180 以上180 以下 |
-| `elevationM` | number または null | 任意 | 地点自体の標高（m）。不明なら `null`。負の標高も使用できる |
-| `nameReading` | string または null | 任意 | 表示名の読み仮名。不明なら `null` |
-| `aliases` | string の配列 または null | 任意 | 別名。ない場合は `[]`。空の名前・表示名と同じ名前・重複は含めない |
-| `wikipediaUrl` | string または null | 任意 | Wikipedia の解説記事の HTTPS URL。ない場合は `null` |
-| `wikidataUrl` | string または null | 任意 | Wikidata の項目の HTTPS URL。ない場合は `null` |
-
-数値に `NaN` や無限大は使用しない。文字列の名前・読み仮名・別名は前後の空白を除く。標高に建物の高さなどを入れない。リンク先の記事本文は同梱しない。
-
-### JSON の例
-
-次の配列は、OSM 由来の山頂と、OSM との関連付けがない手動作成の地点の形式を示す。手動作成の地点は説明用の架空のデータ。
-
-```json
-[
-  {
-    "id": "3403990450",
-    "type": "peak",
-    "osmId": 3403990450,
-    "name": "万三郎岳",
-    "latitude": 34.8627963,
-    "longitude": 139.0018525,
-    "elevationM": 1405.6,
-    "nameReading": "ばんざぶろうだけ",
-    "aliases": ["天城山"],
-    "wikipediaUrl": "https://ja.wikipedia.org/wiki/%E5%A4%A9%E5%9F%8E%E5%B1%B1",
-    "wikidataUrl": null
-  },
-  {
-    "id": "example-tower",
-    "type": "landmark",
-    "name": "展望塔",
-    "latitude": 35.0,
-    "longitude": 139.0
-  }
-]
-```
-
-### 地点ごとのグラフィック
-
-任意の `graphic.svg` に SVG 本文を文字列として内蔵する。JSON 内の引用符・改行などは通常の JSON 文字列としてエスケープする。画像を持たない地点は `graphic` 自体を省略または `null` とする。
-
-```json
-{
-  "id": "fuji",
-  "type": "peak",
-  "name": "富士山",
-  "latitude": 35.3606,
-  "longitude": 138.7274,
-  "graphic": {
-    "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><path d=\"M10 90 L50 10 L90 90 Z\"/></svg>",
-    "scale": 1.5
-  }
-}
-```
-
-`scale` はアプリの標準表示サイズに対する幅・高さの倍率で、省略または `null` の場合は `1.0`。有限の正の数とする。富士山を通常より大きくする場合は `1.5` などを指定する。縦横比は `viewBox` から維持し、ラベルや他の画像との重なり判定にも倍率を反映する。表示倍率と SVG 自体の縦横サイズは独立する。
-
-SVG はデータ本体の gzip に含まれるため、画像の追加ダウンロード・assetId・manifest の画像一覧は不要。カタログに同梱された manifest のサイズと SHA-256 で、SVG を含むデータ本体全体を検証する。同じ SVG を複数地点で使う場合も、それぞれの地点に本文を記載する。
-
-SVG は UTF-8 の静止画とし、有効な `viewBox` と SVG の名前空間を必須にする。SVG 本文はUTF-8で100,000バイト以内。固定の縦横サイズや縦横比は設けない。パス・基本図形・グループ・グラデーション・クリッピングを使用できる。文字はパスに変換し、スクリプト・アニメーション・外部参照・埋め込み画像・CSS・フォント依存は使用しない。詳細な許可要素・属性は [graphics.py](osm-peaks/scripts/graphics.py) に定義する。生成時と公開前に SVG の内容と倍率を検査する。
-
-`graphic` は任意項目の追加なので地点データの版は据え置く。アプリ側では SVG 非対応・描画失敗時に `type` に応じた標準アイコンへ戻す。画像表示はアプリ側で別途実装する。SVG の著作権・利用条件は地点データとは別に確認し、取得元・作成者・利用条件を各データセットの資料に記載する。
-
-### 地点の種別
-
-`type` は1地点につき1つの文字列で表す。小文字の英字で始め、続きには小文字の英数字・下線を使う。
-
-| 値 | 意味 |
-|---|---|
-| `peak` | 山頂（山頂生成処理で収録する火山ノードを含む） |
-| `parking` | 駐車場 |
-| `trailhead` | 登山口 |
-| `landmark` | 塔などの目印 |
-| `mountain_hut` | 山小屋・避難小屋 |
-| `campsite` | キャンプ場・テント場 |
-| `water_source` | 水場 |
-| `toilet` | トイレ |
-| `viewpoint` | 展望地点 |
-| `pass` | 峠 |
-| `junction` | 登山道の分岐 |
-
-例: `{"id":"trailhead-parking","type":"parking","name":"登山口駐車場","latitude":35.0,"longitude":139.0}`。
-
-任意項目の追加として地点データの版は5のままとする。既存データでは省略可能とし、新規の山頂生成では必ず `peak` を出力する。省略やアプリが知らない種別は種別不明として扱い、その地点の名前・座標などは引き続き利用する。未知の種別を理由にデータセット全体を拒否しない。種別は今後追加でき、追加時はこの表と該当データの仕様を更新する。
-
-### ID とデータセット
-
-`id` は名前・座標を変更しても維持し、削除した ID を別の地点に再利用しない。OSM 山頂ではノード番号を先頭ゼロなしの文字列にし、手動作成では `"example-tower"` のような短い値を付ける。
-
-アプリ側では「データセット名＋id」の組で地点を識別する。同じデータセットを複数ファイルに分ける場合も、そのデータセット全体で ID を一意にする。異なるデータセット間では同じ ID を使用できる。同一地点が複数のデータセットに含まれる場合の統合は別に判断する。
-
-項目の取得方法・配列の並び順・収録対象の重複の扱いは各データの仕様に記載する。山頂では OSM ノード番号の数値順に並べる。
-
-manifest の共通仕様は [リポジトリ共通の manifest.json](../README.md#manifestjson) を参照する。
+- 形式を変えたとき（任意の項目や種別を足すときも）は、同じ PR で `formats/` の文書と変更履歴、スキーマを更新する。公開した版の文書は消さない。
+- 項目の取り方・配列の並び順・収録する対象と重複の扱いは、データごとの README に書く。
+- 地点ごとのグラフィックの SVG は、生成するときと公開する前に、内容と倍率を [graphics.py](osm-peaks/scripts/graphics.py) で検査する。SVG の取得元・作成者・利用条件は、データごとの README に書く。
 
 ## 補足 JSON の形式
 
