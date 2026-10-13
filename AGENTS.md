@@ -98,9 +98,8 @@ Co-authored-by: Codex GPT-6
 
 - 共通の確認（改行コード・BOM、手動公開入口）: [ルート README の「変更の確かめ方」](README.md#変更の確かめ方)
 - 地点の共通ビューアのテスト: [地点 README の「共通ビューアのテスト」](points/README.md#共通ビューアのテスト)
-- 国土地理院の山頂 JSON の Release 公開テスト: [GSI 山頂 README の「テスト」](points/gsi-peaks/README.md#テスト)
-- テスト用地点の生成・公開テスト: [テスト用地点 README の「テスト」](points/testdata/README.md#テスト)
 - 国土地理院の山頂データの生成・Release 公開テスト: [GSI 山頂 README の「テスト」](points/gsi-peaks/README.md#テスト)
+- テスト用地点の生成・公開テスト: [テスト用地点 README の「テスト」](points/testdata/README.md#テスト)
 - 山頂データの単体テスト・小さな PBF での生成テスト: [山頂 README の「テスト」](points/osm-peaks/README.md#テスト)
 
 - CI のテストは共通の入口で実行し、共通処理とデータごとのジョブに分ける。構成と追加方法は [ルート README の「Actions の構成」](README.md#actions-の構成) を参照する。

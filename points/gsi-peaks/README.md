@@ -194,6 +194,7 @@ Release の Action は引き続きコミット済み JSON だけを使い、約 
 ```bash
 python -m pip install -r points/gsi-peaks/requirements-vector.txt
 python -m unittest discover -s points/gsi-peaks/tests -v
+python -m unittest release_tools.tests.test_gsi_peaks -v
 ```
 
 テストは外部通信を行わず、山頂名と別称、GSI 専用 ID、重複、位置の範囲、地表標高、キャッシュ、取得失敗、共通の地点形式を確かめる。CI の「共通：データ処理のテスト」の「地点 / 国土地理院山頂」でも実行する。
