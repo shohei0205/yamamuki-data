@@ -57,7 +57,7 @@ Release のタグ・ファイル名・置き場所など、データごとの配
 | `attribution` | string | 必須 | 表示すべき出典。OSM 由来は `© OpenStreetMap contributors` |
 | `supplementSources` | object | 任意 | 補足（日本百名山のタグなど）の出典。出典 ID ごとに `source`・`license`・`attribution`・`changes` を書く |
 
-項目の制約の詳細は [ルート README の「manifest.json」](../../README.md#manifestjson) と [manifest の版5 のスキーマ](../../schemas/manifest/manifest-v5.schema.json) にあり、地点データで足す項目は [地点データの manifest](../README.md#地点データの-manifest) にある。
+項目の制約の詳細は [ルート README の「manifest.json」](../../README.md#manifestjson) と [manifest の版5 のスキーマ](../../schemas/manifest-v5.schema.json) にあり、地点データで足す項目は [地点データの manifest](../README.md#地点データの-manifest) にある。
 
 ## データ本体
 
@@ -87,7 +87,7 @@ gzip で圧縮した UTF-8（BOM なし）の JSON 配列で、1 要素が 1 地
 
 - 任意の項目は、省略と `null` を同じ意味に扱う。`aliases`・`tags` の省略は空の配列、`type` の省略は種別不明、`graphic` の省略は画像なしの意味。
 - 定義していない項目は置かない。数値に `NaN` や無限大は使わない。
-- 項目の制約の詳細は [地点の形式](../README.md#地点の形式) と [地点データの版5 のスキーマ](../../schemas/points/data-v5.schema.json) にある。
+- 項目の制約の詳細は [地点の形式](../README.md#地点の形式) と [地点データの版5 のスキーマ](../schemas/data-v5.schema.json) にある。
 
 ## 出典とライセンス
 

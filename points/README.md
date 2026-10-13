@@ -26,12 +26,13 @@ points/
   testdata/
     README.md       開発版限定のテストデータの生成・公開手順
     points.json     手動作成した架空の地点データ
-schemas/points/
-  data-v5.schema.json     地点データのスキーマ
-  catalog-v1.schema.json  地点カタログのスキーマ
+  schemas/
+    data-v5.schema.json         地点データのスキーマ
+    catalog-v1.schema.json      地点カタログのスキーマ
+    supplements-v1.schema.json  補足 JSON のスキーマ
 ```
 
-取得元・対象ごとに専用フォルダを作り、収録条件・作成方法・配布先を各 README に記載する。スキーマはリポジトリ直下の `schemas/points/` に、`data-v<版>.schema.json`・`catalog-v<版>.schema.json` として保存する。
+取得元・対象ごとに専用フォルダを作り、収録条件・作成方法・配布先を各 README に記載する。スキーマは `points/schemas/` に、`data-v<版>.schema.json`・`catalog-v<版>.schema.json` として保存する。
 
 ## 地点データの manifest
 
@@ -71,7 +72,7 @@ CI の「共通：データ処理のテスト」（`.github/workflows/test.yml`�
 
 正式版の `points/catalog.json` には正式版のデータだけ、開発版の `points/catalog-dev.json` には開発版のデータだけを収録する。配布先は取得したカタログの URL で区別する。アプリは利用する配布先のカタログを取得し、他方に自動で切り替えない。まだ公開していないデータや地形など地点以外のデータは含めない。
 
-機械検証用のスキーマは [地点カタログの版1](../schemas/points/catalog-v1.schema.json) を参照する。同じカタログ内の `id` は重複させない。
+機械検証用のスキーマは [地点カタログの版1](schemas/catalog-v1.schema.json) を参照する。同じカタログ内の `id` は重複させない。
 
 | 項目 | 内容 |
 |---|---|
@@ -195,7 +196,7 @@ Actions の「地点：カタログから削除」→「Run workflow」で、正
 
 版ごとの形式と変更履歴は、[版5](formats/data-v5.md) と [版4](formats/data-v4.md) にまとめている。形式を変えたときは、同じ PR で `formats/` の文書と変更履歴を更新する。公開した版の文書は消さない。
 
-機械検証用の [地点データの版5](../schemas/points/data-v5.schema.json)（JSON Schema Draft 2020-12）は、gzip 展開後の JSON 配列に適用する。配列は1地点以上とし、定義していない地点の項目は許可しない。データセット全体での `id` の重複、別名と表示名の一致、数値が有限であることは別途確認する。URL の `format` 検査も有効にする。
+機械検証用の [地点データの版5](schemas/data-v5.schema.json)（JSON Schema Draft 2020-12）は、gzip 展開後の JSON 配列に適用する。配列は1地点以上とし、定義していない地点の項目は許可しない。データセット全体での `id` の重複、別名と表示名の一致、数値が有限であることは別途確認する。URL の `format` 検査も有効にする。
 
 ### 項目
 
@@ -358,7 +359,7 @@ manifest の共通仕様は [リポジトリ共通の manifest.json](../README.m
 
 各項目を省略すると元の値を使う。空配列は追加・削除しない指定とする。同じ別名を追加と削除の両方に指定できない。タグ・別名・よみがなには空文字や前後の空白を使えず、配列内の重複も拒否する。各地点にはタグ・表示名・よみがな・別名・除外のいずれかの指定が必要。
 
-`sources` は出典 ID ごとに `source`（資料名・URL）、`license`（利用条件）、`attribution`（著作者表示）、`changes`（資料に加えた加工）を保持する。これらの属性は任意の文字列。複数の資料を補足 JSON 全体の出典一覧として登録できる。地点や項目ごとの出典指定は行わない。スキーマは [supplements-v1.schema.json](../schemas/points/supplements-v1.schema.json) にある。
+`sources` は出典 ID ごとに `source`（資料名・URL）、`license`（利用条件）、`attribution`（著作者表示）、`changes`（資料に加えた加工）を保持する。これらの属性は任意の文字列。複数の資料を補足 JSON 全体の出典一覧として登録できる。地点や項目ごとの出典指定は行わない。スキーマは [supplements-v1.schema.json](schemas/supplements-v1.schema.json) にある。
 
 ## OSM との関連付け
 
@@ -388,7 +389,7 @@ manifest は [リポジトリ共通仕様](../README.md#manifestjson) に従い�
 
 `tags` は「日本百名山」などの分類ラベルを持つ配列。OSM の元タグをそのまま収録する項目ではなく、データ作成者が分類を確認して付ける。山名から分類を推測しない。アプリは未知のタグを無視できるようにする。
 
-地点の補足情報は一つの JSON ファイルにまとめ、`schemaVersion`・`points` と、任意の出典一覧 `sources` を持つ。地点ごとにタグ・表示名・よみがな・別名・除外を指定する。[補足 JSON の形式](#補足-json-の形式) と [スキーマ](../schemas/points/supplements-v1.schema.json) を参照する。生成処理への組み込みと対応表の置き場所は、データセットごとの README に記載する。
+地点の補足情報は一つの JSON ファイルにまとめ、`schemaVersion`・`points` と、任意の出典一覧 `sources` を持つ。地点ごとにタグ・表示名・よみがな・別名・除外を指定する。[補足 JSON の形式](#補足-json-の形式) と [スキーマ](schemas/supplements-v1.schema.json) を参照する。生成処理への組み込みと対応表の置き場所は、データセットごとの README に記載する。
 
 対応表を使って生成する場合は、補足 JSON の `sources` を manifest.json の `supplementSources` にそのまま記録する。出典 ID はタグ名やファイル名とは独立して扱う。元の地点データの出典とライセンスも残す。各属性の意味は [manifest の共通仕様](../README.md#項目) を参照する。タグと出典情報はいずれも任意項目の追加で、地点データと manifest のスキーマの版は 5 のままとする。
 
