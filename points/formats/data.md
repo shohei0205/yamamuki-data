@@ -10,7 +10,7 @@ Release のタグ・ファイル名・置き場所など、データごとの配
 
 ## 版について
 
-地点 JSON の版は manifest の `dataSchemaVersion` で確認する。現行版は `5`。manifest 自体の版とは独立して管理する。
+地点 JSON の版は manifest の `dataSchemaVersion` で確認する。現行版は `5`。manifest 自体の版とは独立して管理する。manifest 版4以前は `dataSchemaVersion` がなく、地点データの版は manifest の `schemaVersion` と同じ。
 
 版内の変更は `版1.1` のように小数点以下で区別する。小数点以下は文書上の番号で、JSON の版の値には含めない。
 
@@ -64,7 +64,7 @@ gzip で圧縮した UTF-8（BOM なし）の JSON 配列で、1 要素が 1 地
 | `pass` | 峠 |
 | `junction` | 登山道の分岐 |
 
-- 種別は、版を変えずに増やすことがある。増やしたときは、この表を更新する。
+- 種別は JSON の `dataSchemaVersion` を変えずに増やすことがある。追加時はこの表を更新し、文書上の `版5.1` のような番号・変更日・対応 PR を変更履歴に記載する。
 - 読み手は、知らない種別を種別不明として扱い、その地点の名前や位置は使う。知らない種別があっても、データ全体を捨てない。
 - 新しく作る山頂のデータには、必ず `peak` を書く。
 
@@ -106,7 +106,7 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
 
 ### 出典とライセンス
 
-利用条件と出典は、manifest の `license` と `attribution` に書く。使うときは `attribution` の出典を表示する（OSM 由来なら「© OpenStreetMap contributors」）。`tags` などの補足を付けた場合、その出典と利用条件は manifest の `supplementSources` に書く。各項目の意味は [manifest の仕様](../../README.md#配布データの取得情報manifestjson) を参照する。
+利用条件と出典は、manifest の `license` と `attribution` に書く。使うときは `attribution` の出典を表示する（OSM 由来なら「© OpenStreetMap contributors」）。`tags` などの補足を付けた場合、その出典と利用条件は manifest の `supplementSources` に書く。各項目の意味は [manifest の仕様](../../formats/manifest.md) を参照する。
 
 ## JSON の例
 
@@ -235,7 +235,7 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
 
 版1〜3 は、最初の生成・公開処理（#6、2026-10-01 マージ）の中で順に作られた。版1〜3 の Release は今は残っていない。
 
-manifest の変更は [manifest の案内](../../README.md#配布データの取得情報manifestjson) を参照する。
+manifest の変更は [manifest の変更履歴](../../formats/manifest.md#変更履歴) を参照する。
 
 ### 版4（2026-10-03、#26）
 

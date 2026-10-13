@@ -1,6 +1,6 @@
 ﻿# yamamuki-data
 
-山むきアプリ（[shohei0205/yamamuki](https://github.com/shohei0205/yamamuki)）が使うデータを作って配るためのリポジトリ。
+山の地点データなどを作り、誰でも使える形で配るリポジトリ。[山むきアプリ](https://github.com/shohei0205/yamamuki)もこのデータを使っている。
 
 ## データの種類
 
@@ -35,7 +35,7 @@ release_tools/     データ種別共通の公開入口
 
 生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データとデータ本体は原則として git に含めない。国土地理院版は生成済みの地点 JSON と出典要約 JSON だけをコミットし、Action で Release を作る。開発版の最新版を示す小さな `manifest.json` は、Actions の生成物として GitHub Pages に公開する。
 
-正式版は Release を作るところまでで、Pages には公開しない。アプリ（yamamuki）がどの版を読むかは、yamamuki の PR で Release の manifest を選んで決める。アプリが読んでいる版のデータが消えないよう、公開した Release とその添付ファイルは削除・差し替えしない。
+正式版は Release を作るところまでで、Pages には公開しない。利用する側で Release の版を選び、その Release に添付された manifest の URL を固定して取得する。アプリが読んでいる版のデータが消えないよう、公開した Release とその添付ファイルは削除・差し替えしない。
 
 データの種類ごとに公開時期と最新版の参照先を分ける。正式版と開発版も独立して扱い、リポジトリ全体の `releases/latest` はアプリの参照先に使わない。具体的な URL とタグは各データの文書を参照する。
 
@@ -167,9 +167,9 @@ CI の「共通：文字形式の確認」はすべての PR で文字コード�
 | 対象 | 出典・表示 | 利用条件 | 補足・詳細 |
 |---|---|---|---|
 | [OSM 山頂](points/osm-peaks/README.md)（`osm-peaks`） | © OpenStreetMap contributors | [ODbL-1.0](https://opendatacommons.org/licenses/odbl/1-0/) | [OSM の著作権とライセンス](https://www.openstreetmap.org/copyright)を参照 |
-| OSM 山頂の補足適用前の元データ・リリース済みアプリ向けの互換データ | © OpenStreetMap contributors | ODbL-1.0 | [互換データの扱い](points/osm-peaks/README.md#リリース済みアプリ向けの互換データ)を参照 |
+| OSM 山頂の補足適用前の元データ・版4の旧形式データ | © OpenStreetMap contributors | ODbL-1.0 | [互換データの扱い](points/osm-peaks/README.md#版4の旧形式データ)を参照 |
 | [国土地理院の山頂](points/gsi-peaks/README.md)（`gsi-peaks`） | 出典：国土地理院（日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成 | [公共データ利用規約 第 1.0 版](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（`PDL-1.0`） | 元資料 URL・取得日時・出典表示は [snapshot.json](points/gsi-peaks/snapshot.json) に記録 |
-| [テスト用地点](points/testdata/README.md)（`testdata`、開発版のみ） | 山むきの動作確認用に作成した架空データ | CC0-1.0 | 内蔵 SVG と分類タグを含む |
+| [テスト用地点](points/testdata/README.md)（`testdata`、開発版のみ） | 動作確認用の架空データ | CC0-1.0 | 内蔵 SVG と分類タグを含む |
 
 ### 補足データ・画像
 

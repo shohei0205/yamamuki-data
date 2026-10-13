@@ -96,6 +96,10 @@ URL・サイズ・ハッシュ・配布版は説明用の仮の値。実際の�
 
 ## 変更履歴
 
+### スキーマの改名・移動（2026-10-13、#66）
+
+- `schemas/supplement-v1.schema.json` を `points/schemas/supplements-manifest-v1.schema.json` に改名・移動した。移動に合わせて出典定義への相対参照を更新し、検証ルールと JSON の形式の版は保持した。
+
 ### 版1（2026-10-10、#52）
 
 - 初版。
