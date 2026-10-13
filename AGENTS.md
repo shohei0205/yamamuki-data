@@ -88,6 +88,8 @@ Co-authored-by: Codex GPT-6
 - 山頂と地形は公開時期が異なるため、最新版の参照先をデータ種別ごとに分ける。山頂の最新版 manifest は GitHub Pages の `points/osm-peaks/manifest.json`（正式版）と `points/osm-peaks-dev/manifest.json`（開発版）から配り、データ本体は `osm-peaks-<version>` と `osm-peaks-dev-<version>` の Release に置く。リポジトリ全体の `releases/latest` は使わない。Pages は Actions の生成物から直接配置し、配布専用ブランチや生成物のコミットは作らない。アプリへの組み込み時もこの契約に合わせる。公開後に URL やファイル名を変える場合は、yamamuki 側の対応と順番を決める。
 
 - 正式版は `main`、開発版は `dev` のコードから生成・公開する。配布先は実行元ブランチで決め、手動の配布先選択で取り違えないようにする。
+- 正式版の生成は Release を作るところまでで、Pages には公開しない（正式版の `points/osm-peaks/manifest.json` は更新しない）。アプリがどの版を読むかは yamamuki の PR で決める。
+- 公開した Release とその添付ファイルは、削除も差し替えもしない。アプリが読んでいる版のデータが消えるため。直したいときは新しい版を作る。
 - OpenStreetMap のサーバーやデータの配布元は共有の無料サービス。取得の回数や量を増やす変更は避け、増えるときは PR の説明に理由と量の目安を書く。
 
 ## 変更の確かめ方
@@ -95,6 +97,7 @@ Co-authored-by: Codex GPT-6
 コミットの前に、共通の確認と変更したデータに応じたテストを行う。具体的なコマンド・必要なツール・CI での実行範囲は、各 README の記述を参照する。手順の重複と更新漏れを避けるため、このファイルにはコマンドを転記しない。
 
 - 共通の確認（改行コード・BOM、手動公開入口）: [ルート README の「変更の確かめ方」](README.md#変更の確かめ方)
+- 地点の共通ビューアのテスト: [地点 README の「共通ビューアのテスト」](points/README.md#共通ビューアのテスト)
 - 国土地理院の山頂 JSON の Release 公開テスト: [GSI 山頂 README の「テスト」](points/gsi-peaks/README.md#テスト)
 - テスト用地点の生成・公開テスト: [テスト用地点 README の「テスト」](points/testdata/README.md#テスト)
 - 山頂データの単体テスト・小さな PBF での生成テスト: [山頂 README の「テスト」](points/osm-peaks/README.md#テスト)
@@ -162,7 +165,7 @@ AI ツールが起こしやすい失敗を防ぐための指示。人の作業�
 ## 文字コードと改行コード
 
 - テキストファイルは UTF-8、改行は LF にする（`.bat` だけ CRLF）。
-- Markdown（`.md`）は BOM 付きにする（BOM が無いと文字化けする AI ツールがあるため）。Markdown 以外には BOM を付けない。
+- Markdown（`.md`）は BOM 付きにする（BOM が無いと文字化けする AI ツールがあるため）。それ以外には BOM を付けない。
 - 例外として、スキルの `SKILL.md` には BOM を付けない。先頭の `---` からスキルの設定を読むため、BOM があると読めなくなるおそれがある。
 - この決まりは `.gitattributes` と `.editorconfig` に書いてある。指定のない新規ファイルは、同じディレクトリにある同じ種類のファイルに合わせる。
 - ルールどおりかは CI の「共通：文字形式の確認」で確かめている。手元では `.github/scripts/check-text-format.sh` で確かめられる。

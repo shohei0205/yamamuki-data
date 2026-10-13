@@ -2,7 +2,7 @@
 # 改行コードと BOM が .gitattributes / .editorconfig の指定どおりかを確かめる。
 # - リポジトリに入っているテキストファイルは改行が LF(.bat もリポジトリ内は LF で、チェックアウト時に CRLF になる)
 # - Markdown は BOM 付き。ただしスキルの SKILL.md は BOM なし
-# - それ以外のテキストファイルは BOM なし
+# - Markdown 以外のテキストファイルは BOM なし
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 

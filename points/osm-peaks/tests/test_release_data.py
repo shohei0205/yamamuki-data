@@ -146,10 +146,37 @@ class ReleaseDataTests(unittest.TestCase):
                     patch.object(release_data, "previous_release", return_value=None,
                                  side_effect=RuntimeError("通信失敗") if failure else None), \
                     patch.object(release_data, "gh", return_value="https://github.com/owner/repo/releases/tag/untagged-123\n") as gh:
-                release_data.prepare(directory)
+                release_data.prepare(directory, "dev")
                 self.assertIn("auto_publish=false", (Path(directory) / "output").read_text())
                 self.assertIn("--draft", gh.call_args.args)
                 self.assertNotIn("--draft=false", gh.call_args.args)
+
+    def test_stable_preparation_releases_without_draft_or_pages(self):
+        for warnings in ([], ["全国の件数が減りました", "比較不能"]):
+            notes = []
+
+            def gh(*args):
+                notes.append(Path(args[args.index("--notes-file") + 1]).read_text(encoding="utf-8-sig"))
+                return "https://github.com/owner/repo/releases/tag/osm-peaks-test\n"
+            with self.subTest(warnings=warnings), tempfile.TemporaryDirectory() as directory, \
+                    patch.dict(os.environ, {"GITHUB_OUTPUT": str(Path(directory) / "output")}), \
+                    patch.object(release_data, "validate", return_value=self.current), \
+                    patch.object(release_data, "previous_release", return_value=self.current), \
+                    patch.object(release_data, "assess", return_value=warnings), \
+                    patch.object(release_data, "gh", side_effect=gh) as mock:
+                release_data.prepare(directory)
+                arguments = mock.call_args.args
+                self.assertNotIn("--draft", arguments)
+                self.assertIn("--latest=false", arguments)
+                self.assertIn("--prerelease=false", arguments)
+                # 正式版は検査に通っても Pages の公開に進まない。
+                self.assertIn("auto_publish=false", (Path(directory) / "output").read_text())
+                if warnings:
+                    self.assertTrue(notes[0].startswith("## 要確認\n\n- 全国の件数が減りました\n- 比較不能\n\n## データの検査結果（生成後）"))
+                    self.assertTrue(release_data.needs_review(dict(body="\ufeff" + notes[0])))
+                else:
+                    self.assertTrue(notes[0].startswith("## データの検査結果（生成後）"))
+                    self.assertFalse(release_data.needs_review(dict(body=notes[0])))
 
 
     def test_invalid_tag_never_calls_github(self):

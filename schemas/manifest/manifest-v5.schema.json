@@ -79,6 +79,32 @@
       "type": "string",
       "pattern": "\\S",
       "description": "データセットの表示名。新規生成時に記載する。"
+    },
+    "supplementSources": {
+      "type": "object",
+      "description": "補足 JSON の sources に登録した出典 ID と出典情報。タグ名・ファイル名とは独立。",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^\\S(?:.*\\S)?$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "license": {
+            "type": "string"
+          },
+          "attribution": {
+            "type": "string"
+          },
+          "changes": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
     }
   },
   "additionalProperties": true,
