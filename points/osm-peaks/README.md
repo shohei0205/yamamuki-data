@@ -207,19 +207,6 @@ python scripts/build_data.py build/japan-latest.osm.pbf \
 
 元データの取得には数 GB の通信量と空き容量が必要。元データは `points/osm-peaks/build/`、配布ファイルは `points/osm-peaks/dist/` に保存し、どちらも git に入れない。
 
-### 山頂に SVG を設定する
-
-`points/osm-peaks/graphics/` に `<assetId>.svg` と、地点 ID から assetId への対応表 `points.json` を置く。対応表の例は `{"3403990450":"fuji"}`。生成する地点の中から対応する ID に `graphic` を追加する。SVG を用意する場合は、この資料に画像の出典・作成者・利用条件も追記する。
-
-月次・手動の生成 Action は `graphics/points.json` がある場合に画像を取り込み、対応する地点の `graphic.svg` に SVG 本文を内蔵する。手元で生成する場合は次のように指定する（作業場所は `points/osm-peaks/`）。
-
-```bash
-python scripts/build_data.py build/japan-latest.osm.pbf --version local \
-  --graphics-directory graphics --graphics-map graphics/points.json
-```
-
-入力の SVG が欠けている場合は生成を止める。SVG 本文はデータ本体と一緒に圧縮し、公開前は取得した JSON 内の SVG を再検査する。配布するのは gzip と manifest の2ファイル。入力の SVG は git に保存し、生成した `dist/` はコミットしない。
-
 ## テスト
 
 Python 3.12 と osmium-tool を使い、単体テストと小さな PBF による生成テストを行う。SVG の対応表・JSON への内蔵・倍率・未対応要素の拒否・公開前の再検査も単体テストで確認する。CIの「共通：データ処理のテスト」（`.github/workflows/test.yml`）の「地点 / OSM山頂」ジョブで push・PR 時に実行する。

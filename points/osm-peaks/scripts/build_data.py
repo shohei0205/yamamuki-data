@@ -210,7 +210,7 @@ def verified_source_url(pbf):
     return url
 
 
-def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None, graphics_map=None, tags_directory=None, supplements_path=DEFAULT_SUPPLEMENTS):
+def build(pbf, output_dir, version, *, channel="stable", tags_directory=None, supplements_path=DEFAULT_SUPPLEMENTS):
     started = time.monotonic()
     source_url = verified_source_url(pbf)
     logging.info("全国データの生成を開始します: %s（版 %s）", pbf, version)
@@ -231,23 +231,13 @@ def build(pbf, output_dir, version, *, channel="stable", graphics_directory=None
         )
         logging.info("osmium の抽出完了")
         mountains, latest_timestamp = read_mountains(extracted)
-        # 画像も元データに含め、補足適用前の値を別添付として保存する。
+        # 補足適用前の地点データを別添付として保存する。
         supplements = read_supplements(supplements_path) if tags_directory is None else None
         if supplements is not None:
             supplement_sources = supplements.get("sources", {})
         else:
             supplement_sources = {row.get("name", row.get("tag")): {key: value for key, value in row.items() if key not in ("name", "tag")}
                                   for row in apply_tag_jsons(mountains, tags_directory)}
-        if graphics_map is not None:
-            mappings = json.loads(Path(graphics_map).read_text(encoding="utf-8"))
-            if not isinstance(mappings, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in mappings.items()):
-                raise ValueError("画像の対応表は地点 id と assetId の対応で指定してください")
-            for mountain in mountains:
-                if mountain["id"] in mappings:
-                    asset_id = mappings[mountain["id"]]
-                    if not re.fullmatch(r"[a-z][a-z0-9_-]*", asset_id) or graphics_directory is None:
-                        raise ValueError("画像の対応表と SVG の保存先を確認してください")
-                    mountain["graphic"] = {"svg": (Path(graphics_directory) / f"{asset_id}.svg").read_text(encoding="utf-8")}
         original = mountains
         if supplements is not None:
             mountains = apply_supplements(original, supplements)
@@ -265,11 +255,9 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=Path("dist"))
     parser.add_argument("--version", required=True)
     parser.add_argument("--channel", choices=("stable", "dev"), default=os.environ.get("RELEASE_CHANNEL", "stable"))
-    parser.add_argument("--graphics-directory", type=Path)
-    parser.add_argument("--graphics-map", type=Path)
     parser.add_argument("--supplements", type=Path, default=DEFAULT_SUPPLEMENTS)
     args = parser.parse_args()
-    manifest = build(args.pbf, args.output_dir, args.version, channel=args.channel, graphics_directory=args.graphics_directory, graphics_map=args.graphics_map, supplements_path=args.supplements)
+    manifest = build(args.pbf, args.output_dir, args.version, channel=args.channel, supplements_path=args.supplements)
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
 
 
