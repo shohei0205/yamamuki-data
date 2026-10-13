@@ -17,7 +17,7 @@ OSM 山頂とテスト用地点は、次の手順で取得して利用できる�
 
 | データ | 取得する版の選び方 |
 |---|---|
-| OSM 山頂 | [OSM 山頂の取得先](osm-peaks/README.md)を参照する。開発版は Pages の manifest から取得できる。正式版の新しい Release は Pages に反映しないため、[Releases 一覧](https://github.com/shohei0205/yamamuki-data/releases)で `osm-peaks-<version>` の版を選び、Assets の `manifest.json` を取得する |
+| OSM 山頂 | [OSM 山頂の取得先](osm-peaks/README.md)を参照する。開発版（Pre-release）は Pages の manifest から取得できる。正式版の新しい Release は Pages に反映しないため、[Releases 一覧](https://github.com/shohei0205/yamamuki-data/releases)で `osm-peaks-<version>` の版を選び、Assets の `manifest.json` を取得する |
 | テスト用地点 | [開発版カタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json)の `id` が `testdata` の項目を選ぶ。正式版は配布しない。データの内容は [テスト用地点の README](testdata/README.md)を参照する |
 
 1. manifest を取得する。カタログを使う場合は、対象項目の `manifest` に同じ情報が入っているため、別途取得する必要はない。
@@ -59,12 +59,12 @@ manifest の共通項目は [manifest フォーマットの「項目」](../form
 
 ## 公開データのカタログ
 
-公開済みの地点データすべてのダウンロードと検証に必要な情報を、次のカタログから取得できる。
+Pages に掲載されている地点データの取得・検証情報を、次のカタログから取得できる。正式版の通常生成はカタログを更新しないため、正式版の最新 Release をすべて含む一覧ではない。
 
-| 配布先 | カタログ |
-|---|---|
-| 正式版 | [正式版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog.json) |
-| 開発版 | [開発版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) |
+| 配布先 | カタログ | 現在の更新方法 |
+|---|---|---|
+| 正式版 | [正式版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog.json) | 通常生成では更新しない。掲載済み情報を保持し、手動公開・復旧・削除時は更新する |
+| 開発版（Pre-release） | [開発版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) | 開発版の公開・削除時に更新する |
 
 項目・制約・読み込み方法・配布先ごとの収録範囲は [地点カタログフォーマット](formats/catalog.md) を参照する。機械検証用のスキーマは [地点カタログの版1](schemas/catalog-v1.schema.json)。
 
@@ -74,7 +74,7 @@ Actions の「地点：カタログから削除」→「Run workflow」で、正
 
 地点カタログとサイト全体の一覧から対象を除き、その manifest・公開履歴の Pages ファイルも削除する。他のデータ・配布先・公開履歴、Release とデータ本体は保持する。
 
-既存一覧の取得・検証に失敗した場合や対象がない場合は配置を中止する。公開と同じ `publish-data-pages` グループで直列化し、配置後にカタログと履歴の一致を確認する。削除済みデータを再度公開すれば一覧に戻る。定期生成があるデータは次回の公開時に再掲載されるため、継続して配布を止める場合は生成・公開の運用も変更する。
+既存一覧の取得・検証に失敗した場合や対象がない場合は配置を中止する。公開と同じ `publish-data-pages` グループで直列化し、配置後にカタログと履歴の一致を確認する。削除済みデータを再度公開すれば一覧に戻る。Pages に公開するデータは次回の公開時に再掲載されるため、継続して配布を止める場合は生成・公開の運用も変更する。
 
 ### アプリで利用できるデータを判定する
 

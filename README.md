@@ -35,7 +35,7 @@ release_tools/     データ種別共通の公開入口
 
 生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データとデータ本体は原則として git に含めない。国土地理院版は生成済みの地点 JSON と出典要約 JSON だけをコミットし、Action で Release を作る。開発版の最新版を示す小さな `manifest.json` は、Actions の生成物として GitHub Pages に公開する。
 
-正式版は Release を作るところまでで、Pages には公開しない。利用する側で Release の版を選び、その Release に添付された manifest の URL を固定して取得する。アプリが読んでいる版のデータが消えないよう、公開した Release とその添付ファイルは削除・差し替えしない。
+正式版の通常生成は Release を作るところまでで、Pages は更新しない。利用する側で Release の版を選び、その Release に添付された manifest の URL を固定して取得する。アプリが読んでいる版のデータが消えないよう、公開した Release とその添付ファイルは削除・差し替えしない。
 
 データの種類ごとに公開時期と最新版の参照先を分ける。正式版と開発版も独立して扱い、リポジトリ全体の `releases/latest` はアプリの参照先に使わない。具体的な URL とタグは各データの文書を参照する。
 
@@ -48,7 +48,7 @@ release_tools/     データ種別共通の公開入口
 
 正式版も開発版も、このリポジトリの同じ [Releases 一覧](https://github.com/shohei0205/yamamuki-data/releases) に公開する。`main`・`dev` は生成処理の実行元で、配布ファイルは各 Release の **Assets** に添付する。データの種類と正式版・開発版の違いは、Release のタグで区別する。
 
-最新版を示す manifest は GitHub Pages に置く。`main`・`dev` のコードでサイトのファイルを生成して直接配置するため、配布専用ブランチは作らない。生成物も git に入れない。
+開発版の最新版を示す manifest は GitHub Pages に置く。正式版の Pages の manifest・カタログ・履歴は通常生成では更新されず、最新 Release の一覧としては使わない。手動の公開・復旧・カタログ削除では、対象の Pages 情報を更新する。サイトは Actions から直接配置し、配布専用ブランチや生成物のコミットは作らない。
 
 データごとの manifest と公開履歴の URL、データ本体の取得方法は、各データの文書にまとめる。
 
@@ -85,7 +85,7 @@ Actions の「共通：確認済みデータを公開」を入口とする。正
 
 利用開始時に、リポジトリの Settings → Pages → Build and deployment の Source を **GitHub Actions** にし、`github-pages` 環境の配置元として `main` と `dev` を許可する。
 
-履歴版の公開後、Actions で manifest のサイトを生成し、`upload-pages-artifact` と `deploy-pages` で GitHub Pages に直接配置する。ソースは `main`・`dev` に置き、配布専用ブランチや生成物のコミットは作らない。
+開発版の自動公開、確認済みデータの手動公開・復旧、カタログ削除では、Actions で manifest のサイトを生成し、`upload-pages-artifact` と `deploy-pages` で GitHub Pages に直接配置する。ソースは `main`・`dev` に置き、配布専用ブランチや生成物のコミットは作らない。
 
 サイト全体の更新には `/catalog.json` を使う。`schemaVersion: 1` とし、`manifests` にパスと manifest の対応、公開履歴も保存する。既存一覧からサイト全体を作り直し、対象のデータ・配布先だけを置き換える。他のデータ・配布先・履歴は引き継ぐ。これは [アプリが使う地点カタログ](points/README.md#公開データのカタログ) とは別の一覧である。
 
@@ -99,7 +99,7 @@ Pages を更新するジョブは共通の `publish-data-pages` グループで�
 
 生成・検査と確認済みデータの公開は、処理の冒頭に Summary へ実行パラメーターを表示する。ブランチ・イベント・実行者・実行回数・配布先に加え、手動公開では入力 URL またはタグ・SHA-256・確認内容と公開理由・Pages 初期化の指定を表示する。空欄の場合の扱いも明記する。データ固有の入力項目と検査結果は各 README を参照する。
 
-公開ジョブの Summary には公開後の Release の URL、最新版 manifest の固定 URL と Pages の配置結果を表示する。下書きで保留された場合は参照先を更新しない。単体テストのダミーデータは Summary に出さない。過去の実行に保存された Summary は書き換わらない。
+Pages を更新する公開ジョブの Summary には、公開後の Release の URL、配置する manifest の固定 URL と Pages の配置結果を表示する。正式版の通常生成は Release の作成までで、Pages 配置は行わない。下書きで保留された場合は参照先を更新しない。単体テストのダミーデータは Summary に出さない。過去の実行に保存された Summary は書き換わらない。
 
 ## 公開履歴
 

@@ -4,14 +4,14 @@
 
 全国の山頂データの形式、取得先、生成・検査・公開の手順をまとめる。
 
-| 配布先 | 最新版の manifest | 公開履歴 |
-|---|---|---|
-| 正式版 | [https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json) | [https://shohei0205.github.io/yamamuki-data/points/osm-peaks/history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/history.json) |
-| 開発版 | [https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json) | [https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/history.json) |
+| 配布先 | manifest の取得方法 |
+|---|---|
+| 正式版 | 利用する `osm-peaks-<version>` の Release を選び、`https://github.com/shohei0205/yamamuki-data/releases/download/<タグ>/manifest.json` を固定して取得する |
+| 開発版（Pre-release） | [開発版の最新版 manifest](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json) を取得する |
 
-データ本体（`osm-peaks.json.gz`）は、各 manifest の `downloadUrl` から取得する。
+データ本体（`osm-peaks.json.gz`）は manifest の `downloadUrl` から取得する。正式版を切り替えるときは、利用する側で固定した Release のタグを更新する。リポジトリ全体の `releases/latest` は使わない。
 
-正式版は生成しても Pages を更新しない。上の正式版の manifest と公開履歴は、その運用に変えた時点のまま残る。利用する側で正式版の Release を選び、添付された manifest の URL を固定して取得する。
+正式版の通常生成は Pages を更新しない。正式版の [Pages manifest](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json) と公開履歴には、以前掲載した情報が残る。手動公開・復旧・カタログ削除では更新されることがあるが、正式版の最新 Release の取得先としては使わない。
 
 ## 配るもの
 
@@ -32,7 +32,7 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 
 ## 置き場所
 
-[Releases](https://github.com/shohei0205/yamamuki-data/releases) に `manifest.json` と `osm-peaks.json.gz` を添付する。最新版を示す manifest と公開履歴は、冒頭の表にある Pages の URL から取得できる。
+[Releases](https://github.com/shohei0205/yamamuki-data/releases) に `manifest.json` と `osm-peaks.json.gz` を添付する。開発版の最新版 manifest は冒頭の表、公開履歴は「公開履歴」の節から取得できる。正式版は Release の manifest を使う。
 
 manifest の項目・型は [リポジトリ共通の manifest.json](../../formats/manifest.md) を、形式の版ごとの説明と変更履歴は [地点データフォーマット](../formats/data.md) を参照する。版4 のときの配り方（`peaks/`・`peaks-<version>`・`japan-mountains.json.gz`）は [版4の旧形式データ](#版4の旧形式データ) にある。
 
@@ -56,14 +56,9 @@ Release のタイトルとタグは同じ値とし、正式版は `osm-peaks-<ve
 
 山頂データは正式版と開発版の参照先を分ける。公開済みの地点データ一覧は [地点カタログ](../README.md#公開データのカタログ) を参照する。リポジトリ全体の `releases/latest` は使わない。
 
-| 配布先 | Pages のパス | データ本体を置くタグ |
-|---|---|---|
-| 正式版（`stable`） | [https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json) | `osm-peaks-<version>` |
-| 開発版（`dev`） | [https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json) | `osm-peaks-dev-<version>` |
-
 正式版と開発版で manifest の形式は共通とし、開発版の履歴 Release は Pre-release とする。アプリで配布先を選ぶときの扱いは [地点カタログの説明](../README.md#公開データのカタログ) を参照する。
 
-件数・更新日時の比較、初回の手動確認、異常時の下書き保留、手動公開、参照先の復旧は配布先ごとに独立して行う。開発版を正式版の比較基準にせず、開発版の公開で正式版の参照先を更新しない。タグの衝突を防ぐため、`latest` と `dev-` で始まる版名は予約する。
+正式版・開発版の検査はそれぞれの配布先で行う。Pages の自動更新と下書きの自動公開は開発版だけで行い、確認済みデータの手動公開・参照先の復旧は対象の配布先に行う。開発版を正式版の比較基準にせず、開発版の公開で正式版の参照先を更新しない。タグの衝突を防ぐため、`latest` と `dev-` で始まる版名は予約する。
 
 Pages の初期設定、サイト全体の一覧・履歴の引き継ぎ、配置確認、参照先の復旧は [共通の Pages 配置](../../README.md#pages-への配置と参照先の復旧) を参照する。
 
@@ -91,7 +86,7 @@ Pages の初期設定、サイト全体の一覧・履歴の引き継ぎ、配�
 
 ## 公開履歴
 
-山頂の公開履歴は、正式版の [history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/history.json) と開発版の [history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/history.json) に保存する。項目と記録のタイミングは [共通の公開履歴](../../README.md#公開履歴) を参照する。
+Pages に掲載した履歴は、正式版の [history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/history.json) と開発版の [history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/history.json) に保存する。正式版の通常生成はこの履歴を更新しないため、正式版 Release の一覧ではない。項目と記録のタイミングは [共通の公開履歴](../../README.md#公開履歴) を参照する。
 
 ## 作り方
 
