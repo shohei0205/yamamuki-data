@@ -1,6 +1,6 @@
 ﻿# yamamuki-data
 
-山むきアプリ（[shohei0205/yamamuki](https://github.com/shohei0205/yamamuki)）が使うデータを作って配るためのリポジトリ。
+山の地点データなどを作り、誰でも使える形で配るリポジトリ。[山むきアプリ](https://github.com/shohei0205/yamamuki)もこのデータを使っている。
 
 ## データの種類
 
@@ -11,16 +11,17 @@
 
 収録対象、データ本体の形式、ダウンロード先、生成・公開手順、検査基準は、種類ごとの文書にまとめる。
 
-国土地理院の山頂 JSON を Release に配布する Action は [GSI 山頂の公開手順](points/gsi-peaks/README.md)を参照する。Actions の「地点 / 国土地理院山頂：JSON を Release に公開」から起動できる。
+## データを利用する
 
-## 地点データビューア
-
-[地点データビューアの HTML](points/viewer.html) を保存してブラウザで開くと、地点データの確認と補足 JSON の編集ができる。[使い方](points/README.md#地点データをブラウザで確認する)を参照する。
+1. [地点データの一覧](points/README.md)から、利用するデータを選ぶ。
+2. [地点データの取得・利用手順](points/README.md#データを取得して利用する)に従い、manifest とデータ本体を取得して検証する。
+3. JSON の項目は [地点 JSON の形式](points/README.md#地点-json-の形式)、出典・利用条件は [ライセンス](#ライセンス)を確認する。
 
 ## フォルダ構成
 
 ```text
 points/            地点データ（詳細は points/README.md）
+formats/           データ種別に共通する manifest の版別形式説明
 schemas/           データ種別に共通する manifest の版別スキーマ
 release_tools/     データ種別共通の公開入口
 .github/workflows/ GitHub Actions の定義
@@ -28,11 +29,13 @@ release_tools/     データ種別共通の公開入口
 
 データの種類ごとにフォルダを分け、内部の構成は各 README に記載する。Actions の定義は `.github/workflows/` に置く。
 
-## 配布の方針
+## データの配布
+
+### 配布の方針
 
 生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データとデータ本体は原則として git に含めない。国土地理院版は生成済みの地点 JSON と出典要約 JSON だけをコミットし、Action で Release を作る。開発版の最新版を示す小さな `manifest.json` は、Actions の生成物として GitHub Pages に公開する。
 
-正式版は Release を作るところまでで、Pages には公開しない。アプリ（yamamuki）がどの版を読むかは、yamamuki の PR で Release の manifest を選んで決める。アプリが読んでいる版のデータが消えないよう、公開した Release とその添付ファイルは削除・差し替えしない。
+正式版の通常生成は Release を作るところまでで、Pages は更新しない。利用する側で Release の版を選び、その Release に添付された manifest の URL を固定して取得する。アプリが読んでいる版のデータが消えないよう、公開した Release とその添付ファイルは削除・差し替えしない。
 
 データの種類ごとに公開時期と最新版の参照先を分ける。正式版と開発版も独立して扱い、リポジトリ全体の `releases/latest` はアプリの参照先に使わない。具体的な URL とタグは各データの文書を参照する。
 
@@ -45,59 +48,13 @@ release_tools/     データ種別共通の公開入口
 
 正式版も開発版も、このリポジトリの同じ [Releases 一覧](https://github.com/shohei0205/yamamuki-data/releases) に公開する。`main`・`dev` は生成処理の実行元で、配布ファイルは各 Release の **Assets** に添付する。データの種類と正式版・開発版の違いは、Release のタグで区別する。
 
-最新版を示す manifest は GitHub Pages に置く。`main`・`dev` のコードでサイトのファイルを生成して直接配置するため、配布専用ブランチは作らない。生成物も git に入れない。
+開発版の最新版を示す manifest は GitHub Pages に置く。正式版の Pages の manifest・カタログ・履歴は通常生成では更新されず、最新 Release の一覧としては使わない。手動の公開・復旧・カタログ削除では、対象の Pages 情報を更新する。サイトは Actions から直接配置し、配布専用ブランチや生成物のコミットは作らない。
 
 データごとの manifest と公開履歴の URL、データ本体の取得方法は、各データの文書にまとめる。
 
-## manifest.json
+### 配布データの取得情報（manifest.json）
 
-このリポジトリで配布する各データセットに共通する、UTF-8（BOM なし）の JSON オブジェクト。データ本体の取得先・大きさ・ハッシュ・出典を記載する。`schemaVersion` は manifest 自体の形式の版を表す。現在は **版5**。データ本体のスキーマの版は独立して管理し、manifest の版と同じ番号であるとは限らない。使用するデータ本体の版は `dataSchemaVersion` に記載する。データ本体の構造は種類ごとの仕様に従い、地点データは [points/README.md](points/README.md#地点の形式) に記載する。版ごとの形式と変更履歴は [地点データフォーマット](points/formats/data-v5.md) にまとめている。
-
-機械検証用の [manifest の版5](schemas/manifest-v5.schema.json)（JSON Schema Draft 2020-12）を用意している。共通スキーマはデータ種別ごとの追加項目を許可する。
-
-`format` の検査を有効にした検証ツールを使う。日時の前後関係・本体のサイズ・ハッシュ・件数・取得 URL と Release の一致は JSON Schema では照合できないため、公開処理で別途検証する。
-
-### 項目
-
-| 項目 | JSON の型 | 必須 | 内容・制約 |
-|---|---|---|---|
-| `schemaVersion` | integer | 必須 | 形式の版。新規生成は `5` |
-| `dataSchemaVersion` | integer | 新規生成では必須 | データ本体のスキーマの版。正の整数。manifest の `schemaVersion` と独立して管理する |
-| `name` | string | 任意 | データセットの表示名 |
-| `version` | string | 必須 | データセットの配布版。英数字で始まり、英数字・ピリオド・ハイフン・下線で構成する |
-| `downloadUrl` | string | 必須 | この版の gzip データ本体を取得する HTTPS URL |
-| `fileName` | string | 必須 | gzip データ本体のファイル名。データセットごとに定める |
-| `sha256` | string | 必須 | gzip ファイルそのものの SHA-256。小文字の16進数64文字 |
-| `sizeBytes` | integer | 必須 | gzip ファイルのバイト数。正の整数 |
-| `uncompressedSizeBytes` | integer | 必須 | 展開後の JSON のバイト数。正の整数 |
-| `sourceTimestamp` | string | 任意 | 元データ全体の基準日時。取得日時とは区別する。不明なら省略 |
-| `sourceUrl` | string | 任意 | 元データの取得・参照 URL。特定できない場合は省略 |
-| `license` | string | 必須 | データセットの利用条件。OSM 由来では `ODbL-1.0` |
-| `attribution` | string | 必須 | 表示すべき出典。OSM 由来では `© OpenStreetMap contributors` |
-| `supplementSources` | object | 任意 | 補足 JSON の `sources` と同じ、出典 ID と出典情報の対応。各属性は下表を参照 |
-
-補足 JSON の `sources` に登録された出典情報を `supplementSources` にそのまま保存する。出典 ID はオブジェクトのキーとして保持し、タグ名やファイル名とは独立して扱う。出典情報がない場合は省略する。トップレベルの `sourceUrl`・`license`・`attribution` は元データの出典として保持する。
-
-各出典 ID の値は、次の任意の文字列属性を持つオブジェクトとする。地点や補足項目ごとの出典は指定しない。
-
-| 属性 | 必須 | 内容・記載例 |
-|---|---|---|
-| `source` | 任意 | 一覧の作成に使った資料の名称・参照 URL。Wikipedia なら記事名と参照した版の固定リンクを記載する |
-| `license` | 任意 | 出典の資料に適用されるライセンスの名称・版・説明ページの URL（例: `CC BY-SA 4.0 https://creativecommons.org/licenses/by-sa/4.0/`） |
-| `attribution` | 任意 | 出典の利用条件に従って表示する著作者名・クレジット（例: `Wikipedia「日本百名山」の投稿者`） |
-| `changes` | 任意 | 出典から対応表を作る際に行った加工・変更（例: `山名一覧を抽出し、OpenStreetMap の osmId を追加`） |
-
-これらの属性は地点補足対応表の出典情報であり、地点の座標など OSM 由来のデータに対するトップレベルの `sourceUrl`・`license`・`attribution` と併せて参照する。省略された属性の値を生成処理で推測して補うことはない。
-
-データ種別ごとの件数・更新日時などの追加項目と制約は、そのデータの仕様に記載する。日時は UTC の ISO 8601 形式（例: `2026-09-30T20:21:22Z`）を使い、記録していない日時を推測して埋めない。
-
-### 読み込みと公開
-
-利用するアプリは対応する `schemaVersion` を確認し、`downloadUrl` から本体を取得する。展開前に `sizeBytes` と `sha256`、展開後に `uncompressedSizeBytes` を照合する。データ種別ごとの件数なども各仕様に従って照合する。通信や検証に失敗した場合は保存済みデータを維持する。
-
-データセットと正式版・開発版ごとに最新版の manifest の URL を分ける。Release に添付する manifest と最新版として配置する manifest は同じ内容を使い、公開済みの版の本体は差し替えない。公開先の URL・Release タグ・ファイル名は各データセットの資料に記載する。
-
-スキーマファイルは種類ごとに保存する。データ種別に共通する manifest は `schemas/manifest-v<版>.schema.json` に置き、データ本体などのスキーマはデータ種別のフォルダ（地点データは `points/schemas/`）に置く。それぞれ必要なときに独立して版を上げ、公開済みの版は原則変更しない。
+データ本体の取得先・大きさ・ハッシュ・出典を記載する共通の JSON。項目・制約・読み込み方法は [manifest フォーマット](formats/manifest.md) を参照する。機械検証用のスキーマは [manifest の版5](schemas/manifest-v5.schema.json)。
 
 ## Actions の構成
 
@@ -128,7 +85,7 @@ Actions の「共通：確認済みデータを公開」を入口とする。正
 
 利用開始時に、リポジトリの Settings → Pages → Build and deployment の Source を **GitHub Actions** にし、`github-pages` 環境の配置元として `main` と `dev` を許可する。
 
-履歴版の公開後、Actions で manifest のサイトを生成し、`upload-pages-artifact` と `deploy-pages` で GitHub Pages に直接配置する。ソースは `main`・`dev` に置き、配布専用ブランチや生成物のコミットは作らない。
+開発版の自動公開、確認済みデータの手動公開・復旧、カタログ削除では、Actions で manifest のサイトを生成し、`upload-pages-artifact` と `deploy-pages` で GitHub Pages に直接配置する。ソースは `main`・`dev` に置き、配布専用ブランチや生成物のコミットは作らない。
 
 サイト全体の更新には `/catalog.json` を使う。`schemaVersion: 1` とし、`manifests` にパスと manifest の対応、公開履歴も保存する。既存一覧からサイト全体を作り直し、対象のデータ・配布先だけを置き換える。他のデータ・配布先・履歴は引き継ぐ。これは [アプリが使う地点カタログ](points/README.md#公開データのカタログ) とは別の一覧である。
 
@@ -142,7 +99,7 @@ Pages を更新するジョブは共通の `publish-data-pages` グループで�
 
 生成・検査と確認済みデータの公開は、処理の冒頭に Summary へ実行パラメーターを表示する。ブランチ・イベント・実行者・実行回数・配布先に加え、手動公開では入力 URL またはタグ・SHA-256・確認内容と公開理由・Pages 初期化の指定を表示する。空欄の場合の扱いも明記する。データ固有の入力項目と検査結果は各 README を参照する。
 
-公開ジョブの Summary には公開後の Release の URL、最新版 manifest の固定 URL と Pages の配置結果を表示する。下書きで保留された場合は参照先を更新しない。単体テストのダミーデータは Summary に出さない。過去の実行に保存された Summary は書き換わらない。
+Pages を更新する公開ジョブの Summary には、公開後の Release の URL、配置する manifest の固定 URL と Pages の配置結果を表示する。正式版の通常生成は Release の作成までで、Pages 配置は行わない。下書きで保留された場合は参照先を更新しない。単体テストのダミーデータは Summary に出さない。過去の実行に保存された Summary は書き換わらない。
 
 ## 公開履歴
 
@@ -161,7 +118,11 @@ Pages を更新するジョブは共通の `publish-data-pages` グループで�
 
 履歴も `catalog.json` に含め、次回の配置で他の配布先の履歴と一緒に引き継ぐ。配置後は manifest と履歴の両方が生成内容と一致することを確認する。各版のアセット本体は Release に残し、Pages に複製しない。記録を始める前の公開日時や再公開の経緯は復元しない。
 
-## ブランチのマージ方針
+## 開発ルール
+
+作業の進め方は [AGENTS.md](AGENTS.md) を参照する。データを追加するときは種類ごとのフォルダにスクリプト・テスト・README をまとめ、種類ごとの README のデータ一覧からリンクする。
+
+### ブランチのマージ方針
 
 開発版の `dev` と正式版の `main` は継続して使い、変更は PR を通して取り込む。取り込み先に応じて、次のマージ方法を選ぶ。
 
@@ -179,7 +140,7 @@ Pages を更新するジョブは共通の `publish-data-pages` グループで�
 
 GitHub のリポジトリ設定では、マージコミットとスカッシュマージの両方を許可する。マージはユーザーが行い、エージェントは行わない。
 
-## 変更の確かめ方
+### 変更の確かめ方
 
 以下はリポジトリのルートから実行する。手動公開入口のテストには Python 3.12 を使い、外部通信は行わない。
 
@@ -197,10 +158,38 @@ CI の「共通：文字形式の確認」はすべての PR で文字コード�
 
 - [地点データのテスト](points/README.md#変更の確かめ方)
 
-## 開発ルール
-
-作業の進め方は [AGENTS.md](AGENTS.md) を参照する。データを追加するときは種類ごとのフォルダにスクリプト・テスト・README をまとめ、種類ごとの README のデータ一覧からリンクする。
-
 ## ライセンス
 
-データセットごとに出典と利用条件を確認し、各 README と manifest に記載する。アプリなどで利用する場合も、対応する出典とライセンスを表示する。
+特定の Release を使うときは、その Release の manifest に記載された出典・利用条件を確認する。
+
+### 配布データ
+
+| 対象 | 出典・表示 | 利用条件 | 補足・詳細 |
+|---|---|---|---|
+| [OSM 山頂](points/osm-peaks/README.md)（`osm-peaks`） | © OpenStreetMap contributors | [ODbL-1.0](https://opendatacommons.org/licenses/odbl/1-0/) | [OSM の著作権とライセンス](https://www.openstreetmap.org/copyright)を参照 |
+| OSM 山頂の補足適用前の元データ・版4の旧形式データ | © OpenStreetMap contributors | ODbL-1.0 | [互換データの扱い](points/osm-peaks/README.md#版4の旧形式データ)を参照 |
+| [国土地理院の山頂](points/gsi-peaks/README.md)（`gsi-peaks`） | 出典：国土地理院（日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成 | [公共データ利用規約 第 1.0 版](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（`PDL-1.0`） | 元資料 URL・取得日時・出典表示は [snapshot.json](points/gsi-peaks/snapshot.json) に記録 |
+| [テスト用地点](points/testdata/README.md)（`testdata`、開発版のみ） | 動作確認用の架空データ | CC0-1.0 | 内蔵 SVG と分類タグを含む |
+
+### 補足データ・画像
+
+| 対象 | 出典・表示 | 利用条件 | 補足・詳細 |
+|---|---|---|---|
+| 日本百名山の山名一覧 | Wikipedia「日本百名山」の投稿者 | CC BY-SA 4.0 | 参照した版・投稿者へのリンク・加工内容は [supplements.json の `sources`](points/osm-peaks/supplements.json) に記録 |
+| 日本百名山の照合に用いた地点データ | © OpenStreetMap contributors | ODbL-1.0 | 補足の出典は `sources` に記録し、配布データの manifest の `supplementSources` に引き継ぐ。元の地点データと補足の利用条件をそれぞれ確認する |
+| 地点に追加する画像 | 画像ごとの取得元・作成者 | 画像ごとの利用条件 | 追加時にデータセットの README に記載する |
+
+### 地点データビューアが利用する外部データ
+
+[地点データビューア（points/viewer.html）](points/viewer.html) が地図表示と所在地判定に利用するデータ。
+
+| 対象 | 出典 | 利用条件 | 補足・詳細 |
+|---|---|---|---|
+| 所在地判定用の行政区域 | 共同通信社の [japan-choropleth](https://github.com/kyodo-official/japan-choropleth) が加工した国土交通省「国土数値情報 行政区域データ 2025 年版」 | CC BY 4.0 | ビューアが取得し、配布する地点 JSON・補足 JSON には含めない |
+| 背景地図 | 地理院タイル | [地理院タイルの案内](https://maps.gsi.go.jp/development/ichiran.html)を参照 | ビューアが取得し、配布する地点 JSON・補足 JSON には含めない |
+
+### コード・文書
+
+| 対象 | ライセンスの指定状況 |
+|---|---|
+| リポジトリのコード・文書全体 | 全体に適用するライセンスファイルは置いていない。配布データの利用条件をコードや文書全体のライセンスとして扱わない |
