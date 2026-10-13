@@ -1,0 +1,42 @@
+{
+  "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
+  "attribution": "出典：国土地理院（日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成",
+  "sourceUrl": "https://www.gsi.go.jp/KOKUJYOHO/MOUNTAIN/1003zan20260331.csv",
+  "sourceDate": "2026-03-31",
+  "experimental": true,
+  "coordinatePolicy": "主な山岳一覧の最高地点。自然地名を追加した場合は山の代表点を含む。",
+  "elevationPolicy": "山岳一覧の標高を優先。任意の DEM 補完は代表点の地表標高であり公称の山頂標高ではない。",
+  "inputSha256": "db263d963da76ba0ff7d41168a96008d8f38053872a7a07472940a1f3c7891e9",
+  "pointCount": 17040,
+  "sourceSnapshot": {
+    "dem": {
+      "fileCount": 14286,
+      "firstFetchedAt": "2026-10-12T04:03:23Z",
+      "lastFetchedAt": "2026-10-12T15:00:35Z",
+      "urlTemplate": "https://cyberjapandata.gsi.go.jp/xyz/dem/14/{x}/{y}.txt"
+    },
+    "mountainList": {
+      "fileCount": 1,
+      "firstFetchedAt": "2026-10-12T04:02:20Z",
+      "lastFetchedAt": "2026-10-12T04:02:20Z",
+      "files": [
+        {
+          "url": "https://www.gsi.go.jp/KOKUJYOHO/MOUNTAIN/1003zan20260331.csv",
+          "fetchedAt": "2026-10-12T04:02:20Z",
+          "status": 200,
+          "lastModified": null,
+          "etag": null,
+          "transport": "Windows curl",
+          "sha256": "461f7c5fddc3d4a947a6acb3335e5f73e3dfb3e1f0d8a8acb285e1bcac2ca8fc",
+          "sizeBytes": 78800
+        }
+      ]
+    },
+    "natural": {
+      "fileCount": 60735,
+      "firstFetchedAt": "2026-10-12T04:33:35Z",
+      "lastFetchedAt": "2026-10-12T11:17:17Z",
+      "urlTemplate": "https://cyberjapandata.gsi.go.jp/xyz/experimental_nnfpt/15/{x}/{y}.geojson"
+    }
+  }
+}

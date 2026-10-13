@@ -37,6 +37,17 @@ jobs:
       - name: 単体テストと小さな PBF での生成テスト
         run: python -m unittest discover -s tests -v
 
+  gsi-peaks:
+    name: 地点 / 国土地理院山頂
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: コミット済み JSON と Release 公開処理のテスト
+        run: python -m unittest release_tools.tests.test_gsi_peaks -v
+
   test-points:
     name: 地点 / テストデータ
     runs-on: ubuntu-24.04
@@ -51,7 +62,7 @@ jobs:
   test:
     # dev の保護設定が要求するチェック名を維持する。
     name: test
-    needs: [common, osm-peaks, test-points]
+    needs: [common, osm-peaks, gsi-peaks, test-points]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -59,8 +70,10 @@ jobs:
         env:
           COMMON_RESULT: ${{ needs.common.result }}
           OSM_PEAKS_RESULT: ${{ needs.osm-peaks.result }}
+          GSI_PEAKS_RESULT: ${{ needs.gsi-peaks.result }}
           TEST_POINTS_RESULT: ${{ needs.test-points.result }}
         run: |
           test "$COMMON_RESULT" = success
           test "$OSM_PEAKS_RESULT" = success
+          test "$GSI_PEAKS_RESULT" = success
           test "$TEST_POINTS_RESULT" = success
