@@ -21,9 +21,6 @@ class GraphicsTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.source = self.root / "graphics"
-        self.source.mkdir()
-        (self.source / "fuji.svg").write_bytes(SVG)
         self.output = self.root / "dist"
         self.rows = [{"id": "1", "type": "peak", "name": "富士山", "latitude": 35,
                       "longitude": 139, "graphic": {"svg": SVG.decode("utf-8"), "scale": 1.5}}]
@@ -53,18 +50,21 @@ class GraphicsTests(unittest.TestCase):
                 entry = release_data.points_catalog({release_data.manifest_path(channel): manifest}, channel)["datasets"][0]
                 self.assertNotIn("graphics", entry["manifest"])
 
-    def test_build_applies_point_to_asset_map(self):
-        tags = self.root / "tags"
-        tags.mkdir()
-        mappings = self.root / "points.json"
-        mappings.write_text('{"1":"fuji"}', encoding="utf-8")
+    def test_build_applies_supplement_graphic_and_keeps_original(self):
+        supplements = self.root / "supplements.json"
+        supplements.write_text(json.dumps({"schemaVersion": 1, "points": [
+            {"osmId": 1, "graphic": {"svg": SVG.decode("utf-8"), "scale": 1.5}}
+        ]}), encoding="utf-8")
         rows = [{key: value for key, value in self.rows[0].items() if key != "graphic"}]
+        rows[0]["osmId"] = 1
         with patch("scripts.build_data.verified_source_url", return_value="https://download.geofabrik.de/asia/japan-260929.osm.pbf"), \
                 patch("scripts.build_data.subprocess.check_output", return_value="2026-09-29T20:00:00Z"), \
                 patch("scripts.build_data.subprocess.run"), \
                 patch("scripts.build_data.read_mountains", return_value=(rows, "2026-09-29T12:00:00Z")):
-            manifest = build(self.root / "unused.pbf", self.output, "test", graphics_directory=self.source, graphics_map=mappings, tags_directory=tags)
-        self.assertEqual({"svg": SVG.decode("utf-8")}, rows[0]["graphic"])
+            manifest = build(self.root / "unused.pbf", self.output, "test", supplements_path=supplements)
+        self.assertNotIn("graphic", rows[0])
+        distributed = validate(self.output)[1]
+        self.assertEqual({"svg": SVG.decode("utf-8"), "scale": 1.5}, distributed[0]["graphic"])
         self.assertNotIn("graphics", manifest)
 
     def test_inline_svg_and_scale_are_validated(self):
