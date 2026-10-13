@@ -22,7 +22,7 @@ PROVENANCE = ("license", "attribution", "sourceUrl", "sourceDate", "experimental
 def validate(points):
     validate_rows(points)
     for point in points:
-        if not point["id"].startswith(("gsi-1003:", "gsi-natural:")) or point.get("type") != "peak":
+        if not point["id"].startswith(("gsi-1003:", "gsi-natural:", "gsi-vector:")) or point.get("type") != "peak":
             raise ValueError("国土地理院の山頂以外の地点が含まれています")
         if point.get("nameReading") is not None and not isinstance(point["nameReading"], str):
             raise ValueError("読みの形式が不正です")
@@ -46,16 +46,16 @@ def snapshot(source, output=DATA):
     groups = defaultdict(list)
     for item in manifest["sources"]:
         url = item["url"]
-        kind = "natural" if "/experimental_nnfpt/" in url else "dem" if "/xyz/dem/" in url else "mountainList"
+        kind = "vector" if "/optimal_bvmap-v1/" in url else "natural" if "/experimental_nnfpt/" in url else "dem" if "/xyz/dem/" in url else "mountainList"
         groups[kind].append(item)
     info = {key: manifest[key] for key in PROVENANCE}
     info.update(inputSha256=hashlib.sha256(raw).hexdigest(), pointCount=len(points), sourceSnapshot={})
     for kind, items in sorted(groups.items()):
         dates = [item["fetchedAt"] for item in items]
         summary = {"fileCount": len(items), "firstFetchedAt": min(dates), "lastFetchedAt": max(dates)}
-        if kind != "mountainList":
+        if kind not in ("mountainList", "vector"):
             summary["urlTemplate"] = re.sub(r"/\d+/\d+(\.(?:geojson|txt))$", r"/{x}/{y}\1", items[0]["url"])
-        if kind == "mountainList":
+        if kind in ("mountainList", "vector"):
             summary["files"] = items
         info["sourceSnapshot"][kind] = summary
     output.mkdir(parents=True, exist_ok=True)

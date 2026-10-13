@@ -14,6 +14,26 @@ from release_tools import gsi_peaks as target
 
 
 class GsiReleaseTests(unittest.TestCase):
+    def test_vector_id_and_source_are_preserved_in_release_snapshot(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source, staged = root / 'generated', root / 'staged'
+            _, manifest = target.prepare('test-vector', source, 'dev')
+            points = json.loads((source / target.FILE).read_bytes())
+            points[0]['id'] = 'gsi-vector:test'
+            raw = (json.dumps(points, ensure_ascii=False, separators=(',', ':')) + '\n').encode()
+            (source / target.FILE).write_bytes(raw)
+            (source / (target.FILE + '.gz')).write_bytes(gzip.compress(raw, mtime=0))
+            manifest['uncompressedSizeBytes'] = len(raw)
+            vector_source = {'url': 'https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/optimal_bvmap-v1.pmtiles',
+                             'fetchedAt': '2026-10-13T00:00:00Z', 'sha256': 'test', 'sizeBytes': 100}
+            manifest['sources'] = [vector_source]
+            (source / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+            info = target.snapshot(source, staged)
+            self.assertEqual(info['sourceSnapshot']['vector']['files'], [vector_source])
+            _, release = target.prepare('test-vector', root / 'release', 'dev', staged)
+            self.assertEqual(release['sourceSnapshot']['vector']['files'], [vector_source])
+
     def test_committed_snapshot_and_deterministic_package(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
