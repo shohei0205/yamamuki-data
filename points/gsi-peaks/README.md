@@ -31,3 +31,5 @@ python -m release_tools.gsi_peaks prepare --channel stable --version local-test
 ## 出典
 
 国土地理院の日本の主な山岳標高一覧・自然地名・標高タイルを加工して作成した。公共データ利用規約（第 1.0 版）で利用する。元資料の URL と取得日時は `snapshot.json` に記録する。自然地名の代表点と標高タイルで補った地表標高は、公称の山頂位置・標高とは区別する。
+
+出典・利用条件の一覧は、[ルート README のライセンス](../../README.md#ライセンス)を参照する。

@@ -87,7 +87,7 @@
       }
     },
     "sources": {
-      "$ref": "../points/schemas/supplements-v1.schema.json#/properties/sources"
+      "$ref": "supplements-data-v1.schema.json#/properties/sources"
     },
     "license": {
       "type": "string"
