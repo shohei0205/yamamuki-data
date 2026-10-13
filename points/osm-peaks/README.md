@@ -56,7 +56,7 @@ manifest の項目・型は [リポジトリ共通の manifest.json](../../forma
 
 Release のタイトルとタグは同じ値とし、正式版は `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>` とする。取得・検証の契約は [共通の読み込みと公開](../../formats/manifest.md#読み込みと検証) に従う。
 
-山頂データは正式版と開発版の参照先を分ける。公開済みの地点データ一覧は [地点カタログ](../README.md#公開データのカタログ) を参照する。リポジトリ全体の `releases/latest` は使わない。
+山頂データは正式版と開発版の参照先を分ける。Pages に掲載された地点データの一覧は [地点カタログ](../README.md#公開データのカタログ) を参照する。リポジトリ全体の `releases/latest` は使わない。
 
 正式版と開発版で manifest の形式は共通とし、開発版の履歴 Release は Pre-release とする。アプリで配布先を選ぶときの扱いは [地点カタログの説明](../README.md#公開データのカタログ) を参照する。
 
