@@ -8,8 +8,15 @@ from pathlib import Path
 
 if __package__:
     from .graphics import validate_graphics
+    from .point_tags import validate_tag_metadata
 else:
     from graphics import validate_graphics
+    from point_tags import validate_tag_metadata
+
+from pathlib import Path as _Path
+import sys as _sys
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+from document_metadata import alias_objects
 
 DEFAULT_SUPPLEMENTS = Path(__file__).resolve().parents[1] / "supplements.json"
 FIELDS = {"name", "nameReading", "aliases", "aliasesRemove", "tags", "tagsRemove", "exclude", "graphic"}
@@ -30,9 +37,21 @@ def validate_supplement_sources(sources):
     return sources
 
 
+def supplement_document(data):
+    data=validate_supplements(data)
+    return {"schemaVersion":1,"metadata":{"sources":data.get("sources",{}),"tags":data.get("tags",{})},"points":[{**row, **({"aliases":alias_objects(row["aliases"])} if "aliases" in row else {})} for row in data["points"]]}
+
+
 def validate_supplements(data):
-    if not isinstance(data, dict) or set(data) - {"schemaVersion", "sources", "points"} or type(data.get("schemaVersion")) is not int or data["schemaVersion"] != 1:
+    if isinstance(data,dict) and "metadata" in data:
+        if set(data)-{"schemaVersion","metadata","points"} or not isinstance(data["metadata"],dict) or set(data["metadata"])-{"sources","tags"}:
+            raise ValueError("補足 JSON の metadata の構造が不正です")
+        data={"schemaVersion":data.get("schemaVersion"),"points":data.get("points"),**data["metadata"]}
+
+    if not isinstance(data, dict) or set(data) - {"schemaVersion", "sources", "tags", "points"} or type(data.get("schemaVersion")) is not int or data["schemaVersion"] != 1:
         raise ValueError("地点補足 JSON の schemaVersion は 1 にしてください")
+    if "tags" in data:
+        validate_tag_metadata(data["tags"])
     sources = data.get("sources", {})
     if not isinstance(sources, dict):
         raise ValueError("sources は出典 ID と出典情報の対応にしてください")
@@ -43,12 +62,20 @@ def validate_supplements(data):
         raise ValueError("points は配列にしてください")
     seen = set()
     for row in data["points"]:
-        if not isinstance(row, dict) or set(row) - {"osmId", "note", "reason", "expected", *FIELDS}:
+        if not isinstance(row, dict) or set(row) - {"id", "osmId", "note", "reason", "expected", *FIELDS}:
             raise ValueError("地点補足の項目が不正です")
-        identifier = row.get("osmId")
-        if type(identifier) is not int or not 0 < identifier <= 9007199254740991 or identifier in seen:
-            raise ValueError("osmId は重複のない正の整数にしてください")
-        seen.add(identifier)
+        if ("id" in row) == ("osmId" in row):
+            raise ValueError("id または osmId のどちらか一方を指定してください")
+        key = "id" if "id" in row else "osmId"
+        identifier = row[key]
+        if key == "id":
+            if not text(identifier):
+                raise ValueError("id は前後に空白のない空でない文字列にしてください")
+        elif type(identifier) is not int or not 0 < identifier <= 9007199254740991:
+            raise ValueError("osmId は正の整数にしてください")
+        if (key, identifier) in seen:
+            raise ValueError(f"{key} が重複しています")
+        seen.add((key, identifier))
         if not set(row) & FIELDS:
             raise ValueError("地点補足には補足・補正する項目が必要です")
         for key in ("note", "reason"):
@@ -58,28 +85,29 @@ def validate_supplements(data):
             raise ValueError("補正する地点名は空でない文字列にしてください")
         if "nameReading" in row and row["nameReading"] is not None and not text(row["nameReading"]):
             raise ValueError("よみがなは空でない文字列または null にしてください")
+        if "aliases" in row:
+            if not isinstance(row["aliases"],list):
+                raise ValueError("補足の aliases は配列にしてください")
+            alias_objects(row["aliases"])
         if "graphic" in row:
             validate_graphics([row])
         if "exclude" in row and type(row["exclude"]) is not bool:
             raise ValueError("exclude は真偽値にしてください")
-        for key in ("tags", "tagsRemove", "aliases", "aliasesRemove"):
+        for key in ("tags", "tagsRemove", "aliasesRemove"):
             if key in row:
                 values = row[key]
                 if not isinstance(values, list) or any(not text(v) for v in values) or len(set(values)) != len(values):
                     raise ValueError(f"{key} は重複のない空でない文字列の配列にしてください")
         if set(row.get("tags", [])) & set(row.get("tagsRemove", [])):
             raise ValueError("同じタグを追加と削除の両方に指定できません")
-        if set(row.get("aliases", [])) & set(row.get("aliasesRemove", [])):
+        if {v["name"] for v in alias_objects(row.get("aliases", []))} & set(row.get("aliasesRemove", [])):
             raise ValueError("同じ別名を追加と削除の両方に指定できません")
-        if ("name" in row or row.get("exclude") or ("nameReading" in row and row["nameReading"] is None) or row.get("aliasesRemove")) and not text(row.get("reason")):
-            raise ValueError("地点名の補正・除外・削除には reason に理由を書いてください")
         expected = row.get("expected", {})
         if not isinstance(expected, dict) or set(expected) - {"name", "nameReading", "aliases"}:
             raise ValueError("expected は補正前の地点名・よみがな・別名を指定してください")
         for key, value in expected.items():
             if key == "aliases":
-                if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
-                    raise ValueError("expected.aliases は文字列の配列にしてください")
+                alias_objects(value)
             elif value is not None and not isinstance(value, str):
                 raise ValueError("expected の名前・よみがなが不正です")
     return data
@@ -92,22 +120,33 @@ def read_supplements(path=DEFAULT_SUPPLEMENTS):
 def apply_supplements(points, data):
     validate_supplements(data)
     result = deepcopy(points)
-    by_id = {}
-    for point in result:
-        identifier = point.get("osmId")
-        if identifier in by_id:
-            raise ValueError("地点データの osmId が重複しています")
-        by_id[identifier] = point
-    excluded = set()
+    indexes = {"id": {}, "osmId": {}}
+    for index, point in enumerate(result):
+        for key in indexes:
+            identifier = point.get(key)
+            if identifier is None:
+                continue
+            if identifier in indexes[key]:
+                raise ValueError(f"地点データの {key} が重複しています")
+            indexes[key][identifier] = index
+    excluded, applied = set(), set()
     for row in data["points"]:
-        identifier = row["osmId"]
-        if identifier not in by_id:
-            raise ValueError(f"osmId {identifier} が地点データにありません")
-        point = by_id[identifier]
+        ref_key = "id" if "id" in row else "osmId"
+        identifier = row[ref_key]
+        if identifier not in indexes[ref_key]:
+            raise ValueError(f"{ref_key} {identifier} が地点データにありません")
+        index = indexes[ref_key][identifier]
+        if index in applied:
+            raise ValueError("同じ地点に複数の補足が指定されています")
+        applied.add(index)
+        point = result[index]
         for key, expected in row.get("expected", {}).items():
             actual = point.get(key, [] if key == "aliases" else None)
+            if key == "aliases":
+                entries = alias_objects(actual)
+                actual = [v["name"] for v in entries] if all(isinstance(v,str) for v in expected) else entries
             if actual != expected:
-                raise ValueError(f"osmId {identifier} の {key} が想定値と異なります。補正内容を確認してください")
+                raise ValueError(f"{ref_key} {identifier} の {key} が想定値と異なります。補正内容を確認してください")
         for key in ("name", "nameReading", "graphic"):
             if key in row:
                 if row[key] is None:
@@ -118,18 +157,30 @@ def apply_supplements(points, data):
             point["tags"] = list(dict.fromkeys([v for v in (point.get("tags") or []) if v not in row.get("tagsRemove", [])] + row.get("tags", [])))
         if "aliases" in row or "aliasesRemove" in row:
             removed = set(row.get("aliasesRemove", []))
-            point["aliases"] = list(dict.fromkeys([v for v in (point.get("aliases") or []) if v not in removed] + row.get("aliases", [])))
+            entries = {v["name"]:v for v in alias_objects(point.get("aliases"),point.pop("aliasReadings",None)) if v["name"] not in removed}
+            for item in alias_objects(row.get("aliases", [])):
+                name = item["name"]
+                entries[name] = {**entries.get(name,{}), **item}
+            # 旧文字列だけの補足では従来の内部形式を維持する。書き出し時は object にそろえる。
+            if all(isinstance(v,str) for v in point.get("aliases",[])) and all(isinstance(v,str) for v in row.get("aliases",[])) and not any("nameReading" in v for v in entries.values()):
+                point["aliases"] = list(entries)
+            else:
+                point["aliases"] = list(entries.values())
         if row.get("exclude"):
-            excluded.add(identifier)
-    return [point for point in result if point.get("osmId") not in excluded]
+            excluded.add(index)
+    return [point for index, point in enumerate(result) if index not in excluded]
 
 
 def write_companions(directory, original, data, manifest):
     """既存 manifest と配布 gzip を保ち、編集用の元データと補足を同じ版に固定する。"""
     directory = Path(directory)
-    raw = (json.dumps(original, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+    if __package__:
+        from .point_document import document
+    else:
+        from point_document import document
+    raw = (json.dumps(document(original, data.get("tags"), **{k: manifest[k] for k in ("sourceUrl", "license", "attribution", "latestPointTimestamp") if k in manifest}), ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
     (directory / COMPANION_FILES[0]).write_bytes(gzip.compress(raw, mtime=0))
-    (directory / COMPANION_FILES[1]).write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    (directory / COMPANION_FILES[1]).write_text(json.dumps(supplement_document(data), ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     def descriptor(name):
         payload = (directory / name).read_bytes()
         return {"fileName": name, "downloadUrl": manifest["downloadUrl"].rsplit("/", 1)[0] + "/" + name,
@@ -142,7 +193,7 @@ def write_companions(directory, original, data, manifest):
     return companion
 
 
-def validate_companions(directory, manifest, integrated):
+def validate_companions(directory, manifest, integrated, tags=None):
     directory = Path(directory)
     present = [(directory / name).exists() for name in COMPANION_FILES]
     if not any(present):
@@ -159,11 +210,22 @@ def validate_companions(directory, manifest, integrated):
         if descriptor != {"fileName": name, "downloadUrl": url, "sizeBytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}:
             raise ValueError("補足ファイルの取得先・サイズ・ハッシュが一致しません")
     data = read_supplements(directory / COMPANION_FILES[1])
+    if tags is not None and tags != data.get("tags", {}):
+        raise ValueError("manifest と補足 JSON の tags が一致しません")
     if companion.get("sources") != data.get("sources", {}):
         raise ValueError("補足の出典が manifest と一致しません")
     with gzip.open(directory / COMPANION_FILES[0], "rt", encoding="utf-8") as stream:
-        original = json.load(stream)
-    if apply_supplements(original, data) != integrated:
+        if __package__:
+            from .point_document import rows
+        else:
+            from point_document import rows
+        original = rows(json.load(stream))
+    if isinstance(integrated, dict):
+        if integrated.get("tags", {}) != data.get("tags", {}):
+            raise ValueError("地点 JSON と補足 JSON のタグ情報が一致しません")
+        integrated = rows(integrated, 6)
+    from document_metadata import ordered_point
+    if [ordered_point(p) for p in apply_supplements(original, data)] != [ordered_point(p) for p in integrated]:
         raise ValueError("元データと補足から配布データを再現できません")
 
 
@@ -174,16 +236,20 @@ def complete_supplement(input_path, points_path, output_path):
         raise ValueError("入力と出力は別のファイルにしてください")
     data = json.loads(input_path.read_text(encoding="utf-8"))
     from scripts.tag_json import complete_rows, read_points
-    rows = [{**row, "osmId": str(row.get("osmId", "")), "note": row.get("note", "")} for row in data["points"]]
-    rows, report, unresolved = complete_rows(rows, read_points(points_path))
-    data["points"] = [{**row, **({"osmId": int(row["osmId"])} if row["osmId"] else {})} for row in rows]
+    rows = [{**row, "osmId": str(row.get("osmId", "")), "note": row.get("note", "")} for row in data["points"] if "id" not in row]
+    id_rows = [row for row in data["points"] if "id" in row]
+    points = read_points(points_path)
+    apply_supplements(points, {"schemaVersion": 1, "points": id_rows})
+    rows, report, unresolved = complete_rows(rows, [p for p in points if p.get("osmId") is not None])
+    completed = iter([{**row, **({"osmId": int(row["osmId"])} if row["osmId"] else {})} for row in rows])
+    data["points"] = [row if "id" in row else next(completed) for row in data["points"]]
     for row in data["points"]:
         if row.get("osmId") == "":
             del row["osmId"]
     if not unresolved:
         validate_supplements(data)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    output_path.write_text(json.dumps(supplement_document(data), ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     return report, unresolved
 
 

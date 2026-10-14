@@ -79,7 +79,7 @@ def index_points(points):
         if type(identifier) is not int or identifier <= 0 or identifier in by_id:
             raise ValueError("地点データの osmId が不正、または重複しています")
         by_id[identifier] = point
-        for name in set([point["name"], *(point.get("aliases") or [])]):
+        for name in set([point["name"], *(v if isinstance(v,str) else v["name"] for v in (point.get("aliases") or []))]):
             by_name.setdefault(name, []).append(point)
     return by_id, by_name
 
@@ -153,7 +153,11 @@ def read_points(points_path):
     points_path = Path(points_path)
     opener = gzip.open if points_path.suffix == ".gz" else open
     with opener(points_path, "rt", encoding="utf-8") as stream:
-        points = json.load(stream)
+        if __package__:
+            from .point_document import rows
+        else:
+            from point_document import rows
+        points = rows(json.load(stream))
     if not isinstance(points, list):
         raise ValueError("地点データは JSON 配列にしてください")
     return points

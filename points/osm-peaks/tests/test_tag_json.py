@@ -174,11 +174,11 @@ class TagJsonTests(unittest.TestCase):
                 patch("scripts.build_data.subprocess.run", side_effect=extract):
             manifest = build(self.root / "input.pbf", self.root / "dist", "test", tags_directory=self.tags)
         with gzip.open(self.root / "dist/osm-peaks.json.gz", "rt", encoding="utf-8") as stream:
-            point = json.load(stream)[0]
+            point = json.load(stream)["points"][0]
             self.assertEqual(point["tags"], ["日本百名山", "花の百名山"])
             self.assertEqual(point["nameReading"], "ようていざん")
-            self.assertEqual(point["aliases"], ["後方羊蹄山"])
-        self.assertEqual(manifest["dataSchemaVersion"], 5)
+            self.assertEqual(point["aliases"], [{"name":"後方羊蹄山"}])
+        self.assertEqual(manifest["dataSchemaVersion"], 6)
 
         self.assertEqual(manifest["license"], "ODbL-1.0")
         self.assertEqual(manifest["attribution"], "© OpenStreetMap contributors")

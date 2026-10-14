@@ -12,6 +12,9 @@ import re
 import shutil
 
 from release_tools.test_points import ROOT, release_data, validate_rows
+from scripts.supplements import validate_supplement_sources
+from scripts.point_document import rows as document_rows, metadata_of
+from scripts.point_tags import validate_tag_metadata
 
 DATA = ROOT / "points/gsi-peaks"
 FILE = "gsi-peaks.json"
@@ -29,14 +32,16 @@ def validate(points):
         elevation = point.get("elevationM")
         if elevation is not None and (type(elevation) not in (int, float) or not math.isfinite(elevation)):
             raise ValueError("標高の形式が不正です")
-        if not isinstance(point.get("aliases"), list) or any(not isinstance(alias, str) for alias in point["aliases"]):
-            raise ValueError("別名の形式が不正です")
+        from document_metadata import alias_objects
+        alias_objects(point.get("aliases"), legacy=False)
 
 
 def snapshot(source, output=DATA):
     """手元で生成した地点と出典の要約だけを、コミット対象の場所へ取り込む。"""
     raw = (source / FILE).read_bytes()
-    points = json.loads(raw)
+    body = json.loads(raw)
+    points = document_rows(body, 6)
+    common = metadata_of(body)
     validate(points)
     manifest = json.loads((source / "manifest.json").read_bytes())
     if manifest["pointCount"] != len(points) or manifest["uncompressedSizeBytes"] != len(raw):
@@ -49,7 +54,14 @@ def snapshot(source, output=DATA):
         dem = re.search(r"/xyz/(dem(?:1a|5[abc])?_png|dem)/", url)
         kind = "vector" if "/optimal_bvmap-v1/" in url else "natural" if "/experimental_nnfpt/" in url else dem[1] if dem else "mountainList"
         groups[kind].append(item)
+    for key in ("sourceUrl", "license", "attribution", "supplementSources", "pointCount", "latestPointTimestamp"):
+        if common.get(key, {} if key == "supplementSources" else None) != manifest.get(key, {} if key == "supplementSources" else None):
+            raise ValueError("地点 JSON と manifest の出典が一致しません")
     info = {key: manifest[key] for key in PROVENANCE}
+    if "supplementSources" in manifest:
+        info["supplementSources"] = validate_supplement_sources(manifest["supplementSources"])
+    if "latestPointTimestamp" in common:
+        info["latestPointTimestamp"] = common["latestPointTimestamp"]
     info.update(inputSha256=hashlib.sha256(raw).hexdigest(), pointCount=len(points), sourceSnapshot={})
     for kind, items in sorted(groups.items()):
         dates = [item["fetchedAt"] for item in items]
@@ -72,17 +84,28 @@ def prepare(version, directory, channel, source=DATA):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise ValueError("リポジトリ名が不正です")
     raw = (source / FILE).read_bytes()
-    points = json.loads(raw)
+    body = json.loads(raw)
+    points = document_rows(body, 6)
+    common = metadata_of(body)
     validate(points)
     info = json.loads((source / INFO).read_bytes())
     if info["inputSha256"] != hashlib.sha256(raw).hexdigest() or info["pointCount"] != len(points):
         raise ValueError("地点 JSON と出典情報が一致しません。snapshot コマンドで更新してください")
     if not info.get("license") or not info.get("attribution") or not info.get("sourceSnapshot"):
         raise ValueError("出典・ライセンスがありません")
+    for key in ("sourceUrl", "license", "attribution", "supplementSources", "pointCount", "latestPointTimestamp"):
+        if common.get(key, {} if key == "supplementSources" else None) != info.get(key, {} if key == "supplementSources" else None):
+            raise ValueError("地点 JSON と snapshot の出典が一致しません")
     tag = f"gsi-peaks-{'dev-' if channel == 'dev' else ''}{version}"
     archive = gzip.compress(raw, mtime=0)
     manifest = {key: info[key] for key in PROVENANCE}
-    manifest.update(schemaVersion=5, dataSchemaVersion=5, name="山頂（国土地理院）", version=version,
+    if "supplementSources" in info:
+        manifest["supplementSources"] = validate_supplement_sources(info["supplementSources"])
+    if "latestPointTimestamp" in info:
+        manifest["latestPointTimestamp"] = info["latestPointTimestamp"]
+    if common.get("tags"):
+        manifest["tags"]=common["tags"]
+    manifest.update(schemaVersion=5, dataSchemaVersion=6, name="山頂（国土地理院）", version=version,
                     fileName=FILE + ".gz", pointCount=len(points),
                     downloadUrl=f"https://github.com/{repo}/releases/download/{tag}/{FILE}.gz",
                     sha256=hashlib.sha256(archive).hexdigest(), sizeBytes=len(archive),

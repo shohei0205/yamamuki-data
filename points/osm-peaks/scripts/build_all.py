@@ -44,9 +44,10 @@ def build(pbf, output, peaks=None):
 
     pbf = Path(pbf)
     source_url = verified_source_url(pbf)
+    metadata = {}
     overrides = {}
     if peaks:
-        for point in read_points(peaks):
+        for point in read_points(peaks, metadata=metadata):
             if point["id"] in overrides:
                 raise ValueError("山頂版の ID が重複しています")
             overrides[point["id"]] = point
@@ -76,7 +77,7 @@ def build(pbf, output, peaks=None):
         if remaining:
             raise ValueError("山頂版にだけ存在する地点があります。元データの版を確認してください")
 
-    report = write_points(points(), output, "osm-all-points")
+    report = write_points(points(), output, "osm-all-points", tags=metadata.get("tags"), metadata={"sourceUrl": source_url, "license": "ODbL-1.0", "attribution": "© OpenStreetMap contributors", "supplementSources": metadata.get("supplementSources", {})})
     report.update(sourceTimestamp=timestamp, sourceUrl=source_url, inputs=[input_record(pbf)],
                   scope="名前付きノードのみ。線・面・relation の代表点は作らない。",
                   license="ODbL-1.0", attribution="© OpenStreetMap contributors")

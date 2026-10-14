@@ -37,7 +37,8 @@ def build(source, output, cache_directory, offline=False, workers=2, codes=RELAT
     source, output = Path(source), Path(output)
     if source.resolve() in {(output / name).resolve() for name in ("gsi-all-points.json", "gsi-all-points.json.gz")}:
         raise ValueError("入力を保持するため、標高補完の出力先は別フォルダーを指定してください")
-    selected = selected_annotations(read_points(source), codes)
+    metadata = {}
+    selected = selected_annotations(read_points(source, metadata=metadata), codes)
     print(f"標高取得の対象: {len(selected):,} 地点", flush=True)
     output.mkdir(parents=True, exist_ok=True)
     cache = RetryCache(cache_directory, offline=offline)
@@ -50,7 +51,7 @@ def build(source, output, cache_directory, offline=False, workers=2, codes=RELAT
         if point["id"] in assignments:
             point["provenance"]["elevationSource"] = assignments[point["id"]]["source"]
     by_id = {p["id"]: p for p in selected}
-    report = write_points((by_id.get(p["id"], p) for p in read_points(source)), output, "gsi-all-points")
+    report = write_points((by_id.get(p["id"], p) for p in read_points(source)), output, "gsi-all-points", tags=metadata.get("tags"), metadata={k:v for k,v in metadata.items() if k != "tags"})
     report.update(inputs=[input_record(source)], license="PDL-1.0", attribution="国土地理院",
                   relatedAnnotationElevations={"selectedCodes": sorted(codes, key=int), "targetCount": len(selected),
                     "acquiredCount": dem["pointCount"], "missingCount": len(dem["missingIds"]), "bySource": dem["bySource"],

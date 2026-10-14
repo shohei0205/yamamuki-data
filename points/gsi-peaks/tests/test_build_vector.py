@@ -134,12 +134,15 @@ class TargetedNaturalTests(unittest.TestCase):
             root = Path(folder); archive = root / 'input.pmtiles'; archive.write_bytes(b'archive')
             (root / 'optimal_bvmap-source.json').write_text(json.dumps({'url': PMTILES_URL, 'sha256': hashlib.sha256(b'archive').hexdigest(), 'sizeBytes': 7, 'fetchedAt': 'date'}))
             output = root / 'output'
-            argv = ['vector.py', '--archive', str(archive), '--output', str(output)]
+            supplements = root / 'supplements.json'
+            supplements.write_text(json.dumps({'schemaVersion': 1, 'points': [{'id': vector['id'], 'tags': ['日本百名山']}]}), encoding='utf-8')
+            argv = ['vector.py', '--archive', str(archive), '--output', str(output), '--supplements', str(supplements)]
             with patch('sys.argv', argv), patch('build_vector.extract', return_value=([record(vector)], [], 1)), patch('build_vector.Cache', FakeCache), patch('build_vector.extract_heights', return_value=[]), patch('natural_sources.fetch', side_effect=fetch):
                 main()
             first = (output / 'gsi-peaks.json').read_bytes()
-            points = json.loads(first)
+            points = json.loads(first)["points"]
             self.assertTrue(all('provenance' in p for p in points))
+            self.assertEqual(next(p for p in points if p['id'] == vector['id'])['tags'], ['日本百名山'])
             official = next(p for p in points if p['id'].startswith('gsi-mountain-list:'))
             self.assertEqual(official['provenance']['dataSource'], 'mountainList')
             self.assertEqual(official['provenance']['elevationSource'], 'mountainList')

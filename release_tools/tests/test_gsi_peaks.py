@@ -14,6 +14,21 @@ from release_tools import gsi_peaks as target
 
 
 class GsiReleaseTests(unittest.TestCase):
+    def test_supplement_sources_survive_prepare_and_snapshot(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, manifest = target.prepare('test-supplements', root / 'release', 'dev')
+            expected = json.loads((target.DATA / 'supplements.json').read_bytes())['metadata']['sources']
+            self.assertEqual(manifest['supplementSources'], expected)
+            self.assertEqual(json.loads((root / 'release' / target.FILE).read_bytes())['metadata']['tags']['日本百名山']['reading'],'にほんひゃくめいざん')
+            manifest['sources'] = [{'url': 'https://example.com/mountains.csv',
+                                    'fetchedAt': '2026-10-14T00:00:00Z'}]
+            (root / 'release/manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+            info = target.snapshot(root / 'release', root / 'staged')
+            self.assertEqual(info['supplementSources'], expected)
+            self.assertEqual(manifest['tags'], json.loads((root/'release'/target.FILE).read_bytes())['metadata']['tags'])
+            self.assertNotIn('tags', info)
+
     def test_png_dem_sources_keep_layer_and_template(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -35,7 +50,7 @@ class GsiReleaseTests(unittest.TestCase):
             source, staged = root / 'generated', root / 'staged'
             _, manifest = target.prepare('test-vector', source, 'dev')
             points = json.loads((source / target.FILE).read_bytes())
-            points[0]['id'] = 'gsi-vector:test'
+            points['points'][0]['id'] = 'gsi-vector:test'
             raw = (json.dumps(points, ensure_ascii=False, separators=(',', ':')) + '\n').encode()
             (source / target.FILE).write_bytes(raw)
             (source / (target.FILE + '.gz')).write_bytes(gzip.compress(raw, mtime=0))
@@ -55,7 +70,7 @@ class GsiReleaseTests(unittest.TestCase):
             tag, manifest = target.prepare('test-1', root, 'dev')
             raw = (target.DATA / target.FILE).read_bytes()
             self.assertEqual(gzip.decompress((root / (target.FILE + '.gz')).read_bytes()), raw)
-            self.assertEqual(manifest['pointCount'], len(json.loads(raw)))
+            self.assertEqual(manifest['pointCount'], len(json.loads(raw)['points']))
             self.assertEqual(manifest['inputSha256'], hashlib.sha256(raw).hexdigest())
             self.assertEqual(tag, 'gsi-peaks-dev-test-1')
             self.assertIn('/gsi-peaks-dev-test-1/', manifest['downloadUrl'])
@@ -75,13 +90,13 @@ class GsiReleaseTests(unittest.TestCase):
             target.snapshot(source, staged)
             target.prepare('test-2', root / 'release', 'dev', staged)
             changed = json.loads((staged / target.FILE).read_bytes())
-            changed[0]['name'] += '変更'
+            changed['points'][0]['name'] += '変更'
             (staged / target.FILE).write_text(json.dumps(changed), encoding='utf-8')
             with self.assertRaisesRegex(ValueError, '出典情報が一致しません'):
                 target.prepare('test-2', root / 'release', 'dev', staged)
 
     def test_invalid_gsi_rows(self):
-        row = json.loads((target.DATA / target.FILE).read_bytes())[0]
+        row = json.loads((target.DATA / target.FILE).read_bytes())['points'][0]
         for invalid in ({**row, 'id': 'osm:1'}, {**row, 'elevationM': True},
                         {**row, 'elevationM': float('nan')}, {**row, 'aliases': [1]}):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):

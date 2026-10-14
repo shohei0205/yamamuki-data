@@ -97,7 +97,7 @@ class AllTilesTests(unittest.TestCase):
             try:
                 with patch.object(fetch_all, 'Cache', return_value=cache), patch.object(fetch_all, 'read_csv', return_value=[mountain]):
                     fetch_all.finish(db, path, (1, 2, 1, 2), root, root / 'cache', 'test', 1, 0)
-                self.assertEqual(json.loads((root / 'gsi-peaks.json').read_bytes()), [mountain])
+                self.assertEqual(json.loads((root / 'gsi-peaks.json').read_bytes())["points"], [mountain])
                 self.assertEqual(json.loads((root / 'progress.json').read_bytes())['phase'], 'complete')
                 self.assertTrue(json.loads((root / 'report.json').read_bytes())['scan']['complete'])
             finally:

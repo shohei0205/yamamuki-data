@@ -40,30 +40,18 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `5`。�
 | `sourceUrl` | string | 任意 | 元データの取得・参照 URL。特定できない場合は省略 | [版1] 追加<br>[版3.1] 日付付き URL に変更<br>[版5] 必須から任意に変更 |
 | `license` | string | 必須 | データセットの利用条件。OSM 由来では `ODbL-1.0` | [版1] 追加 |
 | `attribution` | string | 必須 | 表示すべき出典。OSM 由来では `© OpenStreetMap contributors` | [版1] 追加 |
-| `supplementSources` | object | 任意 | 補足 JSON の `sources` と同じ、出典 ID と出典情報の対応。各属性は下表を参照 | [版5] 追加 |
+| `tags` | object | 任意 | 地点 JSON の `metadata.tags` と同じタグ共通の読み情報 | [版5] 任意の追加情報として使用 |
+| `supplementSources` | object | 任意 | 補足 JSON の `metadata.sources` を複製した出典一覧。構造と各属性の説明は [補足データフォーマットの出典ごとの情報](../points/formats/supplements-data.md#出典ごとの情報) を参照。出典情報がない場合は省略する | [版5] 追加 |
 
-補足 JSON の `sources` に登録された出典情報を `supplementSources` にそのまま保存する。出典 ID はオブジェクトのキーとして保持し、タグ名やファイル名とは独立して扱う。出典情報がない場合は省略する。トップレベルの `sourceUrl`・`license`・`attribution` は元データの出典として保持する。
-
-各出典 ID の値は、次の任意の文字列属性を持つオブジェクトとする。地点や補足項目ごとの出典は指定しない。
-
-| 属性 | 必須 | 内容・記載例 | 版の履歴 |
-|---|---|---|---|
-| `source` | 任意 | 一覧の作成に使った資料の名称・参照 URL。Wikipedia なら記事名と参照した版の固定リンクを記載する | [版5] 追加 |
-| `license` | 任意 | 出典の資料に適用されるライセンスの名称・版・説明ページの URL（例: `CC BY-SA 4.0 https://creativecommons.org/licenses/by-sa/4.0/`） | [版5] 追加 |
-| `attribution` | 任意 | 出典の利用条件に従って表示する著作者名・クレジット（例: `Wikipedia「日本百名山」の投稿者`） | [版5] 追加 |
-| `changes` | 任意 | 出典から対応表を作る際に行った加工・変更（例: `山名一覧を抽出し、OpenStreetMap の osmId を追加`） | [版5] 追加 |
-
-これらの属性は地点補足対応表の出典情報であり、地点の座標など OSM 由来のデータに対するトップレベルの `sourceUrl`・`license`・`attribution` と併せて参照する。省略された属性の値を生成処理で推測して補うことはない。
-
-地点データの件数・更新日時は、この文書の「地点データ用の項目」を参照する。ほかのデータ種別の追加項目と制約は、そのデータの仕様に記載する。日時は UTC の ISO 8601 形式（例: `2026-09-30T20:21:22Z`）を使い、記録していない日時を推測して埋めない。
+地点データ版6では、`sourceUrl`・`license`・`attribution`・`supplementSources` を地点 JSON にも記載し、manifest と一致させる。地点 JSON の `metadata` の各子項目を manifest の直下に複製する。タグ共通の情報も `tags` に保持する。地点文書の構造は [地点データフォーマット](../points/formats/data.md) を参照する。
 
 ### 地点データ用の項目
 
-共通項目に加え、次の項目を使う。
+地点データの manifest では、共通項目に加えて次の項目をトップレベルに置く。`supplementSources` の子には入れない。ほかのデータ種別の追加項目と制約は、そのデータの仕様に記載する。日時は UTC の ISO 8601 形式（例: `2026-09-30T20:21:22Z`）を使い、記録していない日時を推測して埋めない。
 
 | 項目 | 型 | 必須 | 内容 | 版の履歴 |
 |---|---|---|---|---|
-| `pointCount` | integer | 必須 | 地点の件数。正の整数で、展開した配列の件数と同じ | [版1] 元の項目を追加<br>[版5] `mountainCount` から改名 |
+| `pointCount` | integer | 必須 | 地点の件数。正の整数。地点データ版6では `points` 配列の件数、版5以前ではトップレベルの配列の件数と同じ | [版1] 元の項目を追加<br>[版5] `mountainCount` から改名 |
 | `latestPointTimestamp` | string または null | 任意 | 収録地点の元データ上の最終編集日時の最大値。現地調査日や生成日時ではない。`sourceTimestamp` があるときは、それより後にしない | [版3] 元の項目を追加<br>[版5] `latestMountainTimestamp` から改名し任意化 |
 
 これらの項目には、ほかの種類の件数や日時を入れない。共通スキーマ内の地点データ用の定義（`pointManifest`）で検証する。日時の前後関係や、本体の大きさ・ハッシュ・件数はスキーマでは確かめられないので、別に確かめる。

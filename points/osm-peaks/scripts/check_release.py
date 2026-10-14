@@ -9,9 +9,10 @@ import math
 from pathlib import Path
 import re
 
+from scripts.point_document import rows as document_rows, metadata_of
 from scripts.build_data import FILE_NAME, MAX_SIZE_BYTES
 from scripts.graphics import validate_graphics
-from scripts.point_tags import validate_tags
+from scripts.point_tags import validate_tags, validate_alias_readings, validate_tag_metadata
 from scripts.supplements import validate_supplement_sources
 from scripts.supplements import validate_companions
 from scripts.release_channels import download_url, release_tag
@@ -47,7 +48,7 @@ def validate(directory, *, tag=None, channel="stable"):
         raise ValueError("未対応の schemaVersion です")
     # 旧 manifest は当時の山頂形式の版を使う。明示された版は独立して検査する。
     data_version = manifest.get("dataSchemaVersion", manifest["schemaVersion"])
-    if type(data_version) is not int or data_version not in (1, 2, 3, 4, 5):
+    if type(data_version) is not int or data_version not in (1, 2, 3, 4, 5, 6):
         raise ValueError("未対応の dataSchemaVersion です")
     if "name" in manifest and (not isinstance(manifest["name"], str) or not manifest["name"].strip()):
         raise ValueError("データセットの表示名が不正です")
@@ -78,10 +79,16 @@ def validate(directory, *, tag=None, channel="stable"):
         raw = stream.read(MAX_UNCOMPRESSED_BYTES + 1)
     if len(raw) > MAX_UNCOMPRESSED_BYTES or len(raw) != manifest.get("uncompressedSizeBytes"):
         raise ValueError("展開後のサイズが不正です")
-    rows = json.loads(raw)
+    body = json.loads(raw)
+    rows = document_rows(body, data_version)
+    info = metadata_of(body)
+    if data_version == 6:
+        for key in ("sourceUrl", "license", "attribution", "supplementSources", "pointCount", "latestPointTimestamp", "tags"):
+            if info.get(key, {} if key in ("supplementSources","tags") else None) != manifest.get(key, {} if key in ("supplementSources","tags") else None):
+                raise ValueError("地点 JSON と manifest の出典情報が一致しません")
     if not isinstance(rows, list) or not rows or len(rows) != manifest.get(count_key):
         raise ValueError("山の件数が不正です")
-    validate_companions(directory, manifest, rows)
+    validate_companions(directory, manifest, rows, tags=info.get("tags", {}) if data_version == 6 else None)
     seen = set()
     for row in rows:
         if not isinstance(row, dict):
@@ -123,9 +130,10 @@ def validate(directory, *, tag=None, channel="stable"):
             aliases = row.get("aliases", [] if data_version >= 5 else None)
             if aliases is None and data_version >= 5:
                 aliases = []
-            if not isinstance(aliases, list) or not all(isinstance(a, str) and a.strip() for a in aliases):
+            if data_version < 6 and (not isinstance(aliases, list) or not all(isinstance(a, str) and a.strip() for a in aliases)):
                 raise ValueError("別名の形式が不正です")
     validate_tags(rows)
+    validate_alias_readings(rows)
     validate_graphics(rows)
     return manifest, rows
 

@@ -266,3 +266,13 @@ python -m unittest release_tools.tests.test_gsi_peaks -v
 宝篋山は山名注記から収録し、周囲の三角点の標高 460.7 m を採用する。よみがなと別名「小田山」は参照した資料に含まれないため未設定。長七ノ頭は山名注記の位置を使い、自然地名の「岩・洞窟」に記載された「ちょうしちのあたま」を照合して読みを補っている。
 
 山以外も含む確認用 JSON の生成方法は、[全部入り JSON の生成手順](../README.md#山以外も含む全部入り-json-を作る) を参照する。
+
+## 日本百名山のタグと補足
+
+[supplements.json](supplements.json) は共通の補足形式で、`id` により GSI の地点を指定する。生成時はこのファイルを適用し、日本百名山 100 件のタグを付ける。`--supplements` で別の補足 JSON を指定できる。対象 ID が無ければ生成を失敗させ、別の地点へ自動で付け替えない。
+
+OSM 版の `note` と著書順、出典・ライセンスを保持する。[採用地点の対応表](notes/日本百名山.md) と [OSM 版の確認記録](notes/日本百名山-osm元記録.md) を参照する。利尻山・羊蹄山・焼岳は OSM 版と採用地点が異なるが、GSI 版の既存地点にタグを付ける。
+
+補足の出典は生成 manifest、`snapshot.json`、配布 manifest の `supplementSources` に保存する。地点の国土地理院データの利用条件に加え、日本百名山の山名一覧は CC BY-SA 4.0、照合元の OpenStreetMap データは ODbL 1.0 を参照する。
+
+配布する地点 JSON の現行版は6。トップレベルは共通のタグ情報と出典情報を持つ object で、地点配列は `points` に格納する。manifest の版は5、`dataSchemaVersion` は6。利用側は版6に対応する必要がある。

@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "points/osm-peaks"))
 from scripts import release_data
 from scripts.graphics import validate_graphics
-from scripts.point_tags import validate_tags
+from scripts.point_document import rows as document_rows, ordered_point
+from scripts.point_tags import validate_tags, validate_alias_readings
 
 
 def validate_rows(rows):
@@ -44,6 +45,7 @@ def validate_rows(rows):
             if type(value) not in (int, float) or not math.isfinite(value) or abs(value) > limit:
                 raise ValueError("座標が不正です")
     validate_tags(rows)
+    validate_alias_readings(rows)
     validate_graphics(rows)
 
 
@@ -52,13 +54,13 @@ def generate(version, directory):
         raise ValueError("版の形式が不正です")
     rows = json.loads((ROOT / "points/testdata/points.json").read_text(encoding="utf-8"))
     validate_rows(rows)
-    raw = (json.dumps(rows, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+    raw = (json.dumps({"schemaVersion":6,"metadata":{"pointCount":len(rows),"license":"CC0-1.0","attribution":"山むきの動作確認用に作成した架空データ","tags":{}},"points":[ordered_point(point) for point in rows]}, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
     archive = gzip.compress(raw, mtime=0)
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     filename = "test-points.json.gz"
     tag = f"testdata-dev-{version}"
-    manifest = {"schemaVersion": 5, "dataSchemaVersion": 5, "name": "テスト用地点（架空）",
+    manifest = {"schemaVersion": 5, "dataSchemaVersion": 6, "name": "テスト用地点（架空）",
                 "version": version, "fileName": filename,
                 "downloadUrl": f"https://github.com/{os.environ.get('GH_REPO', 'shohei0205/yamamuki-data')}/releases/download/{tag}/{filename}",
                 "sha256": hashlib.sha256(archive).hexdigest(), "sizeBytes": len(archive),
@@ -93,9 +95,9 @@ def publish(version, directory):
             or len(actual) != manifest["sizeBytes"] or hashlib.sha256(actual).hexdigest() != manifest["sha256"]):
         raise ValueError("添付ファイルが生成結果と一致しません")
     raw = gzip.decompress(actual)
-    if len(raw) != manifest["uncompressedSizeBytes"] or len(json.loads(raw)) != manifest["pointCount"]:
+    if len(raw) != manifest["uncompressedSizeBytes"] or len(document_rows(json.loads(raw), 6)) != manifest["pointCount"]:
         raise ValueError("展開後のサイズ・件数が一致しません")
-    validate_rows(json.loads(raw))
+    validate_rows(document_rows(json.loads(raw), 6))
     manifests = dict(catalog)
     manifests["points/testdata-dev/manifest.json"] = manifest
     histories = {key: list(value) for key, value in getattr(catalog, "histories", {}).items()}

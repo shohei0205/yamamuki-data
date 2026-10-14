@@ -243,7 +243,7 @@ OpenStreetMap 由来のデータは **© OpenStreetMap contributors** を表示�
 
 ## 地点の補足対応表
 
-[supplements.json](supplements.json) 一つで全タグと補正を管理する。生成時は osmId で対応付け、タグの追記・表示名とよみがなの補正・別名の追加と削除・地点の除外を適用する。`--supplements` で別のファイルを指定できる。不正値・未知の ID・重複 ID・想定値の不一致は生成エラーにする。修正理由と管理用メモは補足ファイルに保持し、統合した地点データには注入しない。
+[supplements.json](supplements.json) 一つで全タグと補正を管理する。生成時は `id` または `osmId` で対応付け、タグの追記・表示名とよみがなの補正・別名の追加と削除・地点の除外を適用する。`--supplements` で別のファイルを指定できる。不正値・未知の ID・重複 ID・想定値の不一致は生成エラーにする。修正理由と管理用メモは補足ファイルに保持し、統合した地点データには注入しない。
 
 日本百名山の 100 地点も同じ補足 JSON に収録する。共通形式は [補足データフォーマット](../formats/supplements-data.md)、編集操作は [ビューアの編集手順](../README.md#補足を編集する) を参照する。
 
@@ -253,7 +253,7 @@ OpenStreetMap 由来のデータは **© OpenStreetMap contributors** を表示�
 PYTHONPATH=points/osm-peaks python -m scripts.supplements points/osm-peaks/supplements.json --points osm-peaks-source.json.gz --output points/osm-peaks/build/supplements.json
 ```
 
-osmId がない行では `note` の山名・別名を完全一致で照合する。osmId があり `note` が空なら地点名をメモに補う。候補が複数ある場合は未解決とし、終了コード 1 を返す。形式の不備は終了コード 2。入力は変更せず、補足・補正・出典情報を出力へ引き継ぐ。補完には補足適用前の元データを使う。
+`id` を指定した行は、その指定を保って検証する。`id` も osmId もない行では `note` の山名・別名を完全一致で照合して osmId を補う。osmId があり `note` が空なら地点名をメモに補う。候補が複数ある場合は未解決とし、終了コード 1 を返す。形式の不備は終了コード 2。入力は変更せず、補足・補正・出典情報を出力へ引き継ぐ。補完には補足適用前の元データを使う。
 
 ### 出典の管理
 
@@ -267,7 +267,7 @@ osmId がない行では `note` の山名・別名を完全一致で照合する
 
 ### アプリ用データと確認・編集用の添付
 
-アプリは、現状の manifest の参照先から補足マージ済みの `osm-peaks.json.gz` 一つを取得する。ファイル名・取得 URL・manifest の版5を維持し、Android・iOS 側で補足をマージする処理は追加しない。マージ前のオリジナル JSON.gz と補足は、確認・編集用として同じ Release に添付する。
+利用側は、manifest の参照先から補足マージ済みの `osm-peaks.json.gz` 一つを取得する。ファイル名・取得 URL・manifest の版5を維持し、Android・iOS 側で補足をマージする処理は追加しない。マージ前のオリジナル JSON.gz と補足は、確認・編集用として同じ Release に添付する。
 
 | ファイル | 内容 |
 |---|---|
@@ -286,3 +286,5 @@ osmId がない行では `note` の山名・別名を完全一致で照合する
 出典・利用条件の一覧は、[ルート README のライセンス](../../README.md#ライセンス)を参照する。
 
 山以外も含む確認用 JSON の生成方法は、[全部入り JSON の生成手順](../README.md#山以外も含む全部入り-json-を作る) を参照する。
+
+配布する地点 JSON の現行版は6。トップレベルは共通のタグ情報と出典情報を持つ object で、地点配列は `points` に格納する。manifest の版は5、`dataSchemaVersion` は6。利用側は版6に対応する必要がある。

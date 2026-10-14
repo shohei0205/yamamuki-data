@@ -9,7 +9,11 @@ import json
 import math
 from pathlib import Path
 import re
+import sys
 import unicodedata
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from document_metadata import validate_metadata, ordered_point
 
 from download import Cache
 
@@ -222,10 +226,12 @@ def generate(cache, bbox=None, natural=False, dem=False, max_tiles=10000, csv_ur
                     "sources": sorted(cache.used.values(), key=lambda value: value["url"])}
 
 
-def write(points, report, output, version):
+def write(points, report, output, version, tags=None, metadata=None):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
         raise ValueError("版の文字が不正です")
-    raw = (json.dumps(points, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode()
+    info = {"schemaVersion":6, "pointCount": len(points), "sourceUrl": CSV_URL, "license": LICENSE, "attribution": ATTRIBUTION, "supplementSources": {}, **(metadata or {}), "tags": {} if tags is None else tags}
+    validate_metadata(info, len(points))
+    raw = (json.dumps({"schemaVersion":6,"metadata":{k:v for k,v in info.items() if k != "schemaVersion"},"points":[ordered_point(point) for point in points]}, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode()
     stream = io.BytesIO()
     with gzip.GzipFile(filename="", mode="wb", fileobj=stream, mtime=0) as compressed:
         compressed.write(raw)
@@ -234,7 +240,7 @@ def write(points, report, output, version):
         raise ValueError("圧縮後のサイズが 5 MB を超えました")
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    manifest = {"schemaVersion": 5, "dataSchemaVersion": 5, "name": "山頂（国土地理院）",
+    manifest = {"schemaVersion": 5, "dataSchemaVersion": 6, "name": "山頂（国土地理院）",
                 "version": version, "fileName": "gsi-peaks.json.gz", "pointCount": len(points),
                 "downloadUrl": f"https://github.com/shohei0205/yamamuki-data/releases/download/gsi-peaks-{version}/gsi-peaks.json.gz",
                 "sha256": hashlib.sha256(payload).hexdigest(), "sizeBytes": len(payload), "uncompressedSizeBytes": len(raw),
@@ -243,6 +249,9 @@ def write(points, report, output, version):
                 "coordinatePolicy": "主な山岳一覧の最高地点。自然地名を追加した場合は山の代表点を含む。",
                 "elevationPolicy": "山岳一覧の標高を優先。任意の DEM 補完は代表点の地表標高であり公称の山頂標高ではない。",
                 "sources": report["sources"]}
+    manifest.update({k:v for k,v in (metadata or {}).items() if k != "schemaVersion"})
+    if tags:
+        manifest["tags"]=tags
     (output / "gsi-peaks.json.gz").write_bytes(payload)
     (output / "gsi-peaks.json").write_bytes(raw)
     for name, data in (("manifest.json", manifest), ("report.json", report)):

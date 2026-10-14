@@ -103,7 +103,7 @@ class AllGsiTests(unittest.TestCase):
                         'assignments': [{'id': points[0]['id'], 'source': 'dem1a_png', 'elevationM': 123.45}]}
             with patch.object(fill_annotation_heights, 'fill_dem', side_effect=dem):
                 report = fill_annotation_heights.build(source, root/'out', root/'cache', offline=True)
-            result = json.loads((root/'out/gsi-all-points.json').read_bytes())
+            result = json.loads((root/'out/gsi-all-points.json').read_bytes())['points']
             self.assertEqual(result[0]['elevationM'], 123.45)
             self.assertEqual(result[0]['provenance']['elevationSource'], 'dem1a_png')
             self.assertEqual(report['pointCount'], len(rows))

@@ -10,7 +10,7 @@ Release のタグ・ファイル名・置き場所など、データごとの配
 
 ## 版について
 
-地点 JSON の版は manifest の `dataSchemaVersion` で確認する。現行版は `5`。manifest 自体の版とは独立して管理する。manifest 版4以前は `dataSchemaVersion` がなく、地点データの版は manifest の `schemaVersion` と同じ。
+地点 JSON の版は本体の `schemaVersion` で確認する。版5以前の本体は配列のため、manifest の `dataSchemaVersion` を使う。版6では本体の `schemaVersion` と manifest の `dataSchemaVersion` を一致させる。現行版は `6`。manifest 自体の版とは独立して管理する。manifest 版4以前は `dataSchemaVersion` がなく、地点データの版は manifest の `schemaVersion` と同じ。
 
 版内の変更は `版1.1` のように小数点以下で区別する。小数点以下は文書上の番号で、JSON の版の値には含めない。
 
@@ -18,24 +18,49 @@ Release のタグ・ファイル名・置き場所など、データごとの配
 
 | 形式の版 | 機械検証用スキーマ | 規格 |
 |---|---|---|
+| 6 | [data-v6.schema.json](../schemas/data-v6.schema.json) | JSON Schema Draft 2020-12 |
 | 5 | [data-v5.schema.json](../schemas/data-v5.schema.json) | JSON Schema Draft 2020-12 |
 | 1〜4 | スキーマなし。変更履歴を参照 | — |
 
 ## 項目
 
-gzip で圧縮した UTF-8（BOM なし）の JSON 配列で、1 要素が 1 地点。配列には 1 地点以上を入れる。gzip のヘッダーには日時とファイル名を入れない。山頂以外の地点（駐車場・登山口など）も入れられる共通の形式。
+gzip で圧縮した UTF-8（BOM なし）の JSON object。`points` に 1 地点以上の地点配列を格納する。版5以前のトップレベルは地点配列だった。gzip のヘッダーには日時とファイル名を入れない。山頂以外の地点（駐車場・登山口など）も入れられる共通の形式。
+
+| 項目 | 型 | 必須 | 内容 | 版の履歴 |
+|---|---|---|---|---|
+| `schemaVersion` | integer | 必須 | 地点 JSON 本体の版。`6`。manifest 自体の `schemaVersion` とは独立 | [版6] 追加 |
+| `points` | array | 必須 | 地点の配列。1 地点以上 | [版6] 追加 |
+| `metadata` | object | 任意 | 文書全体で共有する件数・日時・タグ・出典情報。下表を参照。各子項目を配布 manifest の直下へ同じ名前・値で複製する。manifest 自体の版は5のまま | [版6] 追加 |
+
+### 共通情報（metadata）
+
+以下は `metadata` の子に指定する。省略・空 object は共通情報なし。`null` は指定できない。
+
+| 項目 | 型 | 必須 | 内容 | 版の履歴 |
+|---|---|---|---|---|
+| `pointCount` | integer | 任意 | `points` の要素数。生成時に実数から設定し、配布 manifest の同名項目と一致させる | [版6] 追加 |
+| `latestPointTimestamp` | string | 任意 | 地点の最終更新日時（タイムゾーン付き ISO 8601）。manifest にある場合は同じ値を記載し、元資料から分からない場合は省略する | [版6] 追加 |
+| `tags` | object | 任意 | [補足 JSON のタグ情報](supplements-data.md#タグごとの情報) と同じ形。各タグの任意の `reading` に読みを記載する。省略・空 object は共通の読みなし。`null` は不可。各地点の `points[].tags` は文字列配列で、用途が異なる | [版6] 追加 |
+| `sourceUrl` | string | 任意 | 元データの取得 URL。配布時は manifest の同名項目と一致させる | [版6] 追加 |
+| `license` | string | 任意 | 元データの利用条件。配布時は manifest の同名項目と一致させる | [版6] 追加 |
+| `attribution` | string | 任意 | 元データの帰属表示。配布時は manifest の同名項目と一致させる | [版6] 追加 |
+| `supplementSources` | object | 任意 | 補足 JSON の [出典一覧](supplements-data.md#出典ごとの情報) と同じ形。`null` は不可。配布時は manifest の同名項目と一致させる | [版6] 追加 |
+
+### 地点ごとの項目
+
+以下は `points` 配列の各要素に指定する。
 
 | 項目 | 型 | 必須 | 内容 | 版の履歴 |
 |---|---|---|---| --- |
-| `id` | string | 必須 | データセット内で一意な、空でない ID。取得元を表す接頭辞は付けない。ID の作り方は各データセットの文書を参照 | [版5] 追加 |
+| `id` | string | 必須 | データセット内で一意な、空でない ID。接頭辞を含む ID の形式・作り方は各データセットの文書で定める | [版5] 追加 |
 | `type` | string または null | 任意 | 地点の種別（「地点の種別」を参照） | [版5] 追加 |
 | `osmId` | integer または null | 任意 | 関連する OSM ノード ID（正の整数）。版1〜4では必須だったが、版5から任意。OSM と関連付けていない地点には無い | [版1] 追加<br>[版5] 任意化 |
 | `name` | string | 必須 | 表示名。空にしない | [版1] 追加 |
+| `nameReading` | string または null | 任意 | 表示名の読み | [版2] 追加<br>[版5] 任意化 |
 | `latitude` | number | 必須 | WGS 84 の緯度（度）。−90 以上 90 以下 | [版1] 追加 |
 | `longitude` | number | 必須 | WGS 84 の経度（度）。−180 以上 180 以下 | [版1] 追加 |
 | `elevationM` | number または null | 任意 | 地点そのものの標高（m）。建物の高さなどは入れない。負の値もありうる | [版1] 追加<br>[版5] 任意化 |
-| `nameReading` | string または null | 任意 | 表示名の読み | [版2] 追加<br>[版5] 任意化 |
-| `aliases` | string の配列 または null | 任意 | 別名。空の名前・表示名と同じ名前・重複は含めない | [版2] 追加<br>[版5] 任意化 |
+| `aliases` | object の配列 または null | 任意 | 別名と読み（「別名のよみがな」を参照）。空の名前・表示名と同じ名前・名前の重複は含めない | [版2] 文字列配列を追加<br>[版5] 任意化<br>[版6] object 配列に変更 |
 | `wikipediaUrl` | string または null | 任意 | Wikipedia 記事の HTTPS URL。記事の本文は入れない | [版2] 追加<br>[版5] 任意化 |
 | `wikidataUrl` | string または null | 任意 | Wikidata 項目の HTTPS URL | [版2] 追加<br>[版5] 任意化 |
 | `tags` | string の配列 または null | 任意 | 分類ラベル（例: `日本百名山`）。空の文字列・重複は含めない | [版5] 追加 |
@@ -46,9 +71,9 @@ gzip で圧縮した UTF-8（BOM なし）の JSON 配列で、1 要素が 1 地
 - 定義していない項目は置かない。数値に `NaN` や無限大は使わない。名前・読み・別名・タグの前後に空白を入れない。
 - 配列の並び順は保証しない。地点の識別には `id` を使い、表示や処理に必要な順番は利用する側で並べ替える。
 - 項目の取り方・同じ地点が重なったときの扱いは、データごとの README に書く。
-- 概要表のスキーマは、展開後の配列に当てはめる。URL の `format` の検査を有効にして使う。`id` の重複、別名と表示名の一致、数値が有限かは、スキーマでは確かめられないので別に確かめる。
+- 概要表のスキーマは、展開後の JSON 全体に当てはめる（版6は object、版5は配列）。URL の `format` の検査を有効にして使う。`id` の重複、別名と表示名の一致、数値が有限かは、スキーマでは確かめられないので別に確かめる。
 
-### 地点の種別
+#### 地点の種別
 
 `type` は 1 地点に 1 つの文字列で、小文字の英字で始め、続きには小文字の英数字と下線を使う。今決めている値は次のとおり。
 
@@ -70,13 +95,13 @@ gzip で圧縮した UTF-8（BOM なし）の JSON 配列で、1 要素が 1 地
 - 読み手は、知らない種別を種別不明として扱い、その地点の名前や位置は使う。知らない種別があっても、データ全体を捨てない。
 - 新しく作る山頂のデータには、必ず `peak` を書く。
 
-### ID とデータセット
+#### ID とデータセット
 
 - すべての地点データで、`id` の維持は努力義務とし、永続性を保証しない。名前や位置が変わっても可能な限り同じ ID を維持するが、取得元や生成方法によっては、同じ地点でも ID が変わる場合がある。
 - 消した地点の `id` を、別の地点に意図的に使い回さない。ID の作り方と維持方針は、各データセットの文書に記載する。
 - 地点は「データセットの名前と `id` の組」で見分ける。1 つのデータセットを複数のファイルに分けるときも、データセット全体で `id` を一意にする。別のデータセットとは、同じ `id` が重なってもよい。
 
-### OSM との関連付け
+#### OSM との関連付け
 
 手動作成の地点でも任意の `osmId` を指定できる。`id` はデータセット内の地点を見分ける識別子、`osmId` は関連する OSM ノードへの参照として扱う。
 
@@ -86,7 +111,7 @@ gzip で圧縮した UTF-8（BOM なし）の JSON 配列で、1 要素が 1 地
 
 `osmId` はノードの番号を表す。way・relation は同じ番号のノードと区別できないため、この項目には指定しない。それらとの関連付けが必要になった時点で種別の表し方を追加する。
 
-### 地点ごとの出典情報
+#### 地点ごとの出典情報
 
 `provenance` は、その地点の取得元・元資料の分類・標高の出典を記録するオブジェクト。省略または `null` は、地点ごとの出典情報がないことを表す。オブジェクト内の各項目は任意で、確認できる情報だけを記録する。空のオブジェクト `{}` も指定できる。
 
@@ -110,7 +135,7 @@ gzip で圧縮した UTF-8（BOM なし）の JSON 配列で、1 要素が 1 地
 }
 ```
 
-### 地点ごとのグラフィック
+#### 地点ごとのグラフィック
 
 `graphic` は、地点に表示する画像を SVG の本文として持つ。画像を別に取りに行く必要はなく、manifest の `sizeBytes` と `sha256` で、SVG を含むデータ全体を確かめられる。同じ SVG を複数の地点で使うときも、地点ごとに本文を書く。
 
@@ -132,11 +157,49 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
 
 ### 出典とライセンス
 
-利用条件と出典は、manifest の `license` と `attribution` に書く。使うときは `attribution` の出典を表示する（OSM 由来なら「© OpenStreetMap contributors」）。`tags` などの補足を付けた場合、その出典と利用条件は manifest の `supplementSources` に書く。各項目の意味は [manifest の仕様](../../formats/manifest.md) を参照する。
+利用条件と出典は、版6の地点文書と manifest の `license`・`attribution` に書く。使うときは `attribution` の出典を表示する（OSM 由来なら「© OpenStreetMap contributors」）。`tags` などの補足を付けた場合、その出典と利用条件は地点文書と manifest の `supplementSources` に書く。各項目の意味は [manifest の仕様](../../formats/manifest.md) を参照する。
 
 ## JSON の例
 
-各例は形式説明用の架空の地点。データ本体は JSON 配列で、版2〜4の項目は同じ。版の番号は JSON 本体に含めない。
+### 版6
+
+```json
+{
+  "schemaVersion": 6,
+  "metadata": {
+    "pointCount": 1,
+    "latestPointTimestamp": "2026-10-14T00:00:00Z",
+    "sourceUrl": "https://example.com/source",
+    "license": "資料の利用条件",
+    "attribution": "資料の著作者表示",
+    "supplementSources": {
+      "山の資料": {
+        "source": "資料名・URL"
+      }
+    },
+    "tags": {
+      "日本百名山": {
+        "reading": "にほんひゃくめいざん"
+      }
+    }
+  },
+  "points": [
+    {
+      "id": "gsi-mountain-list:368",
+      "type": "peak",
+      "name": "剣ヶ峯",
+      "latitude": 35.3606,
+      "longitude": 138.7274,
+      "tags": [
+        "日本百名山"
+      ]
+    }
+  ]
+}
+```
+
+
+各例は形式説明用の架空の地点。版5以前のデータ本体は JSON 配列で、版2〜4の項目は同じ。版5以前の版の番号は JSON 本体に含めない。
 
 ### 版5
 
@@ -147,10 +210,10 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
     "type": "peak",
     "osmId": 123456,
     "name": "見本山",
+    "nameReading": "みほんやま",
     "latitude": 35.0,
     "longitude": 139.0,
     "elevationM": 1000,
-    "nameReading": "みほんやま",
     "aliases": [],
     "wikipediaUrl": null,
     "wikidataUrl": null
@@ -183,10 +246,10 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
   {
     "osmId": 123456,
     "name": "見本山",
+    "nameReading": "みほんやま",
     "latitude": 35.0,
     "longitude": 139.0,
     "elevationM": 1000,
-    "nameReading": "みほんやま",
     "aliases": [],
     "wikipediaUrl": null,
     "wikidataUrl": null
@@ -201,10 +264,10 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
   {
     "osmId": 123456,
     "name": "見本山",
+    "nameReading": "みほんやま",
     "latitude": 35.0,
     "longitude": 139.0,
     "elevationM": 1000,
-    "nameReading": "みほんやま",
     "aliases": [],
     "wikipediaUrl": null,
     "wikidataUrl": null
@@ -219,10 +282,10 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
   {
     "osmId": 123456,
     "name": "見本山",
+    "nameReading": "みほんやま",
     "latitude": 35.0,
     "longitude": 139.0,
     "elevationM": 1000,
-    "nameReading": "みほんやま",
     "aliases": [],
     "wikipediaUrl": null,
     "wikidataUrl": null
@@ -244,7 +307,32 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
 ]
 ```
 
+### 別名のよみがな
+
+`aliases` は、別名ごとの object を持つ配列。名前と読みを同じ要素で保持する。版5以前は文字列配列だった。版6で読みがない別名も `{"name":"別名"}` の形で記載する。
+
+| 項目 | 型 | 必須 | 内容 | 版の履歴 |
+|---|---|---|---|---|
+| `aliases[].name` | string | 必須 | 別名。空文字・前後の空白・表示名と同じ名前・名前の重複は使わない | [版6] 追加 |
+| `aliases[].nameReading` | string または null | 任意 | 別名の読み。省略・`null` は読みなし。空文字・前後の空白は使わない | [版6] 追加 |
+
+```json
+{
+  "aliases": [{"name": "柴安嵓", "nameReading": "しばやすぐら"}]
+}
+```
+
 ## 変更履歴
+
+### 版6（2026-10-14）
+
+- トップレベルを地点配列から object に変更し、従来の配列を必須の `points` に格納する。版5の読み込み処理では版6を読めないため、利用前に対応が必要。
+- 本体に必須の `schemaVersion: 6` を追加する。manifest の `dataSchemaVersion` と一致させる。manifest 自体の `schemaVersion` は `5` のままとする。
+- `metadata` に任意の `pointCount`・`latestPointTimestamp` を追加する。`pointCount` は実際の地点数、`latestPointTimestamp` は元データ上の最終編集日時とし、配布 manifest の同名項目と一致させる。最終編集日時が不明な場合は省略する。
+- `metadata` に任意の `sourceUrl`・`license`・`attribution`・`supplementSources` を追加し、元データと補足の出典情報を地点 JSON にも保持する。配布 manifest の同名項目と一致させる。
+- `metadata` に任意の `tags` object を追加し、タグ共通の `reading` を保持する。タグ情報も manifest の直下へ複製する。各地点の `points[].tags` は従来の文字列配列を維持する。
+- `aliases` を文字列配列から object 配列に変更し、各要素の `name` と任意の `nameReading` に別名と読みをまとめる。
+- 機械検証用の [data-v6.schema.json](../schemas/data-v6.schema.json) を追加し、版5のスキーマも残す。
 
 ### 版5.1（2026-10-14）
 
@@ -287,3 +375,5 @@ manifest の変更は [manifest の変更履歴](../../formats/manifest.md#変�
 
 - `osmId`・`name`・`latitude`・`longitude`・`elevationM` の 5 項目。
 - 版1 の仕様を書いた資料は残っていない。上の項目は、#6 の検査処理（`peaks/scripts/check_release.py` の `validate`）が版1 に求める項目から読み取ったもの。
+
+タグ共通の読みは地点ごとに繰り返さず、地点文書の`metadata` 内の任意の `tags` に記載する。地点の `tags` は文字列配列のまま。

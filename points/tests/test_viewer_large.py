@@ -12,7 +12,9 @@ class LargeViewerTests(unittest.TestCase):
         provenance='function provenanceOf('+provenance
         helpers=page.split('const LARGE_POINT_LIMIT=',1)[1].split('let points=[];',1)[0]
         labels='const sourceLabels='+page.split('const sourceLabels=',1)[1].split('function refreshProvenanceFilters()',1)[0]
+        validation='function validateAliasReadings('+page.split('function validateAliasReadings(',1)[1].split('function parseSupplement(',1)[0]
         parser='function entriesFromJson('+page.split('function entriesFromJson(',1)[1].split('const fileInput=',1)[0]
+        parser=validation+parser
         checks=r"""
 const assert=require('node:assert/strict'),vm=require('node:vm'),zlib=require('node:zlib');
 let terminated=0;
@@ -95,7 +97,7 @@ globalThis.Worker=class{
   const progress=[];const entries=await readPointFile(blob,entriesFromJson,count=>progress.push(count));assert.deepEqual(progress,[0,1]);assert.equal(entries.length,1);assert.equal(entries[0].elevation,null);assert.equal(entries[0].source.type,null);assert.equal(entries[0].source.provenance.classification,'661');assert.ok(pointSearchText(entries[0]).includes('男体山御本殿'));
  }
  await assert.rejects(()=>readPointFile(new Blob([JSON.stringify([raw[0],raw[0]])])),/重複/);
- await assert.rejects(()=>readPointFile(new Blob(['{}'])),/配列/);
+ await assert.rejects(()=>readPointFile(new Blob(['{}'])),/配列|schemaVersion/);
  for(const partial of [{},{dataSource:'vector'},{classification:'661'},{elevationSource:'osm'}]){const entries=await readPointFile(new Blob([JSON.stringify([{...raw[0],provenance:partial}])]));const info=provenanceOf(entries[0]);assert.equal(info.dataSource,partial.dataSource??'unknown');assert.equal(info.classification,partial.classification??'unknown');assert.equal(info.elevationSource,partial.elevationSource??'unknown');}
  for(const invalid of [{dataSource:null},{dataSource:''},{dataSource:' osm '},{extra:'osm'}])await assert.rejects(()=>readPointFile(new Blob([JSON.stringify([{...raw[0],provenance:invalid}])])),/provenance/);
  assert.equal(terminated,13);

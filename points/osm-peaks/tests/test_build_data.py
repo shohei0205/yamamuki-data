@@ -1,3 +1,4 @@
+from scripts.point_document import ordered_point
 """外部通信をせずに抽出・圧縮・manifest の対応を確かめる。"""
 
 import gzip
@@ -160,7 +161,9 @@ class BuildDataTests(unittest.TestCase):
         manifest = write_distribution(mountains, self.root, "20260930-1", TIMESTAMP, "2026-09-29T12:00:00Z")
         archive = (self.root / FILE_NAME).read_bytes()
         raw = gzip.decompress(archive)
-        self.assertEqual(mountains, json.loads(raw))
+        self.assertEqual([ordered_point(p) for p in mountains], json.loads(raw)["points"])
+        self.assertEqual(json.loads(raw)["metadata"]["pointCount"],manifest["pointCount"])
+        self.assertEqual(json.loads(raw)["metadata"]["latestPointTimestamp"],manifest["latestPointTimestamp"])
         self.assertEqual(manifest, json.loads((self.root / "manifest.json").read_text(encoding="utf-8")))
         self.assertEqual(5, manifest["schemaVersion"])
         self.assertEqual("山頂", manifest["name"])
@@ -243,7 +246,7 @@ class BuildDataTests(unittest.TestCase):
         self.assertEqual("https://download.geofabrik.de/asia/japan-260929.osm.pbf", manifest["sourceUrl"])
         self.assertEqual(4, manifest["pointCount"])
         self.assertEqual(TIMESTAMP, manifest["sourceTimestamp"])
-        self.assertEqual(read_mountains(self.xml)[0], json.loads(gzip.decompress((self.root / "output" / FILE_NAME).read_bytes())))
+        self.assertEqual(read_mountains(self.xml)[0], json.loads(gzip.decompress((self.root / "output" / FILE_NAME).read_bytes()))["points"])
 
 
 if __name__ == "__main__":

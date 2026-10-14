@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from supplement_support import supplement_points, DEFAULT_SUPPLEMENTS, read_supplements
 from download import Cache
 from generate import CSV_URL, distance, point, read_csv, reading, write
 from heights import extract_heights, apply_annotations, fill_dem
@@ -136,6 +137,7 @@ def elevations(points, cache):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--supplements", type=Path, default=DEFAULT_SUPPLEMENTS, help="地点 ID で適用する補足 JSON")
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--cache", type=Path, default=Path("build/gsi-cache"))
     parser.add_argument("--output", type=Path, default=Path("build/gsi-national-primary"))
@@ -191,16 +193,19 @@ def main():
         elevation_source = "mountainList" if source == "mountainList" else height_sources.get(p["id"])
         if elevation_source is not None:
             p["provenance"]["elevationSource"] = elevation_source
+    points, supplement_sources = supplement_points(points, args.supplements)
     report = {"pointCount": len(points), "primarySource": "optimal_bvmap-v1", "vectorAnnotationCount": len(records),
               "vectorPointCount": comparison["vectorPointCount"], "fallbackCount": len(comparison["fallbackIds"]),
-              "readingCount": sum(bool(p["nameReading"]) for p in points), "elevationCount": sum(p["elevationM"] is not None for p in points),
+              "readingCount": sum(bool(p.get("nameReading")) for p in points), "elevationCount": sum(p["elevationM"] is not None for p in points),
               "demElevationCount": dem_report["pointCount"], "demSources": dem_report["bySource"],
               "annotationElevationCount": len(annotation_report["applied"]), "processedVectorTiles": processed, "naturalAcquisition": scan,
               "reviewCount": len(comparison["review"]), "skipped": skipped + omissions,
               "sources": sorted([archive_info, *natural_sources, *cache.used.values()], key=lambda s: s["url"])}
-    write(points, report, args.output, args.version)
+    tags = read_supplements(args.supplements).get("tags", {})
+    write(points, report, args.output, args.version, tags=tags, metadata={"sourceUrl": PMTILES_URL, "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html", "attribution": "出典：国土地理院（最適化ベクトルタイル・日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成", "supplementSources": supplement_sources})
     path = args.output / "manifest.json"
     manifest = json.loads(path.read_bytes())
+    manifest["supplementSources"] = supplement_sources
     manifest.update(attribution="出典：国土地理院（最適化ベクトルタイル・日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成",
                     sourceUrl=PMTILES_URL, sourceDate=None,
                     elevationPolicy="山岳一覧の公称標高、25 m 以内で双方に一意な三角点・標高点、DEM1A・DEM5A・DEM5B・DEM5C・DEM10B の順に採用。DEM は指定座標の地表標高であり、最高地点の標高とは限らない。",

@@ -18,15 +18,17 @@ import xml.etree.ElementTree as ET
 
 
 if __package__:
+    from scripts.point_document import document
     from scripts.release_channels import download_url
     from scripts.graphics import validate_graphics
-    from scripts.point_tags import validate_tags
+    from scripts.point_tags import validate_tags, validate_alias_readings, validate_tag_metadata
     from scripts.tag_json import apply_tag_jsons
     from scripts.supplements import DEFAULT_SUPPLEMENTS, read_supplements, apply_supplements, write_companions, validate_supplement_sources
 else:
+    from point_document import document
     from release_channels import download_url
     from graphics import validate_graphics
-    from point_tags import validate_tags
+    from point_tags import validate_tags, validate_alias_readings, validate_tag_metadata
     from tag_json import apply_tag_jsons
     from supplements import DEFAULT_SUPPLEMENTS, read_supplements, apply_supplements, write_companions, validate_supplement_sources
 
@@ -137,7 +139,9 @@ def normalize_timestamp(value):
     return stamp.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL, channel="stable", supplement_sources=None):
+def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL, channel="stable", supplement_sources=None, tag_metadata=None):
+    if tag_metadata is not None:
+        validate_tag_metadata(tag_metadata)
     if supplement_sources is not None:
         validate_supplement_sources(supplement_sources)
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
@@ -148,9 +152,10 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
     if latest_mountain_timestamp > source_timestamp:
         raise ValueError("山頂の最終編集日時が元データの基準日時より新しくなっています")
     validate_tags(mountains)
+    validate_alias_readings(mountains)
     validate_graphics(mountains)
     logging.info("%s 件を JSON に変換しています", format(len(mountains), ","))
-    raw = (json.dumps(mountains, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+    raw = (json.dumps(document(mountains, tag_metadata, latestPointTimestamp=latest_mountain_timestamp, sourceUrl=source_url, license="ODbL-1.0", attribution="© OpenStreetMap contributors", supplementSources={} if supplement_sources is None else supplement_sources), ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
     # ファイル名と生成時刻をヘッダーに含めず、同じ内容の圧縮結果をそろえる。
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -167,7 +172,7 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
         logging.info("SHA-256 を計算し、manifest を作成しています")
         manifest = {
             "schemaVersion": 5,
-            "dataSchemaVersion": 5,
+            "dataSchemaVersion": 6,
             "name": "山頂",
             "version": version,
             "fileName": FILE_NAME,
@@ -182,6 +187,8 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
             "license": "ODbL-1.0",
             "attribution": "© OpenStreetMap contributors",
         }
+        if tag_metadata:
+            manifest["tags"]=tag_metadata
         if supplement_sources:
             manifest["supplementSources"] = supplement_sources
         manifest_path = Path(temporary) / "manifest.json"
@@ -244,7 +251,7 @@ def build(pbf, output_dir, version, *, channel="stable", tags_directory=None, su
         original = mountains
         if supplements is not None:
             mountains = apply_supplements(original, supplements)
-        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel, supplement_sources=supplement_sources)
+        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel, supplement_sources=supplement_sources, tag_metadata=supplements.get("tags") if supplements is not None else None)
         if supplements is not None:
             write_companions(output_dir, original, supplements, manifest)
     logging.info("全国データの生成完了（経過 %.1f 秒）", time.monotonic() - started)

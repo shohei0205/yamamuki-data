@@ -70,7 +70,8 @@ def build(database, peaks_path, comparison_path, output, previous_path=None):
     inputs = [input_record(path) for path in (peaks_path, comparison_path, database)]
     if previous_path:
         inputs.append(input_record(previous_path))
-    peaks = list(read_points(peaks_path))
+    metadata = {}
+    peaks = list(read_points(peaks_path, metadata=metadata))
     comparison = json.loads(Path(comparison_path).read_text(encoding="utf-8"))
     previous = {}
     if previous_path:
@@ -83,7 +84,7 @@ def build(database, peaks_path, comparison_path, output, previous_path=None):
         for point in annotation_points(database, peaks, comparison):
             yield preserve_height(point, previous)
 
-    report = write_points(points(), output, "gsi-all-points")
+    report = write_points(points(), output, "gsi-all-points", tags=metadata.get("tags"), metadata={k:v for k,v in metadata.items() if k != "tags"})
     report.update(inputs=inputs,
                   scope="山頂版と名称付き単一点注記。数字だけの注記・空名称・タイル外の複製・収録済み山頂注記を除外。",
                   elevationPolicy="標高と読みを推測で補わない。注記の標高は山頂の標高とは限らない。",

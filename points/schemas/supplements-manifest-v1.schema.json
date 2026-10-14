@@ -23,7 +23,11 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
     "dataSchemaVersion": {
-      "const": 5
+      "type": "integer",
+      "enum": [
+        5,
+        6
+      ]
     },
     "distributionSha256": {
       "type": "string",

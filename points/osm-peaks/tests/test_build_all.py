@@ -41,7 +41,7 @@ class AllOsmTests(unittest.TestCase):
             peak = node_point(1, 35, 139, {'name': '補足済みの山', 'natural': 'peak', 'ele': '100'})
             peaks.write_text(json.dumps([peak]), encoding='utf-8')
             report = build(pbf, root/'out', peaks)
-            rows = json.loads((root/'out/osm-all-points.json').read_bytes())
+            rows = json.loads((root/'out/osm-all-points.json').read_bytes())['points']
             self.assertEqual([p['id'] for p in rows], ['1', '2'])
             self.assertEqual(rows[0]['name'], '補足済みの山')
             self.assertEqual(report['peakCount'], 1)

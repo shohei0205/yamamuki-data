@@ -32,7 +32,7 @@ class TestPoints(unittest.TestCase):
             directory = Path(temporary)
             manifest = target.generate("test-1", directory)
             contents = (directory / manifest["fileName"]).read_bytes()
-            rows = json.loads(gzip.decompress(contents))
+            rows = json.loads(gzip.decompress(contents))["points"]
             self.assertEqual(len(rows), manifest["pointCount"])
             self.assertEqual(len({row["type"] for row in rows}), 11)
             self.assertEqual(rows[0]["graphic"]["scale"], 1.5)

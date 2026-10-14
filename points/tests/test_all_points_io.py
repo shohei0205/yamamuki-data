@@ -12,6 +12,17 @@ from all_points_io import read_points, write_points
 
 
 class AllPointsIoTests(unittest.TestCase):
+    def test_alias_readings_roundtrip_and_unknown_alias_rejected(self):
+        point = {"id":"1", "name":"燧ヶ岳", "latitude":35, "longitude":139,
+                 "aliases":["柴安嵓"], "aliasReadings":{"柴安嵓":"しばやすぐら"}}
+        with tempfile.TemporaryDirectory() as folder:
+            write_points([point], folder, "points")
+            from document_metadata import ordered_point
+            self.assertEqual(list(read_points(Path(folder)/"points.json")), [ordered_point(point)])
+            for readings in [{"未登録":"よみ"}, {"柴安嵓":None}, {"柴安嵓":""}]:
+                with self.subTest(readings=readings), self.assertRaises(ValueError):
+                    write_points([{**point,"aliasReadings":readings}], folder, "points")
+
     def test_json_chunks_bom_and_gzip(self):
         points = [{"id": "1", "name": "山、[麓]", "latitude": 35, "longitude": 139},
                   {"id": "2", "name": "駅", "latitude": 36, "longitude": 140}]

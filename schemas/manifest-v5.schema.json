@@ -73,7 +73,7 @@
     "dataSchemaVersion": {
       "type": "integer",
       "minimum": 1,
-      "description": "データ本体のスキーマの版。新規生成時は必ず記載し、manifest の版とは独立して管理する。"
+      "description": "データ本体の版。地点文書の現行版は6。manifest の版とは独立して管理する。"
     },
     "name": {
       "type": "string",
@@ -101,6 +101,23 @@
           },
           "changes": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "tags": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^\\S(?:.*\\S)?$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "reading": {
+            "type": "string",
+            "pattern": "^\\S(?:.*\\S)?$"
           }
         },
         "additionalProperties": false

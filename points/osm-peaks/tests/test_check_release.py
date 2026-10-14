@@ -1,6 +1,8 @@
 """件数の境界・地域の欠落・ファイル破損の判定を確かめる。"""
 
 import copy
+import gzip
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -133,7 +135,7 @@ class CheckReleaseTests(unittest.TestCase):
             root = Path(directory)
             rows = dataset(1)[1]
             manifest = write_distribution(rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
-            self.assertEqual(5, manifest["dataSchemaVersion"])
+            self.assertEqual(6, manifest["dataSchemaVersion"])
             for value in (None, True, "5", 0, 99):
                 (root / "manifest.json").write_text(json.dumps(dict(manifest, dataSchemaVersion=value)), encoding="utf-8")
                 with self.subTest(value=value), self.assertRaises(ValueError):
@@ -147,11 +149,19 @@ class CheckReleaseTests(unittest.TestCase):
             del old_rows[0]["id"]
             old_manifest = write_distribution(old_rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
             old_manifest["dataSchemaVersion"] = 2
+            old_raw = (json.dumps(old_rows,ensure_ascii=False,separators=(',',':'))+'\n').encode()
+            old_gzip = gzip.compress(old_raw,mtime=0)
+            (root / FILE_NAME).write_bytes(old_gzip)
+            old_manifest.update(sha256=hashlib.sha256(old_gzip).hexdigest(),sizeBytes=len(old_gzip),uncompressedSizeBytes=len(old_raw))
             (root / "manifest.json").write_text(json.dumps(old_manifest), encoding="utf-8")
             self.assertEqual(old_rows, validate(root)[1])
             write_distribution(rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
             legacy = dict(manifest)
             del legacy["dataSchemaVersion"]
+            legacy_raw = (json.dumps(rows,ensure_ascii=False,separators=(',',':'))+'\n').encode()
+            legacy_gzip = gzip.compress(legacy_raw,mtime=0)
+            (root / FILE_NAME).write_bytes(legacy_gzip)
+            legacy.update(sha256=hashlib.sha256(legacy_gzip).hexdigest(),sizeBytes=len(legacy_gzip),uncompressedSizeBytes=len(legacy_raw))
             (root / "manifest.json").write_text(json.dumps(legacy), encoding="utf-8")
             self.assertEqual(rows, validate(root)[1])
         before, after = dataset(), dataset()
@@ -208,8 +218,8 @@ class CheckReleaseTests(unittest.TestCase):
                 with self.subTest(field=field):
                     rows = dataset(1)[1]
                     rows[0][field] = value
-                    write_distribution(rows, directory, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
                     with self.assertRaises(ValueError):
+                        write_distribution(rows, directory, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
                         validate(directory)
 
     def test_bad_rows_rejected_even_with_valid_checksum(self):
@@ -218,8 +228,8 @@ class CheckReleaseTests(unittest.TestCase):
                 with self.subTest(changes=changes):
                     rows = dataset(1)[1]
                     rows[0].update(changes)
-                    write_distribution(rows, directory, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
                     with self.assertRaises(ValueError):
+                        write_distribution(rows, directory, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
                         validate(directory)
 
 

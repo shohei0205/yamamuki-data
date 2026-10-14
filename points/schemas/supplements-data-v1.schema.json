@@ -40,11 +40,12 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": [
-          "osmId"
-        ],
         "additionalProperties": false,
         "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+          },
           "osmId": {
             "type": "integer",
             "minimum": 1,
@@ -83,8 +84,32 @@
             "type": "array",
             "uniqueItems": true,
             "items": {
-              "type": "string",
-              "pattern": "^\\S(?:.*\\S)?$"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\S(?:.*\\S)?$"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "name"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "^\\S(?:.*\\S)?$"
+                    },
+                    "nameReading": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^\\S(?:.*\\S)?$"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              ]
             }
           },
           "aliasesRemove": {
@@ -117,7 +142,32 @@
               "aliases": {
                 "type": "array",
                 "items": {
-                  "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^\\S(?:.*\\S)?$"
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "name"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "pattern": "^\\S(?:.*\\S)?$"
+                        },
+                        "nameReading": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "pattern": "^\\S(?:.*\\S)?$"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
                 }
               }
             }
@@ -196,62 +246,108 @@
             ]
           }
         ],
-        "allOf": [
+        "oneOf": [
           {
-            "if": {
-              "anyOf": [
-                {
-                  "required": [
-                    "name"
-                  ]
-                },
-                {
-                  "required": [
-                    "exclude"
-                  ],
-                  "properties": {
-                    "exclude": {
-                      "const": true
-                    }
-                  }
-                },
-                {
-                  "required": [
-                    "nameReading"
-                  ],
-                  "properties": {
-                    "nameReading": {
-                      "type": "null"
-                    }
-                  }
-                },
-                {
-                  "required": [
-                    "aliasesRemove"
-                  ],
-                  "properties": {
-                    "aliasesRemove": {
-                      "minItems": 1
-                    }
-                  }
-                }
-              ]
-            },
-            "then": {
-              "required": [
-                "reason"
-              ],
-              "properties": {
-                "reason": {
-                  "type": "string",
-                  "pattern": "^\\S(?:.*\\S)?$"
-                }
-              }
-            }
+            "required": [
+              "id"
+            ]
+          },
+          {
+            "required": [
+              "osmId"
+            ]
           }
         ]
       }
+    },
+    "tags": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^\\S(?:.*\\S)?$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "reading": {
+            "type": "string",
+            "pattern": "^\\S(?:.*\\S)?$"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "sources": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^\\S(?:.*\\S)?$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "type": "string"
+              },
+              "license": {
+                "type": "string"
+              },
+              "attribution": {
+                "type": "string"
+              },
+              "changes": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "tags": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^\\S(?:.*\\S)?$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "reading": {
+                "type": "string",
+                "pattern": "^\\S(?:.*\\S)?$"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
     }
   },
-  "$comment": "osmId の重複、別名の追加・削除の競合、expected と元データの一致は生成処理で検査する。"
+  "$comment": "osmId の重複、別名の追加・削除の競合、expected と元データの一致は生成処理で検査する。",
+  "not": {
+    "allOf": [
+      {
+        "required": [
+          "metadata"
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "required": [
+              "sources"
+            ]
+          },
+          {
+            "required": [
+              "tags"
+            ]
+          }
+        ]
+      }
+    ]
+  }
 }
