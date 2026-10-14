@@ -49,7 +49,7 @@ class GenerationTests(unittest.TestCase):
 
     def test_csv_has_gsi_ids_and_no_osm_fields(self):
         result = read_csv(mountain_csv())[0]
-        self.assertEqual("gsi-1003:1", result["id"])
+        self.assertEqual("gsi-mountain-list:1", result["id"])
         self.assertEqual("やま", result["nameReading"])
         self.assertEqual(100, result["elevationM"])
         self.assertNotIn("osmId", result)
@@ -95,7 +95,7 @@ class GenerationTests(unittest.TestCase):
         result, conflicts = merge(csv_points, near + distant + distant)
         self.assertEqual(2, len(result))
         self.assertEqual(1, len(conflicts))
-        primary = next(p for p in result if p["id"].startswith("gsi-1003:"))
+        primary = next(p for p in result if p["id"].startswith("gsi-mountain-list:"))
         self.assertEqual("やま", primary["nameReading"])
         self.assertEqual(100, primary["elevationM"])
         self.assertEqual(["別名"], primary["aliases"])

@@ -61,13 +61,26 @@ class BuildDataTests(unittest.TestCase):
         self.assertEqual(["1", "2", "5", "6"], [m["id"] for m in mountains])
         self.assertEqual({"id": "1", "type": "peak", "osmId": 1, "name": "富士山", "latitude": 35.3606,
                           "longitude": 138.7274, "elevationM": 3776,
+                          "provenance": {"dataSource": "osm", "classification": "natural=peak", "elevationSource": "osm"},
                           "nameReading": "ふじさん", "aliases": ["富岳", "芙蓉峰"],
                           "wikipediaUrl": "https://ja.wikipedia.org/wiki/%E5%AF%8C%E5%A3%AB%E5%B1%B1",
                           "wikidataUrl": "https://www.wikidata.org/wiki/Q39231"}, mountains[0])
         self.assertTrue(all(mountain["type"] == "peak" for mountain in mountains))
         self.assertAlmostEqual(304.8, mountains[1]["elevationM"])
+        self.assertEqual("natural=volcano", mountains[1]["provenance"]["classification"])
+        self.assertEqual("osm", mountains[1]["provenance"]["elevationSource"])
+        self.assertTrue(all(m["provenance"]["elevationSource"] == "unassigned" for m in mountains[2:]))
         self.assertEqual("標高不明の山", mountains[2]["name"])
         self.assertIsNone(mountains[2]["elevationM"])
+
+    def test_provenance_survives_supplements(self):
+        from scripts.supplements import apply_supplements
+        mountains = read_mountains(self.xml)[0]
+        before = dict(mountains[0]['provenance'])
+        supplemented = apply_supplements(mountains, {'schemaVersion': 1, 'sources': {},
+            'points': [{'osmId': 1, 'name': '補正した富士山', 'reason': '表記を確認'}]})
+        self.assertEqual(supplemented[0]['provenance'], before)
+        self.assertEqual(mountains[0]['name'], '富士山')
 
     def test_missing_optional_details(self):
         mountain = read_mountains(self.xml)[0][1]

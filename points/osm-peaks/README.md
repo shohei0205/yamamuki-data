@@ -32,6 +32,18 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 
 圧縮後のサイズが 5,000,000 バイトを超える場合は公開を止め、分割を検討する。データが空、ID が重複、座標が不正、元データの日付が取得できない場合も公開しない。
 
+### 地点ごとの出典情報
+
+各地点の `provenance` に取得元・元資料の分類・標高の出典を記録する。形式と制約は [地点データフォーマット](../formats/data.md#地点ごとの出典情報)を参照する。
+
+| 項目 | 値 |
+|---|---|
+| `dataSource` | `osm`（OpenStreetMap） |
+| `classification` | 元ノードのタグに応じて `natural=peak` または `natural=volcano` |
+| `elevationSource` | `ele` から標高を取得できた場合は `osm`、未登録・解釈できない場合は `unassigned` |
+
+`classification` は OSM の元の分類を保持する。共通の地点種別 `type` は、どちらも `peak` とする。補足 JSON は標高を変更しないため、名前・読み・別名・タグなどを補正しても、この出典情報は保持する。補足の出典一覧は manifest の `supplementSources` に記録する。
+
 ## ID の作り方と維持方針
 
 `id` は OSM ノード番号を先頭に 0 を付けない文字列にする。`osmId` にも同じノード番号を数値で出力する（例: `id` が `"123456"`、`osmId` が `123456`）。

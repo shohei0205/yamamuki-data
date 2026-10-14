@@ -14,6 +14,19 @@ from release_tools import test_points as target
 
 
 class TestPoints(unittest.TestCase):
+    def test_provenance_is_optional_and_validated(self):
+        rows = json.loads((target.ROOT / 'points/testdata/points.json').read_bytes())
+        target.validate_rows(rows)
+        rows[0]['provenance'] = {'dataSource': 'vector', 'classification': '661', 'elevationSource': 'unassigned'}
+        target.validate_rows(rows)
+        for valid in [{}, {'dataSource': 'vector'}, {'classification': '661'}, {'elevationSource': 'osm'}]:
+            rows[0]['provenance'] = valid
+            target.validate_rows(rows)
+        for invalid in [[], {'extra': 'vector'}, {'dataSource': None}, {'dataSource': 'vector', 'classification': '661', 'elevationSource': ''}]:
+            rows[0]['provenance'] = invalid
+            with self.assertRaisesRegex(ValueError, '出典情報'):
+                target.validate_rows(rows)
+
     def test_generate(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

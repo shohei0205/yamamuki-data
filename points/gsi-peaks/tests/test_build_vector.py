@@ -15,6 +15,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from build_vector import primary_points, elevations
 from generate import point, NATURAL_URL, tile_position
+from test_heights import png
 from natural_sources import acquire, load, target_tiles
 
 
@@ -44,13 +45,13 @@ class PrimaryTests(unittest.TestCase):
 
     def test_mountain_list_summit_elevation_reading_and_index_win(self):
         vector = point("gsi-vector:1", "槙寄山", None, 35.0001, 139)
-        mountain = point("gsi-1003:14-1", "槇寄山", "まきよせやま", 35, 139, 1188)
+        mountain = point("gsi-mountain-list:14-1", "槇寄山", "まきよせやま", 35, 139, 1188)
         points, _ = primary_points([record(vector)], [mountain], [], [])
         self.assertEqual(points, [{**mountain, "name": "槙寄山", "aliases": ["槇寄山"]}])
 
     def test_label_offset_does_not_lose_official_summit_or_index(self):
         vector = point("gsi-vector:1", "筑波山", None, 35.005, 139)
-        mountain = point("gsi-1003:14-1", "筑波山", "つくばさん", 35, 139, 877)
+        mountain = point("gsi-mountain-list:14-1", "筑波山", "つくばさん", 35, 139, 877)
         points, report = primary_points([record(vector)], [mountain], [], [])
         self.assertEqual(points, [mountain])
         self.assertEqual(report["fallbackIds"], [])
@@ -92,7 +93,7 @@ class PrimaryTests(unittest.TestCase):
         self.assertEqual(len(points), 1)
         self.assertEqual(len(report["duplicates"]), 1)
         other = point("gsi-vector:3", "山", None, 35.0005, 139)
-        mountain = point("gsi-1003:1", "山", "やま", 35.0002, 139, 100)
+        mountain = point("gsi-mountain-list:1", "山", "やま", 35.0002, 139, 100)
         points, report = primary_points([record(p), record(other)], [mountain], [], [])
         self.assertEqual({p["id"] for p in points}, {"gsi-vector:1", "gsi-vector:3"})
         self.assertEqual(len(report["review"]), 3)
@@ -100,9 +101,9 @@ class PrimaryTests(unittest.TestCase):
     def test_missing_dem_value_does_not_invent_elevation(self):
         class Cache:
             def get(self, *args, **kwargs):
-                return ((",".join(["e"] * 256) + "\n") * 256).encode()
+                return png(None)
         points = [point("gsi-vector:1", "山", None, 35, 139)]
-        self.assertEqual(elevations(points, Cache()), 0)
+        self.assertEqual(elevations(points, Cache())["pointCount"], 0)
         self.assertIsNone(points[0]["elevationM"])
 
 
@@ -122,7 +123,7 @@ class TargetedNaturalTests(unittest.TestCase):
             def __init__(self, *args, **kwargs):
                 self.used = {}
             def get(self, url, **kwargs):
-                data = csv_payload if url.endswith('.csv') else ((','.join(['100'] * 256) + '\n') * 256).encode()
+                data = csv_payload if url.endswith('.csv') else png(100)
                 self.used[url] = {"url": url, "fetchedAt": "date", "status": 200, "sha256": hashlib.sha256(data).hexdigest()}
                 return data
         def fetch(number, area):
@@ -134,13 +135,20 @@ class TargetedNaturalTests(unittest.TestCase):
             (root / 'optimal_bvmap-source.json').write_text(json.dumps({'url': PMTILES_URL, 'sha256': hashlib.sha256(b'archive').hexdigest(), 'sizeBytes': 7, 'fetchedAt': 'date'}))
             output = root / 'output'
             argv = ['vector.py', '--archive', str(archive), '--output', str(output)]
-            with patch('sys.argv', argv), patch('build_vector.extract', return_value=([record(vector)], [], 1)), patch('build_vector.Cache', FakeCache), patch('natural_sources.fetch', side_effect=fetch):
+            with patch('sys.argv', argv), patch('build_vector.extract', return_value=([record(vector)], [], 1)), patch('build_vector.Cache', FakeCache), patch('build_vector.extract_heights', return_value=[]), patch('natural_sources.fetch', side_effect=fetch):
                 main()
             first = (output / 'gsi-peaks.json').read_bytes()
             points = json.loads(first)
+            self.assertTrue(all('provenance' in p for p in points))
+            official = next(p for p in points if p['id'].startswith('gsi-mountain-list:'))
+            self.assertEqual(official['provenance']['dataSource'], 'mountainList')
+            self.assertEqual(official['provenance']['elevationSource'], 'mountainList')
+            dem = next(p for p in points if p['id'].startswith('gsi-vector:'))
+            self.assertEqual(dem['provenance']['dataSource'], 'vector')
+            self.assertEqual(dem['provenance']['elevationSource'], 'dem1a_png')
             self.assertEqual(len(points), 2)
             self.assertEqual(next(p for p in points if p['name'] == '山')['nameReading'], 'やま')
-            with patch('sys.argv', [*argv, '--offline']), patch('build_vector.extract', return_value=([record(vector)], [], 1)), patch('build_vector.Cache', FakeCache), patch('natural_sources.fetch', side_effect=AssertionError('通信した')):
+            with patch('sys.argv', [*argv, '--offline']), patch('build_vector.extract', return_value=([record(vector)], [], 1)), patch('build_vector.Cache', FakeCache), patch('build_vector.extract_heights', return_value=[]), patch('natural_sources.fetch', side_effect=AssertionError('通信した')):
                 main()
             self.assertEqual((output / 'gsi-peaks.json').read_bytes(), first)
             report = json.loads((output / 'report.json').read_bytes())

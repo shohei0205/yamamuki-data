@@ -1,15 +1,15 @@
 """ベクトルタイルを山の一覧の第一ソースとし、他の国土地理院データで補完する。"""
 
 import argparse
-from collections import Counter, defaultdict, OrderedDict
+from collections import Counter, defaultdict
 from contextlib import closing
 import hashlib
 import json
-import math
 from pathlib import Path
 
 from download import Cache
-from generate import CSV_URL, DEM_URL, distance, point, read_csv, reading, tile_position, write
+from generate import CSV_URL, distance, point, read_csv, reading, write
+from heights import extract_heights, apply_annotations, fill_dem
 from natural_sources import acquire, load, target_tiles, open_cache
 from vector import extract, normalized, PMTILES_URL
 
@@ -131,32 +131,7 @@ def primary_points(records, mountains, natural, features, reading_radius=100):
 
 
 def elevations(points, cache):
-    rows_cache, count = OrderedDict(), 0
-    for i, p in enumerate(points, 1):
-        if p["elevationM"] is not None:
-            continue
-        x, y = tile_position(p["latitude"], p["longitude"], 14)
-        tile = int(x), int(y)
-        if tile not in rows_cache:
-            payload = cache.get(DEM_URL.format(x=tile[0], y=tile[1]), missing_ok=True)
-            rows = None if payload is None else [row.split(",") for row in payload.decode("ascii").splitlines()]
-            if rows is not None and (len(rows) != 256 or any(len(row) != 256 for row in rows)):
-                raise ValueError("標高タイルの形式が不正です")
-            rows_cache[tile] = rows
-            if len(rows_cache) > 32:
-                rows_cache.popitem(last=False)
-        rows = rows_cache[tile]
-        rows_cache.move_to_end(tile)
-        if rows is not None:
-            value = rows[min(255, int(y % 1 * 256))][min(255, int(x % 1 * 256))]
-            if value != "e":
-                p["elevationM"] = float(value)
-                if not math.isfinite(p["elevationM"]):
-                    raise ValueError("標高が不正です")
-                count += 1
-        if i % 1000 == 0:
-            print(f"標高補完: {i}/{len(points)} 地点", flush=True)
-    return count
+    return fill_dem(points, cache)
 
 
 def main():
@@ -203,11 +178,22 @@ def main():
         natural, features, omissions, natural_sources = load(args.output / "natural-selected.sqlite3", selected)
     points, comparison = primary_points(records, mountains, natural, features, reading_radius=1000)
     scan["readingSearchRadiusM"] = 1000
-    dem_count = elevations(points, cache)
+    measurements = extract_heights(args.archive, args.output / "height-annotations.sqlite3", points)
+    annotation_report = apply_annotations(points, measurements)
+    dem_report = elevations(points, cache)
+    codes = {record["point"]["id"]: str(record["properties"]["vt_code"]) for record in records}
+    mountain_codes = {row["id"]: codes[row["vectorId"]] for row in comparison["enrichment"] if row["source"] == "mountainList"}
+    height_sources = {row["id"]: row["source"] for row in [*annotation_report["applied"], *dem_report["assignments"]]}
+    for p in points:
+        source = "mountainList" if p["id"].startswith("gsi-mountain-list:") else "natural" if p["id"].startswith("gsi-natural:") else "vector"
+        p["provenance"] = {"dataSource": source,
+                           "classification": codes.get(p["id"], mountain_codes.get(p["id"], "山（自然地名）" if source == "natural" else "peak")),
+                           "elevationSource": "mountainList" if source == "mountainList" else height_sources.get(p["id"], "unassigned")}
     report = {"pointCount": len(points), "primarySource": "optimal_bvmap-v1", "vectorAnnotationCount": len(records),
               "vectorPointCount": comparison["vectorPointCount"], "fallbackCount": len(comparison["fallbackIds"]),
               "readingCount": sum(bool(p["nameReading"]) for p in points), "elevationCount": sum(p["elevationM"] is not None for p in points),
-              "demElevationCount": dem_count, "processedVectorTiles": processed, "naturalAcquisition": scan,
+              "demElevationCount": dem_report["pointCount"], "demSources": dem_report["bySource"],
+              "annotationElevationCount": len(annotation_report["applied"]), "processedVectorTiles": processed, "naturalAcquisition": scan,
               "reviewCount": len(comparison["review"]), "skipped": skipped + omissions,
               "sources": sorted([archive_info, *natural_sources, *cache.used.values()], key=lambda s: s["url"])}
     write(points, report, args.output, args.version)
@@ -215,8 +201,14 @@ def main():
     manifest = json.loads(path.read_bytes())
     manifest.update(attribution="出典：国土地理院（最適化ベクトルタイル・日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成",
                     sourceUrl=PMTILES_URL, sourceDate=None,
+                    elevationPolicy="山岳一覧の公称標高、25 m 以内で双方に一意な三角点・標高点、DEM1A・DEM5A・DEM5B・DEM5C・DEM10B の順に採用。DEM は指定座標の地表標高であり、最高地点の標高とは限らない。",
                     coordinatePolicy="山名・座標は最適化ベクトルタイルを優先し、一意に照合できた山岳一覧の最高地点を優先する。未収録の山は山岳一覧・取得済み自然地名から追加する。注記・代表点は最高地点とは限らない。")
     path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    elevation_sources = ([{"id": p["id"], "source": "mountainList", "elevationM": p["elevationM"], "sourceUrl": CSV_URL}
+                          for p in points if p["id"].startswith("gsi-mountain-list:")]
+                         + annotation_report["applied"] + dem_report["assignments"])
+    (args.output / "elevation-sources.json").write_text(json.dumps({"points": sorted(elevation_sources, key=lambda r:r["id"]),
+        "annotationUnresolved": annotation_report["unresolved"], "missingIds": dem_report["missingIds"]}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     for name, data in (("vector-comparison.json", comparison), ("vector-only-points.json", [r["point"] for r in records])):
         (args.output / name).write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({k: v for k, v in report.items() if k not in ("sources", "skipped")}, ensure_ascii=False), flush=True)

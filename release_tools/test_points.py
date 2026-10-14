@@ -34,6 +34,11 @@ def validate_rows(rows):
             raise ValueError("地点名がありません")
         if row.get("type") is not None and (not isinstance(row["type"], str) or not re.fullmatch(r"[a-z][a-z0-9_]*", row["type"])):
             raise ValueError("地点の種別が不正です")
+        provenance = row.get("provenance")
+        if provenance is not None:
+            keys = {"dataSource", "classification", "elevationSource"}
+            if not isinstance(provenance, dict) or not set(provenance) <= keys or any(not isinstance(v, str) or not v.strip() or v.strip() != v for v in provenance.values()):
+                raise ValueError("地点の出典情報が不正です")
         for key, limit in (("latitude", 90), ("longitude", 180)):
             value = row.get(key)
             if type(value) not in (int, float) or not math.isfinite(value) or abs(value) > limit:

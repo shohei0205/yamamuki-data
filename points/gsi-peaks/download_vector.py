@@ -9,6 +9,7 @@ import time
 from urllib.request import Request, urlopen
 
 URL = "https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/optimal_bvmap-v1.pmtiles"
+USER_AGENT = "yamamuki-data/1 (+https://github.com/shohei0205/yamamuki-data)"
 
 
 def save(path, data):
@@ -31,7 +32,7 @@ def download(directory):
         if metadata["url"] != URL or metadata["sizeBytes"] != archive.stat().st_size or metadata.get("sha256") != digest:
             raise ValueError("保存済み PMTiles のハッシュまたは記録が一致しません")
         return archive
-    with urlopen(Request(URL, method="HEAD"), timeout=60) as response:
+    with urlopen(Request(URL, headers={"User-Agent": USER_AGENT}, method="HEAD"), timeout=60) as response:
         metadata = {"url": URL, "sizeBytes": int(response.headers["Content-Length"]),
                     "etag": response.headers.get("ETag"), "lastModified": response.headers.get("Last-Modified")}
     if info.exists():
@@ -55,6 +56,7 @@ def download(directory):
             headers = {"Range": f"bytes={offset}-", "If-Match": metadata["etag"]} if offset else {}
             if not headers.get("If-Match"):
                 headers.pop("If-Match", None)
+            headers["User-Agent"] = USER_AGENT
             try:
                 with urlopen(Request(URL, headers=headers), timeout=60) as response:
                     expected = 206 if offset else 200

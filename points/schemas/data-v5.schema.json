@@ -152,6 +152,28 @@
           },
           "uniqueItems": true,
           "description": "任意の分類ラベル。省略時は空配列。例: 日本百名山。"
+        },
+        "provenance": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "地点の取得元・元資料の分類・標高の取得元。値の定義は各データセットの文書を参照。",
+          "additionalProperties": false,
+          "properties": {
+            "dataSource": {
+              "type": "string",
+              "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+            },
+            "classification": {
+              "type": "string",
+              "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+            },
+            "elevationSource": {
+              "type": "string",
+              "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+            }
+          }
         }
       },
       "additionalProperties": false

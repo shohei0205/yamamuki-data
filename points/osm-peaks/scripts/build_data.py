@@ -104,6 +104,7 @@ def read_mountains(path):
                     raise ValueError(f"ノード {osm_id} の最終編集日時がありません")
                 timestamp = normalize_timestamp(timestamp)
                 latest_timestamp = max(latest_timestamp or timestamp, timestamp)
+                elevation = parse_elevation(tags.get("ele"))
                 mountains[osm_id] = {
                     "id": str(osm_id),
                     "type": "peak",
@@ -111,7 +112,9 @@ def read_mountains(path):
                     "name": name,
                     "latitude": lat,
                     "longitude": lon,
-                    "elevationM": parse_elevation(tags.get("ele")),
+                    "elevationM": elevation,
+                    "provenance": {"dataSource": "osm", "classification": "natural=" + tags["natural"],
+                                   "elevationSource": "osm" if elevation is not None else "unassigned"},
                     "nameReading": tags.get("name:ja-Hira", "").strip() or None,
                     "aliases": read_aliases(tags, name),
                     "wikipediaUrl": wikipedia_url(tags.get("wikipedia")),

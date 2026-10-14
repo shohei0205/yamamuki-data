@@ -91,7 +91,7 @@ class AllTilesTests(unittest.TestCase):
             cache = Mock()
             cache.used = {}
             cache.get.return_value = b''
-            mountain = {'id': 'gsi-1003:1', 'type': 'peak', 'name': '山', 'nameReading': 'やま',
+            mountain = {'id': 'gsi-mountain-list:1', 'type': 'peak', 'name': '山', 'nameReading': 'やま',
                         'latitude': 35, 'longitude': 139, 'elevationM': 100,
                         'aliases': [], 'wikipediaUrl': None, 'wikidataUrl': None}
             try:

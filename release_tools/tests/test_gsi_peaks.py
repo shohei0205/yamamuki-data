@@ -14,6 +14,21 @@ from release_tools import gsi_peaks as target
 
 
 class GsiReleaseTests(unittest.TestCase):
+    def test_png_dem_sources_keep_layer_and_template(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / 'generated'
+            _, manifest = target.prepare('test-dem', source, 'dev')
+            manifest['sources'] = [
+                {'url': f'https://cyberjapandata.gsi.go.jp/xyz/{layer}/{zoom}/100/200.png',
+                 'fetchedAt': '2026-10-14T00:00:00Z'}
+                for layer, zoom in [('dem1a_png', 17), ('dem5a_png', 15), ('dem_png', 14)]]
+            (source / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+            info = target.snapshot(source, root / 'staged')
+            self.assertEqual(set(info['sourceSnapshot']), {'dem1a_png', 'dem5a_png', 'dem_png'})
+            self.assertEqual(info['sourceSnapshot']['dem1a_png']['urlTemplate'],
+                             'https://cyberjapandata.gsi.go.jp/xyz/dem1a_png/17/{x}/{y}.png')
+
     def test_vector_id_and_source_are_preserved_in_release_snapshot(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

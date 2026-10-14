@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import mapbox_vector_tile
 from generate import point
 from vector import annotations, extract, supplement, natural_readings
-from download_vector import download, URL
+from download_vector import download, URL, USER_AGENT
 
 
 def tile(features):
@@ -60,6 +60,7 @@ class VectorTests(unittest.TestCase):
                 archive = download(root)
                 self.assertEqual(request.call_args.args[0].get_header("Range"), "bytes=4-")
                 self.assertEqual(request.call_args.args[0].get_header("If-match"), '"version"')
+                self.assertEqual([call.args[0].get_header("User-agent") for call in request.call_args_list], [USER_AGENT, USER_AGENT])
             self.assertEqual(archive.read_bytes(), body)
             info = json.loads((root / "optimal_bvmap-source.json").read_bytes())
             self.assertEqual(info["sha256"], hashlib.sha256(body).hexdigest())
@@ -68,6 +69,22 @@ class VectorTests(unittest.TestCase):
             archive.write_bytes(b"corrupted")
             with self.assertRaisesRegex(ValueError, "一致しません"):
                 download(root)
+
+    def test_initial_download_identifies_tool_on_head_and_get(self):
+        body = b"original-pmtiles"
+        class Response(io.BytesIO):
+            def __init__(self, data):
+                super().__init__(data)
+                self.status = 200
+                self.headers = {"Content-Length": str(len(body)), "ETag": '"version"', "Last-Modified": "date"}
+        with tempfile.TemporaryDirectory() as folder:
+            with patch("download_vector.urlopen", side_effect=[Response(b""), Response(body)]) as request:
+                archive = download(Path(folder))
+            self.assertEqual(archive.read_bytes(), body)
+            requests = [call.args[0] for call in request.call_args_list]
+            self.assertEqual([r.get_method() for r in requests], ["HEAD", "GET"])
+            self.assertEqual([r.get_header("User-agent") for r in requests], [USER_AGENT, USER_AGENT])
+            self.assertIsNone(requests[1].get_header("Range"))
 
     def test_download_refuses_unknown_partial(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -124,7 +141,7 @@ class VectorTests(unittest.TestCase):
         self.assertEqual(len(report["matched"]), 1)
 
     def test_alias_matches_but_distant_same_name_remains_separate(self):
-        original = point("gsi-1003:1", "別名", "べつめい", 35, 139, 100, ["小田山"])
+        original = point("gsi-mountain-list:1", "別名", "べつめい", 35, 139, 100, ["小田山"])
         records = [{"point": point("gsi-vector:near", "小田山", None, 35.0001, 139), "tile": [], "properties": {}},
                    {"point": point("gsi-vector:far", "小田山", None, 36, 139), "tile": [], "properties": {}}]
         result, report = supplement([original], records)

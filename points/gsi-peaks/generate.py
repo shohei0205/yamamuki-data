@@ -79,7 +79,7 @@ def read_csv(payload):
             raise ValueError("山岳一覧の索引番号が不正または重複しています")
         seen.add(index)
         name, kana, aliases = name_parts(row["山名＜山頂名＞"], row["山名よみ＜山頂名よみ＞"])
-        points.append(point("gsi-1003:" + index, name, kana, row["緯度"], row["経度"], float(row["標高値(m)"]), aliases))
+        points.append(point("gsi-mountain-list:" + index, name, kana, row["緯度"], row["経度"], float(row["標高値(m)"]), aliases))
     if not points:
         raise ValueError("山岳一覧が空です")
     return points

@@ -44,7 +44,7 @@ class Cache:
         metadata = {"url": url, "fetchedAt": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")}
         for attempt in range(3):
             try:
-                with urlopen(Request(url, headers={"User-Agent": "yamamuki-data-gsi-prototype/1"}), timeout=30) as response:
+                with urlopen(Request(url, headers={"User-Agent": "yamamuki-data/1 (+https://github.com/shohei0205/yamamuki-data)"}), timeout=30) as response:
                     if response.status != 200 or urlparse(response.url).hostname not in {"www.gsi.go.jp", "cyberjapandata.gsi.go.jp"}:
                         raise ValueError("取得先または HTTP 応答が不正です")
                     payload = response.read()
