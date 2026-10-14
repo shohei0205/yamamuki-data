@@ -27,21 +27,21 @@ jobs:
       PAGES_DIRECTORY: ${{ github.workspace }}/build/pages
       PYTHONUNBUFFERED: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: テスト
         run: python -m unittest discover -s release_tools/tests -v
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
       - name: テストデータを生成・検証して公開
         run: |
           version="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           python -m release_tools.test_points publish --version "$version"
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: build/pages
-      - uses: actions/deploy-pages@v4
+      - uses: actions/deploy-pages@v5
         id: deployment
       - name: 配置した一覧を確認
         working-directory: points/osm-peaks
