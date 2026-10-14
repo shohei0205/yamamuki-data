@@ -42,6 +42,18 @@ class SupplementTests(unittest.TestCase):
             {"osmId":2,"exclude":True,"reason":"同じ山の重複地点"}]}
         self.temp = tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name)
 
+    def test_v2_is_written_and_v1_remains_readable(self):
+        legacy=self.root/'legacy.json'
+        legacy.write_text(json.dumps(self.data),encoding='utf-8')
+        self.assertEqual(read_supplements(legacy)['schemaVersion'],1)
+        exported=supplement_document(self.data)
+        self.assertEqual(exported['schemaVersion'],2)
+        current=self.root/'current.json'
+        current.write_text(json.dumps(exported),encoding='utf-8')
+        self.assertEqual(read_supplements(current)['schemaVersion'],2)
+        current.write_text(json.dumps({'schemaVersion':2,'sources':{},'points':[]}),encoding='utf-8')
+        with self.assertRaises(ValueError):read_supplements(current)
+
     def test_id_targets_gsi_points_without_osm_ids(self):
         points = [{"id": "gsi-mountain-list:1", "name": "山", "tags": ["既存"]},
                   {"id": "gsi-vector:2", "name": "山", "tags": []}]

@@ -42,7 +42,7 @@ def validate_supplement_sources(sources):
 
 def supplement_document(data):
     data=validate_supplements(data)
-    return {"schemaVersion":1,"metadata":{"sources":data.get("sources",{}),"tags":data.get("tags",{})},"points":[{**row, **({"aliases":alias_objects(row["aliases"])} if "aliases" in row else {})} for row in data["points"]]}
+    return {"schemaVersion":2,"metadata":{"sources":data.get("sources",{}),"tags":data.get("tags",{})},"points":[{**row, **({"aliases":alias_objects(row["aliases"])} if "aliases" in row else {})} for row in data["points"]]}
 
 
 def validate_supplements(data):
@@ -51,8 +51,8 @@ def validate_supplements(data):
             raise ValueError("補足 JSON の metadata の構造が不正です")
         data={"schemaVersion":data.get("schemaVersion"),"points":data.get("points"),**data["metadata"]}
 
-    if not isinstance(data, dict) or set(data) - {"schemaVersion", "sources", "tags", "points"} or type(data.get("schemaVersion")) is not int or data["schemaVersion"] != 1:
-        raise ValueError("地点補足 JSON の schemaVersion は 1 にしてください")
+    if not isinstance(data, dict) or set(data) - {"schemaVersion", "sources", "tags", "points"} or type(data.get("schemaVersion")) is not int or data["schemaVersion"] not in (1, 2):
+        raise ValueError("地点補足 JSON の schemaVersion は 1 または 2 にしてください")
     if "tags" in data:
         validate_tag_metadata(data["tags"])
     sources = data.get("sources", {})
@@ -117,7 +117,14 @@ def validate_supplements(data):
 
 
 def read_supplements(path=DEFAULT_SUPPLEMENTS):
-    return validate_supplements(json.loads(Path(path).read_text(encoding="utf-8")))
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(data, dict) and data.get("schemaVersion") == 2:
+        if set(data) - {"schemaVersion", "metadata", "points"}:
+            raise ValueError("補足 JSON 版2の共通情報は metadata にまとめてください")
+        for row in data.get("points", []):
+            if isinstance(row, dict) and "aliases" in row:
+                alias_objects(row["aliases"], legacy=False)
+    return validate_supplements(data)
 
 
 def apply_supplements(points, data):

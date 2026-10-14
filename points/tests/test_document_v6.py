@@ -117,6 +117,6 @@ class DocumentV6Tests(unittest.TestCase):
             path.write_text(json.dumps(doc,ensure_ascii=False),encoding='utf-8')
             self.assertEqual(rows(doc,6),[point])
             self.assertEqual(list(read_points(path,chunk_size=1)),[point])
-            data={'schemaVersion':1,'metadata':{'sources':{'資料':{'source':'資料名'}},'tags':{}},'points':[{'id':'gsi:1','aliases':[{'name':'柴安嵓','nameReading':'しばやすぐら'}]}]}
+            data={'schemaVersion':2,'metadata':{'sources':{'資料':{'source':'資料名'}},'tags':{}},'points':[{'id':'gsi:1','aliases':[{'name':'柴安嵓','nameReading':'しばやすぐら'}]}]}
             path.write_text(json.dumps(data,ensure_ascii=False),encoding='utf-8')
             self.assertEqual(supplement_document(read_supplements(path)),data)
