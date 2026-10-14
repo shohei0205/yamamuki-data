@@ -13,3 +13,6 @@ __pycache__/
 # AI ツールの個人のルール(AGENTS.md の「個人のルール」を参照)
 CLAUDE.local.md
 AGENTS.override.md
+
+# オリジナルと補足から配布時に生成する。
+/points/gsi-peaks/gsi-peaks.json

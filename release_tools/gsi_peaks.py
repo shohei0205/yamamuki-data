@@ -13,12 +13,13 @@ import re
 import shutil
 
 from release_tools.test_points import ROOT, release_data, validate_rows
-from scripts.supplements import validate_supplement_sources, read_supplements
-from scripts.point_document import rows as document_rows, metadata_of
+from scripts.supplements import validate_supplement_sources, read_supplements, apply_supplements
+from scripts.point_document import rows as document_rows, metadata_of, document
 from scripts.point_tags import validate_tag_metadata
 
 DATA = ROOT / "points/gsi-peaks"
 FILE = "gsi-peaks.json"
+SOURCE_FILE = "gsi-peaks-source.json"
 INFO = "snapshot.json"
 PROVENANCE = ("sources", "sourceDate", "experimental", "coordinatePolicy", "elevationPolicy")
 
@@ -59,8 +60,18 @@ def snapshot(source, output=DATA):
     for key in ("sources", "pointCount"):
         if common.get(key, {} if key == "sources" else None) != manifest_info.get(key, {} if key == "sources" else None):
             raise ValueError("地点 JSON と manifest の出典が一致しません")
-    info = {key: (manifest_info[key] if key == "sources" else manifest[key]) for key in PROVENANCE}
-    info.update(inputSha256=hashlib.sha256(raw).hexdigest(), pointCount=len(points), sourceSnapshot={})
+    original_raw = gzip.decompress((source / (SOURCE_FILE + ".gz")).read_bytes())
+    original = json.loads(original_raw)
+    original_points = document_rows(original, 6)
+    validate(original_points)
+    supplements_raw = gzip.decompress((source / "supplements.json.gz").read_bytes())
+    from scripts.supplements import validate_supplements
+    supplements = validate_supplements(json.loads(supplements_raw))
+    from document_metadata import ordered_point
+    if [ordered_point(p) for p in apply_supplements(original_points, supplements)] != points:
+        raise ValueError("オリジナルと補足から生成結果を再現できません")
+    info = {key: (original["metadata"]["sources"] if key == "sources" else manifest[key]) for key in PROVENANCE}
+    info.update(inputSha256=hashlib.sha256(original_raw).hexdigest(), pointCount=len(original_points), sourceSnapshot={})
     for kind, items in sorted(groups.items()):
         dates = [item["fetchedAt"] for item in items]
         summary = {"fileCount": len(items), "firstFetchedAt": min(dates), "lastFetchedAt": max(dates)}
@@ -70,13 +81,8 @@ def snapshot(source, output=DATA):
             summary["files"] = items
         info["sourceSnapshot"][kind] = summary
     output.mkdir(parents=True, exist_ok=True)
-    original_path = source / "gsi-peaks-source.json.gz"
-    if original_path.exists():
-        (output / "gsi-peaks-source.json").write_bytes(gzip.decompress(original_path.read_bytes()))
-    supplement_path = source / "supplements.json.gz"
-    if supplement_path.exists():
-        (output / "supplements.json").write_bytes(gzip.decompress(supplement_path.read_bytes()))
-    (output / FILE).write_bytes(raw)
+    (output / SOURCE_FILE).write_bytes(original_raw)
+    (output / "supplements.json").write_bytes(supplements_raw)
     (output / INFO).write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     return info
 
@@ -87,19 +93,30 @@ def prepare(version, directory, channel, source=DATA):
     repo = os.environ.get("GH_REPO", "shohei0205/yamamuki-data")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise ValueError("リポジトリ名が不正です")
-    raw = (source / FILE).read_bytes()
-    body = json.loads(raw)
-    points = document_rows(body, 6)
-    common = metadata_of(body)
-    validate(points)
+    original_raw = (source / SOURCE_FILE).read_bytes()
+    original = json.loads(original_raw)
+    original_points = document_rows(original, 6)
+    validate(original_points)
     info = json.loads((source / INFO).read_bytes())
-    if info["inputSha256"] != hashlib.sha256(raw).hexdigest() or info["pointCount"] != len(points):
-        raise ValueError("地点 JSON と出典情報が一致しません。snapshot コマンドで更新してください")
-    if not info.get("sources") or not info.get("sourceSnapshot"):
-        raise ValueError("出典・ライセンスがありません")
-    for key in ("sources", "pointCount"):
-        if common.get(key, {} if key == "sources" else None) != info.get(key, {} if key == "sources" else None):
-            raise ValueError("地点 JSON と snapshot の出典が一致しません")
+    if info["inputSha256"] != hashlib.sha256(original_raw).hexdigest() or info["pointCount"] != len(original_points):
+        raise ValueError("オリジナル JSON と出典情報が一致しません。snapshot コマンドで更新してください")
+    if not info.get("sources") or not info.get("sourceSnapshot") or info["sources"] != original["metadata"].get("sources"):
+        raise ValueError("オリジナル JSON と snapshot の出典が一致しません")
+    supplements = read_supplements(source / "supplements.json")
+    points = apply_supplements(original_points, supplements)
+    validate(points)
+    common = dict(original["metadata"])
+    common.pop("pointCount", None)
+    sources = dict(common.get("sources", {}))
+    for key, entry in supplements.get("sources", {}).items():
+        if key in sources and sources[key] != entry:
+            raise ValueError("元データと補足の出典 ID が競合しています: " + key)
+        sources[key] = entry
+    common["sources"] = sources
+    tags = {**common.pop("tags", {}), **supplements.get("tags", {})}
+    body = document(points, tags, **common)
+    common = body["metadata"]
+    raw = (json.dumps(body, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
     tag = f"gsi-peaks-{'dev-' if channel == 'dev' else ''}{version}"
     archive = gzip.compress(raw, mtime=0)
     manifest = {key: info[key] for key in PROVENANCE}
@@ -119,8 +136,7 @@ def prepare(version, directory, channel, source=DATA):
     shutil.copyfile(source / INFO, directory / INFO)
     (directory / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     from scripts.distribution_parts import write_parts, validate_parts
-    original = json.loads((source / "gsi-peaks-source.json").read_bytes())
-    write_parts(directory, original, read_supplements(source / "supplements.json"), manifest)
+    write_parts(directory, original, supplements, manifest)
     validate_parts(directory, manifest, points)
     return tag, manifest
 

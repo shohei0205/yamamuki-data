@@ -23,14 +23,14 @@ class GsiSupplementTests(unittest.TestCase):
             self.assertNotIn("osmId", migrated)
         for key in ("source", "license", "attribution"):
             self.assertEqual(osm["metadata"]["sources"]["日本百名山"][key], gsi["metadata"]["sources"]["日本百名山"][key])
-        points = json.loads((GSI / "gsi-peaks.json").read_bytes())["points"]
+        points = supplement_points(json.loads((GSI / "gsi-peaks-source.json").read_bytes())["points"])[0]
         actual, sources = supplement_points(points)
         self.assertEqual(actual, points)
         tagged = {p["id"] for p in actual if "日本百名山" in p.get("tags", [])}
         self.assertEqual(tagged, {p["id"] for p in gsi["points"]})
         self.assertTrue({"gsi-mountain-list:17", "gsi-mountain-list:100", "gsi-mountain-list:510",
                          "gsi-mountain-list:368", "gsi-vector:6a6975159e2a0acd6117cb58"} <= tagged)
-        self.assertEqual(sources, {k:v for k,v in json.loads((GSI / "snapshot.json").read_bytes())["sources"].items() if not k.startswith("gsi-")})
+        self.assertEqual(sources, gsi["metadata"]["sources"])
 
     def test_missing_id_stops_generation(self):
         with self.assertRaises(ValueError):

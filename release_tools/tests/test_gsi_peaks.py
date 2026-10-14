@@ -25,7 +25,7 @@ class GsiReleaseTests(unittest.TestCase):
                                     'fetchedAt': '2026-10-14T00:00:00Z'}]
             (root / 'release/manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
             info = target.snapshot(root / 'release', root / 'staged')
-            self.assertEqual({k:v for k,v in info['sources'].items() if not k.startswith('gsi-')}, expected)
+            self.assertFalse(set(expected) & info['sources'].keys())
             self.assertEqual(manifest['metadata']['tags'], json.loads((root/'release'/target.FILE).read_bytes())['metadata']['tags'])
             self.assertNotIn('tags', info)
 
@@ -79,10 +79,10 @@ class GsiReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             tag, manifest = target.prepare('test-1', root, 'dev')
-            raw = (target.DATA / target.FILE).read_bytes()
+            raw = (root / target.FILE).read_bytes()
             self.assertEqual(gzip.decompress((root / (target.FILE + '.gz')).read_bytes()), raw)
             self.assertEqual(manifest['metadata']['pointCount'], len(json.loads(raw)['points']))
-            self.assertEqual(manifest['inputSha256'], hashlib.sha256(raw).hexdigest())
+            self.assertEqual(manifest['inputSha256'], hashlib.sha256((target.DATA / target.SOURCE_FILE).read_bytes()).hexdigest())
             self.assertEqual(tag, 'gsi-peaks-dev-test-1')
             self.assertIn('/gsi-peaks-dev-test-1/', manifest['downloadUrl'])
             self.assertIn('国土地理院', manifest['metadata']['sources']['gsi-peaks']['attribution'])
@@ -102,14 +102,29 @@ class GsiReleaseTests(unittest.TestCase):
             (source / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
             target.snapshot(source, staged)
             target.prepare('test-2', root / 'release', 'dev', staged)
-            changed = json.loads((staged / target.FILE).read_bytes())
+            changed = json.loads((staged / target.SOURCE_FILE).read_bytes())
             changed['points'][0]['name'] += '変更'
-            (staged / target.FILE).write_text(json.dumps(changed), encoding='utf-8')
+            (staged / target.SOURCE_FILE).write_text(json.dumps(changed), encoding='utf-8')
             with self.assertRaisesRegex(ValueError, '出典情報が一致しません'):
                 target.prepare('test-2', root / 'release', 'dev', staged)
 
+    def test_prepare_needs_only_original_snapshot_and_supplements(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);source=root/'source';source.mkdir()
+            for name in (target.SOURCE_FILE,target.INFO,'supplements.json'):
+                shutil.copyfile(target.DATA/name,source/name)
+            self.assertFalse((source/target.FILE).exists())
+            supplements=json.loads((source/'supplements.json').read_bytes())
+            supplements['points'][0]['tags'].append('追加タグ')
+            (source/'supplements.json').write_text(json.dumps(supplements),encoding='utf-8')
+            target.prepare('test-source-only',root/'dist','dev',source)
+            generated=json.loads((root/'dist'/target.FILE).read_bytes())
+            matching=next(p for p in generated['points'] if p['id']==supplements['points'][0]['id'])
+            self.assertIn('追加タグ',matching['tags'])
+            self.assertFalse((source/target.FILE).exists())
+
     def test_invalid_gsi_rows(self):
-        row = json.loads((target.DATA / target.FILE).read_bytes())['points'][0]
+        row = json.loads((target.DATA / target.SOURCE_FILE).read_bytes())['points'][0]
         for invalid in ({**row, 'id': 'osm:1'}, {**row, 'elevationM': True},
                         {**row, 'elevationM': float('nan')}, {**row, 'aliases': [1]}):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):

@@ -3,7 +3,7 @@
   "experimental": true,
   "coordinatePolicy": "山名・座標は最適化ベクトルタイルを優先し、一意に照合できた山岳一覧の最高地点を優先する。未収録の山は山岳一覧・取得済み自然地名から追加する。注記・代表点は最高地点とは限らない。",
   "elevationPolicy": "山岳一覧の公称標高、25 m 以内で双方に一意な三角点・標高点、DEM1A・DEM5A・DEM5B・DEM5C・DEM10B の順に採用。DEM は指定座標の地表標高であり、最高地点の標高とは限らない。",
-  "inputSha256": "7e4a3004ea55a40026f730051c2afaacc968fb460083e1aeeb856d14c274f78a",
+  "inputSha256": "bdbfe0d488177a71da3eeb5253fd4849d1be6b37c8a54ce778461680ad14d9bd",
   "pointCount": 17248,
   "sourceSnapshot": {
     "dem1a_png": {
@@ -77,12 +77,6 @@
   },
   "dataSchemaVersion": 6,
   "sources": {
-    "日本百名山": {
-      "source": "Wikipedia「日本百名山」著書順の山の一覧（2026-10-10 参照） https://ja.wikipedia.org/w/index.php?title=日本百名山&oldid=111092405",
-      "license": "山名一覧: CC BY-SA 4.0 https://creativecommons.org/licenses/by-sa/4.0/ ; 照合に用いた OpenStreetMap データ: ODbL 1.0 https://opendatacommons.org/licenses/odbl/1-0/",
-      "attribution": "Wikipedia「日本百名山」の投稿者 https://ja.wikipedia.org/w/index.php?title=日本百名山&action=history ; © OpenStreetMap contributors https://www.openstreetmap.org/copyright",
-      "changes": "OSM 版の日本百名山 100 件の順序・タグ・note を保持し、名前・別名と位置を照合して既存の国土地理院の地点 ID に対応付けた。利尻山・羊蹄山・焼岳は OSM 版と採用地点が異なる。notes/日本百名山.md に対応表と相違を記載する。元の OSM 版の確認記録は notes/日本百名山-osm元記録.md に保存する。"
-    },
     "gsi-peaks": {
       "source": "https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/optimal_bvmap-v1.pmtiles",
       "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",

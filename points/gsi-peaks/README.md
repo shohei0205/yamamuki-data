@@ -21,7 +21,7 @@
 | `gsi-peaks.json.gz` | アプリが取得する地点データ。manifest の `downloadUrl` から取得する |
 | `manifest.json` | 地点データの取得先・サイズ・ハッシュ・件数・出典 |
 | `gsi-peaks.json` | 同じ地点配列の非圧縮 JSON。確認用 |
-| `snapshot.json` | コミット済み地点 JSON のハッシュと、元資料の取得日時・出典の要約 |
+| `snapshot.json` | コミット済みオリジナル JSON のハッシュと、元資料の取得日時・出典の要約 |
 
 正式版は `gsi-peaks-<version>`、開発版は `gsi-peaks-dev-<version>` の Release に置く。利用する版を選び、その Release の `manifest.json` の URL を固定して取得する。リポジトリ全体の `releases/latest` は使わない。GSI の公開 Action は Pages の manifest・履歴・地点カタログを更新しない。
 
@@ -66,13 +66,13 @@ Windows で公式 CSV の TLS を Python が扱えない場合は、Windows 標�
 
 ## 生成済み JSON をコミットして Release に公開する
 
-全国の元データ取得・地点生成は手元で行う。Git に入れる配布データは `points/gsi-peaks/gsi-peaks.json` と、その出典・取得日時の範囲・地点 JSON の SHA-256 を記録した `snapshot.json` だけとする。SQLite、`gsi-cache/`、gzip、全タイルの明細を含む manifest・report はコミットしない。
+全国の元データ取得・地点生成は手元で行う。Git には補足適用前の `points/gsi-peaks/gsi-peaks-source.json`、補足の `supplements.json`、出典・取得日時の範囲・オリジナル JSON の SHA-256 を記録した `snapshot.json` を保存する。マージ済みの `gsi-peaks.json` は配布時に生成し、Git に含めない。SQLite、`gsi-cache/`、gzip、全タイルの明細を含む manifest・report はコミットしない。
 
 生成後、次のコマンドで地点 JSON と小さな出典要約を取り込む。
 
 ```bash
 python -m release_tools.gsi_peaks snapshot --source build/gsi-national-primary
-git add points/gsi-peaks/gsi-peaks.json points/gsi-peaks/snapshot.json
+git add points/gsi-peaks/gsi-peaks-source.json points/gsi-peaks/supplements.json points/gsi-peaks/snapshot.json
 ```
 
 両方を同じコミットで更新する。地点 JSON だけを編集すると SHA-256 が一致せず、公開処理は停止する。元データは手元で保管し、JSON の取り込み後も削除しない。
@@ -235,7 +235,7 @@ Release の Action はコミット済みの地点 JSON と出典要約を使う�
 
 出典・利用条件の一覧は、[ルート README のライセンス](../../README.md#ライセンス)を参照する。
 
-補足適用前の `gsi-peaks-source.json` もコミットして保持する。Release には、マージ済みの `gsi-peaks.json.gz`、オリジナルの `gsi-peaks-source.json.gz`、補足の `supplements.json.gz` と、それぞれの `manifest.json`・`gsi-peaks-source-manifest.json`・`supplements-manifest.json` を配布する。各 manifest は共通形式を使う。公開前にオリジナルへ補足を適用し、配布地点を再現できることを確認する。
+補足適用前の `gsi-peaks-source.json` をコミットして保持する。マージ済みの `gsi-peaks.json` は Action で補足を適用して生成する。Release には、マージ済みの `gsi-peaks.json.gz`、オリジナルの `gsi-peaks-source.json.gz`、補足の `supplements.json.gz` と、それぞれの `manifest.json`・`gsi-peaks-source-manifest.json`・`supplements-manifest.json` を配布する。各 manifest は共通形式を使う。公開前にオリジナルへ補足を適用し、配布地点を再現できることを確認する。
 
 ## テスト
 
@@ -249,7 +249,7 @@ python -m unittest release_tools.tests.test_gsi_peaks -v
 
 ## コミット済み全国版の内容
 
-2026 年 10 月 14 日の生成結果を `gsi-peaks.json` と `snapshot.json` に保存している。件数は次のとおり。
+2026 年 10 月 14 日の補足適用前の生成結果を `gsi-peaks-source.json` と `snapshot.json` に保存している。補足適用後の件数は次のとおり。
 
 | 項目 | 件数 |
 |---|---:|
