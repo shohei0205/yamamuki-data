@@ -1,6 +1,6 @@
 ﻿## 何を変えたか
 
-<!-- 変更内容と理由を短く。同じリポジトリの Issue なら Closes #番号。別リポジトリなら Closes owner/repo#番号（例: Closes shohei0205/yamamuki#番号） -->
+<!-- 変更内容と理由を短く。同じリポジトリの Issue なら Closes #番号。別リポジトリの Issue には Closes を付けない（指すだけなら owner/repo#番号。例: shohei0205/yamamuki#番号） -->
 
 ## 対象
 
