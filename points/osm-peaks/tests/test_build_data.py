@@ -249,7 +249,10 @@ class BuildDataTests(unittest.TestCase):
         self.assertEqual(4, manifest["metadata"]["pointCount"])
         self.assertRegex(manifest["dataTimestamp"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
         self.assertNotIn("sourceTimestamp", manifest["metadata"])
-        self.assertEqual(read_mountains(self.xml)[0], json.loads(gzip.decompress((self.root / "output" / FILE_NAME).read_bytes()))["points"])
+        expected = read_mountains(self.xml)[0]
+        for point in expected:
+            point["aliases"] = [{"name": name} for name in point["aliases"]]
+        self.assertEqual(expected, json.loads(gzip.decompress((self.root / "output" / FILE_NAME).read_bytes()))["points"])
 
 
 if __name__ == "__main__":
