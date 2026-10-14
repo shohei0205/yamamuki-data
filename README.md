@@ -33,7 +33,7 @@ release_tools/     データ種別共通の公開入口
 
 ### 配布の方針
 
-生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データとデータ本体は原則として git に含めない。国土地理院版は生成済みの地点 JSON と出典要約 JSON だけをコミットし、Action で Release を作る。開発版の最新版を示す小さな `manifest.json` は、Actions の生成物として GitHub Pages に公開する。
+生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データとデータ本体は原則として git に含めない。国土地理院版は補足適用後・適用前の地点 JSON と出典要約 JSON をコミットし、Action で Release を作る。開発版の最新版を示す小さな `manifest.json` は、Actions の生成物として GitHub Pages に公開する。
 
 正式版の通常生成は Release を作るところまでで、Pages は更新しない。利用する側で Release の版を選び、その Release に添付された manifest の URL を固定して取得する。アプリが読んでいる版のデータが消えないよう、公開した Release とその添付ファイルは削除・差し替えしない。
 
@@ -54,7 +54,7 @@ release_tools/     データ種別共通の公開入口
 
 ### 配布データの取得情報（manifest.json）
 
-データ本体の取得先・大きさ・ハッシュ・出典を記載する共通の JSON。項目・制約・読み込み方法は [manifest フォーマット](formats/manifest.md) を参照する。機械検証用のスキーマは [manifest の版5](schemas/manifest-v5.schema.json)。
+データ本体の取得先・大きさ・ハッシュ・出典を記載する共通の JSON。項目・制約・読み込み方法は [manifest フォーマット](formats/manifest.md) を、各 JSON の共通情報は [metadata フォーマット](formats/metadata.md) を参照する。
 
 ## Actions の構成
 
@@ -176,7 +176,7 @@ CI の「共通：文字形式の確認」はすべての PR で文字コード�
 | 対象 | 出典・表示 | 利用条件 | 補足・詳細 |
 |---|---|---|---|
 | 日本百名山の山名一覧 | Wikipedia「日本百名山」の投稿者 | CC BY-SA 4.0 | 参照した版・投稿者へのリンク・加工内容は [supplements.json の `sources`](points/osm-peaks/supplements.json) に記録 |
-| 日本百名山の照合に用いた地点データ | © OpenStreetMap contributors | ODbL-1.0 | 補足の出典は `sources` に記録し、配布データの manifest の `supplementSources` に引き継ぐ。元の地点データと補足の利用条件をそれぞれ確認する |
+| 日本百名山の照合に用いた地点データ | © OpenStreetMap contributors | ODbL-1.0 | 補足の出典は `sources` に記録し、配布データの manifest の `sources` に引き継ぐ。元の地点データと補足の利用条件をそれぞれ確認する |
 | 地点に追加する画像 | 画像ごとの取得元・作成者 | 画像ごとの利用条件 | 追加時にデータセットの README に記載する |
 
 ### 地点データビューアが利用する外部データ

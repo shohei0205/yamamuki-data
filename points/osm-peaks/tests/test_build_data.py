@@ -162,18 +162,20 @@ class BuildDataTests(unittest.TestCase):
         archive = (self.root / FILE_NAME).read_bytes()
         raw = gzip.decompress(archive)
         self.assertEqual([ordered_point(p) for p in mountains], json.loads(raw)["points"])
-        self.assertEqual(json.loads(raw)["metadata"]["pointCount"],manifest["pointCount"])
-        self.assertEqual(json.loads(raw)["metadata"]["latestPointTimestamp"],manifest["latestPointTimestamp"])
+        self.assertEqual(json.loads(raw)["metadata"],manifest["metadata"])
+        self.assertFalse({"tags","sources","pointCount","latestPointTimestamp","sourceTimestamp"} & manifest.keys())
+        self.assertEqual(json.loads(raw)["metadata"]["sources"]["osm-peaks"]["lastestTimeStamp"],manifest["metadata"]["sources"]["osm-peaks"]["lastestTimeStamp"])
         self.assertEqual(manifest, json.loads((self.root / "manifest.json").read_text(encoding="utf-8")))
-        self.assertEqual(5, manifest["schemaVersion"])
+        self.assertEqual(6, manifest["schemaVersion"])
         self.assertEqual("山頂", manifest["name"])
         self.assertEqual("20260930-1", manifest["version"])
-        self.assertEqual(TIMESTAMP, manifest["sourceTimestamp"])
-        self.assertEqual("2026-09-29T12:00:00Z", manifest["latestPointTimestamp"])
+        self.assertRegex(manifest["dataTimestamp"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        self.assertNotIn("sourceTimestamp", manifest["metadata"])
+        self.assertEqual("2026-09-29T12:00:00Z", manifest["metadata"]["sources"]["osm-peaks"]["lastestTimeStamp"])
         self.assertEqual(hashlib.sha256(archive).hexdigest(), manifest["sha256"])
         self.assertEqual(len(archive), manifest["sizeBytes"])
         self.assertEqual(len(raw), manifest["uncompressedSizeBytes"])
-        self.assertEqual(4, manifest["pointCount"])
+        self.assertEqual(4, manifest["metadata"]["pointCount"])
         write_distribution(mountains, self.root / "again", "20260930-2", TIMESTAMP, "2026-09-29T12:00:00Z")
         self.assertEqual(archive, (self.root / "again" / FILE_NAME).read_bytes())
 
@@ -231,8 +233,8 @@ class BuildDataTests(unittest.TestCase):
         url = "https://download.geofabrik.de/asia/japan-260929.osm.pbf"
         manifest = write_distribution(read_mountains(self.xml)[0], self.root / "dated", "test",
                                       TIMESTAMP, "2026-09-29T12:00:00Z", source_url=url)
-        self.assertEqual(url, manifest["sourceUrl"])
-        self.assertEqual(url, json.loads((self.root / "dated/manifest.json").read_text(encoding="utf-8"))["sourceUrl"])
+        self.assertEqual(url, manifest["metadata"]["sources"]["osm-peaks"]["source"])
+        self.assertEqual(url, json.loads((self.root / "dated/manifest.json").read_text(encoding="utf-8"))["metadata"]["sources"]["osm-peaks"]["source"])
 
     @unittest.skipUnless(shutil.which("osmium"), "osmium がないため、PBF の生成テストは CI で実行")
     def test_real_pbf_to_distribution(self):
@@ -243,9 +245,10 @@ class BuildDataTests(unittest.TestCase):
         supplements = self.root / "supplements.json"
         supplements.write_text(json.dumps({"schemaVersion": 1, "sources": {}, "points": []}), encoding="utf-8")
         manifest = build(pbf, self.root / "output", "test", supplements_path=supplements)
-        self.assertEqual("https://download.geofabrik.de/asia/japan-260929.osm.pbf", manifest["sourceUrl"])
-        self.assertEqual(4, manifest["pointCount"])
-        self.assertEqual(TIMESTAMP, manifest["sourceTimestamp"])
+        self.assertEqual("https://download.geofabrik.de/asia/japan-260929.osm.pbf", manifest["metadata"]["sources"]["osm-peaks"]["source"])
+        self.assertEqual(4, manifest["metadata"]["pointCount"])
+        self.assertRegex(manifest["dataTimestamp"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        self.assertNotIn("sourceTimestamp", manifest["metadata"])
         self.assertEqual(read_mountains(self.xml)[0], json.loads(gzip.decompress((self.root / "output" / FILE_NAME).read_bytes()))["points"])
 
 

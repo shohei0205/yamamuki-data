@@ -77,7 +77,8 @@ def build(pbf, output, peaks=None):
         if remaining:
             raise ValueError("山頂版にだけ存在する地点があります。元データの版を確認してください")
 
-    report = write_points(points(), output, "osm-all-points", tags=metadata.get("tags"), metadata={"sourceUrl": source_url, "license": "ODbL-1.0", "attribution": "© OpenStreetMap contributors", "supplementSources": metadata.get("supplementSources", {})})
+    from scripts.point_document import source_entries
+    report = write_points(points(), output, "osm-all-points", tags=metadata.get("tags"), metadata={"sources":source_entries("osm-peaks",source_url,"ODbL-1.0","© OpenStreetMap contributors",metadata.get("sources"))})
     report.update(sourceTimestamp=timestamp, sourceUrl=source_url, inputs=[input_record(pbf)],
                   scope="名前付きノードのみ。線・面・relation の代表点は作らない。",
                   license="ODbL-1.0", attribution="© OpenStreetMap contributors")

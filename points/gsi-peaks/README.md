@@ -105,7 +105,7 @@ python points/gsi-peaks/fetch_all.py
 
 `build/gsi-national-all/progress.json` の `phase` が `fetching` の間はタイル取得中、`elevation` は標高補完中、`complete` は JSON 生成完了。`failed` はエラーを記録して停止した状態。完了後、同じフォルダへ `gsi-peaks.json`・gzip 版・manifest・report を出力する。`--output` で出力先を変更できる。
 
-全タイルの HTTP 状態・取得日時・200 の元ファイルとハッシュは SQLite に保存する。manifest と report の `sources` には取得できた自然地名タイル、山岳一覧、標高タイルの情報を記載する。404 の明細は SQLite に残し、report の `scan` に取得範囲・全件数・404 件数・SQLite の SHA-256 を記録する。国土地理院がこの範囲で配信していない地点は補わず、全国の全山頂を網羅したとは扱わない。
+全タイルの HTTP 状態・取得日時・200 の元ファイルとハッシュは SQLite に保存する。manifest の `sourceFiles` と report の `sources` には取得できた自然地名タイル、山岳一覧、標高タイルの情報を記載する。404 の明細は SQLite に残し、report の `scan` に取得範囲・全件数・404 件数・SQLite の SHA-256 を記録する。国土地理院がこの範囲で配信していない地点は補わず、全国の全山頂を網羅したとは扱わない。
 
 ### 元データの保管と再生成
 
@@ -177,7 +177,9 @@ python points/gsi-peaks/vector.py \
 
 ベクトルタイルにない山を追加するときも、同名・別名の近接地点があれば二重登録を避ける。100 m 以内に一つだけ対応する地点があれば既存の地点を使い、複数候補や 100～1000 m の同名地点は確認候補に回す。自然地名だけから追加した地点は `gsi-natural:` の ID を使う。ID の継続利用は、次の維持方針に従う。
 
-### ID の維持方針
+元データと補足資料の出典は地点 JSON の `metadata.sources` と manifest の `metadata.sources` に保持する。`gsi-peaks` は主資料、`gsi-mountain-list` は山岳一覧、`gsi-natural` は自然地名、`gsi-dem` は標高タイルを表す。取得ファイルごとの記録は生成時 manifest の `sourceFiles` に分けて保存する。
+
+## ID の維持方針
 
 [地点データの共通仕様](../formats/data.md#id-とデータセット)に従い、`gsi-peaks` でも ID の維持は努力義務とし、永続性を保証しない。
 
@@ -233,6 +235,8 @@ Release の Action はコミット済みの地点 JSON と出典要約を使う�
 
 出典・利用条件の一覧は、[ルート README のライセンス](../../README.md#ライセンス)を参照する。
 
+補足適用前の `gsi-peaks-source.json` もコミットして保持する。Release には、マージ済みの `gsi-peaks.json.gz`、オリジナルの `gsi-peaks-source.json.gz`、補足の `supplements.json.gz` と、それぞれの `manifest.json`・`gsi-peaks-source-manifest.json`・`supplements-manifest.json` を配布する。各 manifest は共通形式を使う。公開前にオリジナルへ補足を適用し、配布地点を再現できることを確認する。
+
 ## テスト
 
 ```bash
@@ -273,6 +277,6 @@ python -m unittest release_tools.tests.test_gsi_peaks -v
 
 OSM 版の `note` と著書順、出典・ライセンスを保持する。[採用地点の対応表](notes/日本百名山.md) と [OSM 版の確認記録](notes/日本百名山-osm元記録.md) を参照する。利尻山・羊蹄山・焼岳は OSM 版と採用地点が異なるが、GSI 版の既存地点にタグを付ける。
 
-補足の出典は生成 manifest、`snapshot.json`、配布 manifest の `supplementSources` に保存する。地点の国土地理院データの利用条件に加え、日本百名山の山名一覧は CC BY-SA 4.0、照合元の OpenStreetMap データは ODbL 1.0 を参照する。
+補足の出典は生成 manifest、`snapshot.json`、配布 manifest の `metadata.sources` に保存する。地点の国土地理院データの利用条件に加え、日本百名山の山名一覧は CC BY-SA 4.0、照合元の OpenStreetMap データは ODbL 1.0 を参照する。
 
 配布する地点 JSON の現行版は6。トップレベルは共通のタグ情報と出典情報を持つ object で、地点配列は `points` に格納する。manifest の版は5、`dataSchemaVersion` は6。利用側は版6に対応する必要がある。

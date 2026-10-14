@@ -14,10 +14,23 @@ from scripts.point_document import rows
 
 
 class DocumentV6Tests(unittest.TestCase):
+    def test_multiple_sources_preserve_credits_and_reject_collisions(self):
+        from document_metadata import source_entries, validate_metadata
+        extra={'reference':{'source':'https://example.com/reference','license':'CC BY 4.0','attribution':'Author','changes':'Names extracted'}}
+        sources=source_entries('osm-peaks','https://example.com/osm','ODbL-1.0','OSM contributors',extra)
+        self.assertEqual(sources['reference'],extra['reference'])
+        self.assertEqual(len(sources),2)
+        self.assertNotIn('osm-peaks',extra)
+        with self.assertRaises(ValueError):
+            source_entries('reference','https://example.com/different',supplements=extra)
+        for invalid in (None,[],{'reference':{'source':123}},{'reference':{'unknown':'value'}}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                validate_metadata({'sources':invalid})
+
     def test_metadata_survives_streaming_with_any_field_order(self):
         point={'id':'1','name':'山','latitude':35,'longitude':139}
         tags={'日本百名山':{'reading':'にほんひゃくめいざん'}}
-        info={'sourceUrl':'https://example.com','license':'PDL-1.0','attribution':'国土地理院','supplementSources':{'資料':{'source':'資料名'}},'latestPointTimestamp':'2026-10-14T00:00:00Z'}
+        info={'sources':{'国土地理院':{'source':'https://example.com','license':'PDL-1.0','attribution':'国土地理院','lastestTimeStamp':'2026-10-14T00:00:00Z'},'資料':{'source':'資料名'}}}
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'input.json'
             for doc in [{'schemaVersion':6,**info,'tags':tags,'points':[point]},{'points':[point],'tags':tags,**info,'schemaVersion':6}]:
@@ -54,12 +67,12 @@ class DocumentV6Tests(unittest.TestCase):
     def test_invalid_metadata_is_rejected_by_all_python_paths(self):
         point={'id':'1','name':'山','latitude':35,'longitude':139}
         invalid=[{'license':123},{'attribution':None},{'sourceUrl':[]},
-                 {'supplementSources':{'資料':{'source':123}}},
+                 {'sources':{'資料':{'lastestTimeStamp':'not-a-date'}}},
                  {'supplementSources':{'資料':{'unknown':'値'}}},
                  {'latestPointTimestamp':'not-a-date'},
-                 {'latestPointTimestamp':'2026-10-14T00:00:00+00:60'},
-                 {'latestPointTimestamp':'2026-02-30T00:00:00Z'},
-                 {'latestPointTimestamp':'2026-10-14T00:00:00'},
+                 {'sources':{'資料':{'lastestTimeStamp':'2026-10-14T00:00:00+00:60'}}},
+                 {'sources':{'資料':{'lastestTimeStamp':'2026-02-30T00:00:00Z'}}},
+                 {'sources':{'資料':{'lastestTimeStamp':'2026-10-14T00:00:00'}}},
                  {'pointCount':True},{'pointCount':0}]
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'input.json'
@@ -97,7 +110,7 @@ class DocumentV6Tests(unittest.TestCase):
         from scripts.point_document import document
         from scripts.supplements import read_supplements, supplement_document
         point={'id':'gsi:1','name':'燧ヶ岳','latitude':35,'longitude':139,'aliases':[{'name':'柴安嵓','nameReading':'しばやすぐら'}]}
-        doc=document([point],{'日本百名山':{'reading':'にほんひゃくめいざん'}},license='PDL-1.0')
+        doc=document([point],{'日本百名山':{'reading':'にほんひゃくめいざん'}},sources={'国土地理院':{'license':'PDL-1.0'}})
         self.assertEqual(set(doc),{'schemaVersion','metadata','points'})
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'points.json'

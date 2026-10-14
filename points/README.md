@@ -250,7 +250,7 @@ GSI の出力は `gsi-all-points.json`、`gsi-all-points.json.gz`、`report.json
 
 項目・制約・出典の決まりと例は、[補足データフォーマット](formats/supplements-data.md) にまとめている。機械検証用のスキーマは [補足データの版1](schemas/supplements-data-v1.schema.json)。
 
-元データと補足 JSON の取得先・サイズ・SHA-256・出典を記載する補足 manifest の形式は、[補足 manifest フォーマット](formats/supplements-manifest.md) を参照する。機械検証用のスキーマは、[supplements-manifest-v1.schema.json](schemas/supplements-manifest-v1.schema.json) にある。
+地点データは補足適用後の JSON、補足適用前のオリジナル JSON、補足 JSON をそれぞれ共通形式の manifest 付きで配布する。補足ファイルを単体で配布するときの manifest も [共通形式](../formats/manifest.md#補足ファイル単体の配布) を使う。従来の専用形式は [旧形式の仕様](formats/supplements-manifest.md) を参照する。
 
 ## OSM との関連付け
 

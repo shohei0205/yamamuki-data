@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 """国土地理院の公式 CSV・自然地名・標高タイルだけから、山頂データを生成する。"""
 
 import argparse
@@ -13,7 +14,7 @@ import sys
 import unicodedata
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from document_metadata import validate_metadata, ordered_point
+from document_metadata import validate_metadata, ordered_point, source_entries
 
 from download import Cache
 
@@ -229,7 +230,21 @@ def generate(cache, bbox=None, natural=False, dem=False, max_tiles=10000, csv_ur
 def write(points, report, output, version, tags=None, metadata=None):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
         raise ValueError("版の文字が不正です")
-    info = {"schemaVersion":6, "pointCount": len(points), "sourceUrl": CSV_URL, "license": LICENSE, "attribution": ATTRIBUTION, "supplementSources": {}, **(metadata or {}), "tags": {} if tags is None else tags}
+    legacy = dict(metadata or {})
+    source_url = legacy.pop("sourceUrl",CSV_URL)
+    license = legacy.pop("license",LICENSE)
+    attribution = legacy.pop("attribution",ATTRIBUTION)
+    sources = source_entries("gsi-peaks",source_url,license,attribution,legacy.pop("supplementSources",None))
+    # 実際に使った国土地理院の資料を、取得記録の種別ごとに一覧へ残す。
+    for item in report.get("sources",[]):
+        url=item["url"]
+        if "/experimental_nnfpt/" in url:
+            sources=source_entries("gsi-natural","https://cyberjapandata.gsi.go.jp/xyz/experimental_nnfpt/{z}/{x}/{y}.geojson",license,attribution,sources)
+        elif "/xyz/dem" in url:
+            sources=source_entries("gsi-dem","https://maps.gsi.go.jp/development/ichiran.html",license,attribution,sources)
+        elif url==CSV_URL and source_url!=CSV_URL:
+            sources=source_entries("gsi-mountain-list",CSV_URL,license,attribution,sources)
+    info = {"schemaVersion":6,"pointCount":len(points),"sources":sources,**legacy,"tags":{} if tags is None else tags}
     validate_metadata(info, len(points))
     raw = (json.dumps({"schemaVersion":6,"metadata":{k:v for k,v in info.items() if k != "schemaVersion"},"points":[ordered_point(point) for point in points]}, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode()
     stream = io.BytesIO()
@@ -240,18 +255,21 @@ def write(points, report, output, version, tags=None, metadata=None):
         raise ValueError("圧縮後のサイズが 5 MB を超えました")
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    manifest = {"schemaVersion": 5, "dataSchemaVersion": 6, "name": "山頂（国土地理院）",
+    manifest = {"schemaVersion": 6, "dataSchemaVersion": 6, "name": "山頂（国土地理院）",
                 "version": version, "fileName": "gsi-peaks.json.gz", "pointCount": len(points),
                 "downloadUrl": f"https://github.com/shohei0205/yamamuki-data/releases/download/gsi-peaks-{version}/gsi-peaks.json.gz",
                 "sha256": hashlib.sha256(payload).hexdigest(), "sizeBytes": len(payload), "uncompressedSizeBytes": len(raw),
-                "license": LICENSE, "attribution": ATTRIBUTION, "sourceUrl": CSV_URL,
+                "sources":sources,
                 "sourceDate": "2026-03-31", "experimental": True,
                 "coordinatePolicy": "主な山岳一覧の最高地点。自然地名を追加した場合は山の代表点を含む。",
                 "elevationPolicy": "山岳一覧の標高を優先。任意の DEM 補完は代表点の地表標高であり公称の山頂標高ではない。",
-                "sources": report["sources"]}
-    manifest.update({k:v for k,v in (metadata or {}).items() if k != "schemaVersion"})
+                "sourceFiles": report["sources"]}
+    manifest.update({k:v for k,v in legacy.items() if k != "schemaVersion"})
     if tags:
         manifest["tags"]=tags
+    manifest["dataTimestamp"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    from document_metadata import copy_manifest_metadata
+    copy_manifest_metadata(manifest, {k:v for k,v in info.items() if k != "schemaVersion"})
     (output / "gsi-peaks.json.gz").write_bytes(payload)
     (output / "gsi-peaks.json").write_bytes(raw)
     for name, data in (("manifest.json", manifest), ("report.json", report)):

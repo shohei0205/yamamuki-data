@@ -76,6 +76,8 @@ URL の形式を検証するときは、JSON Schema の `format` の検査を有
 
 Pages を更新する公開・削除時に、サイト全体の manifest 一覧から自動生成し、他の地点データと配布先を引き継ぐ。manifest と同じ Pages 配置で更新し、配置後に一致を確認する。生成物は git に含めない。公開 URL と削除の操作手順は [地点データの README](../README.md#公開データのカタログ) を参照する。
 
+同梱 manifest が版6の場合、元データと補足の出典は `manifest.metadata.sources` にまとめる。トップレベルの `sourceUrl`・`license`・`attribution`・`supplementSources` は使わない。版5以前の同梱 manifest は従来の形式を保持する。
+
 ## JSON の例
 
 取得先は説明用の URL。同梱する manifest の版はカタログの版と独立しており、この例では manifest 版5を使う。

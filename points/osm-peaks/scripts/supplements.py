@@ -20,8 +20,9 @@ from document_metadata import alias_objects
 
 DEFAULT_SUPPLEMENTS = Path(__file__).resolve().parents[1] / "supplements.json"
 FIELDS = {"name", "nameReading", "aliases", "aliasesRemove", "tags", "tagsRemove", "exclude", "graphic"}
-METADATA = {"source", "license", "attribution", "changes"}
-COMPANION_FILES = ("osm-peaks-source.json.gz", "supplements.json", "supplement-manifest.json")
+METADATA = {"source", "license", "attribution", "changes", "lastestTimeStamp"}
+COMPANION_FILES = ("osm-peaks-source.json.gz", "supplements.json")
+LEGACY_COMPANION_FILE = "supplement-manifest.json"
 
 
 def text(value):
@@ -34,6 +35,8 @@ def validate_supplement_sources(sources):
     for identifier, metadata in sources.items():
         if not text(identifier) or not isinstance(metadata, dict) or set(metadata) - METADATA or any(not isinstance(value, str) for value in metadata.values()):
             raise ValueError("supplementSources の出典 ID または出典情報が不正です")
+    from document_metadata import validate_metadata
+    validate_metadata({"sources": sources})
     return sources
 
 
@@ -171,37 +174,22 @@ def apply_supplements(points, data):
     return [point for index, point in enumerate(result) if index not in excluded]
 
 
-def write_companions(directory, original, data, manifest):
-    """既存 manifest と配布 gzip を保ち、編集用の元データと補足を同じ版に固定する。"""
-    directory = Path(directory)
-    if __package__:
-        from .point_document import document
-    else:
-        from point_document import document
-    raw = (json.dumps(document(original, data.get("tags"), **{k: manifest[k] for k in ("sourceUrl", "license", "attribution", "latestPointTimestamp") if k in manifest}), ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
-    (directory / COMPANION_FILES[0]).write_bytes(gzip.compress(raw, mtime=0))
-    (directory / COMPANION_FILES[1]).write_text(json.dumps(supplement_document(data), ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
-    def descriptor(name):
-        payload = (directory / name).read_bytes()
-        return {"fileName": name, "downloadUrl": manifest["downloadUrl"].rsplit("/", 1)[0] + "/" + name,
-                "sizeBytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
-    companion = {"schemaVersion": 1, "version": manifest["version"], "dataSchemaVersion": manifest["dataSchemaVersion"],
-                 "distributionSha256": manifest["sha256"], "base": descriptor(COMPANION_FILES[0]),
-                 "supplements": descriptor(COMPANION_FILES[1]), "sources": data.get("sources", {}),
-                 "license": manifest["license"], "attribution": manifest["attribution"]}
-    (directory / COMPANION_FILES[2]).write_text(json.dumps(companion, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
-    return companion
-
-
 def validate_companions(directory, manifest, integrated, tags=None):
     directory = Path(directory)
     present = [(directory / name).exists() for name in COMPANION_FILES]
-    if not any(present):
+    legacy_path = directory / LEGACY_COMPANION_FILE
+    if manifest.get("schemaVersion", 0) >= 6:
+        if any(k in manifest for k in ("base", "supplements")):
+            raise ValueError("地点 manifest 版6では補足ファイルを別添しません")
         return
-    if not all(present):
+    if not any(present) and not legacy_path.exists():
+        return
+    if not all(present) or not legacy_path.exists():
         raise ValueError("元データ・補足・補足 manifest がそろっていません")
-    companion = json.loads((directory / COMPANION_FILES[2]).read_text(encoding="utf-8"))
-    if type(companion.get("schemaVersion")) is not int or companion.get("schemaVersion") != 1 or set(companion) != {"schemaVersion", "version", "dataSchemaVersion", "distributionSha256", "base", "supplements", "sources", "license", "attribution"} or companion.get("version") != manifest["version"] or companion.get("dataSchemaVersion") != manifest["dataSchemaVersion"] or companion.get("distributionSha256") != manifest["sha256"] or any(companion.get(key) != manifest[key] for key in ("license", "attribution")):
+    companion = json.loads(legacy_path.read_text(encoding="utf-8"))
+    version = companion.get("schemaVersion")
+    expected = {"schemaVersion", "version", "dataSchemaVersion", "distributionSha256", "base", "supplements", "sources", "license", "attribution"}
+    if type(version) is not int or version != 1 or set(companion) != expected or companion.get("version") != manifest["version"] or companion.get("dataSchemaVersion") != manifest["dataSchemaVersion"] or companion.get("distributionSha256") != manifest["sha256"] or any(companion.get(k) != manifest.get(k) for k in ("license", "attribution")):
         raise ValueError("補足 manifest と地点 manifest の版・出典・ハッシュが一致しません")
     for key, name in zip(("base", "supplements"), COMPANION_FILES):
         descriptor = companion.get(key, {})
@@ -212,7 +200,7 @@ def validate_companions(directory, manifest, integrated, tags=None):
     data = read_supplements(directory / COMPANION_FILES[1])
     if tags is not None and tags != data.get("tags", {}):
         raise ValueError("manifest と補足 JSON の tags が一致しません")
-    if companion.get("sources") != data.get("sources", {}):
+    if (version == 1 and companion.get("sources") != data.get("sources", {})) or (version == 2 and any(companion.get("sources", {}).get(k) != v for k, v in data.get("sources", {}).items())):
         raise ValueError("補足の出典が manifest と一致しません")
     with gzip.open(directory / COMPANION_FILES[0], "rt", encoding="utf-8") as stream:
         if __package__:

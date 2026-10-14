@@ -30,7 +30,7 @@ class GsiSupplementTests(unittest.TestCase):
         self.assertEqual(tagged, {p["id"] for p in gsi["points"]})
         self.assertTrue({"gsi-mountain-list:17", "gsi-mountain-list:100", "gsi-mountain-list:510",
                          "gsi-mountain-list:368", "gsi-vector:6a6975159e2a0acd6117cb58"} <= tagged)
-        self.assertEqual(sources, json.loads((GSI / "snapshot.json").read_bytes())["supplementSources"])
+        self.assertEqual(sources, {k:v for k,v in json.loads((GSI / "snapshot.json").read_bytes())["sources"].items() if not k.startswith("gsi-")})
 
     def test_missing_id_stops_generation(self):
         with self.assertRaises(ValueError):

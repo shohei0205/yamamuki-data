@@ -11,78 +11,15 @@
       "type": "integer",
       "const": 6
     },
+    "metadata": {
+      "$ref": "../../schemas/metadata-v1.schema.json"
+    },
     "points": {
       "type": "array",
       "minItems": 1,
       "items": {
         "$ref": "#/$defs/point"
       }
-    },
-    "metadata": {
-      "type": "object",
-      "properties": {
-        "tags": {
-          "type": "object",
-          "propertyNames": {
-            "type": "string",
-            "pattern": "^\\S(?:.*\\S)?$"
-          },
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "reading": {
-                "type": "string",
-                "pattern": "^\\S(?:.*\\S)?$"
-              }
-            },
-            "additionalProperties": false
-          }
-        },
-        "sourceUrl": {
-          "type": "string"
-        },
-        "license": {
-          "type": "string"
-        },
-        "attribution": {
-          "type": "string"
-        },
-        "supplementSources": {
-          "type": "object",
-          "description": "補足 JSON の sources に登録した出典 ID と出典情報。タグ名・ファイル名とは独立。",
-          "propertyNames": {
-            "type": "string",
-            "pattern": "^\\S(?:.*\\S)?$"
-          },
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "source": {
-                "type": "string"
-              },
-              "license": {
-                "type": "string"
-              },
-              "attribution": {
-                "type": "string"
-              },
-              "changes": {
-                "type": "string"
-              }
-            },
-            "additionalProperties": false
-          }
-        },
-        "pointCount": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "latestPointTimestamp": {
-          "type": "string",
-          "format": "date-time"
-        }
-      },
-      "additionalProperties": false
     }
   },
   "additionalProperties": false,

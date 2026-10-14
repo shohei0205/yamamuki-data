@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "配布データの manifest（版6）",
+  "description": "リポジトリ共通の配布情報。地点データでは $defs/pointManifest を使用する。日時の前後関係と本体の整合性は別途検証する。",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "version",
+    "downloadUrl",
+    "fileName",
+    "sha256",
+    "sizeBytes",
+    "uncompressedSizeBytes",
+    "metadata",
+    "dataTimestamp"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 6,
+      "type": "integer"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "downloadUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://[^/?#\\s]+"
+    },
+    "fileName": {
+      "type": "string",
+      "pattern": "^[^/\\\\\\s]+\\.gz$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sizeBytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "uncompressedSizeBytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "dataSchemaVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "データ本体の版。地点文書の現行版は6。manifest の版とは独立して管理する。"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "データセットの表示名。新規生成時に記載する。"
+    },
+    "metadata": {
+      "$ref": "metadata-v1.schema.json",
+      "required": [
+        "sources"
+      ],
+      "properties": {
+        "sources": {
+          "minProperties": 1
+        }
+      }
+    },
+    "dataTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "pointManifest": {
+      "description": "地点データ用。共通項目に加えて pointCount を必須とする。",
+      "allOf": [
+        {
+          "$ref": "#"
+        },
+        {
+          "properties": {
+            "metadata": {
+              "required": [
+                "pointCount"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "not": {
+        "required": [
+          "sourceUrl"
+        ]
+      }
+    },
+    {
+      "not": {
+        "required": [
+          "license"
+        ]
+      }
+    },
+    {
+      "not": {
+        "required": [
+          "attribution"
+        ]
+      }
+    },
+    {
+      "not": {
+        "required": [
+          "supplementSources"
+        ]
+      }
+    },
+    {
+      "not": {
+        "required": [
+          "sources"
+        ]
+      }
+    },
+    {
+      "not": {
+        "required": [
+          "tags"
+        ]
+      }
+    },
+    {
+      "not": {
+        "required": [
+          "pointCount"
+        ]
+      }
+    },
+    {
+      "not": {
+        "required": [
+          "latestPointTimestamp"
+        ]
+      }
+    },
+    {
+      "not": {
+        "required": [
+          "sourceTimestamp"
+        ]
+      }
+    },
+    {
+      "not": {
+        "required": [
+          "base"
+        ]
+      }
+    },
+    {
+      "not": {
+        "required": [
+          "supplements"
+        ]
+      }
+    }
+  ]
+}

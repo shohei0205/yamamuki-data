@@ -3,7 +3,7 @@
 from datetime import datetime
 import re
 
-FIELDS = {"schemaVersion","sourceUrl", "license", "attribution", "supplementSources", "pointCount", "latestPointTimestamp", "tags"}
+FIELDS = {"schemaVersion","sources", "pointCount", "tags"}
 
 
 def text(value):
@@ -15,38 +15,56 @@ def validate_metadata(data, point_count=None):
         raise ValueError("地点文書の共通情報が不正です")
     if "schemaVersion" in data and (type(data["schemaVersion"]) is not int or data["schemaVersion"] != 6):
         raise ValueError("地点 JSON の schemaVersion は6にしてください")
-    for key in ("sourceUrl", "license", "attribution"):
-        if key in data and not isinstance(data[key], str):
-            raise ValueError(f"{key} は文字列にしてください")
     if "tags" in data:
         tags = data["tags"]
         if not isinstance(tags, dict) or any(not text(k) or not isinstance(v, dict) or set(v)-{"reading"}
                 or ("reading" in v and not text(v["reading"])) for k,v in tags.items()):
             raise ValueError("タグ情報が不正です")
-    if "supplementSources" in data:
-        sources = data["supplementSources"]
+    if "sources" in data:
+        sources = data["sources"]
         if not isinstance(sources, dict) or any(not text(k) or not isinstance(v, dict)
-                or set(v)-{"source","license","attribution","changes"}
+                or set(v)-{"source","license","attribution","changes","lastestTimeStamp"}
                 or any(not isinstance(item,str) for item in v.values()) for k,v in sources.items()):
-            raise ValueError("補足の出典情報が不正です")
+            raise ValueError("出典情報が不正です")
     if "pointCount" in data:
         count = data["pointCount"]
         if type(count) is not int or count < 1 or (point_count is not None and count != point_count):
             raise ValueError("pointCount は実際の地点数と等しい正の整数にしてください")
     if point_count is not None and point_count < 1:
         raise ValueError("地点配列には1地点以上が必要です")
-    if "latestPointTimestamp" in data:
-        stamp = data["latestPointTimestamp"]
-        if not isinstance(stamp, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})",stamp):
-            raise ValueError("latestPointTimestamp はタイムゾーン付き日時にしてください")
-        if stamp[-1] not in "Zz" and (int(stamp[-5:-3]) > 23 or int(stamp[-2:]) > 59):
-            raise ValueError("latestPointTimestamp の時差が不正です")
-        try:
-            datetime.fromisoformat(stamp.upper().replace("Z","+00:00"))
-        except ValueError as error:
-            raise ValueError("latestPointTimestamp の日時が不正です") from error
+    for entry in data.get("sources", {}).values():
+        if "lastestTimeStamp" in entry:
+            validate_timestamp(entry["lastestTimeStamp"])
     return data
 
+
+
+
+def validate_timestamp(stamp):
+    field = "lastestTimeStamp"
+    if not isinstance(stamp, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})",stamp):
+        raise ValueError(f"{field} はタイムゾーン付き日時にしてください")
+    if stamp[-1] not in "Zz" and (int(stamp[-5:-3]) > 23 or int(stamp[-2:]) > 59):
+        raise ValueError(f"{field} の時差が不正です")
+    try:
+        datetime.fromisoformat(stamp.upper().replace("Z","+00:00"))
+    except ValueError as error:
+        raise ValueError(f"{field} の日時が不正です") from error
+
+def source_entries(identifier, source=None, license=None, attribution=None, supplements=None, lastestTimeStamp=None):
+    validate_metadata({"sources":{} if supplements is None else supplements})
+    result = {k:dict(v) for k,v in (supplements or {}).items()}
+    entry = {k:v for k,v in {"source":source,"license":license,"attribution":attribution}.items() if v is not None}
+    if lastestTimeStamp is not None:
+        entry["lastestTimeStamp"] = lastestTimeStamp
+    elif identifier in result and "lastestTimeStamp" in result[identifier]:
+        entry["lastestTimeStamp"] = result[identifier]["lastestTimeStamp"]
+    if entry:
+        if identifier in result and result[identifier] != entry:
+            raise ValueError("元データと補足の出典 ID が競合しています: "+identifier)
+        result[identifier] = entry
+    validate_metadata({"sources":result})
+    return result
 
 
 def alias_objects(aliases, readings=None, legacy=True):
@@ -89,3 +107,20 @@ def ordered_point(point):
         if key == "name":
             result["nameReading"] = point["nameReading"]
     return result
+
+
+def manifest_metadata(manifest):
+    """版6の共通情報と、旧 manifest の直下の共通項目を読む。"""
+    return manifest.get("metadata", {}) if manifest.get("schemaVersion", 0) >= 6 else manifest
+
+
+def copy_manifest_metadata(manifest, metadata):
+    """データ本体の共通情報をそのままコピーし、直下との重複を取り除く。"""
+    from copy import deepcopy
+    validate_metadata(metadata)
+    for key in FIELDS - {"schemaVersion"}:
+        manifest.pop(key, None)
+    manifest.pop("sourceTimestamp", None)
+    manifest.pop("latestPointTimestamp", None)
+    manifest["metadata"] = deepcopy(metadata)
+    return manifest

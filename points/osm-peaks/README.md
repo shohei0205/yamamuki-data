@@ -42,7 +42,7 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 | `classification` | 元ノードのタグに応じて `natural=peak` または `natural=volcano` |
 | `elevationSource` | `ele` から標高を取得できた場合は `osm`、未登録・解釈できない場合は項目を省略 |
 
-`classification` は OSM の元の分類を保持する。共通の地点種別 `type` は、どちらも `peak` とする。補足 JSON は標高を変更しないため、名前・読み・別名・タグなどを補正しても、この出典情報は保持する。補足の出典一覧は manifest の `supplementSources` に記録する。
+`classification` は OSM の元の分類を保持する。共通の地点種別 `type` は、どちらも `peak` とする。補足 JSON は標高を変更しないため、名前・読み・別名・タグなどを補正しても、この出典情報は保持する。補足の出典一覧は manifest の `metadata.sources` に記録する。
 
 ## ID の作り方と維持方針
 
@@ -64,11 +64,11 @@ manifest の項目・型は [リポジトリ共通の manifest.json](../../forma
 | `fileName` | `osm-peaks.json.gz` |
 | `downloadUrl` | 正式版は `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>` の Release の gzip ファイル |
 | `pointCount` | 収録した名前付き山頂ノードの件数 |
-| `sourceTimestamp` | 全国 PBF ヘッダーの `osmosis_replication_timestamp` |
-| `latestPointTimestamp` | 収録する山頂ノードの OSM 最終編集日時の最大値。収録対象外のノードは集計しない |
-| `sourceUrl` | 実際に取得・検証した日付付き全国 PBF の URL。latest 指定でも確定した日付付き URL を記録 |
-| `license` | `ODbL-1.0` |
-| `attribution` | `© OpenStreetMap contributors` |
+| `dataTimestamp` | 配布データを生成した UTC 日時。PBF の基準日時とは区別する |
+| `metadata.sources.osm-peaks.lastestTimeStamp` | 収録する山頂ノードの OSM 最終編集日時の最大値。収録対象外のノードは集計しない |
+| `metadata.sources.osm-peaks.source` | 実際に取得・検証した日付付き全国 PBF の URL。latest 指定でも確定した日付付き URL を記録 |
+| `metadata.sources.osm-peaks.license` | `ODbL-1.0` |
+| `metadata.sources.osm-peaks.attribution` | `© OpenStreetMap contributors` |
 
 元データと収録ノードの日時は必須とし、欠落・形式不正・収録ノードの日時が元データより新しい場合は生成・公開を止める。元データの日付はダウンロード日時ではない。同じ元データで再実行しても配布の `version` は変わる。
 
@@ -221,7 +221,7 @@ python scripts/build_data.py build/japan-latest.osm.pbf \
 
 開発版を手元で生成するときは、生成コマンドに `--channel dev` を指定する。省略時は `RELEASE_CHANNEL` の値、未設定なら正式版を使う。取得 URL のリポジトリは `GH_REPO`、未設定なら `GITHUB_REPOSITORY`、どちらも未設定なら `shohei0205/yamamuki-data` を使う。
 
-取得時に PBF の隣へ `<PBF のファイル名>.source.json` を保存し、URL・サイズ・MD5 を記録する。取得済みファイルを再利用した場合も記録を作る。生成時に記録と PBF を照合し、日付付き URL を manifest の `sourceUrl` に引き継ぐ。記録の欠落や不一致は生成を止める。既存の PBF に記録がない場合は、同じ対象日で取得コマンドを再実行すると、内容が一致すれば再ダウンロードせずに記録を作れる。
+取得時に PBF の隣へ `<PBF のファイル名>.source.json` を保存し、URL・サイズ・MD5 を記録する。取得済みファイルを再利用した場合も記録を作る。生成時に記録と PBF を照合し、日付付き URL を manifest の `metadata.sources.osm-peaks.source` に引き継ぐ。記録の欠落や不一致は生成を止める。既存の PBF に記録がない場合は、同じ対象日で取得コマンドを再実行すると、内容が一致すれば再ダウンロードせずに記録を作れる。
 
 元データの取得には数 GB の通信量と空き容量が必要。元データは `points/osm-peaks/build/`、配布ファイルは `points/osm-peaks/dist/` に保存し、どちらも git に入れない。
 
@@ -257,7 +257,7 @@ PYTHONPATH=points/osm-peaks python -m scripts.supplements points/osm-peaks/suppl
 
 ### 出典の管理
 
-出典・ライセンス・著作者表示・加工内容は、補足 JSON の `sources` に記録する。生成時は manifest.json の `supplementSources` に引き継がれる。詳しい属性は [補足データフォーマット](../formats/supplements-data.md) を参照する。
+出典・ライセンス・著作者表示・加工内容は、補足 JSON の `metadata.sources` に記録する。生成時は manifest.json の `metadata.sources` に引き継がれる。詳しい属性は [補足データフォーマット](../formats/supplements-data.md) を参照する。
 
 ### タグごとの記録
 
@@ -267,21 +267,17 @@ PYTHONPATH=points/osm-peaks python -m scripts.supplements points/osm-peaks/suppl
 
 ### アプリ用データと確認・編集用の添付
 
-利用側は、manifest の参照先から補足マージ済みの `osm-peaks.json.gz` 一つを取得する。ファイル名・取得 URL・manifest の版5を維持し、Android・iOS 側で補足をマージする処理は追加しない。マージ前のオリジナル JSON.gz と補足は、確認・編集用として同じ Release に添付する。
+利用側は、manifest の参照先から補足マージ済みの `osm-peaks.json.gz` 一つを取得する。ファイル名・取得 URL を維持し、manifest は版6にして、Android・iOS 側で補足をマージする処理は追加しない。補足適用前のデータと補足 JSON も、それぞれの manifest とともに同じ Release に添付する。
 
 | ファイル | 内容 |
 |---|---|
 | `osm-peaks.json.gz` | 補足マージ済みの地点データ。アプリが取得する唯一の地点 JSON |
-| `manifest.json` | アプリ向けの取得先・サイズ・ハッシュ。`supplementSources` に補足の全出典を記録 |
-| `osm-peaks-source.json.gz` | 補足マージ前のオリジナル地点データ。OSM からの変換処理は適用済み。確認・編集用 |
-| `supplements.json` | 全タグ・補正・除外と、ファイル全体の出典一覧 |
-| `supplement-manifest.json` | 上記の元データと補足の取得先・サイズ・SHA-256、Release の版、出典・ライセンス |
+| `manifest.json` | アプリ向けの取得先・サイズ・ハッシュ。`metadata.sources` に補足の全出典を記録 |
 
-補足用 manifest の形式は [補足 manifest フォーマット](../formats/supplements-manifest.md) を参照する。`base` と `supplements` にそれぞれ `fileName`・`downloadUrl`・`sizeBytes`・`sha256` を記載し、`distributionSha256` で既存の配布 gzip と結び付ける。`dataSchemaVersion` は元データの版、`sources` は補足の出典一覧。トップレベルの OSM の `license`・`attribution` も保持する。補足 manifest は Release に添付し、Pages の既存 manifest の参照先は変更しない。
+地点データは補足適用後の `osm-peaks.json.gz` と `manifest.json` に加え、補足適用前の `osm-peaks-source.json.gz` と `osm-peaks-source-manifest.json`、補足の `supplements.json.gz` と `supplements-manifest.json` を同じ Release に配布する。各 manifest は共通形式を使い、それぞれが指す JSON の `metadata` をコピーする。オリジナルと補足から配布地点を再現できることを公開前に検証する。補足 JSON を単体で配布する場合は [共通の manifest 形式](../../formats/manifest.md#補足ファイル単体の配布) を使う。
 
 公開前にすべての添付を再取得し、サイズ・ハッシュ・URL・版・出典が一致することと、元データへ補足を適用して配布データを再現できることを検査する。補足のない過去の Release も検証できる。補足関連の添付が一部しかない Release は公開しない。
 
-由来を確認・編集するときは、ビューアで `osm-peaks-source.json.gz` を開き、続けて `supplements.json` を開く。統合済みの `osm-peaks.json.gz` だけでは補正前の値や項目ごとの由来は復元できない。確認・編集用の添付と補足 manifest はアプリの読み込み対象にしない。
 
 出典・利用条件の一覧は、[ルート README のライセンス](../../README.md#ライセンス)を参照する。
 

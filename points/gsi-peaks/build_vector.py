@@ -193,6 +193,7 @@ def main():
         elevation_source = "mountainList" if source == "mountainList" else height_sources.get(p["id"])
         if elevation_source is not None:
             p["provenance"]["elevationSource"] = elevation_source
+    original_points = points
     points, supplement_sources = supplement_points(points, args.supplements)
     report = {"pointCount": len(points), "primarySource": "optimal_bvmap-v1", "vectorAnnotationCount": len(records),
               "vectorPointCount": comparison["vectorPointCount"], "fallbackCount": len(comparison["fallbackIds"]),
@@ -203,11 +204,11 @@ def main():
               "sources": sorted([archive_info, *natural_sources, *cache.used.values()], key=lambda s: s["url"])}
     tags = read_supplements(args.supplements).get("tags", {})
     write(points, report, args.output, args.version, tags=tags, metadata={"sourceUrl": PMTILES_URL, "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html", "attribution": "出典：国土地理院（最適化ベクトルタイル・日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成", "supplementSources": supplement_sources})
+    from scripts.distribution_parts import write_parts
+    write_parts(args.output, original_points, read_supplements(args.supplements), json.loads((args.output / "manifest.json").read_text(encoding="utf-8")))
     path = args.output / "manifest.json"
     manifest = json.loads(path.read_bytes())
-    manifest["supplementSources"] = supplement_sources
-    manifest.update(attribution="出典：国土地理院（最適化ベクトルタイル・日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成",
-                    sourceUrl=PMTILES_URL, sourceDate=None,
+    manifest.update(sourceDate=None,
                     elevationPolicy="山岳一覧の公称標高、25 m 以内で双方に一意な三角点・標高点、DEM1A・DEM5A・DEM5B・DEM5C・DEM10B の順に採用。DEM は指定座標の地表標高であり、最高地点の標高とは限らない。",
                     coordinatePolicy="山名・座標は最適化ベクトルタイルを優先し、一意に照合できた山岳一覧の最高地点を優先する。未収録の山は山岳一覧・取得済み自然地名から追加する。注記・代表点は最高地点とは限らない。")
     path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

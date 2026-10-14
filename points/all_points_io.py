@@ -58,7 +58,7 @@ def read_points(path, chunk_size=1024 * 1024, metadata=None):
         def field():
             nonlocal position, tags
             key = value()
-            if key not in ("metadata", "schemaVersion", "points", "tags", "sourceUrl", "license", "attribution", "supplementSources", "pointCount", "latestPointTimestamp") or key in keys:
+            if key not in ("metadata", "schemaVersion", "points", "tags", "sources", "pointCount") or key in keys:
                 raise ValueError("地点文書の項目が不正または重複しています")
             keys.add(key)
             whitespace()

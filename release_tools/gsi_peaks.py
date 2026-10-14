@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 """コミット済みの国土地理院の地点 JSON を検証し、Release に配布する。"""
 
 import argparse
@@ -12,14 +13,14 @@ import re
 import shutil
 
 from release_tools.test_points import ROOT, release_data, validate_rows
-from scripts.supplements import validate_supplement_sources
+from scripts.supplements import validate_supplement_sources, read_supplements
 from scripts.point_document import rows as document_rows, metadata_of
 from scripts.point_tags import validate_tag_metadata
 
 DATA = ROOT / "points/gsi-peaks"
 FILE = "gsi-peaks.json"
 INFO = "snapshot.json"
-PROVENANCE = ("license", "attribution", "sourceUrl", "sourceDate", "experimental", "coordinatePolicy", "elevationPolicy")
+PROVENANCE = ("sources", "sourceDate", "experimental", "coordinatePolicy", "elevationPolicy")
 
 
 def validate(points):
@@ -44,24 +45,21 @@ def snapshot(source, output=DATA):
     common = metadata_of(body)
     validate(points)
     manifest = json.loads((source / "manifest.json").read_bytes())
-    if manifest["pointCount"] != len(points) or manifest["uncompressedSizeBytes"] != len(raw):
+    manifest_info = manifest.get("metadata", manifest)
+    if manifest_info["pointCount"] != len(points) or manifest["uncompressedSizeBytes"] != len(raw):
         raise ValueError("生成結果と manifest の件数・サイズが一致しません")
     if gzip.decompress((source / (FILE + ".gz")).read_bytes()) != raw:
         raise ValueError("生成した JSON と gzip の内容が一致しません")
     groups = defaultdict(list)
-    for item in manifest["sources"]:
+    for item in manifest.get("sourceFiles",manifest.get("sources")):
         url = item["url"]
         dem = re.search(r"/xyz/(dem(?:1a|5[abc])?_png|dem)/", url)
         kind = "vector" if "/optimal_bvmap-v1/" in url else "natural" if "/experimental_nnfpt/" in url else dem[1] if dem else "mountainList"
         groups[kind].append(item)
-    for key in ("sourceUrl", "license", "attribution", "supplementSources", "pointCount", "latestPointTimestamp"):
-        if common.get(key, {} if key == "supplementSources" else None) != manifest.get(key, {} if key == "supplementSources" else None):
+    for key in ("sources", "pointCount"):
+        if common.get(key, {} if key == "sources" else None) != manifest_info.get(key, {} if key == "sources" else None):
             raise ValueError("地点 JSON と manifest の出典が一致しません")
-    info = {key: manifest[key] for key in PROVENANCE}
-    if "supplementSources" in manifest:
-        info["supplementSources"] = validate_supplement_sources(manifest["supplementSources"])
-    if "latestPointTimestamp" in common:
-        info["latestPointTimestamp"] = common["latestPointTimestamp"]
+    info = {key: (manifest_info[key] if key == "sources" else manifest[key]) for key in PROVENANCE}
     info.update(inputSha256=hashlib.sha256(raw).hexdigest(), pointCount=len(points), sourceSnapshot={})
     for kind, items in sorted(groups.items()):
         dates = [item["fetchedAt"] for item in items]
@@ -72,6 +70,12 @@ def snapshot(source, output=DATA):
             summary["files"] = items
         info["sourceSnapshot"][kind] = summary
     output.mkdir(parents=True, exist_ok=True)
+    original_path = source / "gsi-peaks-source.json.gz"
+    if original_path.exists():
+        (output / "gsi-peaks-source.json").write_bytes(gzip.decompress(original_path.read_bytes()))
+    supplement_path = source / "supplements.json.gz"
+    if supplement_path.exists():
+        (output / "supplements.json").write_bytes(gzip.decompress(supplement_path.read_bytes()))
     (output / FILE).write_bytes(raw)
     (output / INFO).write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     return info
@@ -91,30 +95,33 @@ def prepare(version, directory, channel, source=DATA):
     info = json.loads((source / INFO).read_bytes())
     if info["inputSha256"] != hashlib.sha256(raw).hexdigest() or info["pointCount"] != len(points):
         raise ValueError("地点 JSON と出典情報が一致しません。snapshot コマンドで更新してください")
-    if not info.get("license") or not info.get("attribution") or not info.get("sourceSnapshot"):
+    if not info.get("sources") or not info.get("sourceSnapshot"):
         raise ValueError("出典・ライセンスがありません")
-    for key in ("sourceUrl", "license", "attribution", "supplementSources", "pointCount", "latestPointTimestamp"):
-        if common.get(key, {} if key == "supplementSources" else None) != info.get(key, {} if key == "supplementSources" else None):
+    for key in ("sources", "pointCount"):
+        if common.get(key, {} if key == "sources" else None) != info.get(key, {} if key == "sources" else None):
             raise ValueError("地点 JSON と snapshot の出典が一致しません")
     tag = f"gsi-peaks-{'dev-' if channel == 'dev' else ''}{version}"
     archive = gzip.compress(raw, mtime=0)
     manifest = {key: info[key] for key in PROVENANCE}
-    if "supplementSources" in info:
-        manifest["supplementSources"] = validate_supplement_sources(info["supplementSources"])
-    if "latestPointTimestamp" in info:
-        manifest["latestPointTimestamp"] = info["latestPointTimestamp"]
     if common.get("tags"):
         manifest["tags"]=common["tags"]
-    manifest.update(schemaVersion=5, dataSchemaVersion=6, name="山頂（国土地理院）", version=version,
+    manifest.update(schemaVersion=6, dataSchemaVersion=6, name="山頂（国土地理院）", version=version,
                     fileName=FILE + ".gz", pointCount=len(points),
                     downloadUrl=f"https://github.com/{repo}/releases/download/{tag}/{FILE}.gz",
                     sha256=hashlib.sha256(archive).hexdigest(), sizeBytes=len(archive),
                     uncompressedSizeBytes=len(raw), inputSha256=info["inputSha256"], sourceSnapshot=info["sourceSnapshot"])
+    manifest["dataTimestamp"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    from document_metadata import copy_manifest_metadata
+    copy_manifest_metadata(manifest, common)
     directory.mkdir(parents=True, exist_ok=True)
     (directory / (FILE + ".gz")).write_bytes(archive)
     (directory / FILE).write_bytes(raw)
     shutil.copyfile(source / INFO, directory / INFO)
     (directory / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    from scripts.distribution_parts import write_parts, validate_parts
+    original = json.loads((source / "gsi-peaks-source.json").read_bytes())
+    write_parts(directory, original, read_supplements(source / "supplements.json"), manifest)
+    validate_parts(directory, manifest, points)
     return tag, manifest
 
 
@@ -126,10 +133,11 @@ def publish(version, directory, source=DATA):
     tag, manifest = prepare(version, directory, channel, source)
     notes = directory / "notes.md"
     notes.write_text("[Codex] コミット済みの国土地理院の地点 JSON を配布します。\n\n"
-                     + f"- 地点数: {manifest['pointCount']}\n- SHA-256: `{manifest['sha256']}`\n"
+                     + f"- 地点数: {manifest['metadata']['pointCount']}\n- SHA-256: `{manifest['sha256']}`\n"
                      + f"- 入力コミット: `{os.environ['GITHUB_SHA']}`\n"
-                     + f"- {manifest['attribution']}\n- ライセンス: {manifest['license']}\n", encoding="utf-8", newline="\n")
-    names = (FILE, FILE + ".gz", "manifest.json", INFO)
+                     + "".join(f"- {key}: {value.get('attribution','')} / {value.get('license','')}\n" for key,value in manifest["metadata"]["sources"].items()), encoding="utf-8", newline="\n")
+    from scripts.distribution_parts import filenames
+    names = (FILE, FILE + ".gz", "manifest.json", INFO, *filenames("gsi-peaks"))
     options = ("--prerelease",) if channel == "dev" else ()
     # 既存タグは create が失敗する。公開済みのアセットを差し替えない。
     release_data.gh("release", "create", tag, *(str(directory / name) for name in names),
@@ -142,7 +150,7 @@ def publish(version, directory, source=DATA):
         if (checked / name).read_bytes() != (directory / name).read_bytes():
             raise ValueError(f"Release の添付ファイルが一致しません: {name}")
     release_data.gh("release", "edit", tag, "--draft=false", "--latest=false")
-    release_data.append_summary(f"\n## 国土地理院の山頂\n\n{manifest['pointCount']:,} 地点を Release `{tag}` に公開しました。\n")
+    release_data.append_summary(f"\n## 国土地理院の山頂\n\n{manifest['metadata']['pointCount']:,} 地点を Release `{tag}` に公開しました。\n")
 
 
 def main():

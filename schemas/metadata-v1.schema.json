@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "共通メタデータ（版1）",
+  "description": "データ JSON と配布 manifest で共有する metadata。各項目は任意。データ種別ごとの必須条件は参照元で追加する。",
+  "type": "object",
+  "properties": {
+    "sources": {
+      "$ref": "#/$defs/sources"
+    },
+    "tags": {
+      "$ref": "#/$defs/tags"
+    },
+    "pointCount": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sources": {
+      "type": "object",
+      "description": "元データと補足の出典 ID ごとの情報。タグ名・ファイル名とは独立。",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^\\S(?:.*\\S)?$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "license": {
+            "type": "string"
+          },
+          "attribution": {
+            "type": "string"
+          },
+          "changes": {
+            "type": "string"
+          },
+          "lastestTimeStamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "この出典に由来する収録データの最終更新日時。不明なら省略する。"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "tags": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^\\S(?:.*\\S)?$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "reading": {
+            "type": "string",
+            "pattern": "^\\S(?:.*\\S)?$"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

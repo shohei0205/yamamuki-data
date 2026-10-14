@@ -108,7 +108,7 @@ class CheckReleaseTests(unittest.TestCase):
             original = json.loads(path.read_text(encoding="utf-8"))
             for value in (None, "bad", "2026-09-29T12:00:00", "2026-09-30T00:00:00Z"):
                 with self.subTest(value=value):
-                    manifest = {**original, "latestPointTimestamp": value}
+                    manifest = {**original, "metadata": {**original["metadata"], "sources": {**original["metadata"]["sources"], "osm-peaks": {**original["metadata"]["sources"]["osm-peaks"], "lastestTimeStamp": value}}}}
                     path.write_text(json.dumps(manifest), encoding="utf-8")
                     with self.assertRaises(ValueError):
                         validate(root)
@@ -123,12 +123,23 @@ class CheckReleaseTests(unittest.TestCase):
             (root / FILE_NAME).write_bytes(archive)
             original.update(sizeBytes=len(archive), uncompressedSizeBytes=len(raw),
                             sha256=hashlib.sha256(archive).hexdigest())
+            original.update(original.pop("metadata"))
+            original["sourceTimestamp"] = "2026-09-29T20:22:51Z"
             original["schemaVersion"] = 2
             original["dataSchemaVersion"] = 2
-            del original["latestPointTimestamp"]
+            original.pop("latestPointTimestamp", None)
             original["mountainCount"] = original.pop("pointCount")
             path.write_text(json.dumps(original), encoding="utf-8")
             self.assertEqual(2, validate(root)[0]["schemaVersion"])
+
+    def test_data_timestamp_is_required_and_rejects_invalid_dates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            manifest=write_distribution(dataset(1)[1],root,'test','2026-09-29T20:22:51Z','2026-09-29T12:00:00Z')
+            for value in (None,123,'not-a-date','2026-02-30T00:00:00Z','2026-10-14T00:00:00','2026-10-14T00:00:00+09:00'):
+                changed={**manifest,'dataTimestamp':value}
+                (root/'manifest.json').write_text(json.dumps(changed),encoding='utf-8')
+                with self.subTest(value=value),self.assertRaises(ValueError):validate(root)
 
     def test_data_schema_version_is_checked_independently(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -157,6 +168,10 @@ class CheckReleaseTests(unittest.TestCase):
             self.assertEqual(old_rows, validate(root)[1])
             write_distribution(rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
             legacy = dict(manifest)
+            legacy.update(legacy.pop("metadata"))
+            legacy["latestPointTimestamp"] = legacy["sources"]["osm-peaks"]["lastestTimeStamp"]
+            legacy["sourceTimestamp"] = "2026-09-29T20:22:51Z"
+            legacy["schemaVersion"] = 5
             del legacy["dataSchemaVersion"]
             legacy_raw = (json.dumps(rows,ensure_ascii=False,separators=(',',':'))+'\n').encode()
             legacy_gzip = gzip.compress(legacy_raw,mtime=0)
@@ -263,6 +278,9 @@ class DownloadUrlTests(unittest.TestCase):
                 archive = gzip.compress(raw)
                 (root / FILE_NAME).write_bytes(archive)
                 changed["dataSchemaVersion"] = 3
+                changed.update(changed.pop("metadata"))
+                changed["latestPointTimestamp"] = changed["sources"]["osm-peaks"]["lastestTimeStamp"]
+                changed["sourceTimestamp"] = "2026-09-29T20:22:51Z"
                 changed["mountainCount"] = changed.pop("pointCount")
                 changed["latestMountainTimestamp"] = changed.pop("latestPointTimestamp")
                 changed.update(schemaVersion=3, sizeBytes=len(archive),

@@ -29,22 +29,12 @@ gzip で圧縮した UTF-8（BOM なし）の JSON object。`points` に 1 地�
 | 項目 | 型 | 必須 | 内容 | 版の履歴 |
 |---|---|---|---|---|
 | `schemaVersion` | integer | 必須 | 地点 JSON 本体の版。`6`。manifest 自体の `schemaVersion` とは独立 | [版6] 追加 |
+| `metadata` | object | 任意 | 文書全体の共通情報。[metadata フォーマット](../../formats/metadata.md) を参照。配布 manifest に同じ object をコピーする | [版6] 追加 |
 | `points` | array | 必須 | 地点の配列。1 地点以上 | [版6] 追加 |
-| `metadata` | object | 任意 | 文書全体で共有する件数・日時・タグ・出典情報。下表を参照。各子項目を配布 manifest の直下へ同じ名前・値で複製する。manifest 自体の版は5のまま | [版6] 追加 |
 
 ### 共通情報（metadata）
 
-以下は `metadata` の子に指定する。省略・空 object は共通情報なし。`null` は指定できない。
-
-| 項目 | 型 | 必須 | 内容 | 版の履歴 |
-|---|---|---|---|---|
-| `pointCount` | integer | 任意 | `points` の要素数。生成時に実数から設定し、配布 manifest の同名項目と一致させる | [版6] 追加 |
-| `latestPointTimestamp` | string | 任意 | 地点の最終更新日時（タイムゾーン付き ISO 8601）。manifest にある場合は同じ値を記載し、元資料から分からない場合は省略する | [版6] 追加 |
-| `tags` | object | 任意 | [補足 JSON のタグ情報](supplements-data.md#タグごとの情報) と同じ形。各タグの任意の `reading` に読みを記載する。省略・空 object は共通の読みなし。`null` は不可。各地点の `points[].tags` は文字列配列で、用途が異なる | [版6] 追加 |
-| `sourceUrl` | string | 任意 | 元データの取得 URL。配布時は manifest の同名項目と一致させる | [版6] 追加 |
-| `license` | string | 任意 | 元データの利用条件。配布時は manifest の同名項目と一致させる | [版6] 追加 |
-| `attribution` | string | 任意 | 元データの帰属表示。配布時は manifest の同名項目と一致させる | [版6] 追加 |
-| `supplementSources` | object | 任意 | 補足 JSON の [出典一覧](supplements-data.md#出典ごとの情報) と同じ形。`null` は不可。配布時は manifest の同名項目と一致させる | [版6] 追加 |
+共通項目の型・構造・制約は [metadata フォーマット](../../formats/metadata.md) を参照する。地点 JSON では `metadata` と各子項目は任意。生成時は実際の地点数を `pointCount` に設定する。各地点の `points[].tags` は文字列配列で、共通情報の `metadata.tags` とは用途が異なる。
 
 ### 地点ごとの項目
 
@@ -157,7 +147,7 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
 
 ### 出典とライセンス
 
-利用条件と出典は、版6の地点文書と manifest の `license`・`attribution` に書く。使うときは `attribution` の出典を表示する（OSM 由来なら「© OpenStreetMap contributors」）。`tags` などの補足を付けた場合、その出典と利用条件は地点文書と manifest の `supplementSources` に書く。各項目の意味は [manifest の仕様](../../formats/manifest.md) を参照する。
+利用条件と出典は、地点 JSON の `metadata.sources` と manifest の `metadata.sources` に出典ごとに記載する。利用時には各出典の `license` に従い、`attribution` を表示する。元データと補足の出典は同じ一覧に保持する。
 
 ## JSON の例
 
@@ -168,11 +158,13 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
   "schemaVersion": 6,
   "metadata": {
     "pointCount": 1,
-    "latestPointTimestamp": "2026-10-14T00:00:00Z",
-    "sourceUrl": "https://example.com/source",
-    "license": "資料の利用条件",
-    "attribution": "資料の著作者表示",
-    "supplementSources": {
+    "sources": {
+      "元資料": {
+        "source": "https://example.com/source",
+        "license": "資料の利用条件",
+        "attribution": "資料の著作者表示",
+        "lastestTimeStamp": "2026-10-14T00:00:00Z"
+      },
       "山の資料": {
         "source": "資料名・URL"
       }
@@ -327,10 +319,10 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
 ### 版6（2026-10-14）
 
 - トップレベルを地点配列から object に変更し、従来の配列を必須の `points` に格納する。版5の読み込み処理では版6を読めないため、利用前に対応が必要。
-- 本体に必須の `schemaVersion: 6` を追加する。manifest の `dataSchemaVersion` と一致させる。manifest 自体の `schemaVersion` は `5` のままとする。
-- `metadata` に任意の `pointCount`・`latestPointTimestamp` を追加する。`pointCount` は実際の地点数、`latestPointTimestamp` は元データ上の最終編集日時とし、配布 manifest の同名項目と一致させる。最終編集日時が不明な場合は省略する。
-- `metadata` に任意の `sourceUrl`・`license`・`attribution`・`supplementSources` を追加し、元データと補足の出典情報を地点 JSON にも保持する。配布 manifest の同名項目と一致させる。
-- `metadata` に任意の `tags` object を追加し、タグ共通の `reading` を保持する。タグ情報も manifest の直下へ複製する。各地点の `points[].tags` は従来の文字列配列を維持する。
+- 本体に必須の `schemaVersion: 6` を追加する。manifest の `dataSchemaVersion` と一致させる。manifest 自体の `schemaVersion` は `6` とする。
+- `metadata` に任意の `pointCount` を追加し、実際の地点数を保持する。配布 manifest の `metadata` 内の同名項目と一致させる。出典ごとの最終更新日時は `metadata.sources.<出典ID>.lastestTimeStamp` に保持し、不明なら省略する。
+- `metadata` に任意の `sources` を追加し、元データと補足の出典情報を出典 ID ごとに地点 JSON に保持する。配布 manifest の `metadata` 内の同名項目と一致させる。
+- `metadata` に任意の `tags` object を追加し、タグ共通の `reading` を保持する。タグ情報も manifest の `metadata` に保持する。各地点の `points[].tags` は従来の文字列配列を維持する。
 - `aliases` を文字列配列から object 配列に変更し、各要素の `name` と任意の `nameReading` に別名と読みをまとめる。
 - 機械検証用の [data-v6.schema.json](../schemas/data-v6.schema.json) を追加し、版5のスキーマも残す。
 

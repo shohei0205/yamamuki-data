@@ -41,9 +41,7 @@
               "fileName",
               "sha256",
               "sizeBytes",
-              "uncompressedSizeBytes",
-              "license",
-              "attribution"
+              "uncompressedSizeBytes"
             ],
             "properties": {
               "schemaVersion": {
@@ -92,9 +90,97 @@
                 "type": "string",
                 "pattern": "\\S",
                 "description": "データセットの表示名。新規生成時に記載する。"
+              },
+              "metadata": {
+                "$ref": "../../schemas/metadata-v1.schema.json",
+                "required": [
+                  "sources"
+                ],
+                "properties": {
+                  "sources": {
+                    "minProperties": 1
+                  }
+                }
+              },
+              "dataTimestamp": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
               }
             },
-            "additionalProperties": true
+            "additionalProperties": true,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "schemaVersion": {
+                      "minimum": 6
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "metadata",
+                    "dataTimestamp"
+                  ],
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "sourceUrl"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "license"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "attribution"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "supplementSources"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "sources"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "tags"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "pointCount"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "latestPointTimestamp"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "sourceTimestamp"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "else": {
+                  "required": [
+                    "license",
+                    "attribution"
+                  ]
+                }
+              }
+            ]
           },
           "name": {
             "type": "string",

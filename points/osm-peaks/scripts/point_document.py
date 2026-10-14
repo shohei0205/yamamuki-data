@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from document_metadata import FIELDS, validate_metadata, ordered_point, alias_objects
+from document_metadata import FIELDS, validate_metadata, ordered_point, alias_objects, source_entries
 
 
 def document(points, tags=None, **metadata):

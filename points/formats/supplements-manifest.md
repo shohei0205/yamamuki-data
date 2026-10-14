@@ -1,6 +1,8 @@
-﻿# 補足 manifest フォーマット
+﻿# 補足 manifest フォーマット (廃止)
 
 [地点データの README に戻る](../README.md)
+
+補足ファイルを単体で配布するときの manifest は、[共通の manifest フォーマット](../../formats/manifest.md) を使う。補足専用の manifest 形式は定義しない。この文書は従来の専用形式を説明する。
 
 ## 概要
 
@@ -10,7 +12,7 @@
 
 ## 版について
 
-補足 manifestの版は `schemaVersion` で確認する。現行版は `1`。ほかの形式の版とは独立して管理する。
+補足 manifestの版は `schemaVersion` で確認する。従来の専用形式の最終版は `1`。ほかの形式の版とは独立して管理する。
 
 版内の変更は `版1.1` のように小数点以下で区別する。小数点以下は文書上の番号で、JSON の版の値には含めない。
 
@@ -32,9 +34,10 @@
 | `distributionSha256` | string | 必須 | 補足を適用した配布 gzip の SHA-256。通常の manifest の `sha256` と同じ。小文字の 16 進数 64 文字 | [版1] 追加 |
 | `base` | object | 必須 | 補足を適用する前の地点データのファイル情報。下表を参照 | [版1] 追加 |
 | `supplements` | object | 必須 | 補足 JSON のファイル情報。下表を参照 | [版1] 追加 |
-| `sources` | object | 必須 | 補足 JSON の出典一覧。補足データのスキーマの出典定義を共用する。記載方法は [補足データフォーマット](supplements-data.md#出典ごとの情報) を参照。出典がない場合は `{}`。元の地点データの出典と補足の出典を両方保持する | [版1] 追加 |
-| `license` | string | 必須 | 元の地点データの利用条件。通常の manifest と同じ。OSM 由来は `ODbL-1.0` | [版1] 追加 |
-| `attribution` | string | 必須 | 元の地点データの出典表示。通常の manifest と同じ。OSM 由来は `© OpenStreetMap contributors` | [版1] 追加 |
+| `sources` | object | 必須 | 補足 JSON の出典一覧。補足データのスキーマの出典定義を共用する。記載方法は [metadata フォーマット](../../formats/metadata.md#出典ごとの情報) を参照。出典がない場合は `{}`。元の地点データの出典と補足の出典を両方保持する | [版1] 追加 |
+
+| `license` | string | 必須 | 元の地点データの利用条件。通常の manifest と同じ | [版1] 追加 |
+| `attribution` | string | 必須 | 元の地点データの出典表示。通常の manifest と同じ | [版1] 追加 |
 
 ### ファイル情報
 

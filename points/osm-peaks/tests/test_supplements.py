@@ -1,3 +1,4 @@
+import hashlib
 from scripts.point_document import ordered_point
 from scripts.supplements import supplement_document
 """補足の適用・由来の保持・配布ファイルの再現性を検査する。"""
@@ -9,9 +10,27 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts.supplements import apply_supplements, validate_supplements, write_companions, validate_companions, complete_supplement, read_supplements, COMPANION_FILES
+from scripts.supplements import apply_supplements, validate_supplements, validate_companions, complete_supplement, read_supplements, COMPANION_FILES
 from scripts.build_data import write_distribution
 from scripts import release_data
+
+
+def legacy_companions(directory, original, data, manifest):
+    """編集用の元データと補足の取得情報を配布 manifest に保存する。"""
+    directory = Path(directory)
+    from scripts.point_document import document
+    from document_metadata import manifest_metadata
+    common = manifest_metadata(manifest)
+    raw = (json.dumps(document(original, data.get("tags"), **{k: common[k] for k in ("sources", "latestPointTimestamp") if k in common}), ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+    (directory / COMPANION_FILES[0]).write_bytes(gzip.compress(raw, mtime=0))
+    (directory / COMPANION_FILES[1]).write_text(json.dumps(supplement_document(data), ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    def descriptor(name):
+        payload = (directory / name).read_bytes()
+        return {"fileName": name, "downloadUrl": manifest["downloadUrl"].rsplit("/", 1)[0] + "/" + name,
+                "sizeBytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+    companion = {"schemaVersion":1,"version":manifest["version"],"dataSchemaVersion":manifest["dataSchemaVersion"],"distributionSha256":manifest["sha256"],"base":descriptor(COMPANION_FILES[0]),"supplements":descriptor(COMPANION_FILES[1]),"sources":data.get("sources",{}),"license":manifest["license"],"attribution":manifest["attribution"]}
+    (directory/'supplement-manifest.json').write_text(json.dumps(companion),encoding='utf-8')
+    return companion
 
 
 class SupplementTests(unittest.TestCase):
@@ -131,7 +150,7 @@ class SupplementTests(unittest.TestCase):
                 validate_tag_metadata(invalid)
         with tempfile.TemporaryDirectory() as folder:
             manifest=write_distribution(self.points,Path(folder),'test','2026-10-14T00:00:00Z','2026-10-14T00:00:00Z',tag_metadata=info)
-            self.assertEqual(manifest.get('tags',{}),info)
+            self.assertEqual(manifest['metadata'].get('tags',{}),info)
             self.assertEqual(json.loads(gzip.decompress((Path(folder)/'osm-peaks.json.gz').read_bytes()))['metadata']['tags'],info)
             plain=write_distribution(self.points,Path(folder),'test','2026-10-14T00:00:00Z','2026-10-14T00:00:00Z')
             self.assertNotIn('tags',plain)
@@ -169,8 +188,10 @@ class SupplementTests(unittest.TestCase):
 
     def distribution(self):
         integrated=apply_supplements(self.points,self.data)
-        manifest=write_distribution(integrated,self.root,'test','2026-10-01T00:00:00Z','2026-10-01T00:00:00Z')
-        companion=write_companions(self.root,self.points,self.data,manifest)
+        manifest=write_distribution(integrated,self.root,'test','2026-10-01T00:00:00Z','2026-10-01T00:00:00Z',supplement_sources=self.data['sources'])
+        manifest.update(manifest.pop("metadata"));manifest["schemaVersion"]=5
+        manifest.update(license="ODbL-1.0",attribution="© OpenStreetMap contributors")
+        companion=legacy_companions(self.root,self.points,self.data,manifest)
         return integrated,manifest,companion
 
     def test_companions_reproduce_legacy_gzip_and_keep_original(self):
@@ -183,7 +204,7 @@ class SupplementTests(unittest.TestCase):
         with gzip.open(self.root/manifest['fileName'],'rt',encoding='utf-8') as stream:
             self.assertEqual(json.load(stream)["points"],[ordered_point(p) for p in integrated])
         with gzip.open(self.root/COMPANION_FILES[0],'rt',encoding='utf-8') as f:self.assertEqual(json.load(f)["points"],[ordered_point(p) for p in self.points])
-        self.assertEqual(companion['sources'],self.data['sources'])
+        self.assertEqual({k:v for k,v in companion['sources'].items() if k != 'osm-peaks'},self.data['sources'])
         self.assertIn(manifest['version'],companion['supplements']['downloadUrl'])
         self.assertEqual(supplement_document(read_supplements(self.root/'supplements.json')),supplement_document(self.data))
 
@@ -206,6 +227,21 @@ class SupplementTests(unittest.TestCase):
                 if kind=='version':manifest['version']='another'
                 if kind=='integrated':integrated[0]['name']='違う山'
                 with self.assertRaises(ValueError):validate_companions(self.root,manifest,integrated)
+
+    def test_current_manifest_has_no_companion_descriptors(self):
+        manifest=write_distribution(self.points,self.root,'test','2026-10-01T00:00:00Z','2026-10-01T00:00:00Z')
+        self.assertNotIn('base',manifest)
+        self.assertNotIn('supplements',manifest)
+        validate_companions(self.root,manifest,self.points)
+        changed=deepcopy(manifest);changed['supplements']={}
+        with self.assertRaises(ValueError):validate_companions(self.root,changed,self.points)
+
+    def test_legacy_standalone_manifest_remains_readable(self):
+        integrated,manifest,companion=self.distribution()
+        validate_companions(self.root,manifest,integrated)
+        companion['distributionSha256']='0'*64
+        (self.root/'supplement-manifest.json').write_text(json.dumps(companion),encoding='utf-8')
+        with self.assertRaises(ValueError):validate_companions(self.root,manifest,integrated)
 
     def test_old_distribution_without_companions(self):
         validate_companions(self.root,{},[])
@@ -235,14 +271,23 @@ class SupplementTests(unittest.TestCase):
             with self.subTest(sources=sources), self.assertRaises(ValueError):
                 validate_supplement_sources(sources)
 
-    def test_build_default_path_generates_complete_companion_set(self):
+    def test_build_distributes_original_and_supplement_with_manifests(self):
         from scripts.build_data import build
         path=self.root/'input-supplements.json'
         path.write_text(json.dumps(self.data,ensure_ascii=False),encoding='utf-8')
         with patch('scripts.build_data.verified_source_url',return_value='https://example.com/source'), patch('scripts.build_data.subprocess.check_output',return_value='2026-10-01T00:00:00Z'), patch('scripts.build_data.subprocess.run'), patch('scripts.build_data.read_mountains',return_value=(deepcopy(self.points),'2026-10-01T00:00:00Z')):
             manifest=build(self.root/'source.pbf',self.root/'dist','test',supplements_path=path)
-        self.assertEqual(manifest['supplementSources'],self.data['sources'])
+        self.assertEqual({k:v for k,v in manifest['metadata']['sources'].items() if k != 'osm-peaks'},self.data['sources'])
         self.assertNotIn('tagSources',manifest)
         with gzip.open(self.root/'dist/osm-peaks.json.gz','rt',encoding='utf-8') as f:
             integrated=json.load(f)
         validate_companions(self.root/'dist',manifest,integrated)
+        from scripts.distribution_parts import filenames, validate_parts
+        for name in filenames('osm-peaks'):
+            self.assertTrue((self.root/'dist'/name).is_file())
+        validate_parts(self.root/'dist',manifest,integrated['points'])
+        part=self.root/'dist/supplements-manifest.json'
+        changed=json.loads(part.read_bytes());changed['sha256']='0'*64
+        part.write_text(json.dumps(changed),encoding='utf-8')
+        with self.assertRaises(ValueError):validate_parts(self.root/'dist',manifest,integrated['points'])
+        self.assertEqual(integrated['points'][0]['name'],'補正した山')

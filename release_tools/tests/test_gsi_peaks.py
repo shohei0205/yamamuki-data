@@ -19,14 +19,14 @@ class GsiReleaseTests(unittest.TestCase):
             root = Path(folder)
             _, manifest = target.prepare('test-supplements', root / 'release', 'dev')
             expected = json.loads((target.DATA / 'supplements.json').read_bytes())['metadata']['sources']
-            self.assertEqual(manifest['supplementSources'], expected)
+            self.assertEqual({k:v for k,v in manifest['metadata']['sources'].items() if not k.startswith('gsi-')}, expected)
             self.assertEqual(json.loads((root / 'release' / target.FILE).read_bytes())['metadata']['tags']['日本百名山']['reading'],'にほんひゃくめいざん')
-            manifest['sources'] = [{'url': 'https://example.com/mountains.csv',
+            manifest['sourceFiles'] = [{'url': 'https://example.com/mountains.csv',
                                     'fetchedAt': '2026-10-14T00:00:00Z'}]
             (root / 'release/manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
             info = target.snapshot(root / 'release', root / 'staged')
-            self.assertEqual(info['supplementSources'], expected)
-            self.assertEqual(manifest['tags'], json.loads((root/'release'/target.FILE).read_bytes())['metadata']['tags'])
+            self.assertEqual({k:v for k,v in info['sources'].items() if not k.startswith('gsi-')}, expected)
+            self.assertEqual(manifest['metadata']['tags'], json.loads((root/'release'/target.FILE).read_bytes())['metadata']['tags'])
             self.assertNotIn('tags', info)
 
     def test_png_dem_sources_keep_layer_and_template(self):
@@ -34,7 +34,7 @@ class GsiReleaseTests(unittest.TestCase):
             root = Path(folder)
             source = root / 'generated'
             _, manifest = target.prepare('test-dem', source, 'dev')
-            manifest['sources'] = [
+            manifest['sourceFiles'] = [
                 {'url': f'https://cyberjapandata.gsi.go.jp/xyz/{layer}/{zoom}/100/200.png',
                  'fetchedAt': '2026-10-14T00:00:00Z'}
                 for layer, zoom in [('dem1a_png', 17), ('dem5a_png', 15), ('dem_png', 14)]]
@@ -50,14 +50,25 @@ class GsiReleaseTests(unittest.TestCase):
             source, staged = root / 'generated', root / 'staged'
             _, manifest = target.prepare('test-vector', source, 'dev')
             points = json.loads((source / target.FILE).read_bytes())
+            previous_id = points['points'][0]['id']
             points['points'][0]['id'] = 'gsi-vector:test'
+            original_path = source / 'gsi-peaks-source.json.gz'
+            original = json.loads(gzip.decompress(original_path.read_bytes()))
+            for point in original['points']:
+                if point['id'] == previous_id:point['id'] = 'gsi-vector:test'
+            original_path.write_bytes(gzip.compress(json.dumps(original).encode(),mtime=0))
+            supplement_path = source / 'supplements.json.gz'
+            supplement = json.loads(gzip.decompress(supplement_path.read_bytes()))
+            for point in supplement['points']:
+                if point.get('id') == previous_id:point['id'] = 'gsi-vector:test'
+            supplement_path.write_bytes(gzip.compress(json.dumps(supplement).encode(),mtime=0))
             raw = (json.dumps(points, ensure_ascii=False, separators=(',', ':')) + '\n').encode()
             (source / target.FILE).write_bytes(raw)
             (source / (target.FILE + '.gz')).write_bytes(gzip.compress(raw, mtime=0))
             manifest['uncompressedSizeBytes'] = len(raw)
             vector_source = {'url': 'https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/optimal_bvmap-v1.pmtiles',
                              'fetchedAt': '2026-10-13T00:00:00Z', 'sha256': 'test', 'sizeBytes': 100}
-            manifest['sources'] = [vector_source]
+            manifest['sourceFiles'] = [vector_source]
             (source / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
             info = target.snapshot(source, staged)
             self.assertEqual(info['sourceSnapshot']['vector']['files'], [vector_source])
@@ -70,12 +81,14 @@ class GsiReleaseTests(unittest.TestCase):
             tag, manifest = target.prepare('test-1', root, 'dev')
             raw = (target.DATA / target.FILE).read_bytes()
             self.assertEqual(gzip.decompress((root / (target.FILE + '.gz')).read_bytes()), raw)
-            self.assertEqual(manifest['pointCount'], len(json.loads(raw)['points']))
+            self.assertEqual(manifest['metadata']['pointCount'], len(json.loads(raw)['points']))
             self.assertEqual(manifest['inputSha256'], hashlib.sha256(raw).hexdigest())
             self.assertEqual(tag, 'gsi-peaks-dev-test-1')
             self.assertIn('/gsi-peaks-dev-test-1/', manifest['downloadUrl'])
-            self.assertIn('国土地理院', manifest['attribution'])
-            self.assertEqual(manifest, target.prepare('test-1', root, 'dev')[1])
+            self.assertIn('国土地理院', manifest['metadata']['sources']['gsi-peaks']['attribution'])
+            again=target.prepare('test-1', root, 'dev')[1]
+            self.assertRegex(again.pop('dataTimestamp'), r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
+            self.assertEqual({k:v for k,v in manifest.items() if k != 'dataTimestamp'}, again)
             stable_tag, stable = target.prepare('test-1', root, 'stable')
             self.assertEqual(stable_tag, 'gsi-peaks-test-1')
             self.assertIn('/gsi-peaks-test-1/', stable['downloadUrl'])
@@ -85,7 +98,7 @@ class GsiReleaseTests(unittest.TestCase):
             root = Path(folder)
             source, staged = root / 'generated', root / 'staged'
             _, manifest = target.prepare('test-1', source, 'dev')
-            manifest['sources'] = [{'url': manifest['sourceUrl'], 'fetchedAt': '2026-10-12T04:00:00Z'}]
+            manifest['sourceFiles'] = [{'url': manifest['metadata']['sources']['gsi-peaks']['source'], 'fetchedAt': '2026-10-12T04:00:00Z'}]
             (source / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
             target.snapshot(source, staged)
             target.prepare('test-2', root / 'release', 'dev', staged)
@@ -122,7 +135,8 @@ class GsiReleaseTests(unittest.TestCase):
                         if args[:2] == ('release', 'download'):
                             checked = Path(args[args.index('--dir') + 1])
                             checked.mkdir()
-                            for name in (target.FILE, target.FILE + '.gz', 'manifest.json', target.INFO):
+                            from scripts.distribution_parts import filenames
+                            for name in (target.FILE, target.FILE + '.gz', 'manifest.json', target.INFO, *filenames('gsi-peaks')):
                                 shutil.copyfile(root / name, checked / name)
                             if corrupt:
                                 (checked / target.FILE).write_bytes(b'corrupt')

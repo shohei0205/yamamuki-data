@@ -11,29 +11,12 @@
     "schemaVersion": {
       "const": 1
     },
-    "sources": {
-      "type": "object",
-      "propertyNames": {
-        "type": "string",
-        "pattern": "^\\S(?:.*\\S)?$"
-      },
-      "additionalProperties": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "source": {
-            "type": "string"
-          },
-          "license": {
-            "type": "string"
-          },
-          "attribution": {
-            "type": "string"
-          },
-          "changes": {
-            "type": "string"
-          }
-        }
+    "metadata": {
+      "$ref": "../../schemas/metadata-v1.schema.json",
+      "not": {
+        "required": [
+          "pointCount"
+        ]
       }
     },
     "points": {
@@ -260,70 +243,11 @@
         ]
       }
     },
-    "tags": {
-      "type": "object",
-      "propertyNames": {
-        "type": "string",
-        "pattern": "^\\S(?:.*\\S)?$"
-      },
-      "additionalProperties": {
-        "type": "object",
-        "properties": {
-          "reading": {
-            "type": "string",
-            "pattern": "^\\S(?:.*\\S)?$"
-          }
-        },
-        "additionalProperties": false
-      }
+    "sources": {
+      "$ref": "../../schemas/metadata-v1.schema.json#/$defs/sources"
     },
-    "metadata": {
-      "type": "object",
-      "properties": {
-        "sources": {
-          "type": "object",
-          "propertyNames": {
-            "type": "string",
-            "pattern": "^\\S(?:.*\\S)?$"
-          },
-          "additionalProperties": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "source": {
-                "type": "string"
-              },
-              "license": {
-                "type": "string"
-              },
-              "attribution": {
-                "type": "string"
-              },
-              "changes": {
-                "type": "string"
-              }
-            }
-          }
-        },
-        "tags": {
-          "type": "object",
-          "propertyNames": {
-            "type": "string",
-            "pattern": "^\\S(?:.*\\S)?$"
-          },
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "reading": {
-                "type": "string",
-                "pattern": "^\\S(?:.*\\S)?$"
-              }
-            },
-            "additionalProperties": false
-          }
-        }
-      },
-      "additionalProperties": false
+    "tags": {
+      "$ref": "../../schemas/metadata-v1.schema.json#/$defs/tags"
     }
   },
   "$comment": "osmId の重複、別名の追加・削除の競合、expected と元データの一致は生成処理で検査する。",
