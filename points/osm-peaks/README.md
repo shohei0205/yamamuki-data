@@ -227,6 +227,8 @@ python scripts/build_data.py build/japan-latest.osm.pbf \
 
 ## テスト
 
+全部入り生成のテストも動かすため、先に `python -m pip install -r requirements-all.txt` を実行する。
+
 Python 3.12 と osmium-tool を使い、単体テストと小さな PBF による生成テストを行う。SVG の対応表・JSON への内蔵・倍率・未対応要素の拒否・公開前の再検査も単体テストで確認する。CIの「共通：データ処理のテスト」（`.github/workflows/test.yml`）の「地点 / OSM山頂」ジョブで push・PR 時に実行する。
 
 テストは `points/osm-peaks/` 内で、外部通信を行わず次のコマンドで実行できる。osmium がない場合は PBF を使うテストだけをスキップする。Actions では osmium を入れてすべて実行する。
@@ -282,3 +284,5 @@ osmId がない行では `note` の山名・別名を完全一致で照合する
 由来を確認・編集するときは、ビューアで `osm-peaks-source.json.gz` を開き、続けて `supplements.json` を開く。統合済みの `osm-peaks.json.gz` だけでは補正前の値や項目ごとの由来は復元できない。確認・編集用の添付と補足 manifest はアプリの読み込み対象にしない。
 
 出典・利用条件の一覧は、[ルート README のライセンス](../../README.md#ライセンス)を参照する。
+
+山以外も含む確認用 JSON の生成方法は、[全部入り JSON の生成手順](../README.md#山以外も含む全部入り-json-を作る) を参照する。

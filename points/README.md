@@ -88,13 +88,67 @@ Actions の「地点：カタログから削除」→「Run workflow」で、正
 
 ### 共通ビューアのテスト
 
-共通ビューアの補足 JSON 解析・タグ編集・保存内容の検査は `points/tests/` に置く。Python 3.12 と Node.js を使い、リポジトリ直下で次のコマンドを実行する。外部通信は行わない。Node.js がない場合は、Node.js を使うテストをスキップする。
+共通ビューアの補足 JSON 解析・タグ編集・保存内容の検査と、全部入り地点 JSON の逐次読み書きのテストは `points/tests/` に置く。Python 3.12 と Node.js を使い、リポジトリ直下で次のコマンドを実行する。外部通信は行わない。Node.js がない場合は、Node.js を使うテストをスキップする。
 
 ```bash
 python -m unittest discover -s points/tests -v
 ```
 
 CI の「共通：データ処理のテスト」（`.github/workflows/test.yml`）では、「地点 / 共通ビューア」ジョブで Python と Node.js を準備し、push・PR 時に実行する。山頂データの生成テストとは分けて確認する。
+
+## 山以外も含む全部入り JSON を作る
+
+保存済みの全国元データから、共通ビューアーで確認できる地点 JSON を生成できる。元データ・抽出 DB・DEM キャッシュ・全部入り JSON はローカルに保存し、Git には追加しない。以下のコマンドはリポジトリのルートで実行する。パスは保存先に合わせて変更する。
+
+### OSM の名前付きノード
+
+```bash
+python -m pip install -r points/osm-peaks/requirements-all.txt
+python points/osm-peaks/scripts/build_all.py \
+  --pbf build/japan-latest.osm.pbf \
+  --peaks build/osm-national-provenance/osm-peaks.json \
+  --output build/osm-national-all-points
+```
+
+`--pbf` と同じ場所に、ダウンロード時の取得記録 `japan-latest.osm.pbf.source.json` が必要。サイズと MD5 を照合し、元データの日時を PBF から取得する。`--peaks` は任意で、同じ PBF から生成した山頂版の補足済み地点を引き継ぐ。指定しない場合も `natural=peak`・`natural=volcano` の地点は山頂とする。
+
+`name:ja` または `name` があるノードを収録する。線・面・relation から代表点は作らない。分類タグは `provenance.classification` に記録し、標高は `ele` が解釈できる場合だけ採用する。標高を取得するための通信は行わない。
+
+出力は `osm-all-points.json`、`osm-all-points.json.gz`、`report.json`。出典は OpenStreetMap contributors、ライセンスは ODbL。生成概要に入力のハッシュ・地点数・分類別件数を記録する。
+
+### 国土地理院の名前付き注記
+
+```bash
+python -m pip install -r points/gsi-peaks/requirements-vector.txt
+python points/gsi-peaks/extract_annotations.py \
+  --archive build/gsi-vector-cache/optimal_bvmap-v1.pmtiles \
+  --database build/gsi-national-annotations/annotations.sqlite3
+python points/gsi-peaks/build_all.py \
+  --database build/gsi-national-annotations/annotations.sqlite3 \
+  --peaks points/gsi-peaks/gsi-peaks.json \
+  --comparison build/gsi-national-dem1a/vector-comparison.json \
+  --output build/gsi-all-base
+```
+
+ズーム 16 の `Anno` レイヤーから名前付きの単一点注記を抽出する。数字だけの注記・空名称・タイル外の複製は除く。抽出 DB に元の属性とタイル座標を残し、中断後はコミット済みのタイルの次から再開する。保存済みの同形式の `annotations.sqlite3` も再利用できる。山頂版と同時に生成した `vector-comparison.json` を使い、山頂版に対応する注記を除いて統合する。名前付き注記の集合であり、国土地理院の全地物を網羅するものではない。
+
+標高取得済みの全部入り JSON がある場合は、統合時に `--previous 保存済み/gsi-all-points.json` を指定すると、名前と座標が一致する注記の標高を引き継ぐ。
+
+### 山に関係する注記の標高を補う
+
+```bash
+python points/gsi-peaks/fill_annotation_heights.py \
+  --input build/gsi-all-base/gsi-all-points.json \
+  --output build/gsi-national-all-points \
+  --cache build/gsi-cache \
+  --offline
+```
+
+分類コード `311`・`312`・`313`・`314`・`315`・`316`・`323`・`331`・`332`・`333`・`810`・`830`・`831`・`832` のうち、標高のない山頂以外の注記を対象にする。`--codes` でこの中から対象を限定できる。DEM1A、DEM5A/B/C、DEM10B の順に、注記座標の地表標高を補う。混合分類には山以外の地形もあり、標高を補っても地点を山頂には変更しない。
+
+`--offline` では保存済みの応答だけを使い、必要なキャッシュがなければエラーにする。新たに取得するときは `--offline` を外す。取得した PNG と 404 の応答記録をキャッシュに保持し、429 や一時的なサーバーエラーでは間隔を空けて再試行する。並列数は `--workers` で 1～4 を指定でき、既定は 2。入力を残すため、出力には別フォルダーを指定する。中断後も同じ入力とキャッシュで再実行できる。
+
+GSI の出力は `gsi-all-points.json`、`gsi-all-points.json.gz`、`report.json`。標高補完では DEM の取得記録・地点ごとの割り当て・対象注記の JSON も出力する。標高がない地点は `elevationM: null` とし、`elevationSource` を省略する。元データの出典・ライセンスは [GSI 山頂データ](gsi-peaks/README.md#出典とライセンス) を参照する。
 
 ## 地点データをブラウザで確認する
 
