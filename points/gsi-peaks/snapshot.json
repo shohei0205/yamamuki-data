@@ -6,17 +6,17 @@
   "experimental": true,
   "coordinatePolicy": "山名・座標は最適化ベクトルタイルを優先し、一意に照合できた山岳一覧の最高地点を優先する。未収録の山は山岳一覧・取得済み自然地名から追加する。注記・代表点は最高地点とは限らない。",
   "elevationPolicy": "山岳一覧の公称標高、25 m 以内で双方に一意な三角点・標高点、DEM1A・DEM5A・DEM5B・DEM5C・DEM10B の順に採用。DEM は指定座標の地表標高であり、最高地点の標高とは限らない。",
-  "inputSha256": "05c0949b2106197177c3dbdfd5883691af0e17a2bf006bfddc2c62a6b1d3539b",
-  "pointCount": 17252,
+  "inputSha256": "6be28f461f50812da03d550b22b8c1f1ef68eb1b21d4d36e37aee61b15c2df06",
+  "pointCount": 17248,
   "sourceSnapshot": {
     "dem1a_png": {
-      "fileCount": 1228,
+      "fileCount": 1225,
       "firstFetchedAt": "2026-10-13T17:03:24Z",
       "lastFetchedAt": "2026-10-13T17:03:47Z",
       "urlTemplate": "https://cyberjapandata.gsi.go.jp/xyz/dem1a_png/17/{x}/{y}.png"
     },
     "dem5a_png": {
-      "fileCount": 260,
+      "fileCount": 258,
       "firstFetchedAt": "2026-10-13T17:03:47Z",
       "lastFetchedAt": "2026-10-13T17:03:51Z",
       "urlTemplate": "https://cyberjapandata.gsi.go.jp/xyz/dem5a_png/15/{x}/{y}.png"

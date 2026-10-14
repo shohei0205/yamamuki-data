@@ -14,6 +14,14 @@ import unicodedata
 from download import Cache
 
 CSV_URL = "https://www.gsi.go.jp/KOKUJYOHO/MOUNTAIN/1003zan20260331.csv"
+# 公式 CSV に実際の「?」が含まれる表記を、同じ山の公式ベクトルタイルで確認した名前に補正する。
+# 索引番号と補正前の表記が両方一致する場合だけ適用し、元 CSV は変更しない。
+MOUNTAIN_NAME_REPAIRS = {
+    "199": ("薬?山", "薬萊山"),
+    "204-3": ("?風岳", "屛風岳"),
+    "226": ("?差岳", "朳差岳"),
+    "662": ("?風山", "屛風山"),
+}
 NATURAL_URL = "https://cyberjapandata.gsi.go.jp/xyz/experimental_nnfpt/15/{x}/{y}.geojson"
 DEM_URL = "https://cyberjapandata.gsi.go.jp/xyz/dem/14/{x}/{y}.txt"
 LICENSE = "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html"
@@ -79,6 +87,9 @@ def read_csv(payload):
             raise ValueError("山岳一覧の索引番号が不正または重複しています")
         seen.add(index)
         name, kana, aliases = name_parts(row["山名＜山頂名＞"], row["山名よみ＜山頂名よみ＞"])
+        repair = MOUNTAIN_NAME_REPAIRS.get(index)
+        if repair and name == repair[0]:
+            name = repair[1]
         points.append(point("gsi-mountain-list:" + index, name, kana, row["緯度"], row["経度"], float(row["標高値(m)"]), aliases))
     if not points:
         raise ValueError("山岳一覧が空です")

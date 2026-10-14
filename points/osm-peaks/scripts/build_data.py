@@ -114,7 +114,7 @@ def read_mountains(path):
                     "longitude": lon,
                     "elevationM": elevation,
                     "provenance": {"dataSource": "osm", "classification": "natural=" + tags["natural"],
-                                   "elevationSource": "osm" if elevation is not None else "unassigned"},
+                                   **({"elevationSource": "osm"} if elevation is not None else {})},
                     "nameReading": tags.get("name:ja-Hira", "").strip() or None,
                     "aliases": read_aliases(tags, name),
                     "wikipediaUrl": wikipedia_url(tags.get("wikipedia")),

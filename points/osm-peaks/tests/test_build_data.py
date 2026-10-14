@@ -69,7 +69,7 @@ class BuildDataTests(unittest.TestCase):
         self.assertAlmostEqual(304.8, mountains[1]["elevationM"])
         self.assertEqual("natural=volcano", mountains[1]["provenance"]["classification"])
         self.assertEqual("osm", mountains[1]["provenance"]["elevationSource"])
-        self.assertTrue(all(m["provenance"]["elevationSource"] == "unassigned" for m in mountains[2:]))
+        self.assertTrue(all("elevationSource" not in m["provenance"] for m in mountains[2:]))
         self.assertEqual("標高不明の山", mountains[2]["name"])
         self.assertIsNone(mountains[2]["elevationM"])
 

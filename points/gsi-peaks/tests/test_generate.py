@@ -55,6 +55,15 @@ class GenerationTests(unittest.TestCase):
         self.assertNotIn("osmId", result)
         self.assertEqual(35, result["latitude"])
 
+    def test_confirmed_csv_question_marks_are_repaired(self):
+        for index, original, corrected in [('199', '薬?山', '薬萊山'), ('204-3', '?風岳', '屛風岳'),
+                                           ('226', '?差岳', '朳差岳'), ('662', '?風山', '屛風山')]:
+            p = read_csv(mountain_csv(name=original, index=index))[0]
+            self.assertEqual(p['name'], corrected)
+            self.assertEqual(p['id'], 'gsi-mountain-list:' + index)
+        self.assertEqual(read_csv(mountain_csv(name='別の山', index='199'))[0]['name'], '別の山')
+        self.assertEqual(read_csv(mountain_csv(name='薬?山', index='200'))[0]['name'], '薬?山')
+
     def test_invalid_csv_fails(self):
         for payload in (b"wrong,columns", mountain_csv(index="../1"), mountain_csv(elevation="NaN"),
                         mountain_csv(lat="91"), mountain_csv(kana="漢字")):

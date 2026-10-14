@@ -187,8 +187,10 @@ def main():
     for p in points:
         source = "mountainList" if p["id"].startswith("gsi-mountain-list:") else "natural" if p["id"].startswith("gsi-natural:") else "vector"
         p["provenance"] = {"dataSource": source,
-                           "classification": codes.get(p["id"], mountain_codes.get(p["id"], "山（自然地名）" if source == "natural" else "peak")),
-                           "elevationSource": "mountainList" if source == "mountainList" else height_sources.get(p["id"], "unassigned")}
+                           "classification": codes.get(p["id"], mountain_codes.get(p["id"], "山（自然地名）" if source == "natural" else "peak"))}
+        elevation_source = "mountainList" if source == "mountainList" else height_sources.get(p["id"])
+        if elevation_source is not None:
+            p["provenance"]["elevationSource"] = elevation_source
     report = {"pointCount": len(points), "primarySource": "optimal_bvmap-v1", "vectorAnnotationCount": len(records),
               "vectorPointCount": comparison["vectorPointCount"], "fallbackCount": len(comparison["fallbackIds"]),
               "readingCount": sum(bool(p["nameReading"]) for p in points), "elevationCount": sum(p["elevationM"] is not None for p in points),
