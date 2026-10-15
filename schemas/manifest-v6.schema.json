@@ -4,6 +4,7 @@
   "description": "リポジトリ共通の配布情報。地点データでは $defs/pointManifest を使用する。日時の前後関係と本体の整合性は別途検証する。",
   "type": "object",
   "required": [
+    "schemaFormat",
     "schemaVersion",
     "version",
     "downloadUrl",
@@ -12,9 +13,15 @@
     "sizeBytes",
     "uncompressedSizeBytes",
     "metadata",
-    "dataTimestamp"
+    "dataTimestamp",
+    "dataSchemaFormat",
+    "dataSchemaVersion"
   ],
   "properties": {
+    "schemaFormat": {
+      "type": "string",
+      "const": "yamamuki-manifest"
+    },
     "schemaVersion": {
       "const": 6,
       "type": "integer"
@@ -44,6 +51,11 @@
       "type": "integer",
       "minimum": 1
     },
+    "dataSchemaFormat": {
+      "type": "string",
+      "pattern": "^\\S(?:.*\\S)?$",
+      "description": "データ本体のschemaFormatと同じ値。manifest自身のschemaFormatとは独立。"
+    },
     "dataSchemaVersion": {
       "type": "integer",
       "minimum": 1,
@@ -61,7 +73,7 @@
       ],
       "properties": {
         "sources": {
-          "minProperties": 1
+          "minItems": 1
         }
       }
     },
@@ -85,6 +97,9 @@
               "required": [
                 "pointCount"
               ]
+            },
+            "dataSchemaFormat": {
+              "const": "yamamuki-points"
             }
           }
         }

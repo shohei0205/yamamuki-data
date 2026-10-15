@@ -1,5 +1,6 @@
 import hashlib
 from scripts.point_document import ordered_point
+from document_metadata import distributed_point
 from scripts.supplements import supplement_document
 """補足の適用・由来の保持・配布ファイルの再現性を検査する。"""
 from copy import deepcopy
@@ -33,6 +34,8 @@ def legacy_companions(directory, original, data, manifest):
     return companion
 
 
+from document_metadata import metadata_maps
+
 class SupplementTests(unittest.TestCase):
     def setUp(self):
         self.points = [{"id":"1","osmId":1,"name":"元の山","nameReading":"誤り","aliases":["旧別名","残す別名"],"latitude":35,"longitude":139},
@@ -51,8 +54,8 @@ class SupplementTests(unittest.TestCase):
         current=self.root/'current.json'
         current.write_text(json.dumps(exported),encoding='utf-8')
         self.assertEqual(read_supplements(current)['schemaVersion'],2)
-        current.write_text(json.dumps({'schemaVersion':2,'sources':{},'points':[]}),encoding='utf-8')
-        with self.assertRaises(ValueError):read_supplements(current)
+        current.write_text(json.dumps({'schemaFormat':'yamamuki-point-supplements','schemaVersion':2,'sources':{},'points':[]}),encoding='utf-8')
+        self.assertEqual(read_supplements(current)['points'],[])
 
     def test_id_targets_gsi_points_without_osm_ids(self):
         points = [{"id": "gsi-mountain-list:1", "name": "山", "tags": ["既存"]},
@@ -127,7 +130,7 @@ class SupplementTests(unittest.TestCase):
 
     def test_graphic_rejects_invalid_or_active_svg(self):
         svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"/>'
-        invalid = [{}, {'svg': 1}, {'svg': ''}, {'svg': svg, 'extra': 1}]
+        invalid = [{}, {'svg': 1}, {'svg': ''}]
         invalid += [{'svg': svg, 'scale': scale} for scale in (0, -1, True, '2', float('inf'))]
         invalid += [{'svg': svg.replace('/>', body + '</svg>')} for body in (
             '><script/>', '><image href="https://example.com/x"/>', '><path onclick="alert(1)"/>')]
@@ -153,17 +156,17 @@ class SupplementTests(unittest.TestCase):
 
     def test_tag_metadata_validation_and_distribution(self):
         from scripts.point_tags import validate_tag_metadata
-        info={'日本百名山':{'reading':'にほんひゃくめいざん'}, '読みなし':{}}
+        info={'日本百名山':{'nameReading':'にほんひゃくめいざん'}, '読みなし':{}}
         data={'schemaVersion':1,'tags':info,'points':[]}
         validate_supplements(data)
         self.assertEqual(apply_supplements(self.points,data),self.points)
-        for invalid in [None,[],{'タグ':{'reading':''}},{' タグ':{}},{'タグ':{'extra':1}},{'タグ':{'reading':None}}]:
+        for invalid in [None,[],{'タグ':{'nameReading':''}},{' タグ':{}},{'タグ':{'nameReading':None}}]:
             with self.subTest(invalid=invalid),self.assertRaises(ValueError):
                 validate_tag_metadata(invalid)
         with tempfile.TemporaryDirectory() as folder:
             manifest=write_distribution(self.points,Path(folder),'test','2026-10-14T00:00:00Z','2026-10-14T00:00:00Z',tag_metadata=info)
-            self.assertEqual(manifest['metadata'].get('tags',{}),info)
-            self.assertEqual(json.loads(gzip.decompress((Path(folder)/'osm-peaks.json.gz').read_bytes()))['metadata']['tags'],info)
+            self.assertEqual(metadata_maps(manifest['metadata']).get('tags',{}),info)
+            self.assertEqual(metadata_maps(json.loads(gzip.decompress((Path(folder)/'osm-peaks.json.gz').read_bytes()))['metadata'])['tags'],info)
             plain=write_distribution(self.points,Path(folder),'test','2026-10-14T00:00:00Z','2026-10-14T00:00:00Z')
             self.assertNotIn('tags',plain)
 
@@ -175,7 +178,7 @@ class SupplementTests(unittest.TestCase):
         self.assertEqual(base[0]['aliases'][0]['nameReading'],'旧読み')
         deleted=apply_supplements([result],{'schemaVersion':1,'points':[{'id':row['id'],'aliases':[{'name':'柴安嵓','nameReading':None}]}]})[0]
         self.assertIsNone(deleted['aliases'][0]['nameReading'])
-        for aliases in [None,{},[{'name':''}],[{'name':'柴安嵓','nameReading':''}],[{'name':'柴安嵓','extra':1}],[{'name':'柴安嵓'},{'name':'柴安嵓'}]]:
+        for aliases in [None,{},[{'name':''}],[{'name':'柴安嵓','nameReading':''}],[{'name':'柴安嵓'},{'name':'柴安嵓'}]]:
             with self.subTest(aliases=aliases),self.assertRaises(ValueError):
                 validate_supplements({'schemaVersion':1,'points':[{'id':row['id'],'aliases':aliases}]})
         with self.assertRaises(ValueError):
@@ -191,7 +194,7 @@ class SupplementTests(unittest.TestCase):
 
     def test_invalid_values_and_unknown_fields(self):
         for changed in [{'name':''},{'nameReading':''},{'nameReading':False},{'exclude':1},{'tags':['同じ','同じ']},{'aliases':[None]},
-                        {'aliasesRemove':['追加別名']},{'reason':1},{'references':{'name':['未登録']}},{'references':{'unknown':['資料']}},{'extra':1}]:
+                        {'aliasesRemove':['追加別名']},{'reason':1}]:
             with self.subTest(changed=changed):
                 data=deepcopy(self.data);data['points'][0].update(changed)
                 with self.assertRaises(ValueError):validate_supplements(data)
@@ -214,8 +217,8 @@ class SupplementTests(unittest.TestCase):
         self.assertEqual(manifest['fileName'],'osm-peaks.json.gz')
         self.assertEqual(manifest['downloadUrl'],download_url('test','stable'))
         with gzip.open(self.root/manifest['fileName'],'rt',encoding='utf-8') as stream:
-            self.assertEqual(json.load(stream)["points"],[ordered_point(p) for p in integrated])
-        with gzip.open(self.root/COMPANION_FILES[0],'rt',encoding='utf-8') as f:self.assertEqual(json.load(f)["points"],[ordered_point(p) for p in self.points])
+            self.assertEqual(json.load(stream)["points"],[distributed_point(p) for p in integrated])
+        with gzip.open(self.root/COMPANION_FILES[0],'rt',encoding='utf-8') as f:self.assertEqual(json.load(f)["points"],[distributed_point(p) for p in self.points])
         self.assertEqual({k:v for k,v in companion['sources'].items() if k != 'osm-peaks'},self.data['sources'])
         self.assertIn(manifest['version'],companion['supplements']['downloadUrl'])
         self.assertEqual(supplement_document(read_supplements(self.root/'supplements.json')),supplement_document(self.data))
@@ -264,7 +267,7 @@ class SupplementTests(unittest.TestCase):
         input_path.write_text(json.dumps(data,ensure_ascii=False),encoding='utf-8');points_path.write_text(json.dumps(self.points,ensure_ascii=False),encoding='utf-8')
         before=input_path.read_bytes();report,unresolved=complete_supplement(input_path,points_path,output_path)
         self.assertFalse(unresolved);self.assertEqual(input_path.read_bytes(),before)
-        actual=read_supplements(output_path);self.assertEqual(actual['points'][0]['osmId'],1);self.assertEqual(actual['points'][0]['tags'],['分類A','分類B']);self.assertEqual(actual['sources'],self.data['sources'])
+        actual=read_supplements(output_path);self.assertEqual(actual['points'][0]['id'],'osm:1');self.assertEqual(actual['points'][0]['tags'],['分類A','分類B']);self.assertEqual(actual['sources'],self.data['sources'])
 
     def test_fetch_companions_when_present_and_rejects_missing_asset(self):
         assets={'assets':[{'name':name} for name in COMPANION_FILES]}
@@ -279,7 +282,8 @@ class SupplementTests(unittest.TestCase):
         from scripts.supplements import validate_supplement_sources
         self.assertEqual(validate_supplement_sources({}), {})
         validate_supplement_sources({'資料': {'source': '資料 URL', 'license': 'CC0'}})
-        for sources in [None, [], {'': {}}, {' 資料': {}}, {'資料': []}, {'資料': {'tag': '分類'}}, {'資料': {'license': []}}]:
+        validate_supplement_sources({'資料': {'future': {'value': [1, None]}}})
+        for sources in [None, [], {'': {}}, {' 資料': {}}, {'資料': []}, {'資料': {'license': []}}]:
             with self.subTest(sources=sources), self.assertRaises(ValueError):
                 validate_supplement_sources(sources)
 
@@ -289,7 +293,7 @@ class SupplementTests(unittest.TestCase):
         path.write_text(json.dumps(self.data,ensure_ascii=False),encoding='utf-8')
         with patch('scripts.build_data.verified_source_url',return_value='https://example.com/source'), patch('scripts.build_data.subprocess.check_output',return_value='2026-10-01T00:00:00Z'), patch('scripts.build_data.subprocess.run'), patch('scripts.build_data.read_mountains',return_value=(deepcopy(self.points),'2026-10-01T00:00:00Z')):
             manifest=build(self.root/'source.pbf',self.root/'dist','test',supplements_path=path)
-        self.assertEqual({k:v for k,v in manifest['metadata']['sources'].items() if k != 'osm-peaks'},self.data['sources'])
+        self.assertEqual({k:v for k,v in metadata_maps(manifest['metadata'])["sources"].items() if k != 'osm-peaks'},self.data['sources'])
         self.assertNotIn('tagSources',manifest)
         with gzip.open(self.root/'dist/osm-peaks.json.gz','rt',encoding='utf-8') as f:
             integrated=json.load(f)

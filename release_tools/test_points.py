@@ -18,6 +18,7 @@ from scripts import release_data
 from scripts.graphics import validate_graphics
 from scripts.point_document import rows as document_rows, ordered_point
 from scripts.point_tags import validate_tags, validate_alias_readings
+from document_metadata import distributed_point, validate_point_identifiers
 
 
 def validate_rows(rows):
@@ -27,6 +28,7 @@ def validate_rows(rows):
     for row in rows:
         if not isinstance(row, dict):
             raise ValueError("地点がオブジェクトではありません")
+        validate_point_identifiers(row)
         identifier = row.get("id")
         if not isinstance(identifier, str) or not identifier.strip() or identifier in seen:
             raise ValueError("地点 ID が不正または重複しています")
@@ -54,7 +56,7 @@ def generate(version, directory):
         raise ValueError("版の形式が不正です")
     rows = json.loads((ROOT / "points/testdata/points.json").read_text(encoding="utf-8"))
     validate_rows(rows)
-    raw = (json.dumps({"schemaVersion":6,"metadata":{"pointCount":len(rows),"sources":{"testdata":{"license":"CC0-1.0","attribution":"山むきの動作確認用に作成した架空データ"}},"tags":{}},"points":[ordered_point(point) for point in rows]}, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+    raw = (json.dumps({"schemaFormat":"yamamuki-points","schemaVersion":6,"metadata":{"pointCount":len(rows),"sources":[{"name":"testdata","license":"CC0-1.0","attribution":"山むきの動作確認用に作成した架空データ"}],"tags":[]},"points":[distributed_point(point) for point in rows]}, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
     archive = gzip.compress(raw, mtime=0)
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)

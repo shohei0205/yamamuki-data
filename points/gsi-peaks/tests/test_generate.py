@@ -32,6 +32,8 @@ def natural(name="山", kana="やま", lat=35, lon=139, gaiji="0", kind="山", a
         "kana": kana, "gaijiFlg": gaiji, "Aname": alias}}]}, ensure_ascii=False).encode()
 
 
+from document_metadata import metadata_maps
+
 class GenerationTests(unittest.TestCase):
     def test_multiple_natural_readings_use_first_source_reading(self):
         points, skipped = read_natural(natural(name="蔵王山", kana="ざおうざん,ざおうさん"))
@@ -137,7 +139,7 @@ class GenerationTests(unittest.TestCase):
             self.assertEqual(original,(output/'gsi-peaks.json.gz').read_bytes())
             self.assertEqual(points,json.loads(gzip.decompress(original))["points"])
             self.assertEqual(hashlib.sha256(original).hexdigest(),manifest['sha256'])
-            self.assertEqual("PDL-1.0", manifest['metadata']['sources']['gsi-peaks']['license'].split()[0])
+            self.assertEqual("PDL-1.0", metadata_maps(manifest['metadata'])["sources"]['gsi-peaks']['license'].split()[0])
             self.assertNotIn('latestPointTimestamp',manifest)
             self.assertNotIn('sourceTimestamp',manifest)
             schema=json.loads((Path(__file__).resolve().parents[3]/'points/schemas/data-v5.schema.json').read_text(encoding='utf-8'))

@@ -13,19 +13,21 @@ from unittest.mock import patch
 from release_tools import gsi_peaks as target
 
 
+from document_metadata import metadata_maps
+
 class GsiReleaseTests(unittest.TestCase):
     def test_supplement_sources_survive_prepare_and_snapshot(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             _, manifest = target.prepare('test-supplements', root / 'release', 'dev')
-            expected = json.loads((target.DATA / 'supplements.json').read_bytes())['metadata']['sources']
-            self.assertEqual({k:v for k,v in manifest['metadata']['sources'].items() if not k.startswith('gsi-')}, expected)
-            self.assertEqual(json.loads((root / 'release' / target.FILE).read_bytes())['metadata']['tags']['日本百名山']['reading'],'にほんひゃくめいざん')
+            expected = metadata_maps(json.loads((target.DATA / 'supplements.json').read_bytes())['metadata'])['sources']
+            self.assertEqual({k:v for k,v in metadata_maps(manifest['metadata'])["sources"].items() if not k.startswith('gsi-')}, expected)
+            self.assertEqual(metadata_maps(json.loads((root / 'release' / target.FILE).read_bytes())['metadata'])['tags']['日本百名山']['nameReading'],'にほんひゃくめいざん')
             manifest['sourceFiles'] = [{'url': 'https://example.com/mountains.csv',
                                     'fetchedAt': '2026-10-14T00:00:00Z'}]
             (root / 'release/manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
             info = target.snapshot(root / 'release', root / 'staged')
-            self.assertFalse(set(expected) & info['sources'].keys())
+            self.assertFalse(set(expected) & metadata_maps({'sources':info['sources']})['sources'].keys())
             self.assertEqual(manifest['metadata']['tags'], json.loads((root/'release'/target.FILE).read_bytes())['metadata']['tags'])
             self.assertNotIn('tags', info)
 
@@ -85,7 +87,7 @@ class GsiReleaseTests(unittest.TestCase):
             self.assertEqual(manifest['inputSha256'], hashlib.sha256((target.DATA / target.SOURCE_FILE).read_bytes()).hexdigest())
             self.assertEqual(tag, 'gsi-peaks-dev-test-1')
             self.assertIn('/gsi-peaks-dev-test-1/', manifest['downloadUrl'])
-            self.assertIn('国土地理院', manifest['metadata']['sources']['gsi-peaks']['attribution'])
+            self.assertIn('国土地理院', metadata_maps(manifest['metadata'])["sources"]['gsi-peaks']['attribution'])
             again=target.prepare('test-1', root, 'dev')[1]
             self.assertRegex(again.pop('dataTimestamp'), r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
             self.assertEqual({k:v for k,v in manifest.items() if k != 'dataTimestamp'}, again)
@@ -98,7 +100,7 @@ class GsiReleaseTests(unittest.TestCase):
             root = Path(folder)
             source, staged = root / 'generated', root / 'staged'
             _, manifest = target.prepare('test-1', source, 'dev')
-            manifest['sourceFiles'] = [{'url': manifest['metadata']['sources']['gsi-peaks']['source'], 'fetchedAt': '2026-10-12T04:00:00Z'}]
+            manifest['sourceFiles'] = [{'url': metadata_maps(manifest['metadata'])["sources"]['gsi-peaks']['source'], 'fetchedAt': '2026-10-12T04:00:00Z'}]
             (source / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
             target.snapshot(source, staged)
             target.prepare('test-2', root / 'release', 'dev', staged)

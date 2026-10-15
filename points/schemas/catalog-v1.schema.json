@@ -6,7 +6,7 @@
     "schemaVersion",
     "datasets"
   ],
-  "additionalProperties": false,
+  "additionalProperties": true,
   "properties": {
     "schemaVersion": {
       "type": "integer",
@@ -20,7 +20,7 @@
           "id",
           "manifestUrl"
         ],
-        "additionalProperties": false,
+        "additionalProperties": true,
         "properties": {
           "id": {
             "type": "string",
@@ -106,6 +106,14 @@
                 "type": "string",
                 "format": "date-time",
                 "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+              },
+              "schemaFormat": {
+                "const": "yamamuki-manifest",
+                "type": "string"
+              },
+              "dataSchemaFormat": {
+                "type": "string",
+                "pattern": "^\\S(?:.*\\S)?$"
               }
             },
             "additionalProperties": true,
@@ -121,7 +129,10 @@
                 "then": {
                   "required": [
                     "metadata",
-                    "dataTimestamp"
+                    "dataTimestamp",
+                    "schemaFormat",
+                    "dataSchemaFormat",
+                    "dataSchemaVersion"
                   ],
                   "not": {
                     "anyOf": [

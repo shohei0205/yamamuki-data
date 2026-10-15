@@ -4,19 +4,19 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from document_metadata import FIELDS, validate_metadata, ordered_point, alias_objects, source_entries
+from document_metadata import point_document_json, distributed_point, validate_point_identifiers, metadata_arrays, metadata_maps, FIELDS, validate_metadata, ordered_point, alias_objects, source_entries
 
 
 def document(points, tags=None, **metadata):
     info = {"schemaVersion":6, **metadata, "pointCount": len(points), "tags": {} if tags is None else tags}
     validate_metadata(info, len(points))
-    return {"schemaVersion":6, "metadata":{k:v for k,v in info.items() if k != "schemaVersion"}, "points":[ordered_point(point) for point in points]}
+    return {"schemaFormat":"yamamuki-points", "schemaVersion":6, "metadata":metadata_arrays({k:v for k,v in info.items() if k != "schemaVersion"}), "points":[distributed_point(point) for point in points]}
 
 
 def metadata_of(data):
     if not isinstance(data, dict):
         return {}
-    return data.get("metadata", {k:v for k,v in data.items() if k not in ("points","schemaVersion")})
+    return metadata_maps(data.get("metadata", {k:v for k,v in data.items() if k not in ("points","schemaVersion","schemaFormat")}))
 
 
 def rows(data, version=None):
@@ -25,12 +25,15 @@ def rows(data, version=None):
     if isinstance(data, list) and version != 6:
         return data
     if isinstance(data, dict) and version not in (1, 2, 3, 4, 5):
+        if data.get("schemaFormat") != "yamamuki-points":
+            raise ValueError("地点 JSON の schemaFormat が不正です")
+        data = {k:v for k,v in data.items() if k != "schemaFormat"}
         if "metadata" in data:
-            if set(data)-{"schemaVersion","metadata","points"} or not isinstance(data["metadata"],dict) or "schemaVersion" in data["metadata"]:
+            if not isinstance(data["metadata"],dict) or "schemaVersion" in data["metadata"]:
                 raise ValueError("地点 JSON の metadata の構造が不正です")
             data={**data["metadata"],"schemaVersion":data.get("schemaVersion"),"points":data.get("points")}
 
-        if set(data) - {"tags", "points", *FIELDS} or not isinstance(data.get("points"), list):
+        if not isinstance(data.get("points"), list):
             raise ValueError("版6の地点 JSON は points 配列を持つ object にしてください")
         if "schemaVersion" not in data:
             raise ValueError("版6の地点 JSON には schemaVersion が必要です")
@@ -38,6 +41,9 @@ def rows(data, version=None):
         for point in data["points"]:
             if not isinstance(point, dict) or "aliasReadings" in point:
                 raise ValueError("版6では aliasReadings を使わず aliases に読みを格納してください")
+            if "osmId" in point:
+                raise ValueError("地点 JSON 版6では osmId を使わず relatedIds を指定してください")
+            validate_point_identifiers(point)
             alias_objects(point.get("aliases"), legacy=False)
         return data["points"]
     raise ValueError("地点 JSON の版と構造が一致しません")

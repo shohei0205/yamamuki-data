@@ -31,7 +31,7 @@
 | `datasets[].manifestUrl` | string | 必須 | 対応する最新版 manifest の HTTPS URL。ホスト名の後に `/` を持つ | [版1] 追加 |
 | `datasets[].manifest` | object | 新規生成では必須 | 公開する manifest のコピー。ダウンロードと検証に必要な情報を同梱する | [版1] 追加 |
 
-トップレベルと `datasets` の各要素には、上表にない項目を追加できない。同梱する `manifest` にはデータ種別ごとの追加項目を含められる。スキーマ上は `name` と `manifest` を省略できるが、新規生成のカタログには両方を必ず含める。`id` の重複はスキーマだけでは検出できないため、別途確認する。
+トップレベルと `datasets` の各要素に未知の項目を許可する。読み手は未知の項目を解釈しない。同梱する `manifest` にはデータ種別ごとの追加項目を含められる。スキーマ上は `name` と `manifest` を省略できるが、新規生成のカタログには両方を必ず含める。`id` の重複はスキーマだけでは検出できないため、別途確認する。
 
 ### 同梱する manifest
 
@@ -48,7 +48,7 @@
 | `uncompressedSizeBytes` | integer | 必須 | 正の整数。展開後の JSON のバイト数 | [版1] 追加 |
 | `license` | string | 必須 | 空でない利用条件の文字列 | [版1] 追加 |
 | `attribution` | string | 必須 | 空でない出典表示の文字列 | [版1] 追加 |
-| `dataSchemaVersion` | integer | 新規生成では必須 | データ本体の形式の版。正の整数 | [版1] 追加 |
+| `dataSchemaVersion` | integer | 必須 | データ本体の形式の版。正の整数 | [版1] 追加 |
 | `name` | string | 新規生成では必須 | 空白以外の文字を含む表示名 | [版1] 追加 |
 
 地点データの件数 `pointCount` なども、公開する manifest の内容をそのまま含める。共通項目の意味は [manifest フォーマット](../../formats/manifest.md)、地点固有の項目は [manifest の地点データ用の項目](../../formats/manifest.md#地点データ用の項目) を参照する。
@@ -56,6 +56,8 @@
 地点はデータセットの `id` と地点自身の `id` を組み合わせて識別する。山頂の表示名は正式版・開発版とも「山頂」とする。
 
 ## 読み込みと検証
+
+現行形式では、各 object に未知の項目を許可し、読み手はそれを解釈しない。既知の項目の型・必須条件・重複などの制約は維持する。
 
 1. 利用する配布先のカタログを取得し、カタログ自身の `schemaVersion` に対応していることを確認する。
 2. 各データの `manifest.schemaVersion` と `manifest.dataSchemaVersion` が、アプリの対応する版に含まれることを確認する。「現在の版以下」という比較では判定しない。データ本体の版が不明なら利用不可として扱い、manifest の版から推測しない。
@@ -76,11 +78,11 @@ URL の形式を検証するときは、JSON Schema の `format` の検査を有
 
 Pages を更新する公開・削除時に、サイト全体の manifest 一覧から自動生成し、他の地点データと配布先を引き継ぐ。manifest と同じ Pages 配置で更新し、配置後に一致を確認する。生成物は git に含めない。公開 URL と削除の操作手順は [地点データの README](../README.md#公開データのカタログ) を参照する。
 
-同梱 manifest が版6の場合、元データと補足の出典は `manifest.metadata.sources` にまとめる。トップレベルの `sourceUrl`・`license`・`attribution`・`supplementSources` は使わない。版5以前の同梱 manifest は従来の形式を保持する。
+同梱 manifest が版6の場合、`dataSchemaFormat` は取得するデータ本体の `schemaFormat` と一致させる。元データと補足の出典は `manifest.metadata.sources` にまとめる。トップレベルの `sourceUrl`・`license`・`attribution`・`supplementSources` は使わない。版5以前の同梱 manifest は従来の形式を保持する。
 
 ## JSON の例
 
-取得先は説明用の URL。同梱する manifest の版はカタログの版と独立しており、この例では manifest 版5を使う。
+取得先は説明用の URL。同梱する manifest の版はカタログの版と独立しており、この例では manifest 版6を使い、任意項目を含めて記載する。
 
 ### 版1
 
@@ -89,25 +91,49 @@ Pages を更新する公開・削除時に、サイト全体の manifest 一覧�
   "schemaVersion": 1,
   "datasets": [
     {
-      "id": "osm-peaks",
-      "name": "山頂",
-      "manifestUrl": "https://example.com/points/osm-peaks/manifest.json",
+      "id": "sample-points",
+      "name": "見本の地点データ",
+      "manifestUrl": "https://example.com/releases/example-v6/manifest.json",
       "manifest": {
-        "schemaVersion": 5,
-        "dataSchemaVersion": 5,
-        "name": "山頂",
-        "version": "20261007T071401Z-37585754546-1",
-        "fileName": "osm-peaks.json.gz",
-        "downloadUrl": "https://example.com/osm-peaks.json.gz",
-        "sha256": "01c732e53edd96840111cd17361f2a4d5484e1c2887606663c554377047ee7ee",
-        "sizeBytes": 505256,
-        "uncompressedSizeBytes": 3203003,
-        "pointCount": 14035,
-        "sourceTimestamp": "2026-10-06T20:21:06Z",
-        "latestPointTimestamp": "2026-10-06T19:13:49Z",
-        "sourceUrl": "https://download.geofabrik.de/asia/japan-261006.osm.pbf",
-        "license": "ODbL-1.0",
-        "attribution": "© OpenStreetMap contributors"
+        "schemaFormat": "yamamuki-manifest",
+        "schemaVersion": 6,
+        "dataSchemaFormat": "yamamuki-points",
+        "dataSchemaVersion": 6,
+        "name": "見本の地点データ",
+        "version": "example-v6",
+        "fileName": "sample-points.json.gz",
+        "downloadUrl": "https://example.com/releases/example-v6/sample-points.json.gz",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "sizeBytes": 1000,
+        "uncompressedSizeBytes": 5000,
+        "dataTimestamp": "2026-10-15T00:00:00Z",
+        "metadata": {
+          "sources": [
+            {
+              "source": "見本の地名資料 https://example.com/source",
+              "license": "CC BY 4.0 https://creativecommons.org/licenses/by/4.0/",
+              "attribution": "見本資料の著作者",
+              "changes": "地点名・座標・標高を抽出",
+              "lastestTimeStamp": "2026-10-14T00:00:00Z",
+              "name": "元資料"
+            },
+            {
+              "source": "見本の山名一覧 https://example.com/supplement",
+              "license": "CC0-1.0",
+              "attribution": "見本の補足資料の作成者",
+              "changes": "読み・別名・タグを追加",
+              "lastestTimeStamp": "2026-10-14T01:00:00Z",
+              "name": "補足資料"
+            }
+          ],
+          "tags": [
+            {
+              "name": "日本百名山",
+              "nameReading": "にほんひゃくめいざん"
+            }
+          ],
+          "pointCount": 1
+        }
       }
     }
   ]

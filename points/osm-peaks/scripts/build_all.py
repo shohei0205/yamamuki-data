@@ -31,7 +31,7 @@ def node_point(identifier, latitude, longitude, tags):
         info["classification"] = classification
     if elevation is not None:
         info["elevationSource"] = "osm"
-    return {"id": str(identifier), "osmId": identifier,
+    return {"id": f"osm:{identifier}",
             "type": "peak" if tags.get("natural") in ("peak", "volcano") else None,
             "name": name, "latitude": latitude, "longitude": longitude,
             "elevationM": elevation, "nameReading": tags.get("name:ja-Hira", "").strip() or None,

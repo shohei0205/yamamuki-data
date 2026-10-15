@@ -3,11 +3,16 @@
   "title": "単一の地点補足 JSON（版2）",
   "type": "object",
   "required": [
+    "schemaFormat",
     "schemaVersion",
     "points"
   ],
-  "additionalProperties": false,
+  "additionalProperties": true,
   "properties": {
+    "schemaFormat": {
+      "type": "string",
+      "const": "yamamuki-point-supplements"
+    },
     "schemaVersion": {
       "const": 2
     },
@@ -23,17 +28,12 @@
       "type": "array",
       "items": {
         "type": "object",
-        "additionalProperties": false,
+        "additionalProperties": true,
         "properties": {
           "id": {
-            "type": "string",
-            "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+            "$ref": "point-common-v1.schema.json#/$defs/id"
           },
-          "osmId": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 9007199254740991
-          },
+          "osmId": false,
           "note": {
             "type": "string"
           },
@@ -84,7 +84,7 @@
                   "pattern": "^\\S(?:.*\\S)?$"
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": true
             }
           },
           "aliasesRemove": {
@@ -100,7 +100,7 @@
           },
           "expected": {
             "type": "object",
-            "additionalProperties": false,
+            "additionalProperties": true,
             "properties": {
               "name": {
                 "type": [
@@ -134,8 +134,11 @@
                       "pattern": "^\\S(?:.*\\S)?$"
                     }
                   },
-                  "additionalProperties": false
+                  "additionalProperties": true
                 }
+              },
+              "relatedIds": {
+                "$ref": "point-common-v1.schema.json#/$defs/relatedIds"
               }
             }
           },
@@ -155,7 +158,7 @@
             "required": [
               "svg"
             ],
-            "additionalProperties": false,
+            "additionalProperties": true,
             "properties": {
               "svg": {
                 "type": "string",
@@ -169,6 +172,9 @@
                 "exclusiveMinimum": 0
               }
             }
+          },
+          "relatedIds": {
+            "$ref": "point-common-v1.schema.json#/$defs/relatedIds"
           }
         },
         "anyOf": [
@@ -211,19 +217,15 @@
             "required": [
               "graphic"
             ]
-          }
-        ],
-        "oneOf": [
-          {
-            "required": [
-              "id"
-            ]
           },
           {
             "required": [
-              "osmId"
+              "relatedIds"
             ]
           }
+        ],
+        "required": [
+          "id"
         ]
       }
     }

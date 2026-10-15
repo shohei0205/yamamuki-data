@@ -14,7 +14,8 @@ class LargeViewerTests(unittest.TestCase):
         labels='const sourceLabels='+page.split('const sourceLabels=',1)[1].split('function refreshProvenanceFilters()',1)[0]
         validation='function validateAliasReadings('+page.split('function validateAliasReadings(',1)[1].split('function parseSupplement(',1)[0]
         parser='function entriesFromJson('+page.split('function entriesFromJson(',1)[1].split('const fileInput=',1)[0]
-        parser=validation+parser
+        worker_dependencies="\n".join(next(line for line in page.splitlines() if line.startswith("function "+name+"(")) for name in ("validateRelatedIds","supplementKey"))
+        parser=worker_dependencies+"\n"+validation+parser
         checks=r"""
 const assert=require('node:assert/strict'),vm=require('node:vm'),zlib=require('node:zlib');
 let terminated=0;
@@ -97,10 +98,15 @@ globalThis.Worker=class{
   const progress=[];const entries=await readPointFile(blob,entriesFromJson,count=>progress.push(count));assert.deepEqual(progress,[0,1]);assert.equal(entries.length,1);assert.equal(entries[0].elevation,null);assert.equal(entries[0].source.type,null);assert.equal(entries[0].source.provenance.classification,'661');assert.ok(pointSearchText(entries[0]).includes('男体山御本殿'));
  }
  await assert.rejects(()=>readPointFile(new Blob([JSON.stringify([raw[0],raw[0]])])),/重複/);
- await assert.rejects(()=>readPointFile(new Blob(['{}'])),/配列|schemaVersion/);
+ await assert.rejects(()=>readPointFile(new Blob(['{}'])),/配列|schemaVersion|schemaFormat/);
  for(const partial of [{},{dataSource:'vector'},{classification:'661'},{elevationSource:'osm'}]){const entries=await readPointFile(new Blob([JSON.stringify([{...raw[0],provenance:partial}])]));const info=provenanceOf(entries[0]);assert.equal(info.dataSource,partial.dataSource??'unknown');assert.equal(info.classification,partial.classification??'unknown');assert.equal(info.elevationSource,partial.elevationSource??'unknown');}
- for(const invalid of [{dataSource:null},{dataSource:''},{dataSource:' osm '},{extra:'osm'}])await assert.rejects(()=>readPointFile(new Blob([JSON.stringify([{...raw[0],provenance:invalid}])])),/provenance/);
+ for(const invalid of [{dataSource:null},{dataSource:''},{dataSource:' osm '},{dataSource:123}])await assert.rejects(()=>readPointFile(new Blob([JSON.stringify([{...raw[0],provenance:invalid}])])),/provenance/);
  assert.equal(terminated,13);
+ const current={schemaFormat:'yamamuki-points',schemaVersion:6,metadata:{pointCount:1,sources:[{name:'gsi-peaks',source:'https://example.com/source',license:'PDL-1.0'}],tags:[{name:'日本百名山',nameReading:'にほんひゃくめいざん'}]},points:[{...raw[0],id:'gsi-vector:sample',relatedIds:['osm:123']}]};
+ for(const blob of [new Blob([JSON.stringify(current)]),new Blob([zlib.gzipSync(JSON.stringify(current))])]){
+  const entries=await readPointFile(blob);assert.equal(entries.length,1);assert.equal(entries.metadata.sources['gsi-peaks'].license,'PDL-1.0');assert.equal(entries.metadata.tags['日本百名山'].nameReading,'にほんひゃくめいざん');assert.equal(entries[0].relatedIds[0],'osm:123');
+ }
+ assert.equal(terminated,15);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
         rendering=page.split('function renderLargeRows(){',1)[1].split('function refreshLargeMap(){',1)[0]

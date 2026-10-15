@@ -42,9 +42,15 @@ def validate(directory, *, tag=None, channel="stable"):
         validate_supplement_sources(manifest["supplementSources"])
     original_manifest = manifest
     if manifest.get("schemaVersion") == 6:
-        from document_metadata import validate_metadata, FIELDS
+        from document_metadata import metadata_maps, validate_metadata, FIELDS
+        if "dataSchemaVersion" not in manifest:
+            raise ValueError("manifest 版6には dataSchemaVersion が必要です")
         if any(k in manifest for k in ("sourceUrl", "license", "attribution", "supplementSources", "sources", "tags", "pointCount", "latestPointTimestamp", "sourceTimestamp")):
             raise ValueError("manifest 版6の共通情報は metadata にまとめてください")
+        if manifest.get("schemaFormat") != "yamamuki-manifest":
+            raise ValueError("manifest の schemaFormat が不正です")
+        if manifest.get("dataSchemaFormat") != "yamamuki-points":
+            raise ValueError("地点 manifest の dataSchemaFormat が不正です")
         stamp = manifest.get("dataTimestamp")
         if not isinstance(stamp, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", stamp):
             raise ValueError("dataTimestamp は UTC の生成日時にしてください")
@@ -55,7 +61,7 @@ def validate(directory, *, tag=None, channel="stable"):
         validate_metadata(info)
         if not info.get("sources"):
             raise ValueError("出典情報がありません")
-        manifest = {**manifest, **info}
+        manifest = {**manifest, **metadata_maps(info)}
     count_key = "pointCount" if manifest.get("schemaVersion",0) >= 5 else "mountainCount"
     for key in (count_key, "sizeBytes", "uncompressedSizeBytes"):
         if type(manifest.get(key)) is not int or manifest[key] <= 0:
@@ -98,6 +104,8 @@ def validate(directory, *, tag=None, channel="stable"):
     if len(raw) > MAX_UNCOMPRESSED_BYTES or len(raw) != manifest.get("uncompressedSizeBytes"):
         raise ValueError("展開後のサイズが不正です")
     body = json.loads(raw)
+    if original_manifest["schemaVersion"] >= 6 and isinstance(body, dict) and manifest["dataSchemaFormat"] != body.get("schemaFormat"):
+        raise ValueError("manifest の dataSchemaFormat とデータ本体の schemaFormat が一致しません")
     rows = document_rows(body, data_version)
     info = metadata_of(body)
     if data_version == 6 and original_manifest.get("schemaVersion") == 6 and body.get("metadata", {}) != original_manifest.get("metadata"):
@@ -118,7 +126,7 @@ def validate(directory, *, tag=None, channel="stable"):
             raise ValueError("山データがオブジェクトではありません")
         if data_version >= 5:
             identifier = row.get("id")
-            valid_id = isinstance(identifier, str) and re.fullmatch(r"[1-9][0-9]*", identifier)
+            valid_id = isinstance(identifier, str) and re.fullmatch(r"osm:[1-9][0-9]*" if data_version >= 6 else r"[1-9][0-9]*", identifier)
         else:
             identifier = row.get("osmId")
             valid_id = type(identifier) is int and identifier > 0
@@ -132,7 +140,7 @@ def validate(directory, *, tag=None, channel="stable"):
             osm_id = row["osmId"]
             if type(osm_id) is not int or osm_id <= 0:
                 raise ValueError("osmId は正の整数で指定してください")
-            if identifier != str(osm_id):
+            if identifier != (f"osm:{osm_id}" if data_version >= 6 else str(osm_id)):
                 raise ValueError("山頂の id と osmId が一致しません")
         if not isinstance(row.get("name"), str) or not row["name"].strip():
             raise ValueError("山の名前がありません")

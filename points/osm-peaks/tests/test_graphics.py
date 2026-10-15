@@ -22,7 +22,7 @@ class GraphicsTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.output = self.root / "dist"
-        self.rows = [{"id": "1", "type": "peak", "name": "富士山", "latitude": 35,
+        self.rows = [{"id": "osm:1", "type": "peak", "name": "富士山", "latitude": 35,
                       "longitude": 139, "graphic": {"svg": SVG.decode("utf-8"), "scale": 1.5}}]
 
     def generate(self, channel="stable"):
@@ -30,7 +30,7 @@ class GraphicsTests(unittest.TestCase):
                                   "2026-09-29T12:00:00Z", channel=channel)
 
     def test_null_optional_fields_round_trip(self):
-        for key in ("osmId", "type", "elevationM", "nameReading", "aliases", "tags", "wikipediaUrl", "wikidataUrl", "graphic"):
+        for key in ("type", "elevationM", "nameReading", "aliases", "tags", "wikipediaUrl", "wikidataUrl", "graphic"):
             self.rows[0][key] = None
         self.generate()
         self.assertEqual(validate(self.output)[1], self.rows)

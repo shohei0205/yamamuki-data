@@ -32,9 +32,9 @@ tables.set('分類',table(1,'自由なメモ\n改行も可'));assert.equal(apply
 const edited=applyTagEdits(result.entries,new Map([[0,{add:new Set(['手動']),remove:new Set(['既存'])}]]));
 assert.deepEqual(edited[0].tags,['分類','手動']);assert.deepEqual(original.tags,['既存']);
 const mountains=[{osmId:'1',pointName:'羊蹄山',latitude:42,longitude:140,source:{aliases:['蝦夷富士']}},{osmId:'2',pointName:'同名山',latitude:35,longitude:139},{osmId:'3',pointName:'同名山',latitude:36,longitude:140}];
-for(const text of ['羊蹄山','1','1,羊蹄山','羊蹄山,1','#osmId,name\n,羊蹄山','#osmId,name\n,羊蹄山','name\n蝦夷富士','osmId\n1','#name\tosmId\n羊蹄山\t1']){const completed=completeTagList(text,mountains);assert.deepEqual(completed.issues,[]);assert.deepEqual(completed.mappings,[{osmId:'1',name:'羊蹄山'}]);}
+for(const text of ['羊蹄山','1','1,羊蹄山','羊蹄山,1','#osmId,name\n,羊蹄山','#osmId,name\n,羊蹄山','name\n蝦夷富士','osmId\n1','#name\tosmId\n羊蹄山\t1']){const completed=completeTagList(text,mountains);assert.deepEqual(completed.issues,[]);assert.deepEqual(completed.mappings,[{id:'osm:1',name:'羊蹄山'}]);}
 for(const text of ['不明山','999','1,違う山','1\n羊蹄山','0','#osmId,name\n1','osmId\n1.5'])assert.ok(completeTagList(text,mountains).issues.length,text);
-const multiple=completeTagList('同名山',mountains);assert.deepEqual(multiple.issues,[]);assert.deepEqual(multiple.mappings,[{osmId:'2',name:'同名山'},{osmId:'3',name:'同名山'}]);assert.equal(multiple.reviews[0].includedCount,2);assert.ok(completeTagList('同名山\n2',mountains).issues.length);
+const multiple=completeTagList('同名山',mountains);assert.deepEqual(multiple.issues,[]);assert.deepEqual(multiple.mappings,[{id:'osm:2',name:'同名山'},{id:'osm:3',name:'同名山'}]);assert.equal(multiple.reviews[0].includedCount,2);assert.ok(completeTagList('同名山\n2',mountains).issues.length);
 const review=completeTagList('同名山\n1,違う山\n999',mountains).reviews;assert.equal(review.length,3);assert.deepEqual(review[0].candidates.map(p=>p.osmId),['2','3']);assert.equal(review[1].osmId,'1');assert.equal(review[1].name,'違う山');assert.equal(review[1].candidates[0].pointName,'羊蹄山');assert.equal(review[2].osmId,'999');assert.equal(review[2].candidates.length,0);
 assert.throws(()=>completeTagList('',mountains));assert.throws(()=>completeTagList('name',mountains));
 assert.equal(mappingListText([{osmId:'1',name:'山,"一'}]),'#osmId,name\n1,"山,""一"\n');
@@ -66,6 +66,7 @@ window.showSaveFilePicker=async value=>{options=value;return{createWritable:asyn
 assert.equal(await saveFile('分類.json','{}\n','application/json;charset=utf-8'),'saved');assert.equal(options.suggestedName,'分類.json');assert.deepEqual(options.types[0].accept,{'application/json':['.json']});assert.equal(written,'{}\n');assert.equal(closed,true);
 window.showSaveFilePicker=async()=>{throw new DOMException('cancel','AbortError');};assert.equal(await saveFile('x.json','{}\n','application/json'),null);assert.match(status.textContent,/キャンセル/);assert.equal(clicked,false);
 let aborted=false;window.showSaveFilePicker=async()=>({createWritable:async()=>({write:async()=>{throw Error('失敗');},abort:async()=>aborted=true})});assert.equal(await saveFile('x.json','{}\n','application/json'),null);assert.equal(aborted,true);assert.match(status.textContent,/失敗/);assert.equal(saving,false);
+window.showSaveFilePicker=async()=>{throw Error('ダウンロード時は保存ダイアログを開かない');};assert.equal(await saveFile('x.json','{}\n','application/json',true),'download');assert.equal(clicked,true);clicked=false;
 window.showSaveFilePicker=undefined;assert.equal(await saveFile('x.json','{}\n','application/json'),'download');assert.equal(clicked,true);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 '''
@@ -111,8 +112,8 @@ const points=[{osmId:'1',tags:['分類']},{osmId:'2',tags:['分類']},{osmId:'3'
 const tagTables=new Map([['分類',{mappings:[{osmId:'2'}]}]]),tagEdits=new Map();
 assert.deepEqual(tagFilterOptions(),[['tag:分類','分類']]);
 assert.deepEqual([...tagFilterIndex.get('tag:分類')],[0,1]);assert.deepEqual([...tagFilterIndex.get('supplemented')],[]);points[2].supplement={nameReading:'やま'};tagFilterOptions();assert.deepEqual([...tagFilterIndex.get('supplemented')],[2]);assert.equal(matchesTagFilter(2,'supplemented'),true);assert.equal(matchesTagFilter(0,'supplemented'),false);assert.deepEqual([...tagFilterIndex.get('untagged')],[2]);
-let supplementDocument={tags:{'分類':{reading:'ぶんるい'}}};points[1].tags=[];tagFilterOptions();assert.deepEqual([...tagFilterIndex.get('tag:分類')],[0]);
-points[2].tags=['分類'];tagEdits.set(2,{add:new Set(['分類'])});tagFilterOptions();assert.deepEqual([...tagFilterIndex.get('tag:分類')],[0,2]);points[0].tags=[];points[2].tags=[];assert.deepEqual(tagFilterOptions(),[]);assert.equal(tagFilterIndex.has('tag:分類'),false);points[0].tags=['日本百名山','北海道百名山','九州百名山','関東百名山','信州百名山','東北百名山','読みなし'];supplementDocument.tags=Object.fromEntries([['関東','かんとう'],['九州','きゅうしゅう'],['信州','しんしゅう'],['東北','とうほく'],['日本','にほん'],['北海道','ほっかいどう']].map(([name,reading])=>[name+'百名山',{reading:reading+'ひゃくめいざん'}]));assert.deepEqual(tagFilterOptions().map(row=>row[1]),['関東百名山','九州百名山','信州百名山','東北百名山','日本百名山','北海道百名山','読みなし']);
+let supplementDocument={tags:{'分類':{nameReading:'ぶんるい'}}};points[1].tags=[];tagFilterOptions();assert.deepEqual([...tagFilterIndex.get('tag:分類')],[0]);
+points[2].tags=['分類'];tagEdits.set(2,{add:new Set(['分類'])});tagFilterOptions();assert.deepEqual([...tagFilterIndex.get('tag:分類')],[0,2]);points[0].tags=[];points[2].tags=[];assert.deepEqual(tagFilterOptions(),[]);assert.equal(tagFilterIndex.has('tag:分類'),false);points[0].tags=['日本百名山','北海道百名山','九州百名山','関東百名山','信州百名山','東北百名山','読みなし'];supplementDocument.tags=Object.fromEntries([['関東','かんとう'],['九州','きゅうしゅう'],['信州','しんしゅう'],['東北','とうほく'],['日本','にほん'],['北海道','ほっかいどう']].map(([name,reading])=>[name+'百名山',{nameReading:reading+'ひゃくめいざん'}]));assert.deepEqual(tagFilterOptions().map(row=>row[1]),['関東百名山','九州百名山','信州百名山','東北百名山','日本百名山','北海道百名山','読みなし']);
 """
         result = subprocess.run([shutil.which("node"), "-"], input=(source + checks).encode("utf-8"), capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))

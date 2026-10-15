@@ -71,9 +71,10 @@ def read_tag_json(path, *, complete=False):
 
 
 def index_points(points):
+    from document_metadata import osm_node_id
     by_id, by_name = {}, {}
     for point in points:
-        identifier = point.get("osmId")
+        identifier = osm_node_id(point)
         if identifier is None:
             continue
         if type(identifier) is not int or identifier <= 0 or identifier in by_id:
@@ -116,6 +117,7 @@ def apply_tag_jsons(points, directory=DEFAULT_TAGS_DIRECTORY):
     return sources
 
 def complete_rows(rows, points):
+    from document_metadata import osm_node_id
     by_id, by_name = index_points(points)
     completed, report, used = [], [], set()
     unresolved = False
@@ -135,7 +137,7 @@ def complete_rows(rows, points):
         else:
             candidates = by_name.get(row["note"], [])
             if len(candidates) == 1:
-                row["osmId"] = str(candidates[0]["osmId"])
+                row["osmId"] = str(osm_node_id(candidates[0]))
                 status = "osmId を補完"
             else:
                 status = "候補が複数あります" if candidates else "山名が見つかりません"
@@ -198,7 +200,7 @@ def main():
     for row, status, candidates in report:
         print(f"{row['osmId']},{row['note']}: {status}")
         for point in candidates:
-            print(f"  {point['osmId']},{point['name']}")
+            print(f"  {point.get('osmId',point.get('id'))},{point['name']}")
     if unresolved:
         parser.exit(1, "未解決の行があります。照合結果を確認してください。\n")
 

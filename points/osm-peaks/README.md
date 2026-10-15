@@ -46,7 +46,7 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 
 ## ID の作り方と維持方針
 
-`id` は OSM ノード番号を先頭に 0 を付けない文字列にする。`osmId` にも同じノード番号を数値で出力する（例: `id` が `"123456"`、`osmId` が `123456`）。
+地点 JSON 版6の `id` は `osm:<ノード番号>` とする（例: `osm:123456`）。`osmId` は版6で廃止する。他の地点との関連付けには `relatedIds` を使う。山頂版と名前付きノードの全部入り版では、同じノードに同じ ID を使う。版5以前の `id` は接頭辞のない数値文字列。
 
 同じ OSM ノードなら、名前や位置が更新されても ID を維持する。OSM 上で別のノードに置き換わると、同じ山でも ID が変わる。[地点データの共通仕様](../formats/data.md#id-とデータセット)に従い、ID の維持は努力義務とし、永続性を保証しない。
 
@@ -243,7 +243,7 @@ OpenStreetMap 由来のデータは **© OpenStreetMap contributors** を表示�
 
 ## 地点の補足対応表
 
-[supplements.json](supplements.json) 一つで全タグと補正を管理する。生成時は `id` または `osmId` で対応付け、タグの追記・表示名とよみがなの補正・別名の追加と削除・地点の除外を適用する。`--supplements` で別のファイルを指定できる。不正値・未知の ID・重複 ID・想定値の不一致は生成エラーにする。修正理由と管理用メモは補足ファイルに保持し、統合した地点データには注入しない。
+[supplements.json](supplements.json) 一つで全タグと補正を管理する。生成時は `id` で対応付け、タグの追記・表示名とよみがなの補正・別名の追加と削除・地点の除外を適用する。`--supplements` で別のファイルを指定できる。不正値・未知の ID・重複 ID・想定値の不一致は生成エラーにする。修正理由と管理用メモは補足ファイルに保持し、統合した地点データには注入しない。
 
 日本百名山の 100 地点も同じ補足 JSON に収録する。共通形式は [補足データフォーマット](../formats/supplements-data.md)、編集操作は [ビューアの編集手順](../README.md#補足を編集する) を参照する。
 
@@ -253,7 +253,7 @@ OpenStreetMap 由来のデータは **© OpenStreetMap contributors** を表示�
 PYTHONPATH=points/osm-peaks python -m scripts.supplements points/osm-peaks/supplements.json --points osm-peaks-source.json.gz --output points/osm-peaks/build/supplements.json
 ```
 
-`id` を指定した行は、その指定を保って検証する。`id` も osmId もない行では `note` の山名・別名を完全一致で照合して osmId を補う。osmId があり `note` が空なら地点名をメモに補う。候補が複数ある場合は未解決とし、終了コード 1 を返す。形式の不備は終了コード 2。入力は変更せず、補足・補正・出典情報を出力へ引き継ぐ。補完には補足適用前の元データを使う。
+`id` を指定した行は、その指定を保って検証する。`id` も osmId もない行では `note` の山名・別名を完全一致で照合して osmId を補う。osmId があり `note` が空なら地点名をメモに補う。旧形式で入力した `osmId` は、保存時に `id: "osm:<ノード番号>"` へ変換する。候補が複数ある場合は未解決とし、終了コード 1 を返す。形式の不備は終了コード 2。入力は変更せず、補足・補正・出典情報を出力へ引き継ぐ。補完には補足適用前の元データを使う。
 
 ### 出典の管理
 

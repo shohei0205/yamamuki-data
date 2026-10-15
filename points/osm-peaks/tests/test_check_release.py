@@ -10,11 +10,12 @@ import unittest
 
 from scripts.build_data import FILE_NAME, write_distribution
 from scripts.check_release import assess, validate
+from document_metadata import metadata_maps
 
 
 def dataset(count=10000, latitude=35):
     return ({"version": "test", "schemaVersion": 2, "sourceTimestamp": "2026-09-29T20:22:51Z"},
-            [{"id": str(i + 1), "name": "山", "latitude": latitude, "longitude": 139,
+            [{"id": f"osm:{i + 1}", "name": "山", "latitude": latitude, "longitude": 139,
               "elevationM": None, "nameReading": None, "aliases": [], "wikipediaUrl": None,
               "wikidataUrl": None} for i in range(count)])
 
@@ -108,7 +109,7 @@ class CheckReleaseTests(unittest.TestCase):
             original = json.loads(path.read_text(encoding="utf-8"))
             for value in (None, "bad", "2026-09-29T12:00:00", "2026-09-30T00:00:00Z"):
                 with self.subTest(value=value):
-                    manifest = {**original, "metadata": {**original["metadata"], "sources": {**original["metadata"]["sources"], "osm-peaks": {**original["metadata"]["sources"]["osm-peaks"], "lastestTimeStamp": value}}}}
+                    manifest = {**original, "metadata": {**original["metadata"], "sources": {**metadata_maps(original["metadata"])["sources"], "osm-peaks": {**metadata_maps(original["metadata"])["sources"]["osm-peaks"], "lastestTimeStamp": value}}}}
                     path.write_text(json.dumps(manifest), encoding="utf-8")
                     with self.assertRaises(ValueError):
                         validate(root)
@@ -132,6 +133,30 @@ class CheckReleaseTests(unittest.TestCase):
             path.write_text(json.dumps(original), encoding="utf-8")
             self.assertEqual(2, validate(root)[0]["schemaVersion"])
 
+    def test_manifest_data_schema_format_is_required(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            manifest=write_distribution(dataset(1)[1],root,'test','2026-09-29T20:22:51Z','2026-09-29T12:00:00Z')
+            self.assertEqual(manifest['dataSchemaFormat'],'yamamuki-points')
+            for value in (None,'yamamuki-manifest','yamamuki-point-supplements',123):
+                changed=dict(manifest)
+                if value is None:changed.pop('dataSchemaFormat')
+                else:changed['dataSchemaFormat']=value
+                (root/'manifest.json').write_text(json.dumps(changed),encoding='utf-8')
+                with self.subTest(value=value),self.assertRaises(ValueError):validate(root)
+
+    def test_manifest_schema_format_is_required(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            manifest=write_distribution(dataset(1)[1],root,'test','2026-09-29T20:22:51Z','2026-09-29T12:00:00Z')
+            self.assertEqual(manifest['schemaFormat'],'yamamuki-manifest')
+            for value in (None,'yamamuki-points','yamamuki-point-supplements',123):
+                changed=dict(manifest)
+                if value is None:changed.pop('schemaFormat')
+                else:changed['schemaFormat']=value
+                (root/'manifest.json').write_text(json.dumps(changed),encoding='utf-8')
+                with self.subTest(value=value),self.assertRaises(ValueError):validate(root)
+
     def test_data_timestamp_is_required_and_rejects_invalid_dates(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
@@ -147,6 +172,10 @@ class CheckReleaseTests(unittest.TestCase):
             rows = dataset(1)[1]
             manifest = write_distribution(rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
             self.assertEqual(6, manifest["dataSchemaVersion"])
+            missing = {key: value for key, value in manifest.items() if key != "dataSchemaVersion"}
+            (root / "manifest.json").write_text(json.dumps(missing), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "dataSchemaVersion"):
+                validate(root)
             for value in (None, True, "5", 0, 99):
                 (root / "manifest.json").write_text(json.dumps(dict(manifest, dataSchemaVersion=value)), encoding="utf-8")
                 with self.subTest(value=value), self.assertRaises(ValueError):
@@ -169,16 +198,17 @@ class CheckReleaseTests(unittest.TestCase):
             write_distribution(rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
             legacy = dict(manifest)
             legacy.update(legacy.pop("metadata"))
-            legacy["latestPointTimestamp"] = legacy["sources"]["osm-peaks"]["lastestTimeStamp"]
+            legacy["latestPointTimestamp"] = metadata_maps(legacy)["sources"]["osm-peaks"]["lastestTimeStamp"]
             legacy["sourceTimestamp"] = "2026-09-29T20:22:51Z"
             legacy["schemaVersion"] = 5
             del legacy["dataSchemaVersion"]
-            legacy_raw = (json.dumps(rows,ensure_ascii=False,separators=(',',':'))+'\n').encode()
+            legacy_rows = [{**row,"id":row["id"].removeprefix("osm:")} for row in rows]
+            legacy_raw = (json.dumps(legacy_rows,ensure_ascii=False,separators=(',',':'))+'\n').encode()
             legacy_gzip = gzip.compress(legacy_raw,mtime=0)
             (root / FILE_NAME).write_bytes(legacy_gzip)
             legacy.update(sha256=hashlib.sha256(legacy_gzip).hexdigest(),sizeBytes=len(legacy_gzip),uncompressedSizeBytes=len(legacy_raw))
             (root / "manifest.json").write_text(json.dumps(legacy), encoding="utf-8")
-            self.assertEqual(rows, validate(root)[1])
+            self.assertEqual(legacy_rows, validate(root)[1])
         before, after = dataset(), dataset()
         before[0]["dataSchemaVersion"] = 2
         after[0]["dataSchemaVersion"] = 5
@@ -197,20 +227,21 @@ class CheckReleaseTests(unittest.TestCase):
                         with self.assertRaises(ValueError):
                             validate(directory)
 
-    def test_ids_and_optional_osm_id(self):
+    def test_ids_and_related_ids(self):
         with tempfile.TemporaryDirectory() as directory:
-            valid = [{}, {"osmId": 1}, {"osmId": None}]
-            invalid = [{"id": value} for value in (None, 1, "", "0", "01", "osm:way:1", "curated:landmark:test")]
-            invalid += [{"osmId": value} for value in (True, 0, -1, "1", 2)]
+            valid = [{}, {"relatedIds": []}, {"relatedIds": ["gsi-vector:sample", "custom:sample"]}]
+            invalid = [{"id": value} for value in (None, 1, "", "0", "1", "01", "osm:0", "osm:01", "osm:way:1", "curated:landmark:test")]
+            invalid += [{"relatedIds": value} for value in (None, "osm:2", [1], [""], [" osm:2"], ["osm:2","osm:2"], ["osm:1"])]
             for index, changes in enumerate(valid + invalid):
                 with self.subTest(changes=changes):
                     rows = dataset(1)[1]
                     rows[0].update(changes)
-                    write_distribution(rows, directory, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
                     if index < len(valid):
+                        write_distribution(rows, directory, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
                         self.assertEqual(rows, validate(directory)[1])
                     else:
                         with self.assertRaises(ValueError):
+                            write_distribution(rows, directory, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
                             validate(directory)
             rows = dataset(2)[1]
             rows[1]["id"] = rows[0]["id"]
@@ -279,7 +310,7 @@ class DownloadUrlTests(unittest.TestCase):
                 (root / FILE_NAME).write_bytes(archive)
                 changed["dataSchemaVersion"] = 3
                 changed.update(changed.pop("metadata"))
-                changed["latestPointTimestamp"] = changed["sources"]["osm-peaks"]["lastestTimeStamp"]
+                changed["latestPointTimestamp"] = metadata_maps(changed)["sources"]["osm-peaks"]["lastestTimeStamp"]
                 changed["sourceTimestamp"] = "2026-09-29T20:22:51Z"
                 changed["mountainCount"] = changed.pop("pointCount")
                 changed["latestMountainTimestamp"] = changed.pop("latestPointTimestamp")

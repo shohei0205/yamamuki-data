@@ -23,15 +23,16 @@
 
 ## 項目
 
-地点の補足情報は一つの JSON ファイルにまとめる。`schemaVersion`・`points` と、任意の共通情報 `metadata` を持ち、`metadata.sources` に出典一覧、`metadata.tags` にタグ情報を格納し、`points` の `id` または `osmId` で元の地点に対応付ける。地点ごとにタグ・表示名・よみがな・別名・除外を指定する。
+地点の補足情報は一つの JSON ファイルにまとめる。`schemaVersion`・`points` と、任意の共通情報 `metadata` を持ち、`metadata.sources` に出典一覧、`metadata.tags` にタグ情報を格納し、`points` の `id` で元の地点に対応付ける。地点ごとにタグ・表示名・よみがな・別名・除外を指定する。
 
 例の出典情報は、実際に確認した資料とその利用条件に置き換える。Wikipedia では参照した版の固定リンクを記載する。タグを追加しない地点は `tags` を省略する。
 
 | 項目 | 型 | 必須 | 内容 | 版の履歴 |
 |---|---|---|---|---|
+| `schemaFormat` | string | 必須 | JSON の形式の識別子。`yamamuki-point-supplements` 固定。他の形式と区別する | [版2] 追加 |
 | `schemaVersion` | integer | 必須 | 補足 JSON の形式の版。`2` | [版1] 追加 |
 | `metadata` | object | 任意 | 共通の出典一覧とタグ情報。省略・空 object は共通情報なし | [版2] 追加 |
-| `points` | array | 必須 | 地点ごとの補足。`id` または `osmId` で元データと対応付ける | [版1] 追加 |
+| `points` | array | 必須 | 地点ごとの補足。`id` で元データと対応付ける | [版1] 追加 |
 
 ### 共通情報（metadata）
 
@@ -43,10 +44,13 @@
 
 ### 地点ごとの項目
 
+`id` と `relatedIds` の値の制約は [地点の共通項目スキーマ](../schemas/point-common-v1.schema.json) を参照する。必須・省略・`null` の扱いは各形式で定める。
+
 | 項目 | 型 | 必須 | 内容 | 版の履歴 |
 |---|---|---|---|---|
-| `id` | string | どちらか一方が必須 | 対応する地点の `id` と完全一致する文字列。空文字・前後の空白は使わない。`osmId` を指定しない場合に必須 | [版2] 追加 |
-| `osmId` | integer | どちらか一方が必須 | 対応する OSM ノード番号。正の整数で、最大値は `9007199254740991`。`id` を指定しない場合に必須 | [版1] 追加<br>[版2] 任意化 |
+| `id` | string | 必須 | 対応する地点の `id` と完全一致する文字列。空文字・前後の空白は使わない | [版2] 追加 |
+| `osmId` | integer | 廃止 | 版1の OSM ノード番号による対象指定。版2では `id: "osm:<ノード番号>"` を使う | [版1] 追加<br>[版2] 廃止 |
+| `relatedIds` | string の配列 | 任意（補正項目のうち1つ以上が必須） | 関連先 ID の配列全体を置き換える。空配列で解除する。重複・自分自身の ID は指定しない | [版2] 追加 |
 | `tags` | string の配列 | 任意（補正項目のうち1つ以上が必須） | 追加するタグの配列。元のタグを保って重複なく追記する | [版1] 追加 |
 | `tagsRemove` | string の配列 | 任意（補正項目のうち1つ以上が必須） | 元のタグから削除する値の配列。画面上のタグ削除も保存する | [版1] 追加 |
 | `name` | string | 任意（補正項目のうち1つ以上が必須） | 表示名を置き換える。空文字は使えない | [版1] 追加 |
@@ -57,19 +61,21 @@
 | `exclude` | boolean | 任意（補正項目のうち1つ以上が必須） | `true` で表示・配布対象から除外する | [版1] 追加 |
 | `reason` | string | 任意 | 補正理由（任意）。表示名の置き換え・除外・削除でも省略できる | [版1] 追加<br>[版2] 任意化 |
 | `note` | string | 任意 | 管理用の自由なメモ。地点名の置き換えや一致検査には使わない | [版1] 追加 |
-| `expected` | object | 任意 | 補正前に想定する `name`・`nameReading`・`aliases`。元データと異なる場合は適用を中止する | [版1] 追加 |
+| `expected` | object | 任意 | 補正前に想定する `name`・`nameReading`・`aliases`・`relatedIds`。元データと異なる場合は適用を中止する | [版1] 追加 |
 
-`id` と `osmId` はどちらか一方だけを指定する。同じファイルで指定方法を混在させてもよい。文字列の `id: "1"` と整数の `osmId: 1` は別の参照であり、相互に読み替えない。同じ参照の重複と、異なる参照から同じ地点に対応する複数の補足行はエラーにする。
+`id` で対象地点を指定する。同じ ID の補足行の重複はエラーにする。`relatedIds` は対象を探すキーではなく、その地点の関連付けを補正する値。関連先を含むデータセットは同時に読み込まれていなくてもよい。
 
-`id` はデータセット内で照合するため、補足は対応する地点 JSON と組み合わせて使う。OSM のノード番号を持たない GSI や手動作成の地点には `id` を使う。ID の永続性は保証されないため、元データを更新した場合は対応する地点を確認する。
+`id` はデータセットをまたいで一意とする。補足の適用時は、対象の地点 JSON にその ID が存在することを確認する。OSM のノード番号を持たない GSI や手動作成の地点には `id` を使う。ID の永続性は保証されないため、元データを更新した場合は対応する地点を確認する。
 
-補足する各項目を省略すると元の値を使う。空配列は追加・削除しない指定とする。同じタグや別名を追加と削除の両方に指定できない。タグ・別名・よみがなには空文字や前後の空白を使えず、配列内の重複も拒否する。各地点には `tags`・`tagsRemove`・`name`・`nameReading`・`graphic`・`aliases`・`aliasesRemove`・`exclude` のいずれかの指定が必要。
+補足する各項目を省略すると元の値を使う。タグ・別名の空配列は追加・削除しない指定とする。`relatedIds` の空配列は関連付けを解除する。同じタグや別名を追加と削除の両方に指定できない。タグ・別名・よみがなには空文字や前後の空白を使えず、配列内の重複も拒否する。各地点には `tags`・`tagsRemove`・`name`・`nameReading`・`graphic`・`aliases`・`aliasesRemove`・`exclude`・`relatedIds` のいずれかの指定が必要。
 
 ## 読み込みと検証
 
-`schemaVersion` が対応する版であることを確認し、`points` の `id` または `osmId` で元データの地点に対応付ける。不正な値・未知の ID・重複 ID・追加と削除の競合がないかを検証する。`expected` がある場合は元データと照合し、不一致なら適用を中止する。
+現行形式では、各 object に未知の項目を許可し、読み手はそれを解釈しない。既知の項目の型・必須条件・重複などの制約は維持する。
 
-`metadata` は [共通スキーマ](../../schemas/metadata-v1.schema.json) と補足 JSON 固有の条件で検証する。版6の地点 JSON と補足 JSON を併せて検証する場合は、両者の`metadata.tags` が一致することも確認する（省略は空 object として比較）。
+`schemaVersion` が対応する版であることを確認し、`points` の `id` で元データの地点に対応付ける。不正な値・未知の ID・重複 ID・追加と削除の競合がないかを検証する。`expected` がある場合は元データと照合し、不一致なら適用を中止する。
+
+`metadata` は [共通スキーマ](../../schemas/metadata-v1.schema.json) と補足 JSON 固有の条件で検証する。版6の地点 JSON と補足 JSON を併せて検証する場合は、両者の`metadata.tags` が一致することも確認する（省略は空配列として比較）。
 
 補足 JSON の編集と保存は [地点データビューアの操作手順](../README.md#補足-json-を開く) を参照する。
 
@@ -83,14 +89,89 @@
 
 ### 版2
 
+任意項目と子 object の項目を含む例。対象地点は `id` で指定する。`exclude: false` は除外しない指定で、2 行目は除外する指定。資料名・URL・地点は説明用の値。
+
 ```json
 {
+  "schemaFormat": "yamamuki-point-supplements",
   "schemaVersion": 2,
   "metadata": {
-    "sources": {"山の資料": {"source": "資料名・URL"}},
-    "tags": {"日本百名山": {"reading": "にほんひゃくめいざん"}}
+    "sources": [
+      {
+        "source": "見本の地名資料 https://example.com/source",
+        "license": "CC BY 4.0 https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "見本資料の著作者",
+        "changes": "地点名・座標・標高を抽出",
+        "lastestTimeStamp": "2026-10-14T00:00:00Z",
+        "name": "元資料"
+      },
+      {
+        "source": "見本の山名一覧 https://example.com/supplement",
+        "license": "CC0-1.0",
+        "attribution": "見本の補足資料の作成者",
+        "changes": "読み・別名・タグを追加",
+        "lastestTimeStamp": "2026-10-14T01:00:00Z",
+        "name": "補足資料"
+      }
+    ],
+    "tags": [
+      {
+        "name": "日本百名山",
+        "nameReading": "にほんひゃくめいざん"
+      }
+    ]
   },
-  "points": [{"id": "対象地点の ID", "tags": ["日本百名山"], "aliases": [{"name": "柴安嵓", "nameReading": "しばやすぐら"}]}]
+  "points": [
+    {
+      "id": "osm:123456",
+      "name": "見本山",
+      "nameReading": "みほんやま",
+      "aliases": [
+        {
+          "name": "見本岳",
+          "nameReading": "みほんだけ"
+        }
+      ],
+      "aliasesRemove": [
+        "旧別名"
+      ],
+      "tags": [
+        "日本百名山"
+      ],
+      "tagsRemove": [
+        "旧分類"
+      ],
+      "exclude": false,
+      "graphic": {
+        "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"><circle cx=\"5\" cy=\"5\" r=\"4\"/></svg>",
+        "scale": 1.5
+      },
+      "reason": "見本の資料で名前と読みを確認",
+      "note": "照合結果を記録する管理用メモ",
+      "expected": {
+        "name": "旧見本山",
+        "nameReading": "きゅうみほんやま",
+        "aliases": [
+          {
+            "name": "旧別名",
+            "nameReading": "きゅうべつめい"
+          }
+        ],
+        "relatedIds": [
+          "custom:old-sample"
+        ]
+      },
+      "relatedIds": [
+        "gsi-vector:sample",
+        "custom:sample"
+      ]
+    },
+    {
+      "exclude": true,
+      "reason": "見本山と重複する地点",
+      "id": "osm:234567"
+    }
+  ]
 }
 ```
 
@@ -118,14 +199,29 @@
         "日本百名山",
         "北海道百名山"
       ],
-      "nameReading": "ようていざん",
+      "nameReading": "みほんやま",
       "aliases": [
-        "後方羊蹄山",
-        "蝦夷富士"
+        "見本岳"
       ],
       "graphic": {
         "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><path d=\"M10 90 L50 10 L90 90 Z\"/></svg>",
         "scale": 1.5
+      },
+      "name": "見本山",
+      "aliasesRemove": [
+        "旧別名"
+      ],
+      "tagsRemove": [
+        "旧分類"
+      ],
+      "exclude": false,
+      "reason": "見本の資料で名前と読みを確認",
+      "expected": {
+        "name": "旧見本山",
+        "nameReading": "きゅうみほんやま",
+        "aliases": [
+          "旧別名"
+        ]
       }
     }
   ]
@@ -153,11 +249,26 @@
         "日本百名山",
         "北海道百名山"
       ],
-      "nameReading": "ようていざん",
+      "nameReading": "みほんやま",
       "aliases": [
-        "後方羊蹄山",
-        "蝦夷富士"
-      ]
+        "見本岳"
+      ],
+      "name": "見本山",
+      "aliasesRemove": [
+        "旧別名"
+      ],
+      "tagsRemove": [
+        "旧分類"
+      ],
+      "exclude": false,
+      "reason": "見本の資料で名前と読みを確認",
+      "expected": {
+        "name": "旧見本山",
+        "nameReading": "きゅうみほんやま",
+        "aliases": [
+          "旧別名"
+        ]
+      }
     }
   ]
 }
@@ -167,9 +278,12 @@
 
 ### 版2（2026-10-14）
 
+- 必須の `schemaFormat: "yamamuki-point-supplements"` を追加し、形式を識別する。未公開の版2に統合する。
+
 - 出典一覧とタグ情報を `metadata.sources`・`metadata.tags` にまとめる。直下の `sources`・`tags` は使わない。
 - `aliases` を、`name` と任意の `nameReading` を持つ object 配列に変更する。
-- `id` または `osmId` のどちらか一方で地点を指定する。`reason` は任意とする。
+- 対象地点をグローバルな `id` で指定する。旧 `osmId` 指定は廃止する。`reason` は任意とする。
+- `relatedIds` で関連先 ID の配列を置き換え、空配列で解除する。
 - タグ共通の読みと出典ごとの最終更新日時は共通 metadata スキーマに従う。
 - 版1のスキーマでは版2を読めない。旧版の読み込みは維持し、新規保存・配布は版2にそろえる。補足を指す manifest の `dataSchemaVersion` は `2` とする。
 

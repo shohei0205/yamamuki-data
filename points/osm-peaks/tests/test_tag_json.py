@@ -14,6 +14,8 @@ from scripts.build_data import build
 from scripts.point_tags import validate_tags
 
 
+from document_metadata import metadata_maps
+
 class TagJsonTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -180,9 +182,9 @@ class TagJsonTests(unittest.TestCase):
             self.assertEqual(point["aliases"], [{"name":"後方羊蹄山"}])
         self.assertEqual(manifest["dataSchemaVersion"], 6)
 
-        self.assertEqual(manifest["metadata"]["sources"]["osm-peaks"]["license"], "ODbL-1.0")
-        self.assertEqual(manifest["metadata"]["sources"]["osm-peaks"]["attribution"], "© OpenStreetMap contributors")
-        self.assertEqual({k:v for k,v in manifest["metadata"]["sources"].items() if k != "osm-peaks"}, {"よみがな補足": { "source": "よみがな資料", "license": "CC0-1.0"}, "日本百名山": { "source": "固定リンク", "license": "CC BY-SA 4.0", "attribution": "投稿者", "changes": "ID を追加"}, "花の百名山": { "source": "別の出典", "license": "CC BY 4.0"}})
+        self.assertEqual(metadata_maps(manifest["metadata"])["sources"]["osm-peaks"]["license"], "ODbL-1.0")
+        self.assertEqual(metadata_maps(manifest["metadata"])["sources"]["osm-peaks"]["attribution"], "© OpenStreetMap contributors")
+        self.assertEqual({k:v for k,v in metadata_maps(manifest["metadata"])["sources"].items() if k != "osm-peaks"}, {"よみがな補足": { "source": "よみがな資料", "license": "CC0-1.0"}, "日本百名山": { "source": "固定リンク", "license": "CC BY-SA 4.0", "attribution": "投稿者", "changes": "ID を追加"}, "花の百名山": { "source": "別の出典", "license": "CC BY 4.0"}})
 
 
         from scripts.check_release import validate

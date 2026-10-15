@@ -10,7 +10,7 @@
 
 ## 版について
 
-metadata の現行版は `1`。`metadata` 自体に `schemaVersion` は置かず、文書全体のスキーマが参照する共通スキーマで版を指定する。地点 JSON・補足 JSON・manifest の版とは独立して管理する。
+metadata の現行版は `1`。`metadata` 自体に `schemaFormat`・`schemaVersion` は置かず、文書全体のスキーマが参照する共通スキーマで版を指定する。地点 JSON・補足 JSON・manifest の版とは独立して管理する。
 
 版内の変更は `版1.1` のように小数点以下で区別する。小数点以下は文書上の番号で、参照するスキーマの版には含めない。
 
@@ -34,39 +34,41 @@ metadata の現行版は `1`。`metadata` 自体に `schemaVersion` は置かず
 
 ## 共通項目
 
-共通スキーマでは、各項目は任意。`metadata` には空 object を指定できる。定義にない項目や `null` は指定できない。
+共通スキーマでは、各項目は任意。`metadata` には空 object を指定できる。未知の項目は許可し、読み手は解釈しない。既知の項目の制約は維持する。
 
 | 項目 | 型 | 必須 | 内容・制約 | 版の履歴 |
 |---|---|---|---|---|
-| `sources` | object | 任意 | 出典 ID と出典情報の対応。元データと補足の出典を同じ一覧に保持する。各出典の構造は下表を参照 | [版1] 追加 |
-| `tags` | object | 任意 | タグ名とタグ情報の対応。各地点の `tags` 配列とは別の、文書全体で共有する情報 | [版1] 追加 |
+| `sources` | object の配列 | 任意 | 出典名を `name` に持つ出典情報の配列。元データと補足の出典を同じ一覧に保持する。各出典の構造は下表を参照 | [版1] 追加 |
+| `tags` | object の配列 | 任意 | タグ名を `name` に持つタグ情報の配列。各地点の `tags` 配列とは別の、文書全体で共有する情報 | [版1] 追加 |
 | `pointCount` | integer | 任意 | 収録地点の件数。1 以上の整数。地点 JSON の `points` の要素数と一致させる | [版1] 追加 |
 
 ### 出典ごとの情報
 
-`sources` のキーは出典 ID、値はその出典の情報を表す object。出典 ID は空文字や前後に空白がある文字列を指定できない。タグ名やファイル名とは独立して扱う。以下の項目は `metadata.sources.<出典ID>` の子に置く。
+`sources` の各要素は、必須の `name` と任意の出典情報を持つ object。`name` は空文字・前後の空白・配列内の重複を認めない。タグ名やファイル名とは独立して扱う。以下の項目は `metadata.sources[]` に置く。
 
 | 項目 | 型 | 必須 | 内容・制約 | 版の履歴 |
 |---|---|---|---|---|
+| `name` | string | 必須 | 出典名。配列内で重複しない名前 | [版1] 追加 |
 | `source` | string | 任意 | 資料名・参照 URL | [版1] 追加 |
 | `license` | string | 任意 | 資料に適用される利用条件の名称・版・説明 URL | [版1] 追加 |
 | `attribution` | string | 任意 | 利用条件に従って表示する著作者名・出典表示 | [版1] 追加 |
 | `changes` | string | 任意 | 資料に加えた加工・変更 | [版1] 追加 |
 | `lastestTimeStamp` | string | 任意 | この出典に由来する収録データの最終更新日時。タイムゾーン付き ISO 8601。取得日時や配布データの生成日時ではない。不明なら省略する | [版1] 追加 |
 
-各出典の属性はすべて任意で、空 object も指定できる。定義にない属性や `null` は指定できない。日時を推測で補わない。検証時は JSON Schema の `format` 検査を有効にする。
+`name` 以外の出典属性は任意。未知の属性は許可し、読み手は解釈しない。既知の属性には指定された型を使う。日時を推測で補わない。検証時は JSON Schema の `format` 検査を有効にする。
 
 ### タグごとの情報
 
-`tags` のキーはタグ名、値はそのタグの情報を表す object。タグ名は空文字や前後に空白がある文字列を指定できない。以下の項目は `metadata.tags.<タグ名>` の子に置く。
+`tags` の各要素は、必須の `name` と任意の読みを持つ object。`name` は空文字・前後の空白・配列内の重複を認めない。以下の項目は `metadata.tags[]` に置く。
 
 | 項目 | 型 | 必須 | 内容・制約 | 版の履歴 |
 |---|---|---|---|---|
-| `reading` | string | 任意 | タグ名の読み。空文字や前後に空白がある文字列は指定できない | [版1] 追加 |
+| `name` | string | 必須 | タグ名。各地点の `tags` の値と一致させる | [版1] 追加 |
+| `nameReading` | string | 任意 | タグ名の読み。空文字や前後に空白がある文字列は指定できない | [版1] 追加 |
 
-読みが不明なら `reading` を省略する。空 object は指定できる。定義にない属性や `null` は指定できない。
+読みが不明なら `nameReading` を省略する。読みがなくても `name` は必須。未知の属性は許可し、読み手は解釈しない。既知の属性には指定された型を使う。
 
-読みを登録していないタグは読みなしとして扱う。読みのあるタグを読みの文字コード順、同じ読みならタグ名の文字コード順で並べ、読みのないタグはその後にタグ名の文字コード順で並べる。JSON の object 内の記載順には依存しない。読みをひらがなで記載する運用では、検証処理は空でない文字列かを確かめ、ひらがなだけかどうかは検査しない。
+読みを登録していないタグは読みなしとして扱う。読みのあるタグを読みの文字コード順、同じ読みならタグ名の文字コード順で並べ、読みのないタグはその後にタグ名の文字コード順で並べる。配列の記載順には依存しない。読みをひらがなで記載する運用では、検証処理は空でない文字列かを確かめ、ひらがなだけかどうかは検査しない。
 
 ## 形式ごとの条件
 
@@ -85,27 +87,31 @@ metadata の現行版は `1`。`metadata` 自体に `schemaVersion` は置かず
 ```json
 {
   "metadata": {
-    "sources": {
-      "osm-peaks": {
-        "source": "https://example.com/source.osm.pbf",
-        "license": "ODbL-1.0",
-        "attribution": "© OpenStreetMap contributors",
-        "changes": "名前付き山頂ノードを抽出",
-        "lastestTimeStamp": "2026-10-14T00:00:00Z"
+    "sources": [
+      {
+        "source": "見本の地名資料 https://example.com/source",
+        "license": "CC BY 4.0 https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "見本資料の著作者",
+        "changes": "地点名・座標・標高を抽出",
+        "lastestTimeStamp": "2026-10-14T00:00:00Z",
+        "name": "元資料"
       },
-      "山名資料": {
-        "source": "資料名・参照 URL",
-        "license": "CC BY 4.0",
-        "attribution": "資料の著作者",
-        "changes": "山名とよみがなを補足"
+      {
+        "source": "見本の山名一覧 https://example.com/supplement",
+        "license": "CC0-1.0",
+        "attribution": "見本の補足資料の作成者",
+        "changes": "読み・別名・タグを追加",
+        "lastestTimeStamp": "2026-10-14T01:00:00Z",
+        "name": "補足資料"
       }
-    },
-    "tags": {
-      "日本百名山": {
-        "reading": "にほんひゃくめいざん"
+    ],
+    "tags": [
+      {
+        "name": "日本百名山",
+        "nameReading": "にほんひゃくめいざん"
       }
-    },
-    "pointCount": 100
+    ],
+    "pointCount": 1
   }
 }
 ```
@@ -116,4 +122,5 @@ metadata の現行版は `1`。`metadata` 自体に `schemaVersion` は置かず
 
 - 地点 JSON・補足 JSON・配布 manifest の共通定義をまとめる。
 - 出典一覧 `sources`、タグ情報 `tags`、地点件数 `pointCount` を定義する。
-- 出典ごとの最終更新日時は `sources.<出典ID>.lastestTimeStamp` に記載する。
+- `sources`・`tags` は object の配列とし、出典・タグはそれぞれ必須の `name` で識別する。識別子の重複は認めない。未公開の版1に統合する。
+- 出典ごとの最終更新日時は `sources[].lastestTimeStamp` に記載する。

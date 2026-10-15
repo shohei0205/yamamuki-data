@@ -16,10 +16,10 @@ else:
 from pathlib import Path as _Path
 import sys as _sys
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
-from document_metadata import alias_objects
+from document_metadata import osm_node_id, validate_related_ids, validate_point_id, validate_osm_id, alias_objects, metadata_arrays, metadata_maps
 
 DEFAULT_SUPPLEMENTS = Path(__file__).resolve().parents[1] / "supplements.json"
-FIELDS = {"name", "nameReading", "aliases", "aliasesRemove", "tags", "tagsRemove", "exclude", "graphic"}
+FIELDS = {"name", "nameReading", "aliases", "aliasesRemove", "tags", "tagsRemove", "exclude", "graphic", "relatedIds"}
 METADATA = {"source", "license", "attribution", "changes", "lastestTimeStamp"}
 COMPANION_FILES = ("osm-peaks-source.json.gz", "supplements.json")
 LEGACY_COMPANION_FILE = "supplement-manifest.json"
@@ -33,7 +33,7 @@ def validate_supplement_sources(sources):
     if not isinstance(sources, dict):
         raise ValueError("supplementSources は出典 ID と出典情報の対応にしてください")
     for identifier, metadata in sources.items():
-        if not text(identifier) or not isinstance(metadata, dict) or set(metadata) - METADATA or any(not isinstance(value, str) for value in metadata.values()):
+        if not text(identifier) or not isinstance(metadata, dict) or any(not isinstance(value, str) for k,value in metadata.items() if k in METADATA):
             raise ValueError("supplementSources の出典 ID または出典情報が不正です")
     from document_metadata import validate_metadata
     validate_metadata({"sources": sources})
@@ -42,16 +42,18 @@ def validate_supplement_sources(sources):
 
 def supplement_document(data):
     data=validate_supplements(data)
-    return {"schemaVersion":2,"metadata":{"sources":data.get("sources",{}),"tags":data.get("tags",{})},"points":[{**row, **({"aliases":alias_objects(row["aliases"])} if "aliases" in row else {})} for row in data["points"]]}
+    return {"schemaFormat":"yamamuki-point-supplements","schemaVersion":2,"metadata":metadata_arrays({"sources":data.get("sources",{}),"tags":data.get("tags",{})}),"points":[{**{k:v for k,v in row.items() if k != "osmId"}, **({"id":f"osm:{row['osmId']}"} if "osmId" in row else {}), **({"aliases":alias_objects(row["aliases"])} if "aliases" in row else {})} for row in data["points"]]}
 
 
 def validate_supplements(data):
+    if isinstance(data, dict) and data.get("schemaVersion") == 2 and data.get("schemaFormat") != "yamamuki-point-supplements":
+        raise ValueError("補足 JSON の schemaFormat が不正です")
     if isinstance(data,dict) and "metadata" in data:
-        if set(data)-{"schemaVersion","metadata","points"} or not isinstance(data["metadata"],dict) or set(data["metadata"])-{"sources","tags"}:
+        if not isinstance(data["metadata"],dict) or "pointCount" in data["metadata"]:
             raise ValueError("補足 JSON の metadata の構造が不正です")
-        data={"schemaVersion":data.get("schemaVersion"),"points":data.get("points"),**data["metadata"]}
+        data={**({"schemaFormat":data["schemaFormat"]} if "schemaFormat" in data else {}),"schemaVersion":data.get("schemaVersion"),"points":data.get("points"),**metadata_maps(data["metadata"])}
 
-    if not isinstance(data, dict) or set(data) - {"schemaVersion", "sources", "tags", "points"} or type(data.get("schemaVersion")) is not int or data["schemaVersion"] not in (1, 2):
+    if not isinstance(data, dict) or type(data.get("schemaVersion")) is not int or data["schemaVersion"] not in (1, 2):
         raise ValueError("地点補足 JSON の schemaVersion は 1 または 2 にしてください")
     if "tags" in data:
         validate_tag_metadata(data["tags"])
@@ -59,23 +61,24 @@ def validate_supplements(data):
     if not isinstance(sources, dict):
         raise ValueError("sources は出典 ID と出典情報の対応にしてください")
     for key, source in sources.items():
-        if not text(key) or not isinstance(source, dict) or set(source) - METADATA or any(not isinstance(v, str) for v in source.values()):
+        if not text(key) or not isinstance(source, dict) or any(not isinstance(v, str) for k,v in source.items() if k in METADATA):
             raise ValueError("出典 ID または出典情報が不正です")
     if not isinstance(data.get("points"), list):
         raise ValueError("points は配列にしてください")
     seen = set()
     for row in data["points"]:
-        if not isinstance(row, dict) or set(row) - {"id", "osmId", "note", "reason", "expected", *FIELDS}:
+        if not isinstance(row, dict):
             raise ValueError("地点補足の項目が不正です")
+        if data["schemaVersion"] == 2 and ("id" not in row or "osmId" in row):
+            raise ValueError("補足 JSON 版2は id で対象を指定してください")
         if ("id" in row) == ("osmId" in row):
             raise ValueError("id または osmId のどちらか一方を指定してください")
         key = "id" if "id" in row else "osmId"
         identifier = row[key]
         if key == "id":
-            if not text(identifier):
-                raise ValueError("id は前後に空白のない空でない文字列にしてください")
-        elif type(identifier) is not int or not 0 < identifier <= 9007199254740991:
-            raise ValueError("osmId は正の整数にしてください")
+            validate_point_id(identifier)
+        else:
+            validate_osm_id(identifier)
         if (key, identifier) in seen:
             raise ValueError(f"{key} が重複しています")
         seen.add((key, identifier))
@@ -88,6 +91,8 @@ def validate_supplements(data):
             raise ValueError("補正する地点名は空でない文字列にしてください")
         if "nameReading" in row and row["nameReading"] is not None and not text(row["nameReading"]):
             raise ValueError("よみがなは空でない文字列または null にしてください")
+        if "relatedIds" in row:
+            validate_related_ids(row["relatedIds"],row.get("id"))
         if "aliases" in row:
             if not isinstance(row["aliases"],list):
                 raise ValueError("補足の aliases は配列にしてください")
@@ -106,12 +111,14 @@ def validate_supplements(data):
         if {v["name"] for v in alias_objects(row.get("aliases", []))} & set(row.get("aliasesRemove", [])):
             raise ValueError("同じ別名を追加と削除の両方に指定できません")
         expected = row.get("expected", {})
-        if not isinstance(expected, dict) or set(expected) - {"name", "nameReading", "aliases"}:
+        if not isinstance(expected, dict):
             raise ValueError("expected は補正前の地点名・よみがな・別名を指定してください")
         for key, value in expected.items():
             if key == "aliases":
                 alias_objects(value)
-            elif value is not None and not isinstance(value, str):
+            elif key == "relatedIds":
+                validate_related_ids(value)
+            elif key in {"name","nameReading"} and value is not None and not isinstance(value, str):
                 raise ValueError("expected の名前・よみがなが不正です")
     return data
 
@@ -119,8 +126,6 @@ def validate_supplements(data):
 def read_supplements(path=DEFAULT_SUPPLEMENTS):
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     if isinstance(data, dict) and data.get("schemaVersion") == 2:
-        if set(data) - {"schemaVersion", "metadata", "points"}:
-            raise ValueError("補足 JSON 版2の共通情報は metadata にまとめてください")
         for row in data.get("points", []):
             if isinstance(row, dict) and "aliases" in row:
                 alias_objects(row["aliases"], legacy=False)
@@ -133,7 +138,7 @@ def apply_supplements(points, data):
     indexes = {"id": {}, "osmId": {}}
     for index, point in enumerate(result):
         for key in indexes:
-            identifier = point.get(key)
+            identifier = osm_node_id(point) if key == "osmId" else point.get(key)
             if identifier is None:
                 continue
             if identifier in indexes[key]:
@@ -151,13 +156,17 @@ def apply_supplements(points, data):
         applied.add(index)
         point = result[index]
         for key, expected in row.get("expected", {}).items():
-            actual = point.get(key, [] if key == "aliases" else None)
+            if key not in {"name","nameReading","aliases","relatedIds"}:
+                continue
+            actual = point.get(key, [] if key in {"aliases","relatedIds"} else None)
             if key == "aliases":
                 entries = alias_objects(actual)
                 actual = [v["name"] for v in entries] if all(isinstance(v,str) for v in expected) else entries
             if actual != expected:
                 raise ValueError(f"{ref_key} {identifier} の {key} が想定値と異なります。補正内容を確認してください")
-        for key in ("name", "nameReading", "graphic"):
+        if "relatedIds" in row:
+            validate_related_ids(row["relatedIds"],point.get("id"))
+        for key in ("name", "nameReading", "graphic", "relatedIds"):
             if key in row:
                 if row[key] is None:
                     point.pop(key, None)
@@ -219,8 +228,8 @@ def validate_companions(directory, manifest, integrated, tags=None):
         if integrated.get("tags", {}) != data.get("tags", {}):
             raise ValueError("地点 JSON と補足 JSON のタグ情報が一致しません")
         integrated = rows(integrated, 6)
-    from document_metadata import ordered_point
-    if [ordered_point(p) for p in apply_supplements(original, data)] != [ordered_point(p) for p in integrated]:
+    from document_metadata import distributed_point, ordered_point
+    if [distributed_point(p) for p in apply_supplements(original, data)] != [distributed_point(p) for p in integrated]:
         raise ValueError("元データと補足から配布データを再現できません")
 
 
@@ -235,7 +244,7 @@ def complete_supplement(input_path, points_path, output_path):
     id_rows = [row for row in data["points"] if "id" in row]
     points = read_points(points_path)
     apply_supplements(points, {"schemaVersion": 1, "points": id_rows})
-    rows, report, unresolved = complete_rows(rows, [p for p in points if p.get("osmId") is not None])
+    rows, report, unresolved = complete_rows(rows, [p for p in points if osm_node_id(p) is not None])
     completed = iter([{**row, **({"osmId": int(row["osmId"])} if row["osmId"] else {})} for row in rows])
     data["points"] = [row if "id" in row else next(completed) for row in data["points"]]
     for row in data["points"]:

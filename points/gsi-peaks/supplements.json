@@ -1,19 +1,22 @@
 {
+  "schemaFormat": "yamamuki-point-supplements",
   "schemaVersion": 2,
   "metadata": {
-    "sources": {
-      "日本百名山": {
+    "sources": [
+      {
         "source": "Wikipedia「日本百名山」著書順の山の一覧（2026-10-10 参照） https://ja.wikipedia.org/w/index.php?title=日本百名山&oldid=111092405",
         "license": "山名一覧: CC BY-SA 4.0 https://creativecommons.org/licenses/by-sa/4.0/ ; 照合に用いた OpenStreetMap データ: ODbL 1.0 https://opendatacommons.org/licenses/odbl/1-0/",
         "attribution": "Wikipedia「日本百名山」の投稿者 https://ja.wikipedia.org/w/index.php?title=日本百名山&action=history ; © OpenStreetMap contributors https://www.openstreetmap.org/copyright",
-        "changes": "OSM 版の日本百名山 100 件の順序・タグ・note を保持し、名前・別名と位置を照合して既存の国土地理院の地点 ID に対応付けた。利尻山・羊蹄山・焼岳は OSM 版と採用地点が異なる。notes/日本百名山.md に対応表と相違を記載する。元の OSM 版の確認記録は notes/日本百名山-osm元記録.md に保存する。"
+        "changes": "OSM 版の日本百名山 100 件の順序・タグ・note を保持し、名前・別名と位置を照合して既存の国土地理院の地点 ID に対応付けた。利尻山・羊蹄山・焼岳は OSM 版と採用地点が異なる。notes/日本百名山.md に対応表と相違を記載する。元の OSM 版の確認記録は notes/日本百名山-osm元記録.md に保存する。",
+        "name": "日本百名山"
       }
-    },
-    "tags": {
-      "日本百名山": {
-        "reading": "にほんひゃくめいざん"
+    ],
+    "tags": [
+      {
+        "name": "日本百名山",
+        "nameReading": "にほんひゃくめいざん"
       }
-    }
+    ]
   },
   "points": [
     {

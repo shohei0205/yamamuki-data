@@ -18,14 +18,14 @@ import xml.etree.ElementTree as ET
 
 
 if __package__:
-    from scripts.point_document import document, source_entries
+    from scripts.point_document import document, source_entries, point_document_json
     from scripts.release_channels import download_url
     from scripts.graphics import validate_graphics
     from scripts.point_tags import validate_tags, validate_alias_readings, validate_tag_metadata
     from scripts.tag_json import apply_tag_jsons
     from scripts.supplements import DEFAULT_SUPPLEMENTS, read_supplements, apply_supplements, validate_supplement_sources
 else:
-    from point_document import document, source_entries
+    from point_document import document, source_entries, point_document_json
     from release_channels import download_url
     from graphics import validate_graphics
     from point_tags import validate_tags, validate_alias_readings, validate_tag_metadata
@@ -108,9 +108,8 @@ def read_mountains(path):
                 latest_timestamp = max(latest_timestamp or timestamp, timestamp)
                 elevation = parse_elevation(tags.get("ele"))
                 mountains[osm_id] = {
-                    "id": str(osm_id),
+                    "id": f"osm:{osm_id}",
                     "type": "peak",
-                    "osmId": osm_id,
                     "name": name,
                     "latitude": lat,
                     "longitude": lon,
@@ -155,7 +154,7 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
     validate_alias_readings(mountains)
     validate_graphics(mountains)
     logging.info("%s 件を JSON に変換しています", format(len(mountains), ","))
-    raw = (json.dumps(document(mountains, tag_metadata, sources=source_entries("osm-peaks",source_url,"ODbL-1.0","© OpenStreetMap contributors",supplement_sources,lastestTimeStamp=latest_mountain_timestamp)), ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+    raw = point_document_json(document(mountains, tag_metadata, sources=source_entries("osm-peaks",source_url,"ODbL-1.0","© OpenStreetMap contributors",supplement_sources,lastestTimeStamp=latest_mountain_timestamp))).encode("utf-8")
     # ファイル名と生成時刻をヘッダーに含めず、同じ内容の圧縮結果をそろえる。
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

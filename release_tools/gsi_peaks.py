@@ -16,6 +16,7 @@ from release_tools.test_points import ROOT, release_data, validate_rows
 from scripts.supplements import validate_supplement_sources, read_supplements, apply_supplements
 from scripts.point_document import rows as document_rows, metadata_of, document
 from scripts.point_tags import validate_tag_metadata
+from document_metadata import point_document_json, metadata_maps
 
 DATA = ROOT / "points/gsi-peaks"
 FILE = "gsi-peaks.json"
@@ -46,7 +47,7 @@ def snapshot(source, output=DATA):
     common = metadata_of(body)
     validate(points)
     manifest = json.loads((source / "manifest.json").read_bytes())
-    manifest_info = manifest.get("metadata", manifest)
+    manifest_info = metadata_maps(manifest.get("metadata", manifest))
     if manifest_info["pointCount"] != len(points) or manifest["uncompressedSizeBytes"] != len(raw):
         raise ValueError("生成結果と manifest の件数・サイズが一致しません")
     if gzip.decompress((source / (FILE + ".gz")).read_bytes()) != raw:
@@ -67,8 +68,8 @@ def snapshot(source, output=DATA):
     supplements_raw = gzip.decompress((source / "supplements.json.gz").read_bytes())
     from scripts.supplements import validate_supplements
     supplements = validate_supplements(json.loads(supplements_raw))
-    from document_metadata import ordered_point
-    if [ordered_point(p) for p in apply_supplements(original_points, supplements)] != points:
+    from document_metadata import distributed_point, ordered_point
+    if [distributed_point(p) for p in apply_supplements(original_points, supplements)] != points:
         raise ValueError("オリジナルと補足から生成結果を再現できません")
     info = {key: (original["metadata"]["sources"] if key == "sources" else manifest[key]) for key in PROVENANCE}
     info.update(inputSha256=hashlib.sha256(original_raw).hexdigest(), pointCount=len(original_points), sourceSnapshot={})
@@ -105,7 +106,8 @@ def prepare(version, directory, channel, source=DATA):
     supplements = read_supplements(source / "supplements.json")
     points = apply_supplements(original_points, supplements)
     validate(points)
-    common = dict(original["metadata"])
+    from document_metadata import metadata_maps
+    common = metadata_maps(original["metadata"])
     common.pop("pointCount", None)
     sources = dict(common.get("sources", {}))
     for key, entry in supplements.get("sources", {}).items():
@@ -116,7 +118,7 @@ def prepare(version, directory, channel, source=DATA):
     tags = {**common.pop("tags", {}), **supplements.get("tags", {})}
     body = document(points, tags, **common)
     common = body["metadata"]
-    raw = (json.dumps(body, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+    raw = point_document_json(body).encode("utf-8")
     tag = f"gsi-peaks-{'dev-' if channel == 'dev' else ''}{version}"
     archive = gzip.compress(raw, mtime=0)
     manifest = {key: info[key] for key in PROVENANCE}
@@ -151,7 +153,7 @@ def publish(version, directory, source=DATA):
     notes.write_text("[Codex] コミット済みの国土地理院の地点 JSON を配布します。\n\n"
                      + f"- 地点数: {manifest['metadata']['pointCount']}\n- SHA-256: `{manifest['sha256']}`\n"
                      + f"- 入力コミット: `{os.environ['GITHUB_SHA']}`\n"
-                     + "".join(f"- {key}: {value.get('attribution','')} / {value.get('license','')}\n" for key,value in manifest["metadata"]["sources"].items()), encoding="utf-8", newline="\n")
+                     + "".join(f"- {key}: {value.get('attribution','')} / {value.get('license','')}\n" for key,value in metadata_maps(manifest["metadata"])["sources"].items()), encoding="utf-8", newline="\n")
     from scripts.distribution_parts import filenames
     names = (FILE, FILE + ".gz", "manifest.json", INFO, *filenames("gsi-peaks"))
     options = ("--prerelease",) if channel == "dev" else ()

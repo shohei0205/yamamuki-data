@@ -7,7 +7,7 @@ import json
 import math
 from pathlib import Path
 
-from document_metadata import FIELDS, validate_metadata, ordered_point, alias_objects
+from document_metadata import distributed_point, validate_point_identifiers, metadata_arrays, metadata_maps, FIELDS, validate_metadata, ordered_point, alias_objects
 
 
 def read_points(path, chunk_size=1024 * 1024, metadata=None):
@@ -55,23 +55,31 @@ def read_points(path, chunk_size=1024 * 1024, metadata=None):
         keys = set()
         tags = {}
         document_metadata = {}
+        schema_format = None
         def field():
-            nonlocal position, tags
+            nonlocal position, tags, schema_format
             key = value()
-            if key not in ("metadata", "schemaVersion", "points", "tags", "sources", "pointCount") or key in keys:
+            if key in keys:
                 raise ValueError("地点文書の項目が不正または重複しています")
             keys.add(key)
             whitespace()
             if buffer[position:position+1] != ":":
                 raise ValueError("地点文書の区切りが不正です")
             position += 1
-            if key == "metadata":
+            if key == "schemaFormat":
+                schema_format = value()
+                if schema_format != "yamamuki-points":
+                    raise ValueError("地点 JSON の schemaFormat が不正です")
+            elif key == "metadata":
                 item = value()
                 if not isinstance(item,dict) or "schemaVersion" in item:
                     raise ValueError("metadata の構造が不正です")
                 validate_metadata(item)
+                item = metadata_maps(item)
                 tags=item.get("tags",{})
                 document_metadata.update({k:v for k,v in item.items() if k != "tags"})
+            elif key not in ("points", "schemaVersion", "tags", "sources", "pointCount"):
+                value()
             elif key != "points":
                 item = value()
                 validate_metadata({key:item})
@@ -108,6 +116,9 @@ def read_points(path, chunk_size=1024 * 1024, metadata=None):
                 if wrapped:
                     if "aliasReadings" in point:
                         raise ValueError("版6では aliasReadings を使えません")
+                    if "osmId" in point:
+                        raise ValueError("地点 JSON 版6では osmId を使わず relatedIds を指定してください")
+                    validate_point_identifiers(point)
                     alias_objects(point.get("aliases"), legacy=False)
                 point_count += 1
                 yield point
@@ -132,6 +143,8 @@ def read_points(path, chunk_size=1024 * 1024, metadata=None):
             position += 1
             whitespace()
         if wrapped:
+            if schema_format != "yamamuki-points":
+                raise ValueError("地点 JSON には schemaFormat が必要です")
             if "schemaVersion" not in document_metadata:
                 raise ValueError("版6の地点 JSON には schemaVersion が必要です")
             validate_metadata({**document_metadata, "tags":tags}, point_count)
@@ -176,8 +189,9 @@ def write_points(points, output, name, tags=None, metadata=None):
                     digest.update(payload)
                     size += len(payload)
 
-                write(b'{"schemaVersion":6,"points":[\n')
+                write(b'{"schemaFormat":"yamamuki-points","schemaVersion":6,"points":[\n')
                 for point in points:
+                    validate_point_identifiers(point)
                     identifier = point.get("id")
                     if not isinstance(identifier, str) or not identifier.strip() or identifier in seen:
                         raise ValueError(f"地点 ID が不正または重複しています: {identifier}")
@@ -195,11 +209,11 @@ def write_points(points, output, name, tags=None, metadata=None):
                     info = point.get("provenance")
                     if info is None:
                         info = {}
-                    if not isinstance(info, dict) or set(info) - {"dataSource", "classification", "elevationSource"} or any(not isinstance(v, str) or not v.strip() or v.strip() != v for v in info.values()):
+                    if not isinstance(info, dict) or any(not isinstance(v, str) or not v.strip() or v.strip() != v for k,v in info.items() if k in {"dataSource","classification","elevationSource"}):
                         raise ValueError("地点の出典情報が不正です")
                     if counts["points"]:
                         write(b",\n")
-                    write(json.dumps(ordered_point(point), ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+                    write(json.dumps(distributed_point(point), ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8"))
                     counts["points"] += 1
                     counts["peaks"] += point.get("type") == "peak"
                     counts["elevations"] += elevation is not None
@@ -209,7 +223,7 @@ def write_points(points, output, name, tags=None, metadata=None):
                 if not counts["points"]:
                     raise ValueError("出力する地点がありません")
                 info={**{k:v for k,v in (metadata or {}).items() if k not in ("schemaVersion","pointCount")},"tags":tags or {},"pointCount":counts["points"]}
-                write(('\n],"metadata":'+json.dumps(info,ensure_ascii=False,separators=(",",":"))+'}\n').encode("utf-8"))
+                write(('\n],"metadata":'+json.dumps(metadata_arrays(info),ensure_ascii=False,separators=(",",":"))+'}\n').encode("utf-8"))
         temporary.replace(path)
         compressed.replace(archive)
     finally:

@@ -14,7 +14,7 @@ import sys
 import unicodedata
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from document_metadata import validate_metadata, ordered_point, source_entries
+from document_metadata import point_document_json, distributed_point, metadata_arrays, validate_metadata, ordered_point, source_entries
 
 from download import Cache
 
@@ -246,7 +246,7 @@ def write(points, report, output, version, tags=None, metadata=None):
             sources=source_entries("gsi-mountain-list",CSV_URL,license,attribution,sources)
     info = {"schemaVersion":6,"pointCount":len(points),"sources":sources,**legacy,"tags":{} if tags is None else tags}
     validate_metadata(info, len(points))
-    raw = (json.dumps({"schemaVersion":6,"metadata":{k:v for k,v in info.items() if k != "schemaVersion"},"points":[ordered_point(point) for point in points]}, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode()
+    raw = point_document_json({"schemaFormat":"yamamuki-points","schemaVersion":6,"metadata":metadata_arrays({k:v for k,v in info.items() if k != "schemaVersion"}),"points":[distributed_point(point) for point in points]}).encode()
     stream = io.BytesIO()
     with gzip.GzipFile(filename="", mode="wb", fileobj=stream, mtime=0) as compressed:
         compressed.write(raw)

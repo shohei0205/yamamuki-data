@@ -28,7 +28,8 @@ gzip で圧縮した UTF-8（BOM なし）の JSON object。`points` に 1 地�
 
 | 項目 | 型 | 必須 | 内容 | 版の履歴 |
 |---|---|---|---|---|
-| `schemaVersion` | integer | 必須 | 地点 JSON 本体の版。`6`。manifest 自体の `schemaVersion` とは独立 | [版6] 追加 |
+| `schemaFormat` | string | 必須 | JSON の形式の識別子。`yamamuki-points` 固定。他の形式と区別する | [版6] 追加 |
+| `schemaVersion` | integer | 必須 | JSON の形式の版。現行版は `6`。manifest 自体の `schemaVersion` とは独立 | [版6] 追加 |
 | `metadata` | object | 任意 | 文書全体の共通情報。[metadata フォーマット](../../formats/metadata.md) を参照。配布 manifest に同じ object をコピーする | [版6] 追加 |
 | `points` | array | 必須 | 地点の配列。1 地点以上 | [版6] 追加 |
 
@@ -38,13 +39,16 @@ gzip で圧縮した UTF-8（BOM なし）の JSON object。`points` に 1 地�
 
 ### 地点ごとの項目
 
+`id` と `relatedIds` の値の制約は [地点の共通項目スキーマ](../schemas/point-common-v1.schema.json) を参照する。必須・省略・`null` の扱いは各形式で定める。
+
 以下は `points` 配列の各要素に指定する。
 
 | 項目 | 型 | 必須 | 内容 | 版の履歴 |
 |---|---|---|---| --- |
-| `id` | string | 必須 | データセット内で一意な、空でない ID。接頭辞を含む ID の形式・作り方は各データセットの文書で定める | [版5] 追加 |
+| `id` | string | 必須 | データセットをまたいで一意な、前後に空白のない空でない ID。接頭辞を含む ID の形式・作り方は各データセットの文書で定める | [版5] 追加 |
 | `type` | string または null | 任意 | 地点の種別（「地点の種別」を参照） | [版5] 追加 |
-| `osmId` | integer または null | 任意 | 関連する OSM ノード ID（正の整数）。版1〜4では必須だったが、版5から任意。OSM と関連付けていない地点には無い | [版1] 追加<br>[版5] 任意化 |
+| `osmId` | integer または null | 廃止 | 版5以前の OSM ノードへの関連付け。版6では `relatedIds` を使う | [版1] 追加<br>[版5] 任意化<br>[版6] 廃止 |
+| `relatedIds` | string の配列 | 任意 | 関連する他の地点のグローバル ID。省略・空配列は関連付けなし。重複・自分自身の ID は指定しない | [版6] 追加 |
 | `name` | string | 必須 | 表示名。空にしない | [版1] 追加 |
 | `nameReading` | string または null | 任意 | 表示名の読み | [版2] 追加<br>[版5] 任意化 |
 | `latitude` | number | 必須 | WGS 84 の緯度（度）。−90 以上 90 以下 | [版1] 追加 |
@@ -89,17 +93,15 @@ gzip で圧縮した UTF-8（BOM なし）の JSON object。`points` に 1 地�
 
 - すべての地点データで、`id` の維持は努力義務とし、永続性を保証しない。名前や位置が変わっても可能な限り同じ ID を維持するが、取得元や生成方法によっては、同じ地点でも ID が変わる場合がある。
 - 消した地点の `id` を、別の地点に意図的に使い回さない。ID の作り方と維持方針は、各データセットの文書に記載する。
-- 地点は「データセットの名前と `id` の組」で見分ける。1 つのデータセットを複数のファイルに分けるときも、データセット全体で `id` を一意にする。別のデータセットとは、同じ `id` が重なってもよい。
+- 地点は `id` だけで見分ける。異なる地点に、データセットをまたいで同じ `id` を使わない。取得元ごとの接頭辞で名前空間を分ける。同じ元の地点を複数のデータセットや更新版に収録する場合は、同じ `id` を使う。
 
-#### OSM との関連付け
+#### 地点間の関連付け
 
-手動作成の地点でも任意の `osmId` を指定できる。`id` はデータセット内の地点を見分ける識別子、`osmId` は関連する OSM ノードへの参照として扱う。
+`relatedIds` に、関連する他の地点のグローバル ID を列挙する。OSM に限らず、GSI・手動作成などの異なるデータセットの地点を関連付けられる。例として GSI の地点から `"relatedIds": ["osm:123456", "custom:sample"]` と指定する。
 
-実データでは確認した OSM ノード番号を指定する。`osmId` は正の整数とし、関連付けがない場合は省略または `null` とする。文字列は使わない。
+関連付けは一方向。相手側の関連付け、同一地点であること、名称や標高の一致を自動では保証しない。関連先を含むデータセットが読み込まれていなくても保持する。自分自身の ID と重複は指定しない。
 
-手動作成の地点は OSM の関連先を変更・削除しても元の ID を維持する。関連付けだけでデータの自動統合・上書きは行わない。
-
-`osmId` はノードの番号を表す。way・relation は同じ番号のノードと区別できないため、この項目には指定しない。それらとの関連付けが必要になった時点で種別の表し方を追加する。
+OSM の地点自身の ID は `osm:<ノード番号>` とし、自分自身を `relatedIds` に入れない。版5以前の `osmId` は旧版の読み込みでのみ扱い、新規出力には含めない。
 
 #### 地点ごとの出典情報
 
@@ -141,6 +143,8 @@ gzip で圧縮した UTF-8（BOM なし）の JSON object。`points` に 1 地�
 
 ## 読み込みと検証
 
+現行形式では、各 object に未知の項目を許可し、読み手はそれを解釈しない。既知の項目の型・必須条件・重複などの制約は維持する。
+
 配列内の各地点を項目表に従って読み込む。対応する形式の版は manifest の `dataSchemaVersion` で確認する。manifest とデータ本体の取得・サイズ・ハッシュ・件数の照合は [地点データの取得・利用手順](../README.md#データを取得して利用する) を参照する。
 
 JSON Schema では確認できない ID の重複や別名と表示名の一致も検証する。山頂だけを使う場合は `type` が `peak` の地点を選び、未知の種別は種別不明として扱う。
@@ -153,37 +157,71 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
 
 ### 版6
 
+任意項目と子 object の項目を含む、形式説明用の架空の地点。URL は説明用の値。
+
 ```json
 {
+  "schemaFormat": "yamamuki-points",
   "schemaVersion": 6,
   "metadata": {
-    "pointCount": 1,
-    "sources": {
-      "元資料": {
-        "source": "https://example.com/source",
-        "license": "資料の利用条件",
-        "attribution": "資料の著作者表示",
-        "lastestTimeStamp": "2026-10-14T00:00:00Z"
+    "sources": [
+      {
+        "source": "見本の地名資料 https://example.com/source",
+        "license": "CC BY 4.0 https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "見本資料の著作者",
+        "changes": "地点名・座標・標高を抽出",
+        "lastestTimeStamp": "2026-10-14T00:00:00Z",
+        "name": "元資料"
       },
-      "山の資料": {
-        "source": "資料名・URL"
+      {
+        "source": "見本の山名一覧 https://example.com/supplement",
+        "license": "CC0-1.0",
+        "attribution": "見本の補足資料の作成者",
+        "changes": "読み・別名・タグを追加",
+        "lastestTimeStamp": "2026-10-14T01:00:00Z",
+        "name": "補足資料"
       }
-    },
-    "tags": {
-      "日本百名山": {
-        "reading": "にほんひゃくめいざん"
+    ],
+    "tags": [
+      {
+        "name": "日本百名山",
+        "nameReading": "にほんひゃくめいざん"
       }
-    }
+    ],
+    "pointCount": 1
   },
   "points": [
     {
-      "id": "gsi-mountain-list:368",
+      "id": "osm:123456",
       "type": "peak",
-      "name": "剣ヶ峯",
-      "latitude": 35.3606,
-      "longitude": 138.7274,
+      "name": "見本山",
+      "nameReading": "みほんやま",
+      "latitude": 35.0,
+      "longitude": 139.0,
+      "elevationM": 1000.0,
+      "aliases": [
+        {
+          "name": "見本岳",
+          "nameReading": "みほんだけ"
+        }
+      ],
+      "wikipediaUrl": "https://example.com/wiki/sample-mountain",
+      "wikidataUrl": "https://example.com/wikidata/sample-mountain",
+      "graphic": {
+        "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"><circle cx=\"5\" cy=\"5\" r=\"4\"/></svg>",
+        "scale": 1.5
+      },
       "tags": [
         "日本百名山"
+      ],
+      "provenance": {
+        "dataSource": "osm",
+        "classification": "natural=peak",
+        "elevationSource": "osm:ele"
+      },
+      "relatedIds": [
+        "gsi-vector:sample",
+        "custom:sample"
       ]
     }
   ]
@@ -191,7 +229,7 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
 ```
 
 
-各例は形式説明用の架空の地点。版5以前のデータ本体は JSON 配列で、版2〜4の項目は同じ。版5以前の版の番号は JSON 本体に含めない。
+各例は形式説明用の架空の地点。版5の例は版5.1の任意項目も含む。版5以前のデータ本体は JSON 配列で、版2〜4の項目は同じ。版5以前の版の番号は JSON 本体に含めない。
 
 ### 版5
 
@@ -206,9 +244,23 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
     "latitude": 35.0,
     "longitude": 139.0,
     "elevationM": 1000,
-    "aliases": [],
-    "wikipediaUrl": null,
-    "wikidataUrl": null
+    "aliases": [
+      "見本岳"
+    ],
+    "wikipediaUrl": "https://example.com/wiki/sample-mountain",
+    "wikidataUrl": "https://example.com/wikidata/sample-mountain",
+    "tags": [
+      "日本百名山"
+    ],
+    "graphic": {
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"><circle cx=\"5\" cy=\"5\" r=\"4\"/></svg>",
+      "scale": 1.5
+    },
+    "provenance": {
+      "dataSource": "osm",
+      "classification": "natural=peak",
+      "elevationSource": "osm:ele"
+    }
   }
 ]
 ```
@@ -226,6 +278,21 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
     "graphic": {
       "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><path d=\"M10 90 L50 10 L90 90 Z\"/></svg>",
       "scale": 1.5
+    },
+    "nameReading": "てんぼうとう",
+    "elevationM": 1000,
+    "aliases": [
+      "見本の塔"
+    ],
+    "wikipediaUrl": "https://example.com/wiki/sample-tower",
+    "wikidataUrl": "https://example.com/wikidata/sample-tower",
+    "tags": [
+      "展望施設"
+    ],
+    "provenance": {
+      "dataSource": "manual",
+      "classification": "tower",
+      "elevationSource": "survey"
     }
   }
 ]
@@ -242,9 +309,11 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
     "latitude": 35.0,
     "longitude": 139.0,
     "elevationM": 1000,
-    "aliases": [],
-    "wikipediaUrl": null,
-    "wikidataUrl": null
+    "aliases": [
+      "見本岳"
+    ],
+    "wikipediaUrl": "https://example.com/wiki/sample-mountain",
+    "wikidataUrl": "https://example.com/wikidata/sample-mountain"
   }
 ]
 ```
@@ -260,9 +329,11 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
     "latitude": 35.0,
     "longitude": 139.0,
     "elevationM": 1000,
-    "aliases": [],
-    "wikipediaUrl": null,
-    "wikidataUrl": null
+    "aliases": [
+      "見本岳"
+    ],
+    "wikipediaUrl": "https://example.com/wiki/sample-mountain",
+    "wikidataUrl": "https://example.com/wikidata/sample-mountain"
   }
 ]
 ```
@@ -278,9 +349,11 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
     "latitude": 35.0,
     "longitude": 139.0,
     "elevationM": 1000,
-    "aliases": [],
-    "wikipediaUrl": null,
-    "wikidataUrl": null
+    "aliases": [
+      "見本岳"
+    ],
+    "wikipediaUrl": "https://example.com/wiki/sample-mountain",
+    "wikidataUrl": "https://example.com/wikidata/sample-mountain"
   }
 ]
 ```
@@ -318,11 +391,19 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
 
 ### 版6（2026-10-14）
 
+- `osmId` を廃止し、複数のデータセットの地点へ関連付けられる `relatedIds` 配列を追加する。
+
+- 地点 ID の名前空間をグローバルに変更する。OSM の地点は `osm:<ノード番号>` とする。版5以前の数値文字列 ID とは異なる。
+
+- 地点と補足の `id`・`relatedIds` の値の制約を共通スキーマにまとめる。ID は前後の空白を認めない。
+
+- 必須の `schemaFormat: "yamamuki-points"` を追加し、形式を識別する。未公開の版6に統合する。
+
 - トップレベルを地点配列から object に変更し、従来の配列を必須の `points` に格納する。版5の読み込み処理では版6を読めないため、利用前に対応が必要。
 - 本体に必須の `schemaVersion: 6` を追加する。manifest の `dataSchemaVersion` と一致させる。manifest 自体の `schemaVersion` は `6` とする。
-- `metadata` に任意の `pointCount` を追加し、実際の地点数を保持する。配布 manifest の `metadata` 内の同名項目と一致させる。出典ごとの最終更新日時は `metadata.sources.<出典ID>.lastestTimeStamp` に保持し、不明なら省略する。
-- `metadata` に任意の `sources` を追加し、元データと補足の出典情報を出典 ID ごとに地点 JSON に保持する。配布 manifest の `metadata` 内の同名項目と一致させる。
-- `metadata` に任意の `tags` object を追加し、タグ共通の `reading` を保持する。タグ情報も manifest の `metadata` に保持する。各地点の `points[].tags` は従来の文字列配列を維持する。
+- `metadata` に任意の `pointCount` を追加し、実際の地点数を保持する。配布 manifest の `metadata` 内の同名項目と一致させる。出典ごとの最終更新日時は `metadata.sources[].lastestTimeStamp` に保持し、不明なら省略する。
+- `metadata` に任意の `sources` を追加し、元データと補足の出典情報を出典名ごとに地点 JSON に保持する。配布 manifest の `metadata` 内の同名項目と一致させる。
+- `metadata` に任意の `tags` 配列 を追加し、タグ共通の `nameReading` を保持する。タグ情報も manifest の `metadata` に保持する。各地点の `points[].tags` は従来の文字列配列を維持する。
 - `aliases` を文字列配列から object 配列に変更し、各要素の `name` と任意の `nameReading` に別名と読みをまとめる。
 - 機械検証用の [data-v6.schema.json](../schemas/data-v6.schema.json) を追加し、版5のスキーマも残す。
 

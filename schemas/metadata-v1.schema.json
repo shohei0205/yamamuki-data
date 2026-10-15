@@ -15,16 +15,11 @@
       "minimum": 1
     }
   },
-  "additionalProperties": false,
+  "additionalProperties": true,
   "$defs": {
     "sources": {
-      "type": "object",
-      "description": "元データと補足の出典 ID ごとの情報。タグ名・ファイル名とは独立。",
-      "propertyNames": {
-        "type": "string",
-        "pattern": "^\\S(?:.*\\S)?$"
-      },
-      "additionalProperties": {
+      "type": "array",
+      "items": {
         "type": "object",
         "properties": {
           "source": {
@@ -43,27 +38,39 @@
             "type": "string",
             "format": "date-time",
             "description": "この出典に由来する収録データの最終更新日時。不明なら省略する。"
-          }
-        },
-        "additionalProperties": false
-      }
-    },
-    "tags": {
-      "type": "object",
-      "propertyNames": {
-        "type": "string",
-        "pattern": "^\\S(?:.*\\S)?$"
-      },
-      "additionalProperties": {
-        "type": "object",
-        "properties": {
-          "reading": {
+          },
+          "name": {
             "type": "string",
             "pattern": "^\\S(?:.*\\S)?$"
           }
         },
-        "additionalProperties": false
-      }
+        "additionalProperties": true,
+        "required": [
+          "name"
+        ]
+      },
+      "description": "識別子が重複しない情報の配列。"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^\\S(?:.*\\S)?$"
+          },
+          "nameReading": {
+            "type": "string",
+            "pattern": "^\\S(?:.*\\S)?$"
+          }
+        },
+        "additionalProperties": true,
+        "required": [
+          "name"
+        ]
+      },
+      "description": "識別子が重複しない情報の配列。"
     }
   }
 }

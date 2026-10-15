@@ -34,7 +34,7 @@
 | `distributionSha256` | string | 必須 | 補足を適用した配布 gzip の SHA-256。通常の manifest の `sha256` と同じ。小文字の 16 進数 64 文字 | [版1] 追加 |
 | `base` | object | 必須 | 補足を適用する前の地点データのファイル情報。下表を参照 | [版1] 追加 |
 | `supplements` | object | 必須 | 補足 JSON のファイル情報。下表を参照 | [版1] 追加 |
-| `sources` | object | 必須 | 補足 JSON の出典一覧。補足データのスキーマの出典定義を共用する。記載方法は [metadata フォーマット](../../formats/metadata.md#出典ごとの情報) を参照。出典がない場合は `{}`。元の地点データの出典と補足の出典を両方保持する | [版1] 追加 |
+| `sources` | object | 必須 | 補足 JSON の出典一覧。補足データのスキーマの出典定義を共用する。出典 ID をキーとし、各値に任意の `source`・`license`・`attribution`・`changes` を持つ。構造は [版1の補足データスキーマ](../schemas/supplements-data-v1.schema.json) を参照。出典がない場合は `{}`。元の地点データの出典と補足の出典を両方保持する | [版1] 追加 |
 
 | `license` | string | 必須 | 元の地点データの利用条件。通常の manifest と同じ | [版1] 追加 |
 | `attribution` | string | 必須 | 元の地点データの出典表示。通常の manifest と同じ | [版1] 追加 |
@@ -89,7 +89,14 @@ URL・サイズ・ハッシュ・配布版は説明用の仮の値。実際の�
     "sizeBytes": 200,
     "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
   },
-  "sources": {},
+  "sources": {
+    "補足資料": {
+      "source": "見本の資料 https://example.com/supplement",
+      "license": "CC0-1.0",
+      "attribution": "見本資料の作成者",
+      "changes": "山名・読み・別名を抽出"
+    }
+  },
   "license": "ODbL-1.0",
   "attribution": "© OpenStreetMap contributors"
 }
