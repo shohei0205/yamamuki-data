@@ -12,7 +12,7 @@
 
 地点 JSON の項目・型・共通の制約と版の履歴は [地点データフォーマット](../formats/data.md) を参照する。配列の並び順を前提にせず、ID で地点を見分ける。
 
-山名・よみがな・別名の照合と、山頂座標・標高の優先順位は「[名前・位置・ID の照合](#名前位置id-の照合)」に記載する。読みを推測で補わず、確認できない場合は `null` とする。オリジナルの Wikipedia・Wikidata のリンクは `null` とする。配布時には GSI 用の `supplements.json` により、日本百名山 100 件のタグと山名・読み・別名の補正、配布対象からの除外を適用する。補足の出典と加工内容は補足 JSON の `metadata.sources` に記録する。注記位置・自然地名の代表点で取得した DEM の地表標高は、公称の山頂標高と区別する。
+山名・よみがな・別名の照合と、山頂座標・標高の優先順位は「[名前・位置・ID の照合](#名前位置id-の照合)」に記載する。読みを推測で補わず、確認できない場合は `null` とする。オリジナルの Wikipedia・Wikidata のリンクは `null` とする。配布時には GSI 用の `supplements.json` により、`日本百名山` タグと山名・読み・別名の補正、配布対象からの除外を適用する。補足の出典と加工内容は補足 JSON の `metadata.sources` に記録する。注記位置・自然地名の代表点で取得した DEM の地表標高は、公称の山頂標高と区別する。
 
 ### 名前・位置・ID の照合
 
@@ -40,7 +40,7 @@
 - 自然地名と山岳一覧の表示名が完全一致し、100 m 以内で一意に対応する場合は、一つの地点にまとめて山岳一覧の位置・標高・読みを優先する。読みの相違はレポートに記録する。同名でも位置が離れていれば別の地点として残す。
 - 自然地名の外字は復元を推測せず、その地点を除外してレポートに記録する。
 - 自然地名には標高がない。範囲指定の生成では `--dem` を付けた場合、全国全取得では常に、その代表点の地表標高を標高タイルから補う。これは公称の山頂標高とは区別し、補った件数をレポートに記録する。タイルや値が欠ける場合は標高を `null` にする。
-- オリジナルの Wikipedia・Wikidata リンクは `null`。日本百名山タグと名前・読み・別名の補正、配布除外は GSI 用の `supplements.json` で適用する。
+- オリジナルの Wikipedia・Wikidata リンクは `null`。`日本百名山` タグと名前・読み・別名の補正、配布除外は GSI 用の `supplements.json` で適用する。
 
 ### 地点ごとの出典情報
 
@@ -129,6 +129,14 @@ python points/gsi-peaks/vector.py \
 
 抽出済みのベクトルタイルがある場合は、`--extraction-cache build/gsi-national-vector/vector-annotations.sqlite3` も指定すると山名の抽出を再利用できる。この指定がない場合は出力先の `vector-annotations.sqlite3` を使う。
 
+### 標高の補完
+
+全国版では DEM1A はズーム 17、DEM5A/B/C はズーム 15、DEM10B はズーム 14 のPNGタイルを使う。採用した標高の出典は `elevation-sources.json` に記録する。
+
+三角点・標高点の標高も山の最高地点の標高とは限らず、DEMは指定座標の地表標高を表す。
+
+範囲指定の `generate.py --dem` と `fetch_all.py` は、2024 年 10 月以降更新されていない `dem` のテキスト形式を使う。
+
 ### 自然地名の取得範囲とキャッシュ
 
 自然地名は、ベクトルタイルの山と山岳一覧の各地点から、周囲 100 m にかかる自然地名のズーム 15 のタイルだけを選ぶ。タイル境界をまたぐ場合は隣接タイルも含め、同じタイルは一度だけ取得する。
@@ -154,6 +162,8 @@ python -m release_tools.gsi_peaks snapshot --source build/gsi-national-primary
 Release の Action はコミット済みの地点 JSON と出典要約を使う。PMTiles や SQLite はローカルに保管する。
 
 ### 元データの保管と再生成
+
+元資料の資料日や取得日時は `snapshot.json` と元データの取得記録を参照する。自然地名タイルは実験提供のため、取得したファイルをキャッシュとハッシュで固定する。生成日時や取得日時を元データの編集日時として記録しない。
 
 取得した元データは生成後も削除しない。自然地名の GeoJSON は `build/gsi-national-all/natural-tiles.sqlite3` の `tiles.body` に gzip で可逆圧縮して保存する。解凍すると取得時の元のバイト列に戻り、SHA-256 で一致を確認できる。山岳一覧の CSV と標高タイルの元データは `build/gsi-cache/` の `.data` に保存する。両方の保存先を保管すると、取得時と同じ入力から再生成できる。これらは Git の管理対象外。
 
@@ -271,7 +281,7 @@ python points/gsi-peaks/fetch_all.py
 
 補足の出典・ライセンス・帰属表示・加工内容は補足 JSON の `metadata.sources` に記録する。マージ済み地点 JSON には原本と補足の出典をまとめ、その `metadata` を配布 manifest にコピーする。出典は `note` に記載しない。項目と制約は [metadata フォーマット](../../formats/metadata.md) を参照する。
 
-`snapshot.json` は補足適用前の原本の出典と取得記録を保持する。
+`snapshot.json` は補足適用前の原本の出典と取得記録を保持する。 日時の項目と制約は [metadata フォーマット](../../formats/metadata.md) と [manifest フォーマット](../../formats/manifest.md) を参照する。
 
 ### タグごとの記録
 
@@ -281,30 +291,23 @@ python points/gsi-peaks/fetch_all.py
 
 | タグ | 読み | 記録 |
 |---|---|---|
-| 日本百名山 | にほんひゃくめいざん | [採用地点の対応表](notes/日本百名山.md)。国土地理院での名称、補足適用後の表示名・読み・別名と、初期照合時の記録 |
+| 日本百名山 | にほんひゃくめいざん | [日本百名山の作成手順と採用地点](notes/日本百名山.md) |
 
 出典・利用条件は「[出典とライセンス](#出典とライセンス)」を参照する。
 
 
 ## 出典とライセンス
 
-| 用途 | 公式の出典 |
+| 用途 | 出典 |
 |---|---|
 | 山名・読み・最高地点・標高 | [日本の主な山岳標高一覧](https://www.gsi.go.jp/kihonjohochousa/kihonjohochousa41139.html)の [2026 年 3 月 31 日版 CSV](https://www.gsi.go.jp/KOKUJYOHO/MOUNTAIN/1003zan20260331.csv) |
 | 範囲内の山名・読み・代表点・別称 | [自然地名の GeoJSON タイル提供実験](https://github.com/gsi-cyberjapan/experimental_pni) |
 | 全国版の山の一覧・表示名・注記座標 | [最適化ベクトルタイル](https://github.com/gsi-cyberjapan/optimal_bvmap)（PMTiles） |
 | 三角点・標高点の標高 | 最適化ベクトルタイルの `Anno` 分類コード `7102`・`7201` |
 | 任意の地表標高の補完 | [標高タイル](https://maps.gsi.go.jp/development/demtile.html)（DEM1A・DEM5A/B/C・DEM10B の PNG） |
+| 日本百名山の山名一覧 | [Wikipedia「日本百名山」](https://ja.wikipedia.org/w/index.php?title=日本百名山#著書順の山の一覧)（CC BY-SA 4.0）。帰属表示・加工内容は補足 JSON の `metadata.sources` を参照 |
 
-全国版では DEM1A はズーム 17、DEM5A/B/C はズーム 15、DEM10B はズーム 14 を使う。採用した標高の出典を `elevation-sources.json` に記録する。三角点・標高点の標高も山の最高地点の標高とは限らず、DEM は指定座標の地表標高を表す。範囲指定の `generate.py --dem` と `fetch_all.py` は、2024 年 10 月以降更新されていない `dem` のテキスト形式を使う。
-
-国土地理院コンテンツ利用規約に基づき、[公共データ利用規約（第1.0版）](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)で利用する。出典・利用条件・帰属表示・加工内容は地点 JSON の `metadata.sources` に記録し、manifest の `metadata` にそのままコピーする。配布データの日時は manifest 直下の `dataTimestamp` に記録する。出典に由来する収録データの最終更新日時は `metadata.sources[].latestTimestamp` に記録し、不明なら省略する。生成日時や取得日時を元データの編集日時として記録しない。元資料の資料日や取得日時は `snapshot.json` と元データの取得記録を参照する。自然地名タイルは実験提供であり、取得した各ファイルの内容をキャッシュとハッシュで固定する。
-
-日本百名山の山名一覧は Wikipedia「日本百名山」に基づき、補足 JSON に CC BY-SA 4.0 と帰属表示を記録する。参照した版の URL は補足 JSON の `metadata.sources` を参照する。
-
-地点の座標・標高は国土地理院の資料から取得する。
-
-手動補正には複数の資料を参照しており、個別の資料名・参照 URL・参照日・利用条件・帰属表示は未記録である。詳細は補足 JSON の `metadata.sources` を参照する。
+国土地理院の資料は、[公共データ利用規約（第1.0版）](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)に従って利用・加工する。
 
 出典・利用条件の一覧は、[ルート README のライセンス](../../README.md#ライセンス)を参照する。
 

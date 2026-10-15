@@ -279,7 +279,7 @@ python scripts/build_data.py build/japan-latest.osm.pbf \
 
 | タグ | 読み | 記録 |
 |---|---|---|
-| 日本百名山 | にほんひゃくめいざん | [採用方針と検証記録](notes/日本百名山.md) |
+| 日本百名山 | にほんひゃくめいざん | [日本百名山の作成手順と採用地点](notes/日本百名山.md) |
 
 ### 対象 ID と管理用メモの補完
 
@@ -292,14 +292,13 @@ PYTHONPATH=points/osm-peaks python -m scripts.supplements points/osm-peaks/suppl
 
 ## 出典とライセンス
 
-| 用途 | 公式の出典 |
+| 用途 | 出典 |
 |---|---|
 | 山頂の一覧・山名・読み・別名・座標・標高・分類 | [OpenStreetMap](https://www.openstreetmap.org/) の名前付きノード。Geofabrik の [日本全国の PBF](https://download.geofabrik.de/asia/japan.html) から抽出する |
 | Wikipedia・Wikidata へのリンク | OpenStreetMap ノードの `wikipedia`・`wikidata` タグ |
+| 日本百名山の山名一覧 | [Wikipedia「日本百名山」](https://ja.wikipedia.org/w/index.php?title=日本百名山#著書順の山の一覧)（CC BY-SA 4.0）。帰属表示・加工内容は補足 JSON の `metadata.sources` を参照 |
 
 OpenStreetMap 由来のデータは **© OpenStreetMap contributors** を表示し、[Open Database License（ODbL）1.0](https://opendatacommons.org/licenses/odbl/1-0/) に従って利用・再配布する。[OpenStreetMap の著作権とライセンス](https://www.openstreetmap.org/copyright)を参照する。
-
-出典・利用条件・帰属表示は地点 JSON の `metadata.sources` に記録し、manifest の `metadata` にそのままコピーする。補足の出典と加工内容は「[出典の管理](#出典の管理)」を参照する。
 
 出典・利用条件の一覧は、[ルート README のライセンス](../../README.md#ライセンス)を参照する。
 
