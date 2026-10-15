@@ -62,7 +62,7 @@ const basePoints=[],tagEdits=new Map([[4,{}]]);let supplementDocument={},savedSu
 const fields={'supplement-sources':{value:'[]'},'supplement-tag-metadata':{value:'[]'},'tag-json-save-dialog':{close(){closed++;}},'tag-json-save-status':{textContent:''}};
 const document={getElementById(id){return fields[id];}};
 const filters={search:'山',tags:['A','B'],sources:['vector'],hidden:true,scroll:345};
-function exportSupplement(){return {...structuredClone(data),sources:{}};}function metadataMaps(){return {sources:{},tags:{}};}function validateTagMetadata(value){return value;}function validateSupplement(){}function applySupplement(){}function supplementJson(value){return value;}
+function supplementWithOriginalNames(data){return data;}function exportSupplement(){return {...structuredClone(data),sources:{}};}function metadataMaps(){return {sources:{},tags:{}};}function validateTagMetadata(value){return value;}function validateSupplement(){}function applySupplement(){}function supplementJson(value){return value;}
 async function saveFile(){return saveResult;}function recordSupplementEdit(){throw Error('内容が同じ保存では履歴を増やさない');}function showSaveResult(){}function resetSavedTags(){}
 async function refreshEditedSupplement(indices,value,record){assert.deepEqual(indices,[4]);assert.equal(record,false);refreshed++;supplementDocument=value;tagEdits.clear();}
 function refreshSupplement(){throw Error('全体描画では絞り込みが解除される');}

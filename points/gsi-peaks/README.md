@@ -275,7 +275,7 @@ python -m unittest release_tools.tests.test_gsi_peaks -v
 
 [supplements.json](supplements.json) は共通の補足形式で、`id` により GSI の地点を指定する。生成時はこのファイルを適用し、日本百名山 100 件のタグを付ける。`--supplements` で別の補足 JSON を指定できる。対象 ID が無ければ生成を失敗させ、別の地点へ自動で付け替えない。
 
-OSM 版の `note` と著書順、出典・ライセンスを保持する。[採用地点の対応表](notes/日本百名山.md) と [OSM 版の確認記録](notes/日本百名山-osm元記録.md) を参照する。利尻山・羊蹄山・焼岳は OSM 版と採用地点が異なるが、GSI 版の既存地点にタグを付ける。
+[採用地点の対応表](notes/日本百名山.md) に、現在の表示名・読み・別名と初期照合時の記録を分けて記載する。補足 JSON の配列は著書順を表さず、`note` は任意の管理用メモとする。出典・ライセンス・加工内容は補足 JSON の `metadata.sources` に記録する。
 
 補足の出典は生成 manifest、`snapshot.json`、配布 manifest の `metadata.sources` に保存する。地点の国土地理院データの利用条件に加え、日本百名山の山名一覧は CC BY-SA 4.0、照合元の OpenStreetMap データは ODbL 1.0 を参照する。
 

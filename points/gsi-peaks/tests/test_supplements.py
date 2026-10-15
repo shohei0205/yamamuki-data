@@ -24,8 +24,11 @@ class GsiSupplementTests(unittest.TestCase):
             self.assertNotIn("osmId", migrated)
             if "note" in migrated:
                 self.assertIsInstance(migrated["note"], str)
-        for key in ("source", "license", "attribution"):
-            self.assertEqual(metadata_maps(osm["metadata"])["sources"]["日本百名山"][key], metadata_maps(gsi["metadata"])["sources"]["日本百名山"][key])
+        osm_source = metadata_maps(osm["metadata"])["sources"]["日本百名山"]
+        gsi_source = metadata_maps(gsi["metadata"])["sources"]["日本百名山"]
+        self.assertIn(osm_source["source"], gsi_source["source"])
+        for key in ("license", "attribution"):
+            self.assertEqual(osm_source[key], gsi_source[key])
         points = json.loads((GSI / "gsi-peaks-source.json").read_bytes())["points"]
         original_points = json.dumps(points, ensure_ascii=False)
         actual, sources = supplement_points(points)

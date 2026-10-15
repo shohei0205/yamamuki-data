@@ -9,7 +9,7 @@ class ViewerRenderTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node.js が必要です")
     def test_point_reading_renders_and_compares_against_original(self):
         page=(Path(__file__).resolve().parents[1]/"viewer.html").read_text(encoding="utf-8")
-        names=("readingText","aliasEntries","aliasNames","makeTable")
+        names=("readingText","aliasEntries","aliasNames","mergedAliasEntries","aliasDisplayText","makeTable")
         functions="\n".join(next(line for line in page.splitlines() if line.startswith("function "+name+"(")) for name in names)
         checks=r"""
 const assert=require('node:assert/strict');
@@ -34,6 +34,7 @@ comparisons.length=0;
 row=makeTable([{...base,nameReading:'ほせいしたよみ'}]).children[0];
 assert.equal(row.children[5].textContent,'ほせいしたよみ');
 assert.deepEqual(comparisons[1],['ほせいしたよみ','しれとこだけ']);
+comparisons.length=0;row=makeTable([{...base,source:{...source,aliases:[{name:'別名'}]},aliasReadings:{'別名':['べつめい','べつのよみ']}}]).children[0];assert.deepEqual(comparisons[2],['別名（べつめい、べつのよみ）','別名']);
 row=makeTable([{...base,nameReading:null}]).children[0];assert.equal(row.children[5].textContent,'');
 row=makeTable([{...base,nameReading:['しろうまだけ','はくばだけ'],aliasReadings:{'別名':['よみ1','よみ2']}}]).children[0];assert.equal(row.children[5].textContent,'しろうまだけ、はくばだけ');assert.equal(row.children[6].textContent,'別名（よみ1、よみ2）');
 """
@@ -159,3 +160,49 @@ assert.equal(pointDetailTitle({pointName:'山',source:{}}),'山 の詳細');
 """
         result=subprocess.run(["node","-e",code+checks],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr.decode("utf-8",errors="replace"))
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js が必要です")
+    def test_alias_reading_change_marks_cell_bold_and_shows_original(self):
+        page=(Path(__file__).resolve().parents[1]/"viewer.html").read_text(encoding="utf-8")
+        names=("readingText","aliasEntries","mergedAliasEntries","aliasDisplayText","markSupplementCell")
+        code="\n".join(next(line for line in page.splitlines() if line.startswith("function "+name+"(")) for name in names)
+        checks=r"""
+const assert=require('node:assert/strict');
+function cell(text){const classes=new Set();return {textContent:text,classList:{add(value){classes.add(value);},contains(value){return classes.has(value);}}};}
+const source={aliases:[{name:'別名'}]},point={source,aliases:['別名'],aliasReadings:{'別名':['べつめい','べつのよみ']}};
+const current=aliasDisplayText(point),original=aliasDisplayText({source});let target=cell(current);markSupplementCell(target,current,original);assert.equal(target.classList.contains('supplement-modified'),true);assert.equal(target.title,'補足 JSON による変更（元の値: 別名）');
+target=cell(original);markSupplementCell(target,original,original);assert.equal(target.classList.contains('supplement-modified'),false);
+const withReading={aliases:[{name:'別名',nameReading:'もとのよみ'}]};target=cell('別名');markSupplementCell(target,'別名',aliasDisplayText({source:withReading}));assert.equal(target.classList.contains('supplement-modified'),true);assert.match(target.title,/もとのよみ/);
+"""
+        result=subprocess.run(["node","-"],input=code+checks,text=True,encoding="utf-8",capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js が必要です")
+    def test_copy_selected_points_matches_export_selection(self):
+        page=(Path(__file__).resolve().parents[1]/"viewer.html").read_text(encoding="utf-8")
+        code=next(line for line in page.splitlines() if line.startswith("async function copySelectedPoints("))
+        checks=r"""
+const assert=require('node:assert/strict');const points=[{source:{}},{source:{}}],selectedIndices=new Set([0,1]);let copied,indices,message;
+function selectedPointDocument(values){indices=values;return {schemaFormat:'yamamuki-points',schemaVersion:6,points:values.map(id=>({id}))};}
+function selectedPointJsonText(value){return JSON.stringify(value);}async function copyText(text){copied=JSON.parse(text);}function showToast(text){message=text;}
+(async()=>{await copySelectedPoints(points[0]);assert.deepEqual(indices,[0,1]);assert.equal(copied.points.length,2);assert.match(message,/2 件.*コピーしました/);selectedIndices.delete(1);await copySelectedPoints(points[1]);assert.deepEqual(indices,[1]);copyText=async()=>{throw Error('拒否');};await copySelectedPoints(points[0]);assert.match(message,/コピーできませんでした/);})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        result=subprocess.run(["node","-"],input=code+checks,text=True,encoding="utf-8",capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js が必要です")
+    def test_supplement_save_notes_are_original_names_for_all_rows(self):
+        page=(Path(__file__).resolve().parents[1]/"viewer.html").read_text(encoding="utf-8")
+        names=("supplementKey","pointReferenceKeys","supplementWithOriginalNames")
+        code="\n".join(next(line for line in page.splitlines() if line.startswith("function "+name+"(")) for name in names)
+        checks=r"""
+const assert=require('node:assert/strict');
+const entries=[{source:{id:'gsi:1',name:'東岳'},pointName:'悪沢岳'},{source:{id:'gsi:2',name:'別の山'}},{source:{id:'osm:3',name:'元のOSM山'},osmId:'3'}];
+const data={schemaVersion:2,points:[{id:'gsi:1',name:'悪沢岳',note:'旧メモ'},{id:'gsi:2',exclude:true},{id:'osm:3',tags:['分類']}]};const before=JSON.stringify(data);
+const result=supplementWithOriginalNames(data,entries);assert.deepEqual(result.points.map(row=>row.note),['東岳','別の山','元のOSM山']);assert.equal(JSON.stringify(data),before);assert.equal(result.points[0].name,'悪沢岳');assert.equal(result.points[1].exclude,true);
+assert.throws(()=>supplementWithOriginalNames({points:[{id:'unknown'}]},entries),/確認できない/);
+assert.deepEqual(supplementWithOriginalNames({points:[]},[]),{points:[]});
+"""
+        result=subprocess.run(["node","-"],input=code+checks,text=True,encoding="utf-8",capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertNotIn('id="supplement-note"',page)

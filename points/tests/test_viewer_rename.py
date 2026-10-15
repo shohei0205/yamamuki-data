@@ -30,7 +30,7 @@ assert.ok(filtered);assert.deepEqual(selectedFilterValues(provenanceFilters[0]),
     @unittest.skipUnless(shutil.which("node"), "Node.js がありません")
     def test_inherit_nearby_name_and_exclude_as_one_supplement(self):
         page=(Path(__file__).resolve().parents[1]/"viewer.html").read_text(encoding="utf-8")
-        names=("pointReference","pointReferenceKeys","supplementKey","supplementMatches","supplementForPoint","aliasEntries","moveNameToAlias","excludeNearbyPoint","inheritNearbyName")
+        names=("pointReference","pointReferenceKeys","supplementKey","supplementMatches","supplementForPoint","aliasEntries","mergedAliasEntries","inheritedAliasEntries","moveNameToAlias","excludeNearbyPoint","inheritNearbyName")
         code="\n".join(next(line for line in page.splitlines() if line.startswith("function "+name+"(")) for name in names)
         checks=r"""
 const assert=require('node:assert/strict');
@@ -44,6 +44,12 @@ assert.deepEqual(result.points[1],{...data.points[1],exclude:true});
 assert.equal(current.pointName,'柴安嵓');assert.equal(nearby.pointName,'燧ヶ岳');
 const missing=inheritNearbyName(data,current,{...nearby,nameReading:null});assert.equal(missing.points[0].nameReading,null);
 assert.throws(()=>inheritNearbyName(data,current,current));
+const recipient={...current,source:{...current.source,aliases:[{name:'基準の既存別名',nameReading:'きじゅん'},{name:'燧ヶ岳',nameReading:'ひうちがたけ'}]},aliases:['基準の既存別名','燧ヶ岳'],aliasReadings:{'基準の既存別名':'きじゅん','燧ヶ岳':'ひうちがたけ'}};
+const donor={...nearby,aliases:['相手の既存別名','基準の既存別名'],aliasReadings:{'相手の既存別名':['よみ1','よみ2'],'基準の既存別名':'きじゅんべつよみ'}};
+const preserved=inheritNearbyName(data,recipient,donor).points[0];
+assert.deepEqual(preserved.aliases,[{name:'基準の既存別名',nameReading:['きじゅん','きじゅんべつよみ']},{name:'別名'},{name:'柴安嵓',nameReading:'しばやすぐら'},{name:'相手の既存別名',nameReading:['よみ1','よみ2']}]);
+assert.ok(preserved.aliasesRemove.includes('燧ヶ岳'));assert.ok(!preserved.aliasesRemove.includes('柴安嵓'));
+assert.deepEqual(inheritedAliasEntries([{name:'別名',nameReading:'よみ'}],[{name:'別名',nameReading:'よみ'},{name:'削除済み'}],['削除済み']),[{name:'別名',nameReading:'よみ'}]);
 """
         result=subprocess.run(["node","-e",code+checks],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr.decode("utf-8",errors="replace"))
