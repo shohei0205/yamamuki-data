@@ -33,12 +33,12 @@ jobs:
       PYTHONUNBUFFERED: '1'
       GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Pages の設定を確認
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
       - name: 指定した地点データだけを一覧から削除
         env:
           DATASET: ${{ inputs.dataset }}
@@ -46,11 +46,11 @@ jobs:
           PAGES_DIRECTORY: ${{ github.workspace }}/build/pages
         run: python -m scripts.release_data remove-dataset --dataset "$DATASET" --channel "$RELEASE_CHANNEL"
       - name: 更新した配布サイトを保存
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v5
         with:
           path: build/pages
       - name: 更新したカタログを Pages に配置
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
       - name: 配置したカタログと公開履歴を確認
         run: python -m scripts.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"

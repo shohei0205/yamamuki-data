@@ -23,11 +23,11 @@ jobs:
     name: 地点 / 共通ビューア
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - name: 共通ビューアのテスト
@@ -40,8 +40,8 @@ jobs:
       run:
         working-directory: points/osm-peaks
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: osmium を準備
@@ -55,8 +55,8 @@ jobs:
     name: 地点 / 国土地理院山頂
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: コミット済み JSON と Release 公開処理のテスト
@@ -66,8 +66,8 @@ jobs:
     name: 地点 / テストデータ
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: 架空データの生成・公開処理のテスト
