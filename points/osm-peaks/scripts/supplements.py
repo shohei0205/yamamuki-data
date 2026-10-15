@@ -16,7 +16,7 @@ else:
 from pathlib import Path as _Path
 import sys as _sys
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
-from document_metadata import osm_node_id, validate_related_ids, validate_point_id, validate_osm_id, alias_objects, metadata_arrays, metadata_maps
+from document_metadata import name_reading, osm_node_id, validate_related_ids, validate_point_id, validate_osm_id, alias_objects, metadata_arrays, metadata_maps
 
 DEFAULT_SUPPLEMENTS = Path(__file__).resolve().parents[1] / "supplements.json"
 FIELDS = {"name", "nameReading", "aliases", "aliasesRemove", "tags", "tagsRemove", "exclude", "graphic", "relatedIds"}
@@ -89,7 +89,7 @@ def validate_supplements(data):
                 raise ValueError(f"{key} は文字列にしてください")
         if "name" in row and not text(row["name"]):
             raise ValueError("補正する地点名は空でない文字列にしてください")
-        if "nameReading" in row and row["nameReading"] is not None and not text(row["nameReading"]):
+        if "nameReading" in row and row["nameReading"] is not None and not name_reading(row["nameReading"]):
             raise ValueError("よみがなは空でない文字列または null にしてください")
         if "relatedIds" in row:
             validate_related_ids(row["relatedIds"],row.get("id"))
@@ -118,7 +118,9 @@ def validate_supplements(data):
                 alias_objects(value)
             elif key == "relatedIds":
                 validate_related_ids(value)
-            elif key in {"name","nameReading"} and value is not None and not isinstance(value, str):
+            elif key == "nameReading" and value is not None and not name_reading(value):
+                raise ValueError("expected のよみがなが不正です")
+            elif key == "name" and value is not None and not isinstance(value, str):
                 raise ValueError("expected の名前・よみがなが不正です")
     return data
 

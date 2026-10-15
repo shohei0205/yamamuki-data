@@ -49,8 +49,7 @@
         "nameReading": {
           "anyOf": [
             {
-              "type": "string",
-              "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+              "$ref": "../../schemas/metadata-v1.schema.json#/$defs/nameReading"
             },
             {
               "type": "null"
@@ -89,11 +88,7 @@
                 "pattern": "^\\S(?:.*\\S)?$"
               },
               "nameReading": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "pattern": "^\\S(?:.*\\S)?$"
+                "$ref": "../../schemas/metadata-v1.schema.json#/$defs/nameReading"
               }
             },
             "additionalProperties": true

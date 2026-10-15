@@ -10,6 +10,12 @@ def text(value):
     return isinstance(value, str) and bool(value) and value == value.strip()
 
 
+def name_reading(value):
+    """単一の読み、または重複のない1件以上の読みを検証する。"""
+    return text(value) or (isinstance(value, list) and bool(value)
+                           and all(text(item) for item in value) and len(set(value)) == len(value))
+
+
 MAX_OSM_ID = 9007199254740991
 
 
@@ -48,6 +54,8 @@ def validate_related_ids(values, identifier=None):
 
 def validate_point_identifiers(point):
     validate_point_id(point.get("id"))
+    if point.get("nameReading") is not None and not name_reading(point["nameReading"]):
+        raise ValueError("nameReading が不正です")
     if point.get("osmId") is not None:
         validate_osm_id(point["osmId"])
     osm_node_id(point)
@@ -57,6 +65,8 @@ def validate_point_identifiers(point):
 
 def distributed_point(point):
     """地点版6では旧 osmId を関連地点 ID に変換する。"""
+    if point.get("nameReading") is not None and not name_reading(point["nameReading"]):
+        raise ValueError("よみがなは空でない文字列または重複のない読みの配列にしてください")
     result = ordered_point(point)
     osm_id = result.pop("osmId", None)
     if osm_id is not None:
@@ -108,7 +118,7 @@ def validate_metadata(data, point_count=None):
     if "tags" in data:
         tags = data["tags"]
         if not isinstance(tags, dict) or any(not text(k) or not isinstance(v, dict)
-                or ("nameReading" in v and not text(v["nameReading"])) for k,v in tags.items()):
+                or ("nameReading" in v and not name_reading(v["nameReading"])) for k,v in tags.items()):
             raise ValueError("タグ情報が不正です")
     if "sources" in data:
         sources = data["sources"]
@@ -167,14 +177,14 @@ def alias_objects(aliases, readings=None, legacy=True):
         item = {"name":value} if legacy and isinstance(value,str) else dict(value) if isinstance(value,dict) else None
         if item is None or not text(item.get("name")):
             raise ValueError("別名は name と任意の nameReading を持つ object にしてください")
-        if "nameReading" in item and item["nameReading"] is not None and not text(item["nameReading"]):
+        if "nameReading" in item and item["nameReading"] is not None and not name_reading(item["nameReading"]):
             raise ValueError("別名の読みは空でない文字列または null にしてください")
         if item["name"] in seen:
             raise ValueError("別名の name が重複しています")
         seen.add(item["name"])
         result.append(item)
     if readings is not None:
-        if not isinstance(readings,dict) or any(k not in seen or not text(v) for k,v in readings.items()):
+        if not isinstance(readings,dict) or any(k not in seen or not name_reading(v) for k,v in readings.items()):
             raise ValueError("旧別名よみがなの対応が不正です")
         for item in result:
             if item["name"] in readings:

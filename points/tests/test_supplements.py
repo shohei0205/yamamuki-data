@@ -30,6 +30,8 @@ for(const [field,key] of [['sources','name'],['tags','name']])assert.throws(()=>
 const extension={future:{values:[1,null,true]}};assert.equal(entriesFromJson({...doc,...extension,points:[{...doc.points[0],...extension,provenance:extension}]}).length,1);assert.equal(applySupplement(base,{...data,...extension,points:[{...data.points[0],...extension,expected:extension}]})[0].pointName,'補正した山');validateTagMetadata({'分類':{nameReading:'ぶんるい',...extension}});
 const relatedBase=[{source:{id:'gsi-vector:sample',name:'山',relatedIds:['custom:old']},pointName:'山',tags:[]}];const relatedPatch={schemaFormat:'yamamuki-point-supplements',schemaVersion:2,points:[{id:'gsi-vector:sample',relatedIds:['osm:123','custom:not-loaded'],expected:{relatedIds:['custom:old']}}]};assert.deepEqual(applySupplement(relatedBase,relatedPatch)[0].relatedIds,['osm:123','custom:not-loaded']);assert.deepEqual(applySupplement(relatedBase,{...relatedPatch,points:[{...relatedPatch.points[0],relatedIds:[]}]} )[0].relatedIds,[]);for(const value of [null,'osm:123',[1],[''],[' osm:123'],['osm:123','osm:123'],['gsi-vector:sample']])assert.throws(()=>validateRelatedIds(value,'gsi-vector:sample'));assert.deepEqual(supplementJson({schemaVersion:1,points:[{osmId:123,tags:['分類']}]}).points,[{id:'osm:123',tags:['分類']}]);const osmEntry=entriesFromJson({schemaFormat:'yamamuki-points',schemaVersion:6,points:[{id:'osm:123',name:'山',latitude:35,longitude:139}]})[0];assert.equal(osmEntry.osmId,'123');assert.equal(osmEntry.url,'https://www.openstreetmap.org/node/123');
 const nested={schemaFormat:'yamamuki-point-supplements',schemaVersion:2,metadata:{sources:[{name:'資料',source:'資料名'}],tags:[{name:'日本百名山',nameReading:'にほんひゃくめいざん'}]},points:[{id:'osm:1',aliases:[{name:'柴安嵓',nameReading:'しばやすぐら'}]}]};assert.deepEqual(supplementJson(parseSupplement(JSON.stringify(nested))),nested);const nestedDoc=entriesFromJson({schemaFormat:'yamamuki-points',schemaVersion:6,metadata:{pointCount:1,sources:{国土地理院:{license:'PDL-1.0'}},tags:nested.metadata.tags},points:[{id:'gsi:1',name:'燧ヶ岳',latitude:35,longitude:139,aliases:[{name:'柴安嵓',nameReading:'しばやすぐら'}]}]});assert.ok(pointSearchText(nestedDoc[0]).includes('しばやすぐら'));assert.equal(nestedDoc.metadata.pointCount,1);
+const multi={schemaFormat:'yamamuki-point-supplements',schemaVersion:2,points:[{id:'gsi:1',nameReading:['しろうまだけ','はくばだけ']}]};const multiBase=[{source:{id:'gsi:1',name:'白馬岳'},pointName:'白馬岳',tags:[]}];const multiPoint=applySupplement(multiBase,multi)[0];assert.ok(pointSearchText(multiPoint).includes('はくばだけ'));assert.deepEqual(multiPoint.nameReading,['しろうまだけ','はくばだけ']);for(const nameReading of [[],['同じ','同じ'],['', '読み']])assert.throws(()=>validateSupplement({...multi,points:[{id:'gsi:1',nameReading}]}));
+const tagReadings=['にほんひゃくめいざん','にっぽんひゃくめいざん'];const multiTags={...nested,metadata:{...nested.metadata,tags:[{name:'日本百名山',nameReading:tagReadings}]}};assert.deepEqual(supplementJson(parseSupplement(JSON.stringify(multiTags))),multiTags);validateTagMetadata({'日本百名山':{nameReading:tagReadings}});for(const nameReading of [null,[],['同じ','同じ'],[''],[' 前後 '],[2]])assert.throws(()=>validateTagMetadata({'分類':{nameReading}}));
 const original=JSON.stringify(base);const parsed=parseSupplement(JSON.stringify(data));const result=applySupplement(base,parsed)[0];assert.equal(result.pointName,'補正した山');assert.equal(result.nameReading,null);assert.deepEqual(result.aliases,['別名']);assert.deepEqual(result.tags,['元タグ','分類A','分類B']);assert.equal(JSON.stringify(base),original);assert.deepEqual(parseSupplement(JSON.stringify(parsed)),data);assert.deepEqual(parseSupplement(JSON.stringify({schemaVersion:1,points:[{osmId:1,aliases:[{name:'柴安嵓',nameReading:'しばやすぐら'}]}]})).points[0].aliases,[{name:'柴安嵓',nameReading:'しばやすぐら'}]);
 assert.equal(supplementTables(data).size,3);assert.ok(supplementTables(data).has('分類A'));assert.ok(supplementTables(data).has('分類B'));
 for(const fields of [{name:'補正名'},{exclude:true},{nameReading:null},{aliasesRemove:['旧別名']}])for(const reason of [{},{reason:''},{reason:'資料で確認'}]){const optional={schemaVersion:1,points:[{osmId:1,...fields,...reason}]};validateSupplement(optional);applySupplement(base,optional);}
@@ -38,7 +40,7 @@ for(const update of [{name:''},{reason:1},{nameReading:''},{tags:['a','a']},{ali
 assert.throws(()=>applySupplement(base,{...data,points:[{...data.points[0],expected:{name:'別の山'}}]}),/想定/);
 assert.throws(()=>applySupplement(base,{...data,points:[{...data.points[0],osmId:999}]}),/存在しない/);
 '''
-        result=subprocess.run([shutil.which('node'),'-e',source+checks],capture_output=True)
+        result=subprocess.run([shutil.which('node'),'-'],input=(source+checks).encode('utf-8'),capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr.decode('utf-8',errors='replace'))
 
     @unittest.skipUnless(shutil.which('node'),'Node.js がありません')
@@ -59,14 +61,14 @@ assert.deepEqual(parseSupplement(JSON.stringify(exportSupplement())),supplementD
 for(const graphic of [{},{svg:3},{svg:''},... [0,-1,true,'2',Infinity].map(scale=>({svg:'x',scale}))])assert.throws(()=>validateSupplement({schemaVersion:1,points:[{osmId:1,graphic}]}));
 assert.deepEqual(applySupplement(basePoints,{schemaVersion:1,points:[]})[0].source.graphic,originalGraphic);
 '''
-        result=subprocess.run([shutil.which('node'),'-e',source+checks],capture_output=True)
+        result=subprocess.run([shutil.which('node'),'-'],input=(source+checks).encode('utf-8'),capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr.decode('utf-8',errors='replace'))
 
     @unittest.skipUnless(shutil.which('node'),'Node.js がありません')
     def test_detail_describes_actual_changes(self):
         page=(Path(__file__).resolve().parents[1]/'viewer.html').read_text(encoding='utf-8')
         aliases='function aliasEntries('+page.split('function aliasEntries(',1)[1].split('function validateDocumentMetadata(',1)[0]
-        source=aliases+'function supplementChangeLines('+page.split('function supplementChangeLines(',1)[1].split('function showSupplementOrigin',1)[0]
+        source=next(line for line in page.splitlines() if line.startswith('function readingText('))+'\n'+aliases+'function supplementChangeLines('+page.split('function supplementChangeLines(',1)[1].split('function showSupplementOrigin',1)[0]
         checks=r'''
 const assert=require('node:assert/strict');
 const source={name:'元の山',nameReading:'もと',tags:['残すタグ','旧タグ'],aliases:['旧別名']};
@@ -74,13 +76,14 @@ const point={source,pointName:'新しい山',nameReading:null,tags:['残すタ�
 assert.deepEqual(supplementChangeLines(point,{reason:'資料を確認'}),['地点名: 元の山 → 新しい山','よみがな: もと → なし（削除）','タグを追加: 日本百名山','タグを削除: 旧タグ','別名を追加: 新別名','別名を削除: 旧別名','表示・配布対象から除外','理由: 資料を確認']);
 assert.deepEqual(supplementChangeLines({source,pointName:source.name,tags:source.tags},{}),['補足による変更なし']);
 '''
-        result=subprocess.run([shutil.which('node'),'-e',source+checks],capture_output=True)
+        result=subprocess.run([shutil.which('node'),'-'],input=(source+checks).encode('utf-8'),capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr.decode('utf-8',errors='replace'))
 
     @unittest.skipUnless(shutil.which('node'),'Node.js がありません')
     def test_graphic_columns_use_effective_image_and_numeric_scale(self):
         page=(Path(__file__).resolve().parents[1]/'viewer.html').read_text(encoding='utf-8')
         source='function pointGraphic('+page.split('function pointGraphic(',1)[1].split('function appendGraphicCells',1)[0]
+        source+=next(line for line in page.splitlines() if line.startswith('function readingText('))+'\n'
         source+='function pointSortKey('+page.split('function pointSortKey(',1)[1].split('function sortPointRows',1)[0]
         checks=r'''
 const assert=require('node:assert/strict');
@@ -90,7 +93,7 @@ assert.equal(pointGraphic(points[0]).svg,'original');assert.equal(pointGraphic(p
 assert.deepEqual(points.map((_,index)=>pointSortKey(index)),[10,2,null,1]);
 assert.equal(graphicScaleText({}), '1.0倍');assert.equal(graphicScaleText({scale:2}), '2.0倍');assert.equal(graphicScaleText({scale:1.25}), '1.25倍');
 '''
-        result=subprocess.run([shutil.which('node'),'-e',source+checks],capture_output=True)
+        result=subprocess.run([shutil.which('node'),'-'],input=(source+checks).encode('utf-8'),capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr.decode('utf-8',errors='replace'))
 
     @unittest.skipUnless(shutil.which('node'), 'Node.js がありません')

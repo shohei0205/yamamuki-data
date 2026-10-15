@@ -114,7 +114,7 @@ globalThis.Worker=class{
         detail='function detailHeightBounds('+page.split('function detailHeightBounds(',1)[1].split('const detailDivider=',1)[0]
         revealing='function revealRow('+page.split('function revealRow(',1)[1].split('function fitVisible()',1)[0]
         checks+=r"""
-let largeMode=true,displayOrder=Array.from({length:779673},(_,i)=>i),rows=[],selectedIndex=null;
+let largeMode=true,displayOrder=Array.from({length:779673},(_,i)=>i),rows=[],selectedIndex=null;const selectedIndices=new Set();
 const points=displayOrder.map(i=>({pointName:String(i)}));
 let created=0,rendered=[];
 const table={style:{},replaceChildren(fragment){rendered=fragment.children;},setAttribute(){}};

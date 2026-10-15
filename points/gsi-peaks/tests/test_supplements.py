@@ -13,22 +13,27 @@ from document_metadata import metadata_maps
 
 
 class GsiSupplementTests(unittest.TestCase):
-    def test_hundred_tags_notes_and_order_are_preserved(self):
+    def test_hundred_tags_sources_and_optional_notes_with_other_corrections(self):
         osm = json.loads((ROOT / "points/osm-peaks/supplements.json").read_bytes())
         gsi = json.loads((GSI / "supplements.json").read_bytes())
-        self.assertEqual(len(gsi["points"]), 100)
-        self.assertEqual(len({p["id"] for p in gsi["points"]}), 100)
-        for original, migrated in zip(osm["points"], gsi["points"]):
-            self.assertEqual(original["note"], migrated["note"])
-            self.assertEqual(original["tags"], migrated["tags"])
+        hundred = [p for p in gsi["points"] if "日本百名山" in p.get("tags", [])]
+        self.assertEqual(len(hundred), 100)
+        self.assertEqual(len({p["id"] for p in gsi["points"]}), len(gsi["points"]))
+        for migrated in hundred:
+            self.assertEqual(migrated["tags"], ["日本百名山"])
             self.assertNotIn("osmId", migrated)
+            if "note" in migrated:
+                self.assertIsInstance(migrated["note"], str)
         for key in ("source", "license", "attribution"):
             self.assertEqual(metadata_maps(osm["metadata"])["sources"]["日本百名山"][key], metadata_maps(gsi["metadata"])["sources"]["日本百名山"][key])
-        points = supplement_points(json.loads((GSI / "gsi-peaks-source.json").read_bytes())["points"])[0]
+        points = json.loads((GSI / "gsi-peaks-source.json").read_bytes())["points"]
+        original_points = json.dumps(points, ensure_ascii=False)
         actual, sources = supplement_points(points)
-        self.assertEqual(actual, points)
+        self.assertEqual(json.dumps(points, ensure_ascii=False), original_points)
+        excluded = {p["id"] for p in gsi["points"] if p.get("exclude")}
+        self.assertFalse(excluded & {p["id"] for p in actual})
         tagged = {p["id"] for p in actual if "日本百名山" in p.get("tags", [])}
-        self.assertEqual(tagged, {p["id"] for p in gsi["points"]})
+        self.assertEqual(tagged, {p["id"] for p in hundred})
         self.assertTrue({"gsi-mountain-list:17", "gsi-mountain-list:100", "gsi-mountain-list:510",
                          "gsi-mountain-list:368", "gsi-vector:6a6975159e2a0acd6117cb58"} <= tagged)
         self.assertEqual(sources, metadata_maps(gsi["metadata"])["sources"])

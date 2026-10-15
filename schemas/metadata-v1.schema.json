@@ -61,8 +61,7 @@
             "pattern": "^\\S(?:.*\\S)?$"
           },
           "nameReading": {
-            "type": "string",
-            "pattern": "^\\S(?:.*\\S)?$"
+            "$ref": "#/$defs/nameReading"
           }
         },
         "additionalProperties": true,
@@ -71,6 +70,23 @@
         ]
       },
       "description": "識別子が重複しない情報の配列。"
+    },
+    "nameReading": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+          }
+        }
+      ]
     }
   }
 }

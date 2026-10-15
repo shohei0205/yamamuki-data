@@ -236,3 +236,39 @@ class DocumentLayoutTests(unittest.TestCase):
         lines=[line.strip().removesuffix(",") for line in raw.splitlines() if line.lstrip().startswith('{"id":')]
         self.assertEqual([json.loads(line) for line in lines],body["points"])
         self.assertTrue(raw.endswith("\n"))
+
+
+class MultipleReadingTests(unittest.TestCase):
+    def test_readings_survive_supplements_aliases_and_streaming(self):
+        from scripts.point_document import document
+        from scripts.supplements import apply_supplements, validate_supplements
+        readings=["しろうまだけ","はくばだけ"]
+        point={"id":"osm:123","name":"白馬岳","nameReading":"しろうまだけ","latitude":36.75,"longitude":137.75}
+        patch={"schemaFormat":"yamamuki-point-supplements","schemaVersion":2,"points":[{"id":point["id"],"nameReading":readings,"aliases":[{"name":"別名","nameReading":readings}],"expected":{"nameReading":"しろうまだけ"}}]}
+        merged=apply_supplements([point],patch)
+        self.assertEqual(merged[0]["nameReading"],readings)
+        self.assertEqual(rows(document(merged)),merged)
+        with tempfile.TemporaryDirectory() as directory:
+            write_points(merged,directory,"multiple")
+            self.assertEqual(list(read_points(Path(directory)/"multiple.json"))[0]["nameReading"],readings)
+        for bad in [[],[""],["しろうまだけ","しろうまだけ"],["しろうまだけ",3],[" はくばだけ"]]:
+            with self.subTest(bad=bad),self.assertRaises(ValueError):
+                validate_supplements({"schemaFormat":"yamamuki-point-supplements","schemaVersion":2,"points":[{"id":point["id"],"nameReading":bad}]})
+
+
+class TagReadingTests(unittest.TestCase):
+    def test_tag_metadata_readings_roundtrip_and_reject_invalid_arrays(self):
+        from document_metadata import metadata_arrays, metadata_maps
+        from scripts.point_tags import validate_tag_metadata
+        from scripts.point_document import document
+        from scripts.supplements import supplement_document
+        readings=["にほんひゃくめいざん","にっぽんひゃくめいざん"]
+        tags={"日本百名山":{"nameReading":readings}}
+        self.assertEqual(validate_tag_metadata(tags),tags)
+        self.assertEqual(metadata_maps(metadata_arrays({"tags":tags}))["tags"],tags)
+        point={"id":"osm:1","name":"山","latitude":35,"longitude":139}
+        self.assertEqual(document([point],tags)["metadata"]["tags"][0]["nameReading"],readings)
+        self.assertEqual(supplement_document({"schemaVersion":1,"tags":tags,"points":[]})["metadata"]["tags"][0]["nameReading"],readings)
+        for bad in [None,[],[""],["同じ","同じ"],[" 空白"],[1]]:
+            with self.subTest(bad=bad),self.assertRaises(ValueError):
+                validate_tag_metadata({"分類":{"nameReading":bad}})

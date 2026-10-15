@@ -71,7 +71,7 @@ assert.equal(excludeNearbyPoint(result,{osmId:'123'}).points.length,2);
     def test_move_current_name_and_reading_without_losing_existing_aliases(self):
         page=(Path(__file__).resolve().parents[1]/"viewer.html").read_text(encoding="utf-8")
         lines=page.splitlines()
-        code="\n".join(next(line for line in lines if line.startswith("function "+name+"(")) for name in ("aliasEntries","aliasEditorText","parseAliasEditor","moveNameToAlias"))
+        code="\n".join(next(line for line in lines if line.startswith("function "+name+"(")) for name in ("parseReadingInput","aliasEntries","aliasEditorText","parseAliasEditor","moveNameToAlias"))
         handler=next(line for line in lines if line.startswith("document.getElementById('rename-with-alias').addEventListener"))
         setup=r"""
 const assert=require('node:assert/strict');
@@ -94,6 +94,10 @@ assert.deepEqual(parseAliasEditor(''),[]);
 assert.throws(()=>parseAliasEditor('{"name":"山"}\n壊れたJSON'),/2 行目/);
 assert.throws(()=>parseAliasEditor('null'));
 assert.throws(()=>parseAliasEditor('{"name":"山"}\n{"name":"山"}'),/重複/);
+assert.deepEqual(parseReadingInput('しろうまだけ\nはくばだけ'),['しろうまだけ','はくばだけ']);
+assert.throws(()=>parseReadingInput('しろうまだけ\nしろうまだけ'),/重複/);
+assert.throws(()=>parseReadingInput('  '));
+assert.deepEqual(moveNameToAlias('白馬岳',['しろうまだけ','はくばだけ'],[],[]).aliases,[{name:'白馬岳',nameReading:['しろうまだけ','はくばだけ']}]);
 const missing=moveNameToAlias('山',null,[],[]);assert.deepEqual(missing.aliases,[{name:'山'}]);
 fields['supplement-name'].value='編集中の名前';fields['supplement-reading'].value='へんしゅう';fields['supplement-reading-mode'].value='set';fields['supplement-aliases'].value='[]';
 events['rename-with-alias']();assert.deepEqual(parseAliasEditor(fields['supplement-aliases'].value),[{name:'編集中の名前',nameReading:'へんしゅう'}]);

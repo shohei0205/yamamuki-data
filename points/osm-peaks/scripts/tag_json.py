@@ -4,6 +4,9 @@ import argparse
 import gzip
 import json
 from pathlib import Path
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
+from document_metadata import name_reading
 
 DEFAULT_TAGS_DIRECTORY = Path(__file__).resolve().parents[1] / "tags"
 DEFAULT_OUTPUT_DIRECTORY = Path(__file__).resolve().parents[1] / "build" / "tags"
@@ -58,7 +61,7 @@ def read_tag_json(path, *, complete=False):
         if identifier is not None:
             seen.add(identifier)
         extra = {key: row[key] for key in ("nameReading", "aliases") if key in row}
-        if "nameReading" in extra and (not isinstance(extra["nameReading"], str) or not extra["nameReading"] or extra["nameReading"] != extra["nameReading"].strip()):
+        if "nameReading" in extra and not name_reading(extra["nameReading"]):
             raise ValueError(f"{path}: よみがなは空でない文字列にしてください")
         if "aliases" in extra:
             aliases = extra["aliases"]

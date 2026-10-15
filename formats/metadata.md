@@ -64,7 +64,7 @@ metadata の現行版は `1`。`metadata` 自体に `schemaFormat`・`schemaVers
 | 項目 | 型 | 必須 | 内容・制約 | 版の履歴 |
 |---|---|---|---|---|
 | `name` | string | 必須 | タグ名。各地点の `tags` の値と一致させる | [版1] 追加 |
-| `nameReading` | string | 任意 | タグ名の読み。空文字や前後に空白がある文字列は指定できない | [版1] 追加 |
+| `nameReading` | string または string の配列 | 任意 | タグ名の読み。複数ある場合は重複のない1件以上の文字列配列。空文字や前後の空白・空配列は指定できない | [版1] 追加 |
 
 読みが不明なら `nameReading` を省略する。読みがなくても `name` は必須。未知の属性は許可し、読み手は解釈しない。既知の属性には指定された型を使う。
 
@@ -108,7 +108,7 @@ metadata の現行版は `1`。`metadata` 自体に `schemaFormat`・`schemaVers
     "tags": [
       {
         "name": "日本百名山",
-        "nameReading": "にほんひゃくめいざん"
+        "nameReading": ["にほんひゃくめいざん", "にっぽんひゃくめいざん"]
       }
     ],
     "pointCount": 1

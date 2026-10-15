@@ -104,7 +104,7 @@ prevented=false;beforeUnload({preventDefault:()=>prevented=true});assert.equal(p
     def test_filter_index_merges_tag_origins(self):
         page = (Path(__file__).resolve().parents[1] / "viewer.html").read_text(encoding="utf-8")
         references = "function supplementKey(" + page.split("function supplementKey(", 1)[1].split("function addSupplementTags", 1)[0]
-        source = references + "const tableIdSets=" + page.split("const tableIdSets=", 1)[1].split("function renderView", 1)[0]
+        source = next(line for line in page.splitlines() if line.startswith("function readingText("))+"\n" + references + "const tableIdSets=" + page.split("const tableIdSets=", 1)[1].split("function renderView", 1)[0]
         checks = """
 const assert=require('node:assert/strict');const tagFilterIndex=new Map();
 const basePoints=[{tags:['分類']},{tags:[]},{tags:[]}];
@@ -113,7 +113,7 @@ const tagTables=new Map([['分類',{mappings:[{osmId:'2'}]}]]),tagEdits=new Map(
 assert.deepEqual(tagFilterOptions(),[['tag:分類','分類']]);
 assert.deepEqual([...tagFilterIndex.get('tag:分類')],[0,1]);assert.deepEqual([...tagFilterIndex.get('supplemented')],[]);points[2].supplement={nameReading:'やま'};tagFilterOptions();assert.deepEqual([...tagFilterIndex.get('supplemented')],[2]);assert.equal(matchesTagFilter(2,'supplemented'),true);assert.equal(matchesTagFilter(0,'supplemented'),false);assert.deepEqual([...tagFilterIndex.get('untagged')],[2]);
 let supplementDocument={tags:{'分類':{nameReading:'ぶんるい'}}};points[1].tags=[];tagFilterOptions();assert.deepEqual([...tagFilterIndex.get('tag:分類')],[0]);
-points[2].tags=['分類'];tagEdits.set(2,{add:new Set(['分類'])});tagFilterOptions();assert.deepEqual([...tagFilterIndex.get('tag:分類')],[0,2]);points[0].tags=[];points[2].tags=[];assert.deepEqual(tagFilterOptions(),[]);assert.equal(tagFilterIndex.has('tag:分類'),false);points[0].tags=['日本百名山','北海道百名山','九州百名山','関東百名山','信州百名山','東北百名山','読みなし'];supplementDocument.tags=Object.fromEntries([['関東','かんとう'],['九州','きゅうしゅう'],['信州','しんしゅう'],['東北','とうほく'],['日本','にほん'],['北海道','ほっかいどう']].map(([name,reading])=>[name+'百名山',{nameReading:reading+'ひゃくめいざん'}]));assert.deepEqual(tagFilterOptions().map(row=>row[1]),['関東百名山','九州百名山','信州百名山','東北百名山','日本百名山','北海道百名山','読みなし']);
+points[2].tags=['分類'];tagEdits.set(2,{add:new Set(['分類'])});tagFilterOptions();assert.deepEqual([...tagFilterIndex.get('tag:分類')],[0,2]);points[0].tags=[];points[2].tags=[];assert.deepEqual(tagFilterOptions(),[]);assert.equal(tagFilterIndex.has('tag:分類'),false);points[0].tags=['日本百名山','北海道百名山','九州百名山','関東百名山','信州百名山','東北百名山','読みなし'];supplementDocument.tags=Object.fromEntries([['関東','かんとう'],['九州','きゅうしゅう'],['信州','しんしゅう'],['東北','とうほく'],['日本','にほん'],['北海道','ほっかいどう']].map(([name,reading])=>[name+'百名山',{nameReading:reading+'ひゃくめいざん'}]));assert.deepEqual(tagFilterOptions().map(row=>row[1]),['関東百名山','九州百名山','信州百名山','東北百名山','日本百名山','北海道百名山','読みなし']);supplementDocument.tags['日本百名山'].nameReading=['にほんひゃくめいざん','にっぽんひゃくめいざん'];assert.equal(tagFilterOptions()[4][1],'日本百名山');
 """
         result = subprocess.run([shutil.which("node"), "-"], input=(source + checks).encode("utf-8"), capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))

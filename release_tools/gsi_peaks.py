@@ -16,7 +16,7 @@ from release_tools.test_points import ROOT, release_data, validate_rows
 from scripts.supplements import validate_supplement_sources, read_supplements, apply_supplements
 from scripts.point_document import rows as document_rows, metadata_of, document
 from scripts.point_tags import validate_tag_metadata
-from document_metadata import point_document_json, metadata_maps
+from document_metadata import point_document_json, metadata_maps, name_reading
 
 DATA = ROOT / "points/gsi-peaks"
 FILE = "gsi-peaks.json"
@@ -30,7 +30,7 @@ def validate(points):
     for point in points:
         if not point["id"].startswith(("gsi-mountain-list:", "gsi-natural:", "gsi-vector:")) or point.get("type") != "peak":
             raise ValueError("国土地理院の山頂以外の地点が含まれています")
-        if point.get("nameReading") is not None and not isinstance(point["nameReading"], str):
+        if point.get("nameReading") is not None and not name_reading(point["nameReading"]):
             raise ValueError("読みの形式が不正です")
         elevation = point.get("elevationM")
         if elevation is not None and (type(elevation) not in (int, float) or not math.isfinite(elevation)):

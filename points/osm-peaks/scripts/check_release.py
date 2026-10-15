@@ -42,7 +42,7 @@ def validate(directory, *, tag=None, channel="stable"):
         validate_supplement_sources(manifest["supplementSources"])
     original_manifest = manifest
     if manifest.get("schemaVersion") == 6:
-        from document_metadata import metadata_maps, validate_metadata, FIELDS
+        from document_metadata import name_reading, metadata_maps, validate_metadata, FIELDS
         if "dataSchemaVersion" not in manifest:
             raise ValueError("manifest 版6には dataSchemaVersion が必要です")
         if any(k in manifest for k in ("sourceUrl", "license", "attribution", "supplementSources", "sources", "tags", "pointCount", "latestPointTimestamp", "sourceTimestamp")):
@@ -155,6 +155,10 @@ def validate(directory, *, tag=None, channel="stable"):
         if data_version >= 2:
             for key in ("nameReading", "wikipediaUrl", "wikidataUrl"):
                 if key not in row and data_version >= 5:
+                    continue
+                if key == "nameReading" and data_version >= 6:
+                    if row.get(key) is not None and not name_reading(row[key]):
+                        raise ValueError("nameReading の形式が不正です")
                     continue
                 if key not in row or (row[key] is not None and not isinstance(row[key], str)):
                     raise ValueError(f"{key} の形式が不正です")

@@ -23,13 +23,16 @@ def validate_alias_readings(rows):
 
 
 def validate_tag_metadata(info):
+    from pathlib import Path
+    import sys
+    sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
+    from document_metadata import name_reading
     if not isinstance(info, dict):
         raise ValueError("tags はタグ名と情報の対応にしてください")
     for tag, value in info.items():
         if (not isinstance(tag, str) or not tag or tag != tag.strip()
                 or not isinstance(value, dict)):
             raise ValueError("tags のタグ名または項目が不正です")
-        if "nameReading" in value and (not isinstance(value["nameReading"], str)
-                or not value["nameReading"] or value["nameReading"] != value["nameReading"].strip()):
-            raise ValueError("tags.nameReading は前後に空白のない空でない文字列にしてください")
+        if "nameReading" in value and not name_reading(value["nameReading"]):
+            raise ValueError("tags.nameReading は前後に空白のない空でない文字列、または重複のない読みの配列にしてください")
     return info

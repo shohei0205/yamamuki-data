@@ -77,6 +77,15 @@ class GsiReleaseTests(unittest.TestCase):
             _, release = target.prepare('test-vector', root / 'release', 'dev', staged)
             self.assertEqual(release['sourceSnapshot']['vector']['files'], [vector_source])
 
+    def test_multiple_readings_are_valid_for_release(self):
+        point = {"id":"gsi-vector:test", "type":"peak", "name":"白馬岳",
+                 "latitude":36.75, "longitude":137.75, "elevationM":2932,
+                 "nameReading":["しろうまだけ", "はくばだけ"]}
+        target.validate([point])
+        for value in ([], ["同じ", "同じ"], [""], [1]):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                target.validate([{**point, "nameReading":value}])
+
     def test_committed_snapshot_and_deterministic_package(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

@@ -47,8 +47,7 @@
           "nameReading": {
             "anyOf": [
               {
-                "type": "string",
-                "pattern": "^\\S(?:.*\\S)?$"
+                "$ref": "../../schemas/metadata-v1.schema.json#/$defs/nameReading"
               },
               {
                 "type": "null"
@@ -77,11 +76,7 @@
                   "pattern": "^\\S(?:.*\\S)?$"
                 },
                 "nameReading": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "pattern": "^\\S(?:.*\\S)?$"
+                  "$ref": "../../schemas/metadata-v1.schema.json#/$defs/nameReading"
                 }
               },
               "additionalProperties": true
@@ -109,10 +104,7 @@
                 ]
               },
               "nameReading": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+                "$ref": "../../schemas/metadata-v1.schema.json#/$defs/nameReading"
               },
               "aliases": {
                 "type": "array",
@@ -127,11 +119,7 @@
                       "pattern": "^\\S(?:.*\\S)?$"
                     },
                     "nameReading": {
-                      "type": [
-                        "string",
-                        "null"
-                      ],
-                      "pattern": "^\\S(?:.*\\S)?$"
+                      "$ref": "../../schemas/metadata-v1.schema.json#/$defs/nameReading"
                     }
                   },
                   "additionalProperties": true

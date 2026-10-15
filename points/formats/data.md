@@ -50,7 +50,7 @@ gzip で圧縮した UTF-8（BOM なし）の JSON object。`points` に 1 地�
 | `osmId` | integer または null | 廃止 | 版5以前の OSM ノードへの関連付け。版6では `relatedIds` を使う | [版1] 追加<br>[版5] 任意化<br>[版6] 廃止 |
 | `relatedIds` | string の配列 | 任意 | 関連する他の地点のグローバル ID。省略・空配列は関連付けなし。重複・自分自身の ID は指定しない | [版6] 追加 |
 | `name` | string | 必須 | 表示名。空にしない | [版1] 追加 |
-| `nameReading` | string または null | 任意 | 表示名の読み | [版2] 追加<br>[版5] 任意化 |
+| `nameReading` | string・string の配列・null | 任意 | 表示名の読み。複数ある場合は重複のない1件以上の文字列配列とし、順序は記載順を保つ。空文字・前後の空白は使わない | [版2] 追加<br>[版5] 任意化<br>[版6] 複数の読みに対応 |
 | `latitude` | number | 必須 | WGS 84 の緯度（度）。−90 以上 90 以下 | [版1] 追加 |
 | `longitude` | number | 必須 | WGS 84 の経度（度）。−180 以上 180 以下 | [版1] 追加 |
 | `elevationM` | number または null | 任意 | 地点そのものの標高（m）。建物の高さなどは入れない。負の値もありうる | [版1] 追加<br>[版5] 任意化 |
@@ -153,6 +153,8 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
 
 利用条件と出典は、地点 JSON の `metadata.sources` と manifest の `metadata.sources` に出典ごとに記載する。利用時には各出典の `license` に従い、`attribution` を表示する。元データと補足の出典は同じ一覧に保持する。
 
+地点名と別名の `nameReading` は、1つの読みを文字列、複数の読みを文字列配列で記録できる。例えば白馬岳は `"nameReading": ["しろうまだけ", "はくばだけ"]` とする。読みの空配列・重複・空文字・前後の空白は認めない。`metadata.tags` の `nameReading` も同じく文字列または文字列配列を使う。
+
 ## JSON の例
 
 ### 版6
@@ -195,7 +197,7 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
       "id": "osm:123456",
       "type": "peak",
       "name": "見本山",
-      "nameReading": "みほんやま",
+      "nameReading": ["みほんやま", "みほんさん"],
       "latitude": 35.0,
       "longitude": 139.0,
       "elevationM": 1000.0,
@@ -379,7 +381,7 @@ JSON Schema では確認できない ID の重複や別名と表示名の一致�
 | 項目 | 型 | 必須 | 内容 | 版の履歴 |
 |---|---|---|---|---|
 | `aliases[].name` | string | 必須 | 別名。空文字・前後の空白・表示名と同じ名前・名前の重複は使わない | [版6] 追加 |
-| `aliases[].nameReading` | string または null | 任意 | 別名の読み。省略・`null` は読みなし。空文字・前後の空白は使わない | [版6] 追加 |
+| `aliases[].nameReading` | string・string の配列・null | 任意 | 別名の読み。省略・`null` は読みなし。空文字・前後の空白は使わない | [版6] 追加 |
 
 ```json
 {

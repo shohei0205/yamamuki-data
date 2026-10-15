@@ -9,7 +9,7 @@ class ViewerRenderTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node.js が必要です")
     def test_point_reading_renders_and_compares_against_original(self):
         page=(Path(__file__).resolve().parents[1]/"viewer.html").read_text(encoding="utf-8")
-        names=("aliasEntries","aliasNames","makeTable")
+        names=("readingText","aliasEntries","aliasNames","makeTable")
         functions="\n".join(next(line for line in page.splitlines() if line.startswith("function "+name+"(")) for name in names)
         checks=r"""
 const assert=require('node:assert/strict');
@@ -35,6 +35,7 @@ row=makeTable([{...base,nameReading:'ほせいしたよみ'}]).children[0];
 assert.equal(row.children[5].textContent,'ほせいしたよみ');
 assert.deepEqual(comparisons[1],['ほせいしたよみ','しれとこだけ']);
 row=makeTable([{...base,nameReading:null}]).children[0];assert.equal(row.children[5].textContent,'');
+row=makeTable([{...base,nameReading:['しろうまだけ','はくばだけ'],aliasReadings:{'別名':['よみ1','よみ2']}}]).children[0];assert.equal(row.children[5].textContent,'しろうまだけ、はくばだけ');assert.equal(row.children[6].textContent,'別名（よみ1、よみ2）');
 """
         result=subprocess.run(["node","-"],input=functions+checks,encoding="utf-8",capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
@@ -105,6 +106,56 @@ const row={children:[numberCell,nameCell],querySelector(selector){return selecto
 bindPointContextMenu(row,[{disabled:false,focus(){}}]);numberCell.textContent='100';
 row.oncontextmenu({preventDefault(){},stopPropagation(){},clientX:790,clientY:590});
 assert.equal(nameCell.menu,menu);assert.equal(menu.open,true);assert.equal(menu.style.left,'592px');assert.equal(menu.style.top,'512px');
+"""
+        result=subprocess.run(["node","-e",code+checks],capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr.decode("utf-8",errors="replace"))
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js が必要です")
+    def test_multi_selection_toggle_and_range_follow_display_order(self):
+        page=(Path(__file__).resolve().parents[1]/"viewer.html").read_text(encoding="utf-8")
+        code=next(line for line in page.splitlines() if line.startswith("function listSelection("))
+        checks=r"""
+const assert=require('node:assert/strict');const order=[8,2,5,1,9];
+let result=listSelection(new Set(),null,2,order,{});assert.deepEqual([...result.values],[2]);
+result=listSelection(result.values,result.anchor,9,order,{ctrlKey:true});assert.deepEqual([...result.values],[2,9]);
+result=listSelection(result.values,result.anchor,2,order,{metaKey:true});assert.deepEqual([...result.values],[9]);
+result=listSelection(result.values,2,1,order,{shiftKey:true});assert.deepEqual([...result.values],[2,5,1]);assert.equal(result.anchor,2);
+result=listSelection(new Set([9]),1,8,order,{shiftKey:true,ctrlKey:true});assert.deepEqual([...result.values],[9,8,2,5,1]);
+result=listSelection(result.values,result.anchor,5,order,{});assert.deepEqual([...result.values],[5]);
+result=listSelection(result.values,99,1,order,{shiftKey:true});assert.deepEqual([...result.values],[1]);
+"""
+        result=subprocess.run(["node","-e",code+checks],capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr.decode("utf-8",errors="replace"))
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js が必要です")
+    def test_selected_point_export_preserves_metadata_and_omits_excluded(self):
+        page=(Path(__file__).resolve().parents[1]/"viewer.html").read_text(encoding="utf-8")
+        names=("metadataMaps","metadataArrays","pointReference","aliasEntries","mergedAliasEntries","mergedPointJson","selectedPointDocument","selectedPointJsonText","saveSelectedPoints")
+        code="\n".join(next(line for line in page.splitlines() if line.startswith(("function "+name+"(","async function "+name+"("))) for name in names)
+        checks=r"""
+const assert=require('node:assert/strict');
+const points=[{source:{id:'gsi-vector:1',name:'元の名前',latitude:35,longitude:139},pointName:'白馬岳',nameReading:['しろうまだけ','はくばだけ'],tags:['分類']},{source:{id:'gsi-vector:2',name:'除外山'},excluded:true},{source:{id:'123',osmId:123,name:'旧地点',latitude:36,longitude:140},osmId:'123',pointName:'旧地点',tags:[]}];
+const basePoints=[...points];basePoints.metadata={schemaVersion:6,sources:{国土地理院:{license:'PDL-1.0'}},pointCount:3};
+function exportSupplement(){return {sources:{補足:{source:'資料'}},tags:{分類:{nameReading:['ぶんるい1','ぶんるい2']}},points:[]};}
+const original=JSON.stringify(points);const body=selectedPointDocument([0,1,2]);assert.equal(body.metadata.pointCount,2);assert.equal(body.metadata.sources.length,2);assert.equal(body.metadata.tags[0].nameReading.length,2);assert.equal(body.metadata.schemaVersion,undefined);assert.equal(body.points[0].name,'白馬岳');assert.deepEqual(body.points[0].nameReading,['しろうまだけ','はくばだけ']);assert.equal(body.points[1].id,'osm:123');assert.equal(body.points[1].osmId,undefined);assert.equal(JSON.stringify(points),original);assert.deepEqual(JSON.parse(selectedPointJsonText(body)),body);assert.throws(()=>selectedPointDocument([1]),/すべて/);
+const selectedIndices=new Set([0,1,2]);let saved;
+async function saveFile(name,text){saved=JSON.parse(text);return 'saved';}function showSaveResult(){}function showToast(message){throw Error(message);}
+(async()=>{await saveSelectedPoints(points[0]);assert.equal(saved.points.length,2);selectedIndices.clear();selectedIndices.add(0);await saveSelectedPoints(points[2]);assert.equal(saved.points.length,1);assert.equal(saved.points[0].id,'osm:123');})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        result=subprocess.run(["node","-"],input=code+checks,text=True,encoding="utf-8",capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js が必要です")
+    def test_detail_title_uses_effective_readings(self):
+        page=(Path(__file__).resolve().parents[1]/"viewer.html").read_text(encoding="utf-8")
+        code="\n".join(next(line for line in page.splitlines() if line.startswith("function "+name+"(")) for name in ("readingText","pointDetailTitle"))
+        checks=r"""
+const assert=require('node:assert/strict');
+const point={pointName:'越後駒ヶ岳',source:{nameReading:'えちごこまがたけ'}};
+assert.equal(pointDetailTitle(point),'越後駒ヶ岳 (えちごこまがたけ) の詳細');
+assert.equal(pointDetailTitle({...point,nameReading:['よみ1','よみ2']}),'越後駒ヶ岳 (よみ1、よみ2) の詳細');
+assert.equal(pointDetailTitle({...point,nameReading:null}),'越後駒ヶ岳 の詳細');
+assert.equal(pointDetailTitle({pointName:'山',source:{}}),'山 の詳細');
 """
         result=subprocess.run(["node","-e",code+checks],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr.decode("utf-8",errors="replace"))
