@@ -6,9 +6,9 @@
       {
         "name": "日本百名山",
         "source": "Wikipedia「日本百名山」著書順の山の一覧（2026-10-10 参照） https://ja.wikipedia.org/w/index.php?title=日本百名山&oldid=111092405 ; 山名・読み・別名等の手動補正には複数の資料を参照。個別の資料名・参照 URL・参照日は未記録。",
-        "license": "山名一覧: CC BY-SA 4.0 https://creativecommons.org/licenses/by-sa/4.0/ ; 照合に用いた OpenStreetMap データ: ODbL 1.0 https://opendatacommons.org/licenses/odbl/1-0/",
-        "attribution": "Wikipedia「日本百名山」の投稿者 https://ja.wikipedia.org/w/index.php?title=日本百名山&action=history ; © OpenStreetMap contributors https://www.openstreetmap.org/copyright",
-        "changes": "OSM 版の日本百名山タグ100件を、山名・別名と位置の初期照合により国土地理院の地点 ID に対応付けた。その後の採用地点・表示名等の調整は手動補正に含む。初期照合時の対応表と採用地点の相違は notes/日本百名山.md に記録する。地点配列は著書順を表さず、note は任意の管理用メモとする。 山群名と山頂名の対応を表示名・別名で表し、読み・別名の追加と修正、別名の削除、日本百名山タグの採用地点の調整、重複する地点等の配布対象からの除外を行った。note は編集用のメモであり、各補正の出典を示すものではない。個別資料の利用条件・帰属表示は未記録。"
+        "license": "CC BY-SA 4.0 https://creativecommons.org/licenses/by-sa/4.0/",
+        "attribution": "Wikipedia「日本百名山」の投稿者 https://ja.wikipedia.org/w/index.php?title=日本百名山&action=history",
+        "changes": "Wikipedia「日本百名山」の山名一覧100件を、国土地理院の地点 ID に対応付けた。その後の採用地点・表示名等の調整は手動補正に含む。初期照合時の対応表と採用地点の相違は notes/日本百名山.md に記録する。地点配列は著書順を表さず、note は任意の管理用メモとする。 山群名と山頂名の対応を表示名・別名で表し、読み・別名の追加と修正、別名の削除、日本百名山タグの採用地点の調整、重複する地点等の配布対象からの除外を行った。note は編集用のメモであり、各補正の出典を示すものではない。個別資料の利用条件・帰属表示は未記録。"
       }
     ],
     "tags": [

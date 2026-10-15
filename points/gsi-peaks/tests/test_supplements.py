@@ -27,8 +27,11 @@ class GsiSupplementTests(unittest.TestCase):
         osm_source = metadata_maps(osm["metadata"])["sources"]["日本百名山"]
         gsi_source = metadata_maps(gsi["metadata"])["sources"]["日本百名山"]
         self.assertIn(osm_source["source"], gsi_source["source"])
-        for key in ("license", "attribution"):
-            self.assertEqual(osm_source[key], gsi_source[key])
+        self.assertEqual(gsi_source["license"], "CC BY-SA 4.0 https://creativecommons.org/licenses/by-sa/4.0/")
+        self.assertIn('Wikipedia「日本百名山」の投稿者', gsi_source["attribution"])
+        self.assertIn("ja.wikipedia.org", gsi_source["attribution"])
+        self.assertNotIn("ODbL", gsi_source["license"])
+        self.assertNotIn("OpenStreetMap", gsi_source["attribution"])
         points = json.loads((GSI / "gsi-peaks-source.json").read_bytes())["points"]
         original_points = json.dumps(points, ensure_ascii=False)
         actual, sources = supplement_points(points)

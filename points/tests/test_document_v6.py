@@ -53,7 +53,7 @@ class DocumentV6Tests(unittest.TestCase):
     def test_metadata_survives_streaming_with_any_field_order(self):
         point={'id':'1','name':'山','latitude':35,'longitude':139}
         tags={'日本百名山':{'nameReading':'にほんひゃくめいざん'}}
-        info={'sources':{'国土地理院':{'source':'https://example.com','license':'PDL-1.0','attribution':'国土地理院','lastestTimeStamp':'2026-10-14T00:00:00Z'},'資料':{'source':'資料名'}}}
+        info={'sources':{'国土地理院':{'source':'https://example.com','license':'PDL-1.0','attribution':'国土地理院','latestTimestamp':'2026-10-14T00:00:00Z'},'資料':{'source':'資料名'}}}
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'input.json'
             for doc in [{'schemaFormat':'yamamuki-points','schemaVersion':6,**info,'tags':tags,'points':[point]},{'points':[point],'tags':tags,**info,'schemaVersion':6,'schemaFormat':'yamamuki-points'}]:
@@ -91,10 +91,10 @@ class DocumentV6Tests(unittest.TestCase):
     def test_invalid_metadata_is_rejected_by_all_python_paths(self):
         point={'id':'1','name':'山','latitude':35,'longitude':139}
         invalid=[{'sources':{'資料':{'license':123}}},
-                 {'sources':{'資料':{'lastestTimeStamp':'not-a-date'}}},
-                 {'sources':{'資料':{'lastestTimeStamp':'2026-10-14T00:00:00+00:60'}}},
-                 {'sources':{'資料':{'lastestTimeStamp':'2026-02-30T00:00:00Z'}}},
-                 {'sources':{'資料':{'lastestTimeStamp':'2026-10-14T00:00:00'}}},
+                 {'sources':{'資料':{'latestTimestamp':'not-a-date'}}},
+                 {'sources':{'資料':{'latestTimestamp':'2026-10-14T00:00:00+00:60'}}},
+                 {'sources':{'資料':{'latestTimestamp':'2026-02-30T00:00:00Z'}}},
+                 {'sources':{'資料':{'latestTimestamp':'2026-10-14T00:00:00'}}},
                  {'pointCount':True},{'pointCount':0}]
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'input.json'
@@ -110,9 +110,24 @@ class DocumentV6Tests(unittest.TestCase):
             path.write_text('{"points":[]}',encoding='utf-8')
             with self.assertRaises(ValueError): list(read_points(path))
 
-    def test_supplement_manifest_accepts_old_and_new_data_versions(self):
+    def test_catalog_v2_preserves_v1_and_accepts_new_manifest(self):
+        old=json.loads((ROOT/'points/schemas/catalog-v1.schema.json').read_bytes())
+        new=json.loads((ROOT/'points/schemas/catalog-v2.schema.json').read_bytes())
+        self.assertEqual(old['properties']['schemaVersion']['const'],1)
+        self.assertFalse(old['additionalProperties'])
+        self.assertFalse(old['properties']['datasets']['items']['additionalProperties'])
+        self.assertEqual(new['properties']['schemaVersion']['const'],2)
+        self.assertTrue(new['additionalProperties'])
+        self.assertTrue(new['properties']['datasets']['items']['additionalProperties'])
+        old_manifest=old['properties']['datasets']['items']['properties']['manifest']
+        self.assertTrue({'license','attribution'}<=set(old_manifest['required']))
+        current=new['properties']['datasets']['items']['properties']['manifest']
+        self.assertNotIn('license',current['required'])
+        self.assertNotIn('attribution',current['required'])
+
+    def test_legacy_supplement_manifest_keeps_original_data_version(self):
         schema=json.loads((ROOT/'points/schemas/supplements-manifest-v1.schema.json').read_bytes())
-        self.assertEqual(schema['properties']['dataSchemaVersion']['enum'],[5,6])
+        self.assertEqual(schema['properties']['dataSchemaVersion']['const'],5)
         self.assertEqual(schema['properties']['schemaVersion']['const'],1)
 
     def test_reading_is_written_immediately_after_name(self):

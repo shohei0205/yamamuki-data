@@ -53,7 +53,7 @@ metadata の現行版は `1`。`metadata` 自体に `schemaFormat`・`schemaVers
 | `license` | string | 任意 | 資料に適用される利用条件の名称・版・説明 URL | [版1] 追加 |
 | `attribution` | string | 任意 | 利用条件に従って表示する著作者名・出典表示 | [版1] 追加 |
 | `changes` | string | 任意 | 資料に加えた加工・変更 | [版1] 追加 |
-| `lastestTimeStamp` | string | 任意 | この出典に由来する収録データの最終更新日時。タイムゾーン付き ISO 8601。取得日時や配布データの生成日時ではない。不明なら省略する | [版1] 追加 |
+| `latestTimestamp` | string | 任意 | この出典に由来する収録データの最終更新日時。タイムゾーン付き ISO 8601。取得日時や配布データの生成日時ではない。不明なら省略する | [版1] 追加 |
 
 `name` 以外の出典属性は任意。未知の属性は許可し、読み手は解釈しない。既知の属性には指定された型を使う。日時を推測で補わない。検証時は JSON Schema の `format` 検査を有効にする。
 
@@ -93,7 +93,7 @@ metadata の現行版は `1`。`metadata` 自体に `schemaFormat`・`schemaVers
         "license": "CC BY 4.0 https://creativecommons.org/licenses/by/4.0/",
         "attribution": "見本資料の著作者",
         "changes": "地点名・座標・標高を抽出",
-        "lastestTimeStamp": "2026-10-14T00:00:00Z",
+        "latestTimestamp": "2026-10-14T00:00:00Z",
         "name": "元資料"
       },
       {
@@ -101,7 +101,7 @@ metadata の現行版は `1`。`metadata` 自体に `schemaFormat`・`schemaVers
         "license": "CC0-1.0",
         "attribution": "見本の補足資料の作成者",
         "changes": "読み・別名・タグを追加",
-        "lastestTimeStamp": "2026-10-14T01:00:00Z",
+        "latestTimestamp": "2026-10-14T01:00:00Z",
         "name": "補足資料"
       }
     ],
@@ -123,4 +123,4 @@ metadata の現行版は `1`。`metadata` 自体に `schemaFormat`・`schemaVers
 - 地点 JSON・補足 JSON・配布 manifest の共通定義をまとめる。
 - 出典一覧 `sources`、タグ情報 `tags`、地点件数 `pointCount` を定義する。
 - `sources`・`tags` は object の配列とし、出典・タグはそれぞれ必須の `name` で識別する。識別子の重複は認めない。未公開の版1に統合する。
-- 出典ごとの最終更新日時は `sources[].lastestTimeStamp` に記載する。
+- 出典ごとの最終更新日時は `sources[].latestTimestamp` に記載する。

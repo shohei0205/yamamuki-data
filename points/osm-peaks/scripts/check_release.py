@@ -87,7 +87,7 @@ def validate(directory, *, tag=None, channel="stable"):
     timestamp_key = "dataTimestamp" if manifest["schemaVersion"] >= 6 else "sourceTimestamp"
     source_time(manifest[timestamp_key])
     if manifest["schemaVersion"] >= 3:
-        value = manifest["sources"].get("osm-peaks", {}).get("lastestTimeStamp") if manifest["schemaVersion"] >= 6 else manifest.get("latestPointTimestamp" if manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
+        value = manifest["sources"].get("osm-peaks", {}).get("latestTimestamp") if manifest["schemaVersion"] >= 6 else manifest.get("latestPointTimestamp" if manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
         latest = source_time(value)
         if latest > source_time(manifest[timestamp_key]):
             raise ValueError("山頂の最終編集日時が元データの基準日時より新しくなっています")
@@ -198,8 +198,8 @@ def assess(current, previous=None):
     old_timestamp_key = "dataTimestamp" if old_manifest["schemaVersion"] >= 6 else "sourceTimestamp"
     if timestamp_key == old_timestamp_key and source_time(manifest[timestamp_key]) < source_time(old_manifest[old_timestamp_key]):
         warnings.append("データの基準日時が前回公開版より古くなっています")
-    latest = manifest["metadata"].get("sources", {}).get("osm-peaks", {}).get("lastestTimeStamp") if manifest["schemaVersion"] >= 6 else manifest.get("latestPointTimestamp" if manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
-    old_latest = old_manifest["metadata"].get("sources", {}).get("osm-peaks", {}).get("lastestTimeStamp") if old_manifest["schemaVersion"] >= 6 else old_manifest.get("latestPointTimestamp" if old_manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
+    latest = manifest["metadata"].get("sources", {}).get("osm-peaks", {}).get("latestTimestamp") if manifest["schemaVersion"] >= 6 else manifest.get("latestPointTimestamp" if manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
+    old_latest = old_manifest["metadata"].get("sources", {}).get("osm-peaks", {}).get("latestTimestamp") if old_manifest["schemaVersion"] >= 6 else old_manifest.get("latestPointTimestamp" if old_manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
     if latest is not None and old_latest is not None and source_time(latest) == source_time(old_latest):
         warnings.append(f"収録山頂の最新編集日時が前回公開版と同じです: {latest}。自動公開せず下書きに残します")
     if manifest["schemaVersion"] != old_manifest["schemaVersion"]:
@@ -217,7 +217,7 @@ def report(current, previous, warnings):
              f"- 今回: {manifest['version']}、{len(rows):,} 件",
              f"- 前回: {previous[0]['version']}、{len(previous[1]):,} 件" if previous else "- 前回: 比較できず",
              f"- データの日時: {manifest.get('dataTimestamp', manifest.get('sourceTimestamp'))}",
-             f"- 収録する山頂の最新編集日時: {manifest.get('sources', {}).get('osm-peaks', {}).get('lastestTimeStamp', '記録なし') if manifest['schemaVersion'] >= 6 else manifest.get('latestPointTimestamp', manifest.get('latestMountainTimestamp', '旧形式のため記録なし'))}",
+             f"- 収録する山頂の最新編集日時: {manifest.get('sources', {}).get('osm-peaks', {}).get('latestTimestamp', '記録なし') if manifest['schemaVersion'] >= 6 else manifest.get('latestPointTimestamp', manifest.get('latestMountainTimestamp', '旧形式のため記録なし'))}",
              f"- gzip: {manifest['sizeBytes']:,} バイト",
              f"- SHA-256: `{manifest['sha256']}`", "",
              "### 確認事項", "", *([f"- {warning}" for warning in warnings] or ["- 件数と元データの日時に異常はありません"]), "",

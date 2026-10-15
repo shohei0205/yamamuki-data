@@ -6,7 +6,7 @@
     "schemaVersion",
     "datasets"
   ],
-  "additionalProperties": true,
+  "additionalProperties": false,
   "properties": {
     "schemaVersion": {
       "type": "integer",
@@ -20,7 +20,7 @@
           "id",
           "manifestUrl"
         ],
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "string",
@@ -41,7 +41,9 @@
               "fileName",
               "sha256",
               "sizeBytes",
-              "uncompressedSizeBytes"
+              "uncompressedSizeBytes",
+              "license",
+              "attribution"
             ],
             "properties": {
               "schemaVersion": {
@@ -90,108 +92,9 @@
                 "type": "string",
                 "pattern": "\\S",
                 "description": "データセットの表示名。新規生成時に記載する。"
-              },
-              "metadata": {
-                "$ref": "../../schemas/metadata-v1.schema.json",
-                "required": [
-                  "sources"
-                ],
-                "properties": {
-                  "sources": {
-                    "minProperties": 1
-                  }
-                }
-              },
-              "dataTimestamp": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
-              },
-              "schemaFormat": {
-                "const": "yamamuki-manifest",
-                "type": "string"
-              },
-              "dataSchemaFormat": {
-                "type": "string",
-                "pattern": "^\\S(?:.*\\S)?$"
               }
             },
-            "additionalProperties": true,
-            "allOf": [
-              {
-                "if": {
-                  "properties": {
-                    "schemaVersion": {
-                      "minimum": 6
-                    }
-                  }
-                },
-                "then": {
-                  "required": [
-                    "metadata",
-                    "dataTimestamp",
-                    "schemaFormat",
-                    "dataSchemaFormat",
-                    "dataSchemaVersion"
-                  ],
-                  "not": {
-                    "anyOf": [
-                      {
-                        "required": [
-                          "sourceUrl"
-                        ]
-                      },
-                      {
-                        "required": [
-                          "license"
-                        ]
-                      },
-                      {
-                        "required": [
-                          "attribution"
-                        ]
-                      },
-                      {
-                        "required": [
-                          "supplementSources"
-                        ]
-                      },
-                      {
-                        "required": [
-                          "sources"
-                        ]
-                      },
-                      {
-                        "required": [
-                          "tags"
-                        ]
-                      },
-                      {
-                        "required": [
-                          "pointCount"
-                        ]
-                      },
-                      {
-                        "required": [
-                          "latestPointTimestamp"
-                        ]
-                      },
-                      {
-                        "required": [
-                          "sourceTimestamp"
-                        ]
-                      }
-                    ]
-                  }
-                },
-                "else": {
-                  "required": [
-                    "license",
-                    "attribution"
-                  ]
-                }
-              }
-            ]
+            "additionalProperties": true
           },
           "name": {
             "type": "string",

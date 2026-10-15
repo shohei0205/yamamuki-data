@@ -109,7 +109,7 @@ class CheckReleaseTests(unittest.TestCase):
             original = json.loads(path.read_text(encoding="utf-8"))
             for value in (None, "bad", "2026-09-29T12:00:00", "2026-09-30T00:00:00Z"):
                 with self.subTest(value=value):
-                    manifest = {**original, "metadata": {**original["metadata"], "sources": {**metadata_maps(original["metadata"])["sources"], "osm-peaks": {**metadata_maps(original["metadata"])["sources"]["osm-peaks"], "lastestTimeStamp": value}}}}
+                    manifest = {**original, "metadata": {**original["metadata"], "sources": {**metadata_maps(original["metadata"])["sources"], "osm-peaks": {**metadata_maps(original["metadata"])["sources"]["osm-peaks"], "latestTimestamp": value}}}}
                     path.write_text(json.dumps(manifest), encoding="utf-8")
                     with self.assertRaises(ValueError):
                         validate(root)
@@ -198,7 +198,7 @@ class CheckReleaseTests(unittest.TestCase):
             write_distribution(rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
             legacy = dict(manifest)
             legacy.update(legacy.pop("metadata"))
-            legacy["latestPointTimestamp"] = metadata_maps(legacy)["sources"]["osm-peaks"]["lastestTimeStamp"]
+            legacy["latestPointTimestamp"] = metadata_maps(legacy)["sources"]["osm-peaks"]["latestTimestamp"]
             legacy["sourceTimestamp"] = "2026-09-29T20:22:51Z"
             legacy["schemaVersion"] = 5
             del legacy["dataSchemaVersion"]
@@ -310,7 +310,7 @@ class DownloadUrlTests(unittest.TestCase):
                 (root / FILE_NAME).write_bytes(archive)
                 changed["dataSchemaVersion"] = 3
                 changed.update(changed.pop("metadata"))
-                changed["latestPointTimestamp"] = metadata_maps(changed)["sources"]["osm-peaks"]["lastestTimeStamp"]
+                changed["latestPointTimestamp"] = metadata_maps(changed)["sources"]["osm-peaks"]["latestTimestamp"]
                 changed["sourceTimestamp"] = "2026-09-29T20:22:51Z"
                 changed["mountainCount"] = changed.pop("pointCount")
                 changed["latestMountainTimestamp"] = changed.pop("latestPointTimestamp")

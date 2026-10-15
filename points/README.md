@@ -35,23 +35,15 @@ OSM 山頂の配布データには補足が適用済みで、利用するアプ�
 points/
   README.md         地点データの一覧・共通形式
   viewer.html       地点データの共通ビューア
-  tests/            共通ビューアのテスト
-  formats/          地点データ・カタログ・補足の版ごとの形式説明と変更履歴
-  osm-peaks/
-    README.md       OSM 山頂データの生成・公開手順
-    scripts/        取得・生成・検査・公開
-    tests/          山頂データのテスト
-  testdata/
-    README.md       開発版限定のテストデータの生成・公開手順
-    points.json     手動作成した架空の地点データ
-  schemas/
-    data-v5.schema.json         地点データのスキーマ
-    catalog-v1.schema.json      地点カタログのスキーマ
-    supplements-data-v2.schema.json  補足 JSON のスキーマ
-    supplements-manifest-v1.schema.json  補足 manifest のスキーマ
+  tests/            共通処理・ビューアのテスト
+  formats/          地点データ・カタログ・補足の形式説明と変更履歴
+  schemas/          地点データ・カタログ・補足の版ごとのスキーマ
+  osm-peaks/        OpenStreetMap の山頂データ
+  gsi-peaks/        国土地理院の山頂データ
+  testdata/         開発版限定の架空の地点データ
 ```
 
-取得元・対象ごとに専用フォルダを作り、収録条件・作成方法・配布先を各 README に記載する。スキーマは `points/schemas/` に、形式ごとの名前と版を付けて保存する。
+取得元・対象ごとに専用フォルダを作る。フォルダ内の構成・収録条件・作成方法・配布先は、[OSM 山頂](osm-peaks/README.md)、[GSI 山頂](gsi-peaks/README.md)、[テストデータ](testdata/README.md) の各 README を参照する。スキーマのファイル名と対応する版は、各フォーマット文書に記載する。
 
 ## 地点データの manifest
 
@@ -66,7 +58,7 @@ Pages に掲載されている地点データの取得・検証情報を、次�
 | 正式版 | [正式版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog.json) | 通常生成では更新しない。掲載済み情報を保持し、手動公開・復旧・削除時は更新する |
 | 開発版（Pre-release） | [開発版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) | 開発版の公開・削除時に更新する |
 
-項目・制約・読み込み方法・配布先ごとの収録範囲は [地点カタログフォーマット](formats/catalog.md) を参照する。機械検証用のスキーマは [地点カタログの版1](schemas/catalog-v1.schema.json)。
+項目・制約・読み込み方法・配布先ごとの収録範囲は [地点カタログフォーマット](formats/catalog.md) を参照する。機械検証用のスキーマは [地点カタログの版2](schemas/catalog-v2.schema.json)。
 
 ### カタログから削除する
 

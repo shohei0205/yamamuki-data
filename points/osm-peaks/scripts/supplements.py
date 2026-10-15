@@ -20,7 +20,7 @@ from document_metadata import name_reading, osm_node_id, validate_related_ids, v
 
 DEFAULT_SUPPLEMENTS = Path(__file__).resolve().parents[1] / "supplements.json"
 FIELDS = {"name", "nameReading", "aliases", "aliasesRemove", "tags", "tagsRemove", "exclude", "graphic", "relatedIds"}
-METADATA = {"source", "license", "attribution", "changes", "lastestTimeStamp"}
+METADATA = {"source", "license", "attribution", "changes", "latestTimestamp"}
 COMPANION_FILES = ("osm-peaks-source.json.gz", "supplements.json")
 LEGACY_COMPANION_FILE = "supplement-manifest.json"
 

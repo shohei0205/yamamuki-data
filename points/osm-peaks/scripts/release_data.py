@@ -247,7 +247,7 @@ def points_catalog(manifests, selected_channel="stable"):
                 raise ValueError("データセットの表示名が不正です")
             datasets.append({"id": dataset_id, "name": display_name.strip(),
                              "manifestUrl": f"{pages_url()}/{path}", "manifest": manifest})
-    return {"schemaVersion": 1, "datasets": datasets}
+    return {"schemaVersion": 2, "datasets": datasets}
 
 
 def read_points_catalog(channel="stable"):

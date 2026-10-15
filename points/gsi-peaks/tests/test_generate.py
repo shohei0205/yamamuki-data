@@ -142,7 +142,7 @@ class GenerationTests(unittest.TestCase):
             self.assertEqual("PDL-1.0", metadata_maps(manifest['metadata'])["sources"]['gsi-peaks']['license'].split()[0])
             self.assertNotIn('latestPointTimestamp',manifest)
             self.assertNotIn('sourceTimestamp',manifest)
-            schema=json.loads((Path(__file__).resolve().parents[3]/'points/schemas/data-v5.schema.json').read_text(encoding='utf-8'))
+            schema=json.loads((Path(__file__).resolve().parents[3]/'points/schemas/data-v6.schema.json').read_text(encoding='utf-8'))
             properties=schema['$defs']['point']['properties']
             for p in points:
                 self.assertFalse(set(p)-set(properties))

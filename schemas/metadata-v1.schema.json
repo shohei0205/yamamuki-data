@@ -34,7 +34,7 @@
           "changes": {
             "type": "string"
           },
-          "lastestTimeStamp": {
+          "latestTimestamp": {
             "type": "string",
             "format": "date-time",
             "description": "この出典に由来する収録データの最終更新日時。不明なら省略する。"

@@ -154,7 +154,7 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
     validate_alias_readings(mountains)
     validate_graphics(mountains)
     logging.info("%s 件を JSON に変換しています", format(len(mountains), ","))
-    raw = point_document_json(document(mountains, tag_metadata, sources=source_entries("osm-peaks",source_url,"ODbL-1.0","© OpenStreetMap contributors",supplement_sources,lastestTimeStamp=latest_mountain_timestamp))).encode("utf-8")
+    raw = point_document_json(document(mountains, tag_metadata, sources=source_entries("osm-peaks",source_url,"ODbL-1.0","© OpenStreetMap contributors",supplement_sources,latestTimestamp=latest_mountain_timestamp))).encode("utf-8")
     # ファイル名と生成時刻をヘッダーに含めず、同じ内容の圧縮結果をそろえる。
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -181,7 +181,7 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
             "uncompressedSizeBytes": len(raw),
             "pointCount": len(mountains),
             "dataTimestamp": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
-            "sources": source_entries("osm-peaks",source_url,"ODbL-1.0","© OpenStreetMap contributors",supplement_sources,lastestTimeStamp=latest_mountain_timestamp),
+            "sources": source_entries("osm-peaks",source_url,"ODbL-1.0","© OpenStreetMap contributors",supplement_sources,latestTimestamp=latest_mountain_timestamp),
         }
         if tag_metadata:
             manifest["tags"]=tag_metadata

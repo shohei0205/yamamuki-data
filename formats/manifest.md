@@ -42,7 +42,7 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。�
 | `dataTimestamp` | string | 必須 | manifest が指す配布データを生成した日時。UTC の ISO 8601（例: `2026-10-14T03:00:00Z`）。元データの編集日時・取得日時・Release の公開日時ではない | [版6] 追加 |
 | `metadata` | object | 必須 | 指し示すデータ JSON の `metadata` をそのままコピーする。型・構造・制約は [metadata フォーマット](metadata.md) を参照。 | [版6] 追加 |
 | `pointCount` | integer | 廃止 | 版5の地点件数（必須）。版6では `metadata.pointCount` に移動する | [版1] 元の項目を追加<br>[版5] `mountainCount` から改名<br>[版6] 直下の項目を廃止 |
-| `latestPointTimestamp` | string または null | 廃止 | 版5の収録地点の最終編集日時の最大値（任意）。版6では `metadata.sources[].lastestTimeStamp` に移動する | [版3] 元の項目を追加<br>[版5] `latestMountainTimestamp` から改名し任意化<br>[版6] 直下の項目を廃止 |
+| `latestPointTimestamp` | string または null | 廃止 | 版5の収録地点の最終編集日時の最大値（任意）。版6では `metadata.sources[].latestTimestamp` に移動する | [版3] 元の項目を追加<br>[版5] `latestMountainTimestamp` から改名し任意化<br>[版6] 直下の項目を廃止 |
 | `sourceTimestamp` | string | 廃止 | 版5以前の元データ全体の基準日時。版6では廃止。配布データの生成日時は `dataTimestamp` に記載する | [版1] 追加<br>[版5] 必須から任意に変更<br>[版6] 直下の項目を廃止 |
 | `sourceUrl` | string | 廃止 | 版5以前の元データの取得・参照 URL。版6では `metadata.sources[].source` に記載する | [版1] 追加<br>[版3.1] 日付付き URL に変更<br>[版5] 必須から任意に変更<br>[版6] 廃止 |
 | `license` | string | 廃止 | 版5以前のデータセットの利用条件（必須）。版6では `metadata.sources[].license` に記載する | [版1] 追加<br>[版6] 廃止 |
@@ -94,7 +94,7 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。�
         "license": "CC BY 4.0 https://creativecommons.org/licenses/by/4.0/",
         "attribution": "見本資料の著作者",
         "changes": "地点名・座標・標高を抽出",
-        "lastestTimeStamp": "2026-10-14T00:00:00Z",
+        "latestTimestamp": "2026-10-14T00:00:00Z",
         "name": "元資料"
       },
       {
@@ -102,7 +102,7 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。�
         "license": "CC0-1.0",
         "attribution": "見本の補足資料の作成者",
         "changes": "読み・別名・タグを追加",
-        "lastestTimeStamp": "2026-10-14T01:00:00Z",
+        "latestTimestamp": "2026-10-14T01:00:00Z",
         "name": "補足資料"
       }
     ],
@@ -251,7 +251,7 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。�
 
 - 必須の `schemaFormat: "yamamuki-manifest"` を追加し、形式を識別する。未公開の版6に統合する。
 
-- 地点全体の `latestPointTimestamp` を廃止し、出典ごとの `metadata.sources[].lastestTimeStamp` に最終更新日時を保持する。
+- 地点全体の `latestPointTimestamp` を廃止し、出典ごとの `metadata.sources[].latestTimestamp` に最終更新日時を保持する。
 
 - 補足ファイル単体の配布にも共通の manifest 形式を使う。地点データは補足適用後・補足適用前・補足の 3 種類を、それぞれ共通形式の manifest 付きで配布する。
 

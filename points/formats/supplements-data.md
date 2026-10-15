@@ -104,7 +104,7 @@
         "license": "CC BY 4.0 https://creativecommons.org/licenses/by/4.0/",
         "attribution": "見本資料の著作者",
         "changes": "地点名・座標・標高を抽出",
-        "lastestTimeStamp": "2026-10-14T00:00:00Z",
+        "latestTimestamp": "2026-10-14T00:00:00Z",
         "name": "元資料"
       },
       {
@@ -112,7 +112,7 @@
         "license": "CC0-1.0",
         "attribution": "見本の補足資料の作成者",
         "changes": "読み・別名・タグを追加",
-        "lastestTimeStamp": "2026-10-14T01:00:00Z",
+        "latestTimestamp": "2026-10-14T01:00:00Z",
         "name": "補足資料"
       }
     ],

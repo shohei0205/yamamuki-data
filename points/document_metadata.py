@@ -123,7 +123,7 @@ def validate_metadata(data, point_count=None):
     if "sources" in data:
         sources = data["sources"]
         if not isinstance(sources, dict) or any(not text(k) or not isinstance(v, dict)
-                or any(not isinstance(item,str) for k,item in v.items() if k in {"source","license","attribution","changes","lastestTimeStamp"}) for k,v in sources.items()):
+                or any(not isinstance(item,str) for k,item in v.items() if k in {"source","license","attribution","changes","latestTimestamp"}) for k,v in sources.items()):
             raise ValueError("出典情報が不正です")
     if "pointCount" in data:
         count = data["pointCount"]
@@ -132,15 +132,15 @@ def validate_metadata(data, point_count=None):
     if point_count is not None and point_count < 1:
         raise ValueError("地点配列には1地点以上が必要です")
     for entry in data.get("sources", {}).values():
-        if "lastestTimeStamp" in entry:
-            validate_timestamp(entry["lastestTimeStamp"])
+        if "latestTimestamp" in entry:
+            validate_timestamp(entry["latestTimestamp"])
     return data
 
 
 
 
 def validate_timestamp(stamp):
-    field = "lastestTimeStamp"
+    field = "latestTimestamp"
     if not isinstance(stamp, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})",stamp):
         raise ValueError(f"{field} はタイムゾーン付き日時にしてください")
     if stamp[-1] not in "Zz" and (int(stamp[-5:-3]) > 23 or int(stamp[-2:]) > 59):
@@ -150,14 +150,14 @@ def validate_timestamp(stamp):
     except ValueError as error:
         raise ValueError(f"{field} の日時が不正です") from error
 
-def source_entries(identifier, source=None, license=None, attribution=None, supplements=None, lastestTimeStamp=None):
+def source_entries(identifier, source=None, license=None, attribution=None, supplements=None, latestTimestamp=None):
     validate_metadata({"sources":{} if supplements is None else supplements})
     result = {k:dict(v) for k,v in (supplements or {}).items()}
     entry = {k:v for k,v in {"source":source,"license":license,"attribution":attribution}.items() if v is not None}
-    if lastestTimeStamp is not None:
-        entry["lastestTimeStamp"] = lastestTimeStamp
-    elif identifier in result and "lastestTimeStamp" in result[identifier]:
-        entry["lastestTimeStamp"] = result[identifier]["lastestTimeStamp"]
+    if latestTimestamp is not None:
+        entry["latestTimestamp"] = latestTimestamp
+    elif identifier in result and "latestTimestamp" in result[identifier]:
+        entry["latestTimestamp"] = result[identifier]["latestTimestamp"]
     if entry:
         if identifier in result and result[identifier] != entry:
             raise ValueError("元データと補足の出典 ID が競合しています: "+identifier)
