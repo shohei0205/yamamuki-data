@@ -167,7 +167,7 @@ CI の「共通：文字形式の確認」はすべての PR で文字コード�
 | 対象 | 出典・帰属表示 | 利用条件 | 詳細 |
 |---|---|---|---|
 | OpenStreetMap 由来の地点データ | © OpenStreetMap contributors | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) | [OSM 山頂の出典とライセンス](points/osm-peaks/README.md#出典とライセンス)。補足適用前の原本と旧形式のデータも含む |
-| 国土地理院由来の地点データ | 出典：国土地理院。資料名と加工内容を記録する | [公共データ利用規約（第1.0版）](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（PDL-1.0） | [GSI 山頂の出典とライセンス](points/gsi-peaks/README.md#出典とライセンス) |
+| 国土地理院由来の地点データ・OSM版の地点照合と補正に用いた情報 | 出典：国土地理院。資料名と加工内容を記録する | [公共データ利用規約（第1.0版）](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（PDL-1.0） | [GSI 山頂](points/gsi-peaks/README.md#出典とライセンス)・[OSM 山頂](points/osm-peaks/README.md#出典とライセンス) の出典とライセンス |
 | 日本百名山の山名一覧 | Wikipedia「日本百名山」の投稿者 | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) | [GSI 山頂](points/gsi-peaks/README.md#出典とライセンス)・[OSM 山頂](points/osm-peaks/README.md#出典とライセンス) |
 | 動作確認用の架空の地点データ | このリポジトリで作成 | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | [テスト用地点](points/testdata/README.md)。内蔵画像と分類タグを含む |
 

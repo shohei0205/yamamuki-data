@@ -297,6 +297,7 @@ PYTHONPATH=points/osm-peaks python -m scripts.supplements points/osm-peaks/suppl
 | 山頂の一覧・山名・読み・別名・座標・標高・分類 | [OpenStreetMap](https://www.openstreetmap.org/) の名前付きノード。Geofabrik の [日本全国の PBF](https://download.geofabrik.de/asia/japan.html) から抽出する |
 | Wikipedia・Wikidata へのリンク | OpenStreetMap ノードの `wikipedia`・`wikidata` タグ |
 | 日本百名山の山名一覧 | [Wikipedia「日本百名山」](https://ja.wikipedia.org/w/index.php?title=日本百名山#著書順の山の一覧)（CC BY-SA 4.0）。帰属表示・加工内容は補足 JSON の `metadata.sources` を参照 |
+| 日本百名山の地点照合・名称・読み・別名の補正 | 国土地理院の山岳一覧・最適化ベクトルタイル・自然地名を加工して作成（[PDL-1.0](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)）。元資料・帰属表示・加工内容は補足 JSON の `metadata.sources` を参照 |
 
 OpenStreetMap 由来のデータは **© OpenStreetMap contributors** を表示し、[Open Database License（ODbL）1.0](https://opendatacommons.org/licenses/odbl/1-0/) に従って利用・再配布する。[OpenStreetMap の著作権とライセンス](https://www.openstreetmap.org/copyright)を参照する。
 
