@@ -48,7 +48,7 @@
 
 `classification` は対応するベクトルタイルの注記分類コードを文字列で記録する。対応する注記がない山岳一覧の地点は `peak`、自然地名は `山（自然地名）` とする。コードは [国土地理院の注記分類コード](https://maps.gsi.go.jp/help/pdf/vector/optbv_featurecodes.pdf)を参照する。
 
-`elevationSource` は `mountainList`、`triangulation`（三角点）、`spotHeight`（標高点）、`dem1a_png`、`dem5a_png`、`dem5b_png`、`dem5c_png`、`dem_png`（DEM10B）のいずれか。標高が取得できない地点では `elevationSource` を省略する。
+`elevationSource` は `mountainList`、`triangulation`（三角点）、`spotHeight`（標高点）、`dem1a_png`、`dem5a_png`、`dem5b_png`、`dem5c_png`、`dem_png`（DEM10B）のいずれか。標高が取得できない地点では `elevationSource` を省略する。補足で標高を補正した場合は `supplement`（補足による補正）にし、削除した場合は省略する。
 
 <a id="id-の維持方針"></a>
 

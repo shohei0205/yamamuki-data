@@ -45,6 +45,25 @@ class SupplementTests(unittest.TestCase):
             {"osmId":2,"exclude":True,"reason":"同じ山の重複地点"}]}
         self.temp = tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name)
 
+    def test_elevation_correction_deletion_and_validation(self):
+        original = [{"id":"custom:height", "name":"山", "elevationM":100,
+                     "provenance":{"dataSource":"vector", "elevationSource":"dem"}}]
+        before = deepcopy(original)
+        for value in (0, -12.5, 272.9, None):
+            data = {"schemaFormat":"yamamuki-point-supplements","schemaVersion":2,"points":[{"id":"custom:height","elevationM":value,"expected":{"elevationM":100}}]}
+            result = apply_supplements(original, data)[0]
+            if value is None:
+                self.assertNotIn("elevationM", result)
+                self.assertNotIn("elevationSource", result["provenance"])
+            else:
+                self.assertEqual(result["elevationM"], value)
+                self.assertEqual(result["provenance"]["elevationSource"], "supplement")
+            self.assertEqual(result["provenance"]["dataSource"], "vector")
+        self.assertEqual(original, before)
+        for value in (True, "100", float("inf"), float("nan")):
+            with self.assertRaises(ValueError):
+                validate_supplements({"schemaFormat":"yamamuki-point-supplements","schemaVersion":2,"points":[{"id":"custom:height","elevationM":value}]})
+
     def test_v2_is_written_and_v1_remains_readable(self):
         legacy=self.root/'legacy.json'
         legacy.write_text(json.dumps(self.data),encoding='utf-8')

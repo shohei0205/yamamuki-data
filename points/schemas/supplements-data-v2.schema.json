@@ -127,6 +127,12 @@
               },
               "relatedIds": {
                 "$ref": "point-common-v1.schema.json#/$defs/relatedIds"
+              },
+              "elevationM": {
+                "type": [
+                  "number",
+                  "null"
+                ]
               }
             }
           },
@@ -163,6 +169,13 @@
           },
           "relatedIds": {
             "$ref": "point-common-v1.schema.json#/$defs/relatedIds"
+          },
+          "elevationM": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "標高（m）を置き換える。null は標高を削除する。"
           }
         },
         "anyOf": [
@@ -209,6 +222,11 @@
           {
             "required": [
               "relatedIds"
+            ]
+          },
+          {
+            "required": [
+              "elevationM"
             ]
           }
         ],

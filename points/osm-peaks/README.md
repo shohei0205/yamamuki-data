@@ -22,7 +22,7 @@ OpenStreetMap に登録された日本全国の名前付き山頂・火山の地
 | `classification` | 元ノードのタグに応じて `natural=peak` または `natural=volcano` |
 | `elevationSource` | `ele` から標高を取得できた場合は `osm`、未登録・解釈できない場合は項目を省略 |
 
-`classification` は OSM の元の分類を保持する。共通の地点種別 `type` は、どちらも `peak` とする。補足 JSON は標高を変更しないため、名前・読み・別名・タグなどを補正しても、この出典情報は保持する。補足の出典一覧は manifest の `metadata.sources` に記録する。
+`classification` は OSM の元の分類を保持する。共通の地点種別 `type` は、どちらも `peak` とする。名前・読み・別名・タグの補正では元の出典情報を保持する。標高を補正した場合は `elevationSource` を `supplement`（補足による補正）にし、削除した場合は省略する。補足の出典一覧は manifest の `metadata.sources` に記録する。
 
 ### ID の作り方と維持方針
 

@@ -29,12 +29,12 @@ const base={source,pointName:source.name,latitude:44,longitude:145,elevation:125
 let row=makeTable([base]).children[0];
 assert.equal(row.children[5].textContent,'しれとこだけ');
 assert.equal(row.children[6].textContent,'別名（べつめい）');
-assert.deepEqual(comparisons[1],['しれとこだけ','しれとこだけ']);
+assert.deepEqual(comparisons[2],['しれとこだけ','しれとこだけ']);
 comparisons.length=0;
 row=makeTable([{...base,nameReading:'ほせいしたよみ'}]).children[0];
 assert.equal(row.children[5].textContent,'ほせいしたよみ');
-assert.deepEqual(comparisons[1],['ほせいしたよみ','しれとこだけ']);
-comparisons.length=0;row=makeTable([{...base,source:{...source,aliases:[{name:'別名'}]},aliasReadings:{'別名':['べつめい','べつのよみ']}}]).children[0];assert.deepEqual(comparisons[2],['別名（べつめい、べつのよみ）','別名']);
+assert.deepEqual(comparisons[2],['ほせいしたよみ','しれとこだけ']);
+comparisons.length=0;row=makeTable([{...base,source:{...source,aliases:[{name:'別名'}]},aliasReadings:{'別名':['べつめい','べつのよみ']}}]).children[0];assert.deepEqual(comparisons[3],['別名（べつめい、べつのよみ）','別名']);
 row=makeTable([{...base,nameReading:null}]).children[0];assert.equal(row.children[5].textContent,'');
 row=makeTable([{...base,nameReading:['しろうまだけ','はくばだけ'],aliasReadings:{'別名':['よみ1','よみ2']}}]).children[0];assert.equal(row.children[5].textContent,'しろうまだけ、はくばだけ');assert.equal(row.children[6].textContent,'別名（よみ1、よみ2）');
 """
@@ -59,6 +59,8 @@ showSupplementOrigin(0);
 assert.deepEqual(JSON.parse(fields['point-supplement-json'].textContent),row);
 assert.deepEqual(JSON.parse(fields['point-merged-json'].textContent),{id:'gsi-vector:example',name:'変更後の山',latitude:35,longitude:140,provenance:{dataSource:'vector'},aliases:[{name:'別名',nameReading:'べつめい'}],tags:['未保存のタグ'],relatedIds:['osm:123']});
 assert.equal(points[0].source.name,'元の山');
+for(const elevation of [0,272.9,null]){const point={source:{id:'custom:h',name:'山',elevationM:100,provenance:{dataSource:'vector',elevationSource:'dem'}},pointName:'山',tags:[],aliases:[],elevationCorrected:true,elevation};const result=mergedPointJson(point);if(elevation===null){assert.equal(result.elevationM,undefined);assert.equal(result.provenance.elevationSource,undefined);}else{assert.equal(result.elevationM,elevation);assert.equal(result.provenance.elevationSource,'supplement');}assert.equal(point.source.elevationM,100);}
+
 assert.equal(fields['point-excluded-message'].hidden,true);
 points[0].excluded=true;showSupplementOrigin(0);
 assert.equal(fields['point-merged-json'].textContent,'');

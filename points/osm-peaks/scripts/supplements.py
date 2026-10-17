@@ -4,6 +4,7 @@ from copy import deepcopy
 import gzip
 import hashlib
 import json
+import math
 from pathlib import Path
 
 if __package__:
@@ -19,7 +20,7 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 from document_metadata import name_reading, osm_node_id, validate_related_ids, validate_point_id, validate_osm_id, alias_objects, metadata_arrays, metadata_maps
 
 DEFAULT_SUPPLEMENTS = Path(__file__).resolve().parents[1] / "supplements.json"
-FIELDS = {"name", "nameReading", "aliases", "aliasesRemove", "tags", "tagsRemove", "exclude", "graphic", "relatedIds"}
+FIELDS = {"name", "nameReading", "elevationM", "aliases", "aliasesRemove", "tags", "tagsRemove", "exclude", "graphic", "relatedIds"}
 METADATA = {"source", "license", "attribution", "changes", "latestTimestamp"}
 COMPANION_FILES = ("osm-peaks-source.json.gz", "supplements.json")
 LEGACY_COMPANION_FILE = "supplement-manifest.json"
@@ -97,6 +98,8 @@ def validate_supplements(data):
             if not isinstance(row["aliases"],list):
                 raise ValueError("補足の aliases は配列にしてください")
             alias_objects(row["aliases"])
+        if "elevationM" in row and row["elevationM"] is not None and (type(row["elevationM"]) not in (int, float) or not math.isfinite(row["elevationM"])):
+            raise ValueError("補正する標高は有限の数値または null にしてください")
         if "graphic" in row:
             validate_graphics([row])
         if "exclude" in row and type(row["exclude"]) is not bool:
@@ -118,6 +121,8 @@ def validate_supplements(data):
                 alias_objects(value)
             elif key == "relatedIds":
                 validate_related_ids(value)
+            elif key == "elevationM" and value is not None and (type(value) not in (int, float) or not math.isfinite(value)):
+                raise ValueError("expected の標高が不正です")
             elif key == "nameReading" and value is not None and not name_reading(value):
                 raise ValueError("expected のよみがなが不正です")
             elif key == "name" and value is not None and not isinstance(value, str):
@@ -158,7 +163,7 @@ def apply_supplements(points, data):
         applied.add(index)
         point = result[index]
         for key, expected in row.get("expected", {}).items():
-            if key not in {"name","nameReading","aliases","relatedIds"}:
+            if key not in {"name","nameReading","elevationM","aliases","relatedIds"}:
                 continue
             actual = point.get(key, [] if key in {"aliases","relatedIds"} else None)
             if key == "aliases":
@@ -168,12 +173,22 @@ def apply_supplements(points, data):
                 raise ValueError(f"{ref_key} {identifier} の {key} が想定値と異なります。補正内容を確認してください")
         if "relatedIds" in row:
             validate_related_ids(row["relatedIds"],point.get("id"))
-        for key in ("name", "nameReading", "graphic", "relatedIds"):
+        for key in ("name", "nameReading", "elevationM", "graphic", "relatedIds"):
             if key in row:
                 if row[key] is None:
                     point.pop(key, None)
                 else:
                     point[key] = deepcopy(row[key])
+        if "elevationM" in row:
+            provenance = dict(point.get("provenance") or {})
+            if row["elevationM"] is None:
+                provenance.pop("elevationSource", None)
+            else:
+                provenance["elevationSource"] = "supplement"
+            if provenance:
+                point["provenance"] = provenance
+            else:
+                point.pop("provenance", None)
         if "tags" in row or "tagsRemove" in row:
             point["tags"] = list(dict.fromkeys([v for v in (point.get("tags") or []) if v not in row.get("tagsRemove", [])] + row.get("tags", [])))
         if "aliases" in row or "aliasesRemove" in row:

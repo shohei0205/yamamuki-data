@@ -20,19 +20,6 @@
   },
   "points": [
     {
-      "id": "gsi-mountain-list:17",
-      "tags": [
-        "日本百名山"
-      ],
-      "aliases": [
-        {
-          "name": "利尻富士",
-          "nameReading": "りしりふじ"
-        }
-      ],
-      "note": "利尻山"
-    },
-    {
       "id": "gsi-mountain-list:5",
       "tags": [
         "日本百名山"
@@ -52,6 +39,19 @@
         "日本百名山"
       ],
       "note": "雌阿寒岳"
+    },
+    {
+      "id": "gsi-mountain-list:17",
+      "tags": [
+        "日本百名山"
+      ],
+      "aliases": [
+        {
+          "name": "利尻富士",
+          "nameReading": "りしりふじ"
+        }
+      ],
+      "note": "利尻山"
     },
     {
       "id": "gsi-mountain-list:34-1",
@@ -99,11 +99,11 @@
       "note": "羊蹄山"
     },
     {
-      "id": "gsi-mountain-list:166",
+      "id": "gsi-mountain-list:141",
       "tags": [
         "日本百名山"
       ],
-      "note": "岩木山"
+      "note": "早池峰山"
     },
     {
       "id": "gsi-mountain-list:151-1",
@@ -135,11 +135,11 @@
       "note": "岩手山"
     },
     {
-      "id": "gsi-mountain-list:141",
+      "id": "gsi-mountain-list:166",
       "tags": [
         "日本百名山"
       ],
-      "note": "早池峰山"
+      "note": "岩木山"
     },
     {
       "id": "gsi-mountain-list:177",
@@ -155,20 +155,6 @@
         }
       ],
       "note": "新山"
-    },
-    {
-      "id": "gsi-mountain-list:216",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "月山"
-    },
-    {
-      "id": "gsi-mountain-list:221",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "大朝日岳"
     },
     {
       "id": "gsi-mountain-list:204-1",
@@ -207,127 +193,47 @@
       "note": "磐梯山"
     },
     {
-      "id": "gsi-mountain-list:272",
+      "id": "gsi-mountain-list:216",
       "tags": [
         "日本百名山"
       ],
-      "name": "会津駒ヶ岳",
-      "nameReading": "あいづこまがたけ",
+      "note": "月山"
+    },
+    {
+      "id": "gsi-mountain-list:221",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "大朝日岳"
+    },
+    {
+      "id": "gsi-mountain-list:228",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "飯豊山"
+    },
+    {
+      "id": "gsi-mountain-list:247",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "筑波山"
+    },
+    {
+      "id": "gsi-mountain-list:249",
+      "tags": [
+        "日本百名山"
+      ],
+      "name": "那須岳",
+      "nameReading": "なすだけ",
       "aliases": [
         {
-          "name": "駒ヶ岳",
-          "nameReading": "こまがたけ"
+          "name": "茶臼岳",
+          "nameReading": "ちゃうすだけ"
         }
       ],
-      "note": "駒ヶ岳"
-    },
-    {
-      "id": "gsi-mountain-list:285",
-      "tags": [
-        "日本百名山"
-      ],
-      "name": "越後駒ヶ岳",
-      "nameReading": "えちごこまがたけ",
-      "aliases": [
-        {
-          "name": "駒ヶ岳",
-          "nameReading": "こまがたけ"
-        },
-        {
-          "name": "魚沼駒ヶ岳",
-          "nameReading": "うおぬまこまがたけ"
-        }
-      ],
-      "note": "駒ヶ岳"
-    },
-    {
-      "id": "gsi-mountain-list:273",
-      "tags": [
-        "日本百名山"
-      ],
-      "aliasesRemove": [
-        "平ガ岳"
-      ],
-      "note": "平ヶ岳"
-    },
-    {
-      "id": "gsi-mountain-list:290",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "巻機山"
-    },
-    {
-      "id": "gsi-mountain-list:275",
-      "tags": [
-        "日本百名山"
-      ],
-      "name": "燧ヶ岳",
-      "nameReading": "ひうちがたけ",
-      "aliases": [
-        {
-          "name": "柴安嵓",
-          "nameReading": "しばやすぐら"
-        }
-      ],
-      "note": "柴安嵓"
-    },
-    {
-      "id": "gsi-mountain-list:276",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "至仏山"
-    },
-    {
-      "id": "gsi-mountain-list:293-3",
-      "tags": [
-        "日本百名山"
-      ],
-      "name": "谷川岳",
-      "nameReading": "たにがわだけ",
-      "aliases": [
-        {
-          "name": "オキノ耳",
-          "nameReading": "おきのみみ"
-        }
-      ],
-      "note": "オキノ耳"
-    },
-    {
-      "id": "gsi-mountain-list:401",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "雨飾山"
-    },
-    {
-      "id": "gsi-mountain-list:297",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "苗場山"
-    },
-    {
-      "id": "gsi-mountain-list:403",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "妙高山"
-    },
-    {
-      "id": "gsi-mountain-list:402",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "火打山"
-    },
-    {
-      "id": "gsi-mountain-list:405",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "高妻山"
+      "note": "茶臼岳"
     },
     {
       "id": "gsi-mountain-list:255",
@@ -359,13 +265,6 @@
       "note": "皇海山"
     },
     {
-      "id": "gsi-mountain-list:277",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "武尊山"
-    },
-    {
       "id": "gsi-mountain-list:261-1",
       "tags": [
         "日本百名山"
@@ -379,6 +278,108 @@
         }
       ],
       "note": "黒檜山"
+    },
+    {
+      "id": "gsi-mountain-list:272",
+      "tags": [
+        "日本百名山"
+      ],
+      "name": "会津駒ヶ岳",
+      "nameReading": "あいづこまがたけ",
+      "aliases": [
+        {
+          "name": "駒ヶ岳",
+          "nameReading": "こまがたけ"
+        }
+      ],
+      "note": "駒ヶ岳"
+    },
+    {
+      "id": "gsi-mountain-list:273",
+      "tags": [
+        "日本百名山"
+      ],
+      "aliasesRemove": [
+        "平ガ岳"
+      ],
+      "note": "平ヶ岳"
+    },
+    {
+      "id": "gsi-mountain-list:275",
+      "tags": [
+        "日本百名山"
+      ],
+      "name": "燧ヶ岳",
+      "nameReading": "ひうちがたけ",
+      "aliases": [
+        {
+          "name": "柴安嵓",
+          "nameReading": "しばやすぐら"
+        }
+      ],
+      "note": "柴安嵓"
+    },
+    {
+      "id": "gsi-mountain-list:276",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "至仏山"
+    },
+    {
+      "id": "gsi-mountain-list:277",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "武尊山"
+    },
+    {
+      "id": "gsi-mountain-list:285",
+      "tags": [
+        "日本百名山"
+      ],
+      "name": "越後駒ヶ岳",
+      "nameReading": "えちごこまがたけ",
+      "aliases": [
+        {
+          "name": "駒ヶ岳",
+          "nameReading": "こまがたけ"
+        },
+        {
+          "name": "魚沼駒ヶ岳",
+          "nameReading": "うおぬまこまがたけ"
+        }
+      ],
+      "note": "駒ヶ岳"
+    },
+    {
+      "id": "gsi-mountain-list:290",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "巻機山"
+    },
+    {
+      "id": "gsi-mountain-list:293-3",
+      "tags": [
+        "日本百名山"
+      ],
+      "name": "谷川岳",
+      "nameReading": "たにがわだけ",
+      "aliases": [
+        {
+          "name": "オキノ耳",
+          "nameReading": "おきのみみ"
+        }
+      ],
+      "note": "オキノ耳"
+    },
+    {
+      "id": "gsi-mountain-list:297",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "苗場山"
     },
     {
       "id": "gsi-mountain-list:307",
@@ -410,169 +411,111 @@
       "note": "浅間山"
     },
     {
-      "id": "gsi-mountain-list:247",
+      "id": "gsi-mountain-list:321",
       "tags": [
         "日本百名山"
       ],
-      "note": "筑波山"
+      "note": "両神山"
     },
     {
-      "id": "gsi-mountain-list:434",
+      "id": "gsi-mountain-list:324",
       "tags": [
         "日本百名山"
       ],
-      "nameReading": [
-        "しろうまだけ",
-        "はくばだけ"
-      ],
-      "note": "白馬岳"
+      "note": "甲武信ヶ岳"
     },
     {
-      "id": "gsi-mountain-list:440",
+      "id": "gsi-mountain-list:326",
       "tags": [
         "日本百名山"
       ],
+      "note": "瑞牆山"
+    },
+    {
+      "id": "gsi-mountain-list:327",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "金峰山"
+    },
+    {
+      "id": "gsi-mountain-list:339",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "雲取山"
+    },
+    {
+      "id": "gsi-mountain-list:344",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "大菩薩嶺"
+    },
+    {
+      "id": "gsi-mountain-list:361-2",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "丹沢山"
+    },
+    {
+      "id": "gsi-mountain-list:368",
+      "tags": [
+        "日本百名山"
+      ],
+      "name": "富士山",
+      "nameReading": "ふじさん",
       "aliases": [
         {
-          "name": "五竜岳",
-          "nameReading": "ごりゅうだけ"
-        }
-      ],
-      "note": "五龍岳"
-    },
-    {
-      "id": "gsi-mountain-list:441",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "鹿島槍ヶ岳"
-    },
-    {
-      "id": "gsi-mountain-list:465",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "剱岳"
-    },
-    {
-      "id": "gsi-mountain-list:471",
-      "tags": [
-        "日本百名山"
-      ],
-      "name": "立山",
-      "nameReading": "たてやま",
-      "aliases": [
-        {
-          "name": "大汝山",
-          "nameReading": "おおなんじやま"
-        }
-      ],
-      "note": "大汝山"
-    },
-    {
-      "id": "gsi-mountain-list:478",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "薬師岳"
-    },
-    {
-      "id": "gsi-mountain-list:480",
-      "tags": [
-        "日本百名山"
-      ],
-      "aliases": [
-        {
-          "name": "中ノ俣岳",
-          "nameReading": "なかのまただけ"
-        }
-      ],
-      "note": "黒部五郎岳"
-    },
-    {
-      "id": "gsi-mountain-list:457",
-      "tags": [
-        "日本百名山"
-      ],
-      "aliases": [
-        {
-          "name": "黒岳",
-          "nameReading": "くろだけ"
-        }
-      ],
-      "note": "水晶岳"
-    },
-    {
-      "id": "gsi-mountain-list:459",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "鷲羽岳"
-    },
-    {
-      "id": "gsi-mountain-list:501",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "槍ヶ岳"
-    },
-    {
-      "id": "gsi-mountain-list:507",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "奥穂高岳"
-    },
-    {
-      "id": "gsi-mountain-list:495",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "常念岳"
-    },
-    {
-      "id": "gsi-mountain-list:485",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "笠ヶ岳"
-    },
-    {
-      "id": "gsi-mountain-list:510",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "焼岳"
-    },
-    {
-      "id": "gsi-mountain-list:514",
-      "tags": [
-        "日本百名山"
-      ],
-      "name": "乗鞍岳",
-      "nameReading": "のりくらだけ",
-      "aliases": [
-        {
-          "name": "剣ヶ峰",
+          "name": "剣ヶ峯",
           "nameReading": "けんがみね"
         }
       ],
-      "note": "剣ヶ峰"
+      "note": "剣ヶ峯"
     },
     {
-      "id": "gsi-mountain-list:517",
+      "id": "gsi-mountain-list:375",
       "tags": [
         "日本百名山"
       ],
-      "name": "御嶽山",
-      "nameReading": "おんたけさん",
+      "name": "天城山",
+      "nameReading": "あまぎさん",
       "aliases": [
         {
-          "name": "剣ヶ峰",
-          "nameReading": "けんがみね"
+          "name": "万三郎岳",
+          "nameReading": "ばんざぶろうだけ"
         }
       ],
-      "note": "剣ヶ峰"
+      "note": "万三郎岳"
+    },
+    {
+      "id": "gsi-mountain-list:401",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "雨飾山"
+    },
+    {
+      "id": "gsi-mountain-list:402",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "火打山"
+    },
+    {
+      "id": "gsi-mountain-list:403",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "妙高山"
+    },
+    {
+      "id": "gsi-mountain-list:405",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "高妻山"
     },
     {
       "id": "gsi-mountain-list:411",
@@ -625,76 +568,162 @@
       "note": "赤岳"
     },
     {
-      "id": "gsi-mountain-list:321",
+      "id": "gsi-mountain-list:434",
       "tags": [
         "日本百名山"
       ],
-      "note": "両神山"
+      "nameReading": [
+        "しろうまだけ",
+        "はくばだけ"
+      ],
+      "note": "白馬岳"
     },
     {
-      "id": "gsi-mountain-list:339",
+      "id": "gsi-mountain-list:440",
       "tags": [
         "日本百名山"
       ],
-      "note": "雲取山"
-    },
-    {
-      "id": "gsi-mountain-list:324",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "甲武信ヶ岳"
-    },
-    {
-      "id": "gsi-mountain-list:327",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "金峰山"
-    },
-    {
-      "id": "gsi-mountain-list:326",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "瑞牆山"
-    },
-    {
-      "id": "gsi-mountain-list:344",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "大菩薩嶺"
-    },
-    {
-      "id": "gsi-mountain-list:368",
-      "tags": [
-        "日本百名山"
-      ],
-      "name": "富士山",
-      "nameReading": "ふじさん",
       "aliases": [
         {
-          "name": "剣ヶ峯",
+          "name": "五竜岳",
+          "nameReading": "ごりゅうだけ"
+        }
+      ],
+      "note": "五龍岳"
+    },
+    {
+      "id": "gsi-mountain-list:441",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "鹿島槍ヶ岳"
+    },
+    {
+      "id": "gsi-mountain-list:457",
+      "tags": [
+        "日本百名山"
+      ],
+      "aliases": [
+        {
+          "name": "黒岳",
+          "nameReading": "くろだけ"
+        }
+      ],
+      "note": "水晶岳"
+    },
+    {
+      "id": "gsi-mountain-list:459",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "鷲羽岳"
+    },
+    {
+      "id": "gsi-mountain-list:465",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "剱岳"
+    },
+    {
+      "id": "gsi-mountain-list:471",
+      "tags": [
+        "日本百名山"
+      ],
+      "name": "立山",
+      "nameReading": "たてやま",
+      "aliases": [
+        {
+          "name": "大汝山",
+          "nameReading": "おおなんじやま"
+        }
+      ],
+      "note": "大汝山"
+    },
+    {
+      "id": "gsi-mountain-list:478",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "薬師岳"
+    },
+    {
+      "id": "gsi-mountain-list:480",
+      "tags": [
+        "日本百名山"
+      ],
+      "aliases": [
+        {
+          "name": "中ノ俣岳",
+          "nameReading": "なかのまただけ"
+        }
+      ],
+      "note": "黒部五郎岳"
+    },
+    {
+      "id": "gsi-mountain-list:485",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "笠ヶ岳"
+    },
+    {
+      "id": "gsi-mountain-list:495",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "常念岳"
+    },
+    {
+      "id": "gsi-mountain-list:501",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "槍ヶ岳"
+    },
+    {
+      "id": "gsi-mountain-list:507",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "奥穂高岳"
+    },
+    {
+      "id": "gsi-mountain-list:510",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "焼岳"
+    },
+    {
+      "id": "gsi-mountain-list:514",
+      "tags": [
+        "日本百名山"
+      ],
+      "name": "乗鞍岳",
+      "nameReading": "のりくらだけ",
+      "aliases": [
+        {
+          "name": "剣ヶ峰",
           "nameReading": "けんがみね"
         }
       ],
-      "note": "剣ヶ峯"
+      "note": "剣ヶ峰"
     },
     {
-      "id": "gsi-mountain-list:375",
+      "id": "gsi-mountain-list:517",
       "tags": [
         "日本百名山"
       ],
-      "name": "天城山",
-      "nameReading": "あまぎさん",
+      "name": "御嶽山",
+      "nameReading": "おんたけさん",
       "aliases": [
         {
-          "name": "万三郎岳",
-          "nameReading": "ばんざぶろうだけ"
+          "name": "剣ヶ峰",
+          "nameReading": "けんがみね"
         }
       ],
-      "note": "万三郎岳"
+      "note": "剣ヶ峰"
     },
     {
       "id": "gsi-mountain-list:525-1",
@@ -741,13 +770,6 @@
       "note": "駒ヶ岳"
     },
     {
-      "id": "gsi-mountain-list:552",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "仙丈ヶ岳"
-    },
-    {
       "id": "gsi-mountain-list:548",
       "tags": [
         "日本百名山"
@@ -761,6 +783,13 @@
         }
       ],
       "note": "観音ヶ岳"
+    },
+    {
+      "id": "gsi-mountain-list:552",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "仙丈ヶ岳"
     },
     {
       "id": "gsi-mountain-list:555",
@@ -932,13 +961,6 @@
       "note": "中岳"
     },
     {
-      "id": "gsi-mountain-list:951",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "祖母山"
-    },
-    {
       "id": "gsi-mountain-list:927-1",
       "tags": [
         "日本百名山"
@@ -952,6 +974,13 @@
         }
       ],
       "note": "高岳"
+    },
+    {
+      "id": "gsi-mountain-list:951",
+      "tags": [
+        "日本百名山"
+      ],
+      "note": "祖母山"
     },
     {
       "id": "gsi-mountain-list:967-1",
@@ -983,74 +1012,14 @@
       "note": "宮之浦岳"
     },
     {
+      "id": "gsi-vector:0dcfddb0dc67944bc93cf010",
+      "exclude": true,
+      "note": "八ヶ岳"
+    },
+    {
       "id": "gsi-vector:1d93b82608ec6e4c2fb23cf4",
       "exclude": true,
       "note": "八甲田山"
-    },
-    {
-      "id": "gsi-vector:f02ad7f3d18c49080f9be7df",
-      "exclude": true,
-      "note": "鳥海山"
-    },
-    {
-      "id": "gsi-vector:b678a2366ab721ff0f7c8456",
-      "exclude": true,
-      "note": "燧ヶ岳"
-    },
-    {
-      "id": "gsi-vector:964a156bb9841495379f65fd",
-      "exclude": true,
-      "note": "谷川岳"
-    },
-    {
-      "id": "gsi-vector:4c4b2494e30e7b122a555257",
-      "exclude": true,
-      "note": "天城山"
-    },
-    {
-      "id": "gsi-vector:836f328dcae7ce797a179e85",
-      "exclude": true,
-      "note": "乗鞍岳"
-    },
-    {
-      "id": "gsi-vector:cb9e3fa7267f336e5034cf3e",
-      "exclude": true,
-      "note": "御嶽山"
-    },
-    {
-      "id": "gsi-vector:ba81f873dadc385d7a0ba209",
-      "exclude": true,
-      "note": "聖岳"
-    },
-    {
-      "id": "gsi-vector:a07336a0f3c83ad054cd6797",
-      "exclude": true,
-      "note": "大台ヶ原山"
-    },
-    {
-      "id": "gsi-vector:6cb8b63377edc104868feabe",
-      "exclude": true,
-      "note": "石鎚山"
-    },
-    {
-      "id": "gsi-vector:309e3a6ba212f612741c31af",
-      "exclude": true,
-      "note": "蔵王山"
-    },
-    {
-      "id": "gsi-vector:a02e0ceb21412e8f990bb567",
-      "exclude": true,
-      "note": "白山"
-    },
-    {
-      "id": "gsi-vector:502a3fc762b126c08acbc120",
-      "exclude": true,
-      "note": "鳳凰山"
-    },
-    {
-      "id": "gsi-vector:e401ce7d394f0bd2d2fbaa35",
-      "exclude": true,
-      "note": "富士山"
     },
     {
       "id": "gsi-vector:2c8d31b68c03396bbe919409",
@@ -1058,9 +1027,9 @@
       "note": "立山"
     },
     {
-      "id": "gsi-vector:226218052a185dca5755eed9",
+      "id": "gsi-vector:2ea0a8bfd52abe0247a849bc",
       "exclude": true,
-      "note": "赤城山"
+      "note": "大山"
     },
     {
       "id": "gsi-vector:3c6b0148eaac6be735d694fe",
@@ -1068,56 +1037,9 @@
       "note": "霧ヶ峰"
     },
     {
-      "id": "gsi-vector:b7800bf9e572601cfe962dd7",
+      "id": "gsi-vector:4c4b2494e30e7b122a555257",
       "exclude": true,
-      "note": "阿蘇山"
-    },
-    {
-      "id": "gsi-vector:2025212197c900ce326b3e0c",
-      "exclude": true,
-      "note": "荒川岳"
-    },
-    {
-      "id": "gsi-vector:5289d985d11fe4a812a1943c",
-      "exclude": true,
-      "note": "霧島山"
-    },
-    {
-      "id": "gsi-vector:0dcfddb0dc67944bc93cf010",
-      "exclude": true,
-      "note": "八ヶ岳"
-    },
-    {
-      "id": "gsi-vector:86896e818f52bd5d533977cb",
-      "exclude": true,
-      "note": "那須岳"
-    },
-    {
-      "id": "gsi-mountain-list:249",
-      "tags": [
-        "日本百名山"
-      ],
-      "name": "那須岳",
-      "nameReading": "なすだけ",
-      "aliases": [
-        {
-          "name": "茶臼岳",
-          "nameReading": "ちゃうすだけ"
-        }
-      ],
-      "note": "茶臼岳"
-    },
-    {
-      "id": "gsi-mountain-list:361-2",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "丹沢山"
-    },
-    {
-      "id": "gsi-vector:2ea0a8bfd52abe0247a849bc",
-      "exclude": true,
-      "note": "大山"
+      "note": "天城山"
     },
     {
       "id": "gsi-vector:6a6975159e2a0acd6117cb58",
@@ -1135,11 +1057,89 @@
       "note": "弥山"
     },
     {
-      "id": "gsi-mountain-list:228",
-      "tags": [
-        "日本百名山"
-      ],
-      "note": "飯豊山"
+      "id": "gsi-vector:6cb8b63377edc104868feabe",
+      "exclude": true,
+      "note": "石鎚山"
+    },
+    {
+      "id": "gsi-vector:309e3a6ba212f612741c31af",
+      "exclude": true,
+      "note": "蔵王山"
+    },
+    {
+      "id": "gsi-vector:502a3fc762b126c08acbc120",
+      "exclude": true,
+      "note": "鳳凰山"
+    },
+    {
+      "id": "gsi-vector:836f328dcae7ce797a179e85",
+      "exclude": true,
+      "note": "乗鞍岳"
+    },
+    {
+      "id": "gsi-vector:964a156bb9841495379f65fd",
+      "exclude": true,
+      "note": "谷川岳"
+    },
+    {
+      "id": "gsi-vector:5289d985d11fe4a812a1943c",
+      "exclude": true,
+      "note": "霧島山"
+    },
+    {
+      "id": "gsi-vector:86896e818f52bd5d533977cb",
+      "exclude": true,
+      "note": "那須岳"
+    },
+    {
+      "id": "gsi-vector:226218052a185dca5755eed9",
+      "exclude": true,
+      "note": "赤城山"
+    },
+    {
+      "id": "gsi-vector:2025212197c900ce326b3e0c",
+      "exclude": true,
+      "note": "荒川岳"
+    },
+    {
+      "id": "gsi-vector:a02e0ceb21412e8f990bb567",
+      "exclude": true,
+      "note": "白山"
+    },
+    {
+      "id": "gsi-vector:a07336a0f3c83ad054cd6797",
+      "exclude": true,
+      "note": "大台ヶ原山"
+    },
+    {
+      "id": "gsi-vector:b678a2366ab721ff0f7c8456",
+      "exclude": true,
+      "note": "燧ヶ岳"
+    },
+    {
+      "id": "gsi-vector:b7800bf9e572601cfe962dd7",
+      "exclude": true,
+      "note": "阿蘇山"
+    },
+    {
+      "id": "gsi-vector:ba81f873dadc385d7a0ba209",
+      "exclude": true,
+      "note": "聖岳"
+    },
+    {
+      "id": "gsi-vector:cb9e3fa7267f336e5034cf3e",
+      "exclude": true,
+      "note": "御嶽山"
+    },
+    {
+      "id": "gsi-vector:e401ce7d394f0bd2d2fbaa35",
+      "exclude": true,
+      "note": "富士山"
+    },
+    {
+      "id": "gsi-vector:f02ad7f3d18c49080f9be7df",
+      "exclude": true,
+      "note": "鳥海山"
     }
   ]
 }

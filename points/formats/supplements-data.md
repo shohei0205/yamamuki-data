@@ -23,7 +23,7 @@
 
 ## 項目
 
-地点の補足情報は一つの JSON ファイルにまとめる。`schemaVersion`・`points` と、任意の共通情報 `metadata` を持ち、`metadata.sources` に出典一覧、`metadata.tags` にタグ情報を格納し、`points` の `id` で元の地点に対応付ける。地点ごとにタグ・表示名・よみがな・別名・除外を指定する。
+地点の補足情報は一つの JSON ファイルにまとめる。`schemaVersion`・`points` と、任意の共通情報 `metadata` を持ち、`metadata.sources` に出典一覧、`metadata.tags` にタグ情報を格納し、`points` の `id` で元の地点に対応付ける。地点ごとにタグ・表示名・よみがな・標高・別名・除外を指定する。
 
 例の出典情報は、実際に確認した資料とその利用条件に置き換える。Wikipedia では参照した版の固定リンクを記載する。タグを追加しない地点は `tags` を省略する。
 
@@ -56,12 +56,13 @@
 | `name` | string | 任意（補正項目のうち1つ以上が必須） | 表示名を置き換える。空文字は使えない | [版1] 追加 |
 | `nameReading` | string・string の配列・null | 任意（補正項目のうち1つ以上が必須） | よみがなを置き換える。複数ある場合は重複のない1件以上の文字列配列。`null` は元のよみがなを削除する。空配列は使わない | [版1] 追加<br>[版2] 複数の読みに対応 |
 | `graphic` | object または null | 任意（補正項目のうち1つ以上が必須） | `svg` に SVG 本文、任意の `scale` に表示倍率を指定する。元の画像を置き換え、`null` は画像を削除する。省略時は元の画像を保つ | [版1.1] 追加（#56） |
+| `elevationM` | number または null | 任意（補正項目のうち1つ以上が必須） | 標高（m）を置き換える。有限の数値を指定する。`null` は標高を削除、省略は元の値を維持する。補正値の出典は補足の `metadata.sources` に記録する | [版2] 追加 |
 | `aliases` | object の配列（旧文字列も読める） | 任意（補正項目のうち1つ以上が必須） | 追加・補正する別名の配列。各要素は必須の `name` と任意の `nameReading` を持つ | [版1] 追加 |
 | `aliasesRemove` | string の配列 | 任意（補正項目のうち1つ以上が必須） | 元の別名から削除する値の配列 | [版1] 追加 |
 | `exclude` | boolean | 任意（補正項目のうち1つ以上が必須） | `true` で表示・配布対象から除外する | [版1] 追加 |
 | `reason` | string | 任意 | 補正理由（任意）。表示名の置き換え・除外・削除でも省略できる | [版1] 追加<br>[版2] 任意化 |
 | `note` | string | 任意 | 管理用の自由なメモ。地点名の置き換えや一致検査には使わない | [版1] 追加 |
-| `expected` | object | 任意 | 補正前に想定する `name`・`nameReading`・`aliases`・`relatedIds`。元データと異なる場合は適用を中止する | [版1] 追加 |
+| `expected` | object | 任意 | 補正前に想定する `name`・`nameReading`・`elevationM`・`aliases`・`relatedIds`。元データと異なる場合は適用を中止する | [版1] 追加 |
 
 `id` で対象地点を指定する。同じ ID の補足行の重複はエラーにする。`relatedIds` は対象を探すキーではなく、その地点の関連付けを補正する値。関連先を含むデータセットは同時に読み込まれていなくてもよい。
 
@@ -128,6 +129,7 @@
       "id": "osm:123456",
       "name": "見本山",
       "nameReading": ["みほんやま", "みほんさん"],
+      "elevationM": 272.9,
       "aliases": [
         {
           "name": "見本岳",
@@ -153,6 +155,7 @@
       "expected": {
         "name": "旧見本山",
         "nameReading": "きゅうみほんやま",
+        "elevationM": 270,
         "aliases": [
           {
             "name": "旧別名",
@@ -276,10 +279,13 @@
 }
 ```
 
+標高を補正した地点の `provenance.elevationSource` は `supplement`（補足による補正）にする。標高を削除した場合は `elevationM` と `provenance.elevationSource` を省略する。補足を解除した場合は原本の標高と出典に戻る。
+
 ## 変更履歴
 
 ### 版2（2026-10-14）
 
+- 任意の `elevationM` による標高の補正・削除と、`expected.elevationM` による元の標高の照合に対応する。
 - 必須の `schemaFormat: "yamamuki-point-supplements"` を追加し、形式を識別する。未公開の版2に統合する。
 
 - 出典一覧とタグ情報を `metadata.sources`・`metadata.tags` にまとめる。直下の `sources`・`tags` は使わない。
