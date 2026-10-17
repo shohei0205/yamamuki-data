@@ -8,7 +8,14 @@
         "source": "Wikipedia「日本百名山」の「著書順の山の一覧」 https://ja.wikipedia.org/w/index.php?title=日本百名山#著書順の山の一覧",
         "license": "CC BY-SA 4.0 https://creativecommons.org/licenses/by-sa/4.0/",
         "attribution": "Wikipedia「日本百名山」の投稿者 https://ja.wikipedia.org/w/index.php?title=日本百名山&action=history",
-        "changes": "山名一覧を国土地理院の地点 ID に対応付けた採用地点を、OSM の名前・別名・位置と照合して OSM の地点 ID に対応付け、ユーザーがビューアーで採用地点・名称・読み・別名・タグ・配布除外を手動調整した。"
+        "changes": "山名一覧を国土地理院の地点 ID に対応付けた採用地点を、OSM の名前・別名・位置と照合して OSM の地点 ID に対応付け、作成者がビューアーで採用地点・名称・読み・別名・タグ・配布除外を手動調整した。"
+      },
+      {
+        "name": "国土地理院",
+        "source": "国土地理院の地点原本 points/gsi-peaks/gsi-peaks-source.json。日本の主な山岳標高一覧 https://www.gsi.go.jp/KOKUJYOHO/MOUNTAIN/1003zan20260331.csv ; 最適化ベクトルタイル https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/optimal_bvmap-v1.pmtiles ; 自然地名 https://github.com/gsi-cyberjapan/experimental_pni",
+        "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
+        "attribution": "出典：国土地理院（日本の主な山岳標高一覧・最適化ベクトルタイル・自然地名）を加工して作成",
+        "changes": "国土地理院の地点の位置・名称・別名を使って対応する OSM ノードを選定し、GSI 版の採用地点・名称・読み・別名・配布除外を反映した。作成者がビューアーで手動調整した。座標・標高は OSM 原本を維持する。"
       }
     ],
     "tags": [

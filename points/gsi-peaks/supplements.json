@@ -8,7 +8,7 @@
         "source": "Wikipedia「日本百名山」の「著書順の山の一覧」 https://ja.wikipedia.org/w/index.php?title=日本百名山#著書順の山の一覧",
         "license": "CC BY-SA 4.0 https://creativecommons.org/licenses/by-sa/4.0/",
         "attribution": "Wikipedia「日本百名山」の投稿者 https://ja.wikipedia.org/w/index.php?title=日本百名山&action=history",
-        "changes": "山名一覧を国土地理院の地点 ID に対応付け、ユーザーが採用地点・名称・読み・別名・タグ・配布除外を手動調整した。"
+        "changes": "山名一覧を国土地理院の地点 ID に対応付け、作成者が採用地点・名称・読み・別名・タグ・配布除外を手動調整した。"
       }
     ],
     "tags": [
