@@ -14,6 +14,8 @@ from scripts.build_data import build
 from scripts.point_tags import validate_tags
 
 
+from document_metadata import metadata_maps
+
 class TagJsonTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -174,21 +176,21 @@ class TagJsonTests(unittest.TestCase):
                 patch("scripts.build_data.subprocess.run", side_effect=extract):
             manifest = build(self.root / "input.pbf", self.root / "dist", "test", tags_directory=self.tags)
         with gzip.open(self.root / "dist/osm-peaks.json.gz", "rt", encoding="utf-8") as stream:
-            point = json.load(stream)[0]
+            point = json.load(stream)["points"][0]
             self.assertEqual(point["tags"], ["日本百名山", "花の百名山"])
             self.assertEqual(point["nameReading"], "ようていざん")
-            self.assertEqual(point["aliases"], ["後方羊蹄山"])
-        self.assertEqual(manifest["dataSchemaVersion"], 5)
+            self.assertEqual(point["aliases"], [{"name":"後方羊蹄山"}])
+        self.assertEqual(manifest["dataSchemaVersion"], 6)
 
-        self.assertEqual(manifest["license"], "ODbL-1.0")
-        self.assertEqual(manifest["attribution"], "© OpenStreetMap contributors")
-        self.assertEqual(manifest["supplementSources"], {"よみがな補足": { "source": "よみがな資料", "license": "CC0-1.0"}, "日本百名山": { "source": "固定リンク", "license": "CC BY-SA 4.0", "attribution": "投稿者", "changes": "ID を追加"}, "花の百名山": { "source": "別の出典", "license": "CC BY 4.0"}})
+        self.assertEqual(metadata_maps(manifest["metadata"])["sources"]["osm-peaks"]["license"], "ODbL-1.0")
+        self.assertEqual(metadata_maps(manifest["metadata"])["sources"]["osm-peaks"]["attribution"], "© OpenStreetMap contributors")
+        self.assertEqual({k:v for k,v in metadata_maps(manifest["metadata"])["sources"].items() if k != "osm-peaks"}, {"よみがな補足": { "source": "よみがな資料", "license": "CC0-1.0"}, "日本百名山": { "source": "固定リンク", "license": "CC BY-SA 4.0", "attribution": "投稿者", "changes": "ID を追加"}, "花の百名山": { "source": "別の出典", "license": "CC BY 4.0"}})
 
 
         from scripts.check_release import validate
-        self.assertEqual(validate(self.root / "dist")[0]["supplementSources"], manifest["supplementSources"])
+        self.assertEqual(validate(self.root / "dist")[0]["metadata"]["sources"], manifest["metadata"]["sources"])
         saved_manifest = json.loads((self.root / "dist/manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(saved_manifest["supplementSources"], manifest["supplementSources"])
+        self.assertEqual(saved_manifest["metadata"]["sources"], manifest["metadata"]["sources"])
 
     def test_legacy_sources_validation(self):
         from scripts.tag_json import validate_legacy_sources

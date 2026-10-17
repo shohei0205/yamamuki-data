@@ -33,7 +33,7 @@ release_tools/     データ種別共通の公開入口
 
 ### 配布の方針
 
-生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データとデータ本体は原則として git に含めない。国土地理院版は生成済みの地点 JSON と出典要約 JSON だけをコミットし、Action で Release を作る。開発版の最新版を示す小さな `manifest.json` は、Actions の生成物として GitHub Pages に公開する。
+生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データとデータ本体は原則として git に含めない。国土地理院版は補足適用前の地点 JSON と出典要約 JSON をコミットし、Action で補足を適用して Release を作る。開発版の最新版を示す小さな `manifest.json` は、Actions の生成物として GitHub Pages に公開する。
 
 正式版の通常生成は Release を作るところまでで、Pages は更新しない。利用する側で Release の版を選び、その Release に添付された manifest の URL を固定して取得する。アプリが読んでいる版のデータが消えないよう、公開した Release とその添付ファイルは削除・差し替えしない。
 
@@ -54,7 +54,7 @@ release_tools/     データ種別共通の公開入口
 
 ### 配布データの取得情報（manifest.json）
 
-データ本体の取得先・大きさ・ハッシュ・出典を記載する共通の JSON。項目・制約・読み込み方法は [manifest フォーマット](formats/manifest.md) を参照する。機械検証用のスキーマは [manifest の版5](schemas/manifest-v5.schema.json)。
+データ本体の取得先・大きさ・ハッシュ・出典を記載する共通の JSON。項目・制約・読み込み方法は [manifest フォーマット](formats/manifest.md) を、各 JSON の共通情報は [metadata フォーマット](formats/metadata.md) を参照する。
 
 ## Actions の構成
 
@@ -160,36 +160,28 @@ CI の「共通：文字形式の確認」はすべての PR で文字コード�
 
 ## ライセンス
 
-特定の Release を使うときは、その Release の manifest に記載された出典・利用条件を確認する。
+配布データの利用条件は出典ごとに異なる。利用する Release の manifest と、各データセットの「出典とライセンス」を確認する。補足適用後のデータを使う場合は、元データと補足の両方の出典・利用条件を確認する。
 
-### 配布データ
+### 配布データと補足
 
-| 対象 | 出典・表示 | 利用条件 | 補足・詳細 |
+| 対象 | 出典・帰属表示 | 利用条件 | 詳細 |
 |---|---|---|---|
-| [OSM 山頂](points/osm-peaks/README.md)（`osm-peaks`） | © OpenStreetMap contributors | [ODbL-1.0](https://opendatacommons.org/licenses/odbl/1-0/) | [OSM の著作権とライセンス](https://www.openstreetmap.org/copyright)を参照 |
-| OSM 山頂の補足適用前の元データ・版4の旧形式データ | © OpenStreetMap contributors | ODbL-1.0 | [互換データの扱い](points/osm-peaks/README.md#版4の旧形式データ)を参照 |
-| [国土地理院の山頂](points/gsi-peaks/README.md)（`gsi-peaks`） | 出典：国土地理院（日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成 | [公共データ利用規約 第 1.0 版](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（`PDL-1.0`） | 元資料 URL・取得日時・出典表示は [snapshot.json](points/gsi-peaks/snapshot.json) に記録 |
-| [テスト用地点](points/testdata/README.md)（`testdata`、開発版のみ） | 動作確認用の架空データ | CC0-1.0 | 内蔵 SVG と分類タグを含む |
+| OpenStreetMap 由来の地点データ | © OpenStreetMap contributors | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) | [OSM 山頂の出典とライセンス](points/osm-peaks/README.md#出典とライセンス)。補足適用前の原本と旧形式のデータも含む |
+| 国土地理院由来の地点データ・OSM版の地点照合と補正に用いた情報 | 出典：国土地理院。資料名と加工内容を記録する | [公共データ利用規約（第1.0版）](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（PDL-1.0） | [GSI 山頂](points/gsi-peaks/README.md#出典とライセンス)・[OSM 山頂](points/osm-peaks/README.md#出典とライセンス) の出典とライセンス |
+| 日本百名山の山名一覧 | Wikipedia「日本百名山」の投稿者 | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) | [GSI 山頂](points/gsi-peaks/README.md#出典とライセンス)・[OSM 山頂](points/osm-peaks/README.md#出典とライセンス) |
+| 動作確認用の架空の地点データ | このリポジトリで作成 | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | [テスト用地点](points/testdata/README.md)。内蔵画像と分類タグを含む |
 
-### 補足データ・画像
+地点に追加する画像は、画像ごとの出典・利用条件を各データセットの文書で確認する。
 
-| 対象 | 出典・表示 | 利用条件 | 補足・詳細 |
-|---|---|---|---|
-| 日本百名山の山名一覧 | Wikipedia「日本百名山」の投稿者 | CC BY-SA 4.0 | 参照した版・投稿者へのリンク・加工内容は [supplements.json の `sources`](points/osm-peaks/supplements.json) に記録 |
-| 日本百名山の照合に用いた地点データ | © OpenStreetMap contributors | ODbL-1.0 | 補足の出典は `sources` に記録し、配布データの manifest の `supplementSources` に引き継ぐ。元の地点データと補足の利用条件をそれぞれ確認する |
-| 地点に追加する画像 | 画像ごとの取得元・作成者 | 画像ごとの利用条件 | 追加時にデータセットの README に記載する |
+### ビューアーが利用する外部データ
 
-### 地点データビューアが利用する外部データ
+[地点データビューアー](points/viewer.html) は、背景地図と所在地判定用の境界データを取得する。これらは配布する地点データや補足には含めない。
 
-[地点データビューア（points/viewer.html）](points/viewer.html) が地図表示と所在地判定に利用するデータ。
-
-| 対象 | 出典 | 利用条件 | 補足・詳細 |
-|---|---|---|---|
-| 所在地判定用の行政区域 | 共同通信社の [japan-choropleth](https://github.com/kyodo-official/japan-choropleth) が加工した国土交通省「国土数値情報 行政区域データ 2025 年版」 | CC BY 4.0 | ビューアが取得し、配布する地点 JSON・補足 JSON には含めない |
-| 背景地図 | 地理院タイル | [地理院タイルの案内](https://maps.gsi.go.jp/development/ichiran.html)を参照 | ビューアが取得し、配布する地点 JSON・補足 JSON には含めない |
+| 用途 | 出典 | 利用条件・詳細 |
+|---|---|---|
+| 背景地図 | 地理院タイル | [地理院タイルの案内](https://maps.gsi.go.jp/development/ichiran.html) |
+| 所在地判定 | 共同通信社の [japan-choropleth](https://github.com/kyodo-official/japan-choropleth) が加工した国土交通省「国土数値情報 行政区域データ 2025 年版」 | CC BY 4.0。[ビューアーの説明](points/README.md#地点データをブラウザで確認する) |
 
 ### コード・文書
 
-| 対象 | ライセンスの指定状況 |
-|---|---|
-| リポジトリのコード・文書全体 | 全体に適用するライセンスファイルは置いていない。配布データの利用条件をコードや文書全体のライセンスとして扱わない |
+リポジトリのコード・文書全体に適用するライセンスファイルは置いていない。配布データの利用条件を、コードや文書全体のライセンスとして扱わない。

@@ -17,7 +17,7 @@ from urllib.request import Request, urlopen
 from urllib.parse import urlsplit
 
 from scripts.build_data import FILE_NAME
-from scripts.supplements import COMPANION_FILES
+from scripts.supplements import COMPANION_FILES, LEGACY_COMPANION_FILE
 from scripts.check_release import assess, report, validate
 from scripts.release_channels import check_branch, check_tag, prefix, release_tag, download_url
 
@@ -41,10 +41,17 @@ def fetch(tag, directory, channel="stable"):
     gh("release", "download", tag, "--pattern", "manifest.json", "--pattern", FILE_NAME, "--dir", str(directory))
     assets = json.loads(gh("release", "view", tag, "--json", "assets"))["assets"]
     names = {asset["name"] for asset in assets}
-    if any(name in names for name in COMPANION_FILES):
+    from scripts.distribution_parts import filenames
+    parts = filenames("osm-peaks")
+    if any(name in names for name in parts[1:]):
+        if not all(name in names for name in parts):
+            raise ValueError("別配布データと manifest がそろっていません")
+        gh("release", "download", tag, *[v for name in parts for v in ("--pattern", name)], "--dir", str(directory))
+    elif any(name in names for name in (*COMPANION_FILES, LEGACY_COMPANION_FILE)):
         if not all(name in names for name in COMPANION_FILES):
             raise ValueError("Release の補足ファイルがそろっていません")
-        patterns = [part for name in COMPANION_FILES for part in ("--pattern", name)]
+        files = (*COMPANION_FILES, LEGACY_COMPANION_FILE) if LEGACY_COMPANION_FILE in names else COMPANION_FILES
+        patterns = [part for name in files for part in ("--pattern", name)]
         gh("release", "download", tag, *patterns, "--dir", str(directory))
     return validate(directory, tag=tag, channel=channel)
 
@@ -230,7 +237,7 @@ def points_catalog(manifests, selected_channel="stable"):
             manifest = dict(manifests[path])
             # 従来の山頂は manifest の版で本体の形式も管理していた。
             if (dataset_id == "osm-peaks" and "dataSchemaVersion" not in manifest
-                    and type(manifest.get("schemaVersion")) is int and manifest["schemaVersion"] in (1, 2, 3, 4, 5)):
+                    and type(manifest.get("schemaVersion")) is int and manifest["schemaVersion"] in (1, 2, 3, 4, 5, 6)):
                 manifest["dataSchemaVersion"] = manifest["schemaVersion"]
             # 版1〜3の山頂 manifest にも、本体を直接取得できる URL を補う。
             if dataset_id == "osm-peaks" and "downloadUrl" not in manifest and "version" in manifest:
@@ -240,7 +247,7 @@ def points_catalog(manifests, selected_channel="stable"):
                 raise ValueError("データセットの表示名が不正です")
             datasets.append({"id": dataset_id, "name": display_name.strip(),
                              "manifestUrl": f"{pages_url()}/{path}", "manifest": manifest})
-    return {"schemaVersion": 1, "datasets": datasets}
+    return {"schemaVersion": 2, "datasets": datasets}
 
 
 def read_points_catalog(channel="stable"):
@@ -393,8 +400,9 @@ def prepare(directory, channel="stable"):
         state = ["--latest=false"] if stable else ["--draft"]
         logging.info("%s を作成し、SVG を内蔵したデータと manifest をアップロードします: %s",
                      "Release" if stable else "下書き Release", tag)
+        from scripts.distribution_parts import filenames
         url = gh("release", "create", tag, str(Path(directory) / FILE_NAME), str(Path(directory) / "manifest.json"),
-           *[str(Path(directory) / name) for name in COMPANION_FILES if (Path(directory) / name).exists()],
+           *[str(Path(directory) / name) for name in filenames("osm-peaks") if (Path(directory) / name).exists()],
            *state, "--target", os.environ["GITHUB_SHA"], "--title", tag,
            "--notes-file", str(notes), f"--prerelease={str(not stable).lower()}").strip()
         if stable:

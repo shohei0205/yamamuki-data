@@ -12,7 +12,7 @@
 
 ## 版について
 
-manifest 自体の版は `schemaVersion` で確認する。現行版は `5`。データ本体の版は `dataSchemaVersion` に記載し、manifest の版とは独立して管理する。
+manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。データ本体の形式は `dataSchemaFormat`、版は `dataSchemaVersion` に記載し、manifest の版とは独立して管理する。
 
 版内の変更は `版1.1` のように小数点以下で区別する。小数点以下は文書上の番号で、JSON の版の値には含めない。
 
@@ -20,6 +20,7 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `5`。�
 
 | 形式の版 | 機械検証用スキーマ | 規格 |
 |---|---|---|
+| 6 | [manifest-v6.schema.json](../schemas/manifest-v6.schema.json) | JSON Schema Draft 2020-12 |
 | 5 | [manifest-v5.schema.json](../schemas/manifest-v5.schema.json) | JSON Schema Draft 2020-12 |
 | 1〜4 | スキーマなし。変更履歴を参照 | — |
 
@@ -27,8 +28,10 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `5`。�
 
 | 項目 | JSON の型 | 必須 | 内容・制約 | 版の履歴 |
 |---|---|---|---|---|
-| `schemaVersion` | integer | 必須 | 形式の版。新規生成は `5` | [版1] 追加 |
-| `dataSchemaVersion` | integer | 新規生成では必須 | データ本体のスキーマの版。正の整数。manifest の `schemaVersion` と独立して管理する | [版5] 追加 |
+| `schemaFormat` | string | 必須 | JSON の形式の識別子。`yamamuki-manifest` 固定。他の形式と区別する | [版6] 追加 |
+| `schemaVersion` | integer | 必須 | JSON の形式の版。現行版は `6` | [版1] 追加 |
+| `dataSchemaFormat` | string | 必須 | データ本体の `schemaFormat` と同じ値。地点は `yamamuki-points`、補足は `yamamuki-point-supplements`。manifest 自身の `schemaFormat` とは独立 | [版6] 追加 |
+| `dataSchemaVersion` | integer | 必須 | データ本体のスキーマの版。正の整数。manifest の `schemaVersion` と独立して管理する | [版5] 追加<br>[版6] 必須化 |
 | `name` | string | 任意 | データセットの表示名 | [版5] 追加 |
 | `version` | string | 必須 | データセットの配布版。英数字で始まり、英数字・ピリオド・ハイフン・下線で構成する | [版1] 追加 |
 | `downloadUrl` | string | 必須 | この版の gzip データ本体を取得する HTTPS URL | [版4] 追加 |
@@ -36,41 +39,27 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `5`。�
 | `sha256` | string | 必須 | gzip ファイルそのものの SHA-256。小文字の16進数64文字 | [版1] 追加 |
 | `sizeBytes` | integer | 必須 | gzip ファイルのバイト数。正の整数 | [版1] 追加 |
 | `uncompressedSizeBytes` | integer | 必須 | 展開後の JSON のバイト数。正の整数 | [版1] 追加 |
-| `sourceTimestamp` | string | 任意 | 元データ全体の基準日時。取得日時とは区別する。不明なら省略 | [版1] 追加<br>[版5] 必須から任意に変更 |
-| `sourceUrl` | string | 任意 | 元データの取得・参照 URL。特定できない場合は省略 | [版1] 追加<br>[版3.1] 日付付き URL に変更<br>[版5] 必須から任意に変更 |
-| `license` | string | 必須 | データセットの利用条件。OSM 由来では `ODbL-1.0` | [版1] 追加 |
-| `attribution` | string | 必須 | 表示すべき出典。OSM 由来では `© OpenStreetMap contributors` | [版1] 追加 |
-| `supplementSources` | object | 任意 | 補足 JSON の `sources` と同じ、出典 ID と出典情報の対応。各属性は下表を参照 | [版5] 追加 |
+| `dataTimestamp` | string | 必須 | manifest が指す配布データを生成した日時。UTC の ISO 8601（例: `2026-10-14T03:00:00Z`）。元データの編集日時・取得日時・Release の公開日時ではない | [版6] 追加 |
+| `metadata` | object | 必須 | 指し示すデータ JSON の `metadata` をそのままコピーする。型・構造・制約は [metadata フォーマット](metadata.md) を参照。 | [版6] 追加 |
+| `pointCount` | integer | 廃止 | 版5の地点件数（必須）。版6では `metadata.pointCount` に移動する | [版1] 元の項目を追加<br>[版5] `mountainCount` から改名<br>[版6] 直下の項目を廃止 |
+| `latestPointTimestamp` | string または null | 廃止 | 版5の収録地点の最終編集日時の最大値（任意）。版6では `metadata.sources[].latestTimestamp` に移動する | [版3] 元の項目を追加<br>[版5] `latestMountainTimestamp` から改名し任意化<br>[版6] 直下の項目を廃止 |
+| `sourceTimestamp` | string | 廃止 | 版5以前の元データ全体の基準日時。版6では廃止。配布データの生成日時は `dataTimestamp` に記載する | [版1] 追加<br>[版5] 必須から任意に変更<br>[版6] 直下の項目を廃止 |
+| `sourceUrl` | string | 廃止 | 版5以前の元データの取得・参照 URL。版6では `metadata.sources[].source` に記載する | [版1] 追加<br>[版3.1] 日付付き URL に変更<br>[版5] 必須から任意に変更<br>[版6] 廃止 |
+| `license` | string | 廃止 | 版5以前のデータセットの利用条件（必須）。版6では `metadata.sources[].license` に記載する | [版1] 追加<br>[版6] 廃止 |
+| `attribution` | string | 廃止 | 版5以前の出典表示（必須）。版6では `metadata.sources[].attribution` に記載する | [版1] 追加<br>[版6] 廃止 |
+| `supplementSources` | object | 廃止 | 版5の補足の出典一覧（任意）。版6では元データの出典とともに `metadata.sources` に統合する | [版5] 追加<br>[版6] 廃止 |
 
-補足 JSON の `sources` に登録された出典情報を `supplementSources` にそのまま保存する。出典 ID はオブジェクトのキーとして保持し、タグ名やファイル名とは独立して扱う。出典情報がない場合は省略する。トップレベルの `sourceUrl`・`license`・`attribution` は元データの出典として保持する。
+地点データ版6では、地点 JSON の `metadata` を manifest の `metadata` にそのままコピーする。出典・タグ・件数・更新日時もこの object 内で保持する。地点文書の構造は [地点データフォーマット](../points/formats/data.md) を参照する。
 
-各出典 ID の値は、次の任意の文字列属性を持つオブジェクトとする。地点や補足項目ごとの出典は指定しない。
+### 補足ファイル単体の配布
 
-| 属性 | 必須 | 内容・記載例 | 版の履歴 |
-|---|---|---|---|
-| `source` | 任意 | 一覧の作成に使った資料の名称・参照 URL。Wikipedia なら記事名と参照した版の固定リンクを記載する | [版5] 追加 |
-| `license` | 任意 | 出典の資料に適用されるライセンスの名称・版・説明ページの URL（例: `CC BY-SA 4.0 https://creativecommons.org/licenses/by-sa/4.0/`） | [版5] 追加 |
-| `attribution` | 任意 | 出典の利用条件に従って表示する著作者名・クレジット（例: `Wikipedia「日本百名山」の投稿者`） | [版5] 追加 |
-| `changes` | 任意 | 出典から対応表を作る際に行った加工・変更（例: `山名一覧を抽出し、OpenStreetMap の osmId を追加`） | [版5] 追加 |
-
-これらの属性は地点補足対応表の出典情報であり、地点の座標など OSM 由来のデータに対するトップレベルの `sourceUrl`・`license`・`attribution` と併せて参照する。省略された属性の値を生成処理で推測して補うことはない。
-
-地点データの件数・更新日時は、この文書の「地点データ用の項目」を参照する。ほかのデータ種別の追加項目と制約は、そのデータの仕様に記載する。日時は UTC の ISO 8601 形式（例: `2026-09-30T20:21:22Z`）を使い、記録していない日時を推測して埋めない。
-
-### 地点データ用の項目
-
-共通項目に加え、次の項目を使う。
-
-| 項目 | 型 | 必須 | 内容 | 版の履歴 |
-|---|---|---|---|---|
-| `pointCount` | integer | 必須 | 地点の件数。正の整数で、展開した配列の件数と同じ | [版1] 元の項目を追加<br>[版5] `mountainCount` から改名 |
-| `latestPointTimestamp` | string または null | 任意 | 収録地点の元データ上の最終編集日時の最大値。現地調査日や生成日時ではない。`sourceTimestamp` があるときは、それより後にしない | [版3] 元の項目を追加<br>[版5] `latestMountainTimestamp` から改名し任意化 |
-
-これらの項目には、ほかの種類の件数や日時を入れない。共通スキーマ内の地点データ用の定義（`pointManifest`）で検証する。日時の前後関係や、本体の大きさ・ハッシュ・件数はスキーマでは確かめられないので、別に確かめる。
+補足ファイルを単体で配布するときも、この文書の共通 manifest 形式を使う。`dataSchemaVersion` は補足 JSON 本体の版とし、取得先・サイズ・ハッシュは配布する補足ファイルの値を記載する。`metadata` は補足 JSON の `metadata` をそのままコピーする。
 
 ## 読み込みと検証
 
-利用するアプリは対応する `schemaVersion` を確認し、`downloadUrl` から本体を取得する。展開前に `sizeBytes` と `sha256`、展開後に `uncompressedSizeBytes` を照合する。データ種別ごとの件数なども各仕様に従って照合する。地点データの件数は、manifest 版4では `mountainCount`、版5では `pointCount` を使う。通信や検証に失敗した場合は保存済みデータを維持する。
+現行形式では、各 object に未知の項目を許可し、読み手はそれを解釈しない。既知の項目の型・必須条件・重複などの制約は維持する。
+
+利用するアプリは対応する `schemaVersion` を確認し、`downloadUrl` から本体を取得する。展開前に `sizeBytes` と `sha256`、展開後に `uncompressedSizeBytes` を照合する。データ種別ごとの件数なども各仕様に従って照合する。地点データの件数は、manifest 版4では `mountainCount`、版5では `pointCount`、版6では `metadata.pointCount` を使う。通信や検証に失敗した場合は保存済みデータを維持する。
 
 データセットと正式版・開発版ごとに最新版の manifest の URL を分ける。Release に添付する manifest と最新版として配置する manifest は同じ内容を使い、公開済みの版の本体は差し替えない。公開先の URL・Release タグ・ファイル名は各データセットの資料に記載する。
 
@@ -78,7 +67,55 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `5`。�
 
 ## JSON の例
 
-版5・版4は公開済み Release の例。版1〜3.1は版4の例を基に、履歴で確認できる項目の差を示した説明用の例で、実在する Release の manifest ではない。
+版5・版4は公開済み Release を基に、任意項目を補った説明用の例。版1〜3.1は版4の例を基に、履歴で確認できる項目の差を示した説明用の例で、実在する Release の manifest ではない。
+
+### 版6
+
+構造を示す例。サイズ・ハッシュは説明用の値。
+
+```json
+{
+  "schemaFormat": "yamamuki-manifest",
+  "schemaVersion": 6,
+  "dataSchemaFormat": "yamamuki-points",
+  "dataSchemaVersion": 6,
+  "name": "見本の地点データ",
+  "version": "example-v6",
+  "fileName": "sample-points.json.gz",
+  "downloadUrl": "https://example.com/releases/example-v6/sample-points.json.gz",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "sizeBytes": 1000,
+  "uncompressedSizeBytes": 5000,
+  "dataTimestamp": "2026-10-15T00:00:00Z",
+  "metadata": {
+    "sources": [
+      {
+        "source": "見本の地名資料 https://example.com/source",
+        "license": "CC BY 4.0 https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "見本資料の著作者",
+        "changes": "地点名・座標・標高を抽出",
+        "latestTimestamp": "2026-10-14T00:00:00Z",
+        "name": "元資料"
+      },
+      {
+        "source": "見本の山名一覧 https://example.com/supplement",
+        "license": "CC0-1.0",
+        "attribution": "見本の補足資料の作成者",
+        "changes": "読み・別名・タグを追加",
+        "latestTimestamp": "2026-10-14T01:00:00Z",
+        "name": "補足資料"
+      }
+    ],
+    "tags": [
+      {
+        "name": "日本百名山",
+        "nameReading": "にほんひゃくめいざん"
+      }
+    ],
+    "pointCount": 1
+  }
+}
+```
 
 ### 版5
 
@@ -98,7 +135,15 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `5`。�
   "latestPointTimestamp": "2026-10-06T19:13:49Z",
   "sourceUrl": "https://download.geofabrik.de/asia/japan-261006.osm.pbf",
   "license": "ODbL-1.0",
-  "attribution": "© OpenStreetMap contributors"
+  "attribution": "© OpenStreetMap contributors",
+  "supplementSources": {
+    "補足資料": {
+      "source": "見本の資料 https://example.com/supplement",
+      "license": "CC0-1.0",
+      "attribution": "見本資料の作成者",
+      "changes": "山名・読み・別名を抽出"
+    }
+  }
 }
 ```
 
@@ -197,6 +242,23 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `5`。�
 ```
 
 ## 変更履歴
+
+### 版6（2026-10-14）
+
+- `dataSchemaVersion` を必須にする。データ本体の版を manifest の版から推測しない。
+
+- 必須の `dataSchemaFormat` を追加し、データ本体の `schemaFormat` と一致させる。
+
+- 必須の `schemaFormat: "yamamuki-manifest"` を追加し、形式を識別する。未公開の版6に統合する。
+
+- 地点全体の `latestPointTimestamp` を廃止し、出典ごとの `metadata.sources[].latestTimestamp` に最終更新日時を保持する。
+
+- 補足ファイル単体の配布にも共通の manifest 形式を使う。地点データは補足適用後・補足適用前・補足の 3 種類を、それぞれ共通形式の manifest 付きで配布する。
+
+- `sourceTimestamp` を廃止し、配布データの生成日時を表す `dataTimestamp` を直下に追加する。
+- 元データと補足の出典を `metadata.sources` に統合する。
+- `sourceUrl`・`license`・`attribution`・`supplementSources` を廃止する。URL は各出典の `source`、利用条件と帰属表示は各出典の `license`・`attribution` に記載する。
+- 版5以前の manifest は従来のスキーマで検証する。
 
 ### 版5（2026-10-07、#36）
 

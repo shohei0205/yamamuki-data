@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "地点の共通項目（版1）",
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^\\S(?:[\\s\\S]*\\S)?$",
+      "description": "データセットをまたいで地点を識別する、前後に空白のない空でない文字列。"
+    },
+    "relatedIds": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/id"
+      },
+      "uniqueItems": true,
+      "description": "関連する他の地点のグローバル ID。自分自身の ID は指定しない。"
+    }
+  }
+}

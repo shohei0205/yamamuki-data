@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       source_date:
-        description: '取得対象日（YYYY-MM-DD）。空欄は latest。実行当日分は未配布の場合があります'
+        description: '取得対象日（YYYY-MM-DD）。空欄は latest。実行当日分は未配布の場合があります。公開中の日付一覧: https://download.geofabrik.de/asia/japan.html'
         required: false
         default: ''
         type: string

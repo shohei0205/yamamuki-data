@@ -4,6 +4,9 @@ import argparse
 import gzip
 import json
 from pathlib import Path
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
+from document_metadata import name_reading
 
 DEFAULT_TAGS_DIRECTORY = Path(__file__).resolve().parents[1] / "tags"
 DEFAULT_OUTPUT_DIRECTORY = Path(__file__).resolve().parents[1] / "build" / "tags"
@@ -58,7 +61,7 @@ def read_tag_json(path, *, complete=False):
         if identifier is not None:
             seen.add(identifier)
         extra = {key: row[key] for key in ("nameReading", "aliases") if key in row}
-        if "nameReading" in extra and (not isinstance(extra["nameReading"], str) or not extra["nameReading"] or extra["nameReading"] != extra["nameReading"].strip()):
+        if "nameReading" in extra and not name_reading(extra["nameReading"]):
             raise ValueError(f"{path}: よみがなは空でない文字列にしてください")
         if "aliases" in extra:
             aliases = extra["aliases"]
@@ -71,15 +74,16 @@ def read_tag_json(path, *, complete=False):
 
 
 def index_points(points):
+    from document_metadata import osm_node_id
     by_id, by_name = {}, {}
     for point in points:
-        identifier = point.get("osmId")
+        identifier = osm_node_id(point)
         if identifier is None:
             continue
         if type(identifier) is not int or identifier <= 0 or identifier in by_id:
             raise ValueError("地点データの osmId が不正、または重複しています")
         by_id[identifier] = point
-        for name in set([point["name"], *(point.get("aliases") or [])]):
+        for name in set([point["name"], *(v if isinstance(v,str) else v["name"] for v in (point.get("aliases") or []))]):
             by_name.setdefault(name, []).append(point)
     return by_id, by_name
 
@@ -116,6 +120,7 @@ def apply_tag_jsons(points, directory=DEFAULT_TAGS_DIRECTORY):
     return sources
 
 def complete_rows(rows, points):
+    from document_metadata import osm_node_id
     by_id, by_name = index_points(points)
     completed, report, used = [], [], set()
     unresolved = False
@@ -135,7 +140,7 @@ def complete_rows(rows, points):
         else:
             candidates = by_name.get(row["note"], [])
             if len(candidates) == 1:
-                row["osmId"] = str(candidates[0]["osmId"])
+                row["osmId"] = str(osm_node_id(candidates[0]))
                 status = "osmId を補完"
             else:
                 status = "候補が複数あります" if candidates else "山名が見つかりません"
@@ -153,7 +158,11 @@ def read_points(points_path):
     points_path = Path(points_path)
     opener = gzip.open if points_path.suffix == ".gz" else open
     with opener(points_path, "rt", encoding="utf-8") as stream:
-        points = json.load(stream)
+        if __package__:
+            from .point_document import rows
+        else:
+            from point_document import rows
+        points = rows(json.load(stream))
     if not isinstance(points, list):
         raise ValueError("地点データは JSON 配列にしてください")
     return points
@@ -194,7 +203,7 @@ def main():
     for row, status, candidates in report:
         print(f"{row['osmId']},{row['note']}: {status}")
         for point in candidates:
-            print(f"  {point['osmId']},{point['name']}")
+            print(f"  {point.get('osmId',point.get('id'))},{point['name']}")
     if unresolved:
         parser.exit(1, "未解決の行があります。照合結果を確認してください。\n")
 

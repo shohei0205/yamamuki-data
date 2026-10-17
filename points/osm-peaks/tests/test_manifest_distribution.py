@@ -95,7 +95,7 @@ class ManifestDistributionTests(unittest.TestCase):
                      "points/curated_landmarks/manifest.json": {},
                      "terrain/manifest.json": {}, "peaks/manifest.json": {}}
         catalog = release_data.points_catalog(manifests)
-        self.assertEqual(1, catalog["schemaVersion"])
+        self.assertEqual(2, catalog["schemaVersion"])
         self.assertEqual(["curated_landmarks", "osm-peaks"],
                          [entry["id"] for entry in catalog["datasets"]])
         self.assertEqual("https://owner.github.io/repo/points/osm-peaks/manifest.json", catalog["datasets"][-1]["manifestUrl"])

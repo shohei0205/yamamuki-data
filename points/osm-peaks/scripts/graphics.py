@@ -51,7 +51,7 @@ def validate_graphics(rows):
             continue
         graphic = row["graphic"]
         if (not isinstance(graphic, dict) or "svg" not in graphic
-                or not set(graphic) <= {"svg", "scale"} or not isinstance(graphic["svg"], str)):
+                or not isinstance(graphic["svg"], str)):
             raise ValueError("graphic は SVG 文字列を持つオブジェクトで指定してください")
         validate_svg(graphic["svg"].encode("utf-8"))
         scale = graphic.get("scale")
