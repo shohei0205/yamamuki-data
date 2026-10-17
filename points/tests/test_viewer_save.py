@@ -12,7 +12,7 @@ class ViewerSaveTests(unittest.TestCase):
         validation="function validateAliasReadings("+page.split("function validateAliasReadings(",1)[1].split("function parseSupplement(",1)[0]
         application="function applySupplement("+page.split("function applySupplement(",1)[1].split("function supplementTables(",1)[0]
         incremental="function refreshEditedSupplement("+page.split("function refreshEditedSupplement(",1)[1].split("const tagFilterIndex=",1)[0]
-        names=("mapPointName","readingText","validateRelatedIds","supplementKey","pointReferenceKeys","supplementMatches","supplementForPoint","supplementTables","selectedFilterValues","indexedTagFilterOptions")
+        names=("mapPointName","readingText","validateRelatedIds","supplementKey","pointReferenceKeys","supplementMatches","supplementForPoint","supplementTables","selectedFilterValues","exclusionNameKeys","updateExclusionRelations","indexedTagFilterOptions")
         functions="\n".join(next(line for line in page.splitlines() if line.startswith("function "+name+"(")) for name in names)
         checks=r"""
 const assert=require('node:assert/strict');
@@ -47,6 +47,7 @@ function rowVisible(index){return true;}function selectRow(index){selected=index
  scroll.scrollTop=12345;largeMode=false;filter=()=>{scroll.scrollTop=0;};await refreshEditedSupplement(4,data);assert.equal(selected,4);assert.equal(scroll.scrollTop,12345);
  rows[4]=undefined;const painted=replacements;await refreshEditedSupplement(4,data);assert.equal(replacements,painted);
  reads=0;let filters=0;filter=()=>{filters++;};await refreshEditedSupplement([4,9],data,false);assert.equal(filters,1);assert.ok(reads<30);assert.equal(replacements,painted);assert.deepEqual(points[9].tags,['B']);
+const linked={schemaFormat:'yamamuki-point-supplements',schemaVersion:2,points:[{id:raw[4].source.id,tags:['B'],tagsRemove:['A'],aliases:[{name:raw[9].source.name}]},{id:raw[9].source.id,exclude:true,tagsRemove:['A']}]};await refreshEditedSupplement([4,9],linked,false);assert.deepEqual([...tagFilterIndex.get('excluded:tag:B')],[9]);assert.deepEqual(points[9].tags,[]);assert.ok(tagFilter.options.some(option=>option.value==='excluded:tag:B'));const unlinked=structuredClone(linked);delete unlinked.points[0].aliases;await refreshEditedSupplement(4,unlinked,false);assert.equal(tagFilterIndex.has('excluded:tag:B'),false);assert.deepEqual([...tagFilterIndex.get('excluded:unrelated')],[9]);await refreshEditedSupplement(4,linked,false);assert.deepEqual([...tagFilterIndex.get('excluded:tag:B')],[9]);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
         result=subprocess.run(["node","-"],input=validation+application+functions+incremental+checks,encoding="utf-8",capture_output=True)

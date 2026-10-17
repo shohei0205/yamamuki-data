@@ -49,6 +49,7 @@ row=makeTable([{...base,nameReading:['しろうまだけ','はくばだけ'],ali
 const assert=require('node:assert/strict');
 function recordSupplementEdit(){}
 const fields={};const document={getElementById(id){return fields[id]??={textContent:''};}};
+const tagFilterIndex=new Map();tagFilterIndex.exclusionRelations={relations:new Map([[0,['日本百名山']]])};
 const points=[{source:{id:'gsi-vector:example',name:'元の山',nameReading:'もと',latitude:35,longitude:140,provenance:{dataSource:'vector'}},pointName:'変更後の山',nameReading:null,aliases:['別名'],aliasReadings:{'別名':'べつめい'},tags:['未保存のタグ'],relatedIds:['osm:123'],graphic:null}];
 let row={id:'gsi-vector:example',name:'変更後の山',aliases:[{name:'元の山',nameReading:'もとのやま'}],tags:['未保存のタグ'],exclude:true};
 function exportSupplement(){return {points:row?[row]:[]};}
@@ -62,6 +63,7 @@ assert.equal(fields['point-excluded-message'].hidden,true);
 points[0].excluded=true;showSupplementOrigin(0);
 assert.equal(fields['point-merged-json'].textContent,'');
 assert.equal(fields['point-excluded-message'].hidden,false);
+assert.equal(fields['point-exclusion-tags'].hidden,false);assert.ok(fields['point-exclusion-tags'].textContent.includes('日本百名山'));assert.ok(fields['point-exclusion-tags'].textContent.includes('推定'));
 assert.deepEqual(JSON.parse(fields['point-supplement-json'].textContent),row);
 assert.equal(fields['point-supplement-json'].textContent,JSON.stringify(row,null,2));
 row=undefined;showSupplementOrigin(0);
