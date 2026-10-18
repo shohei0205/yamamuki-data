@@ -341,3 +341,10 @@ WAT1 の外周と穴を復元し、穴を避けて三角形化する。河川線
 WASM 経路は同じ最大標高幅タイルで基準との差が最大 1 コード値。槍ヶ岳周辺のブラウザー検証では 1,376,256 点で従来 PNG 経路との差が最大 0.0467 m、SQLite の読み出し量は約 8.0 MB。元 DB は約 208 MB であり、全体を展開していない。JPEG XL の既存圧縮誤差とは別の、デコーダー間の差の測定。SQLite 表示中にサーバーの標高データを取得しないこと、配信データへの復帰を検証した。
 
 検証手順: `python tools/terrain/prepare_jxl_probe.py` → `node tools/terrain/probe_native_jxl.cjs`（`TERRAIN_BROWSER=msedge` でも比較）。結果は `build/native-jxl-probe/browser.json`。`python tools/terrain/compare_jxl_probe.py` で追加誤差を集計する。直接表示は `node tools/terrain/test_height_sqlite_file.cjs`。検証先は `TERRAIN_TEST_URL` で指定できる。依存物とライセンスは [一覧](vendor/sqlite-height-dependencies.md) を参照。
+
+
+2026-10-18: サーバー不要の単一 HTML を追加。`python tools/terrain/build_standalone_viewer.py` で `dist/terrain-viewer.html`（約 2.2 MB）を作る。この HTML をダブルクリックしてブラウザーで開き、「標高 SQLite」から完成済みの DB を選ぶ。必要なら「水域 SQLite」で `build/terrain-inland-vectors/source.sqlite3` を選ぶと海・河川・湖沼も表示できる。HTML は別のフォルダーへコピーして使える。地形データは埋め込まず、選択ファイルをアップロードしない。
+
+`file://` の別ファイル fetch・モジュール Worker 読み込みを避けるため、JS、WASM、Worker のソースとライセンスを HTML に同梱する。Worker は Blob URL で起動し、WASM は埋め込んだバイナリから初期化する。FileReaderSync による SQLite の部分読み出しは従来と同じ。ブラウザーの保護設定を緩めたり、起動フラグを追加したりする必要はない。水域の DB もブラウザー内で照会して既存のベクター描画へ渡す。水域 DB が未選択のときは水域のチェックを無効にし、存在しないサーバーへ問い合わせない。
+
+ソースの HTML / JS を変更したら上のコマンドで単一 HTML を作り直す。`dist/` の完成 HTML は生成物なので Git には入れない。固定版の依存物を包むだけの変換処理を使い、追加の npm ビルド環境は不要。既存の fzstd（`build/terrain-codec-tools/web/fzstd/umd/index.js`）は必要。検証は `node tools/terrain/test_standalone_height.cjs`（`TERRAIN_BROWSER=chrome` でも比較）。file URL、ネットワーク要求なし、SQLite の読み出し、16 bit 復号、影、水域の実表示を確認する。

@@ -1,7 +1,7 @@
 /* ファイルはアップロードせず、専用 Worker へ渡す。 */
 window.SQLiteHeightSource = class {
   constructor(progress) {
-    this.worker = new Worker('/sqlite-height-worker.js',{type:'module'});
+    if(window.terrainStandaloneWorker){const url=URL.createObjectURL(new Blob([window.terrainStandaloneWorker],{type:'text/javascript'}));this.worker=new Worker(url);this.workerURL=url;}else this.worker = new Worker('/sqlite-height-worker.js',{type:'module'});
     this.requests = new Map(); this.serial = 0;
     this.worker.onmessage = ({data}) => {
       if (data.progress) { progress(data.progress); return; }
@@ -20,8 +20,11 @@ window.SQLiteHeightSource = class {
   }
   open(files) { return this.request('open',{files}); }
   tile(key) { return this.request('tile',{key}); }
+  openWater(file) { return this.request('water-open',{file}); }
+  water(request) { return this.request('water',{request}); }
   close() {
     this.worker.terminate();
+    if(this.workerURL)URL.revokeObjectURL(this.workerURL);
     for (const request of this.requests.values()) request.reject(Error('標高ファイルを閉じました'));
     this.requests.clear();
   }

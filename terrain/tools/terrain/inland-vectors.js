@@ -26,8 +26,10 @@ window.InlandVectors=class {
   if(!request)return;this.desiredRequest=request;this.wantedKey=request.key;this.loading=true;this.abort?.abort();this.abort=new AbortController();
   try{
    if(!this.packetCache.has(request.key)){
-    const query=new URLSearchParams(Object.fromEntries(['z','seaZ','riverZ','x0','x1','y0','y1'].map(k=>[k,request[k]]))),r=await fetch('/water-tiles?'+query,{signal:this.abort.signal});
-    if(!r.ok)throw Error('詳細な水域タイルを取得できません');const data=await r.arrayBuffer();this.transferred+=data.byteLength;
+    let data;
+    if(window.localWaterSource)data=await window.localWaterSource(request);
+    else{const query=new URLSearchParams(Object.fromEntries(['z','seaZ','riverZ','x0','x1','y0','y1'].map(k=>[k,request[k]]))),r=await fetch('/water-tiles?'+query,{signal:this.abort.signal});
+    if(!r.ok)throw Error('詳細な水域タイルを取得できません');data=await r.arrayBuffer();}this.transferred+=data.byteLength;
     const decoded=WaterTileClient.decode(data,request);this.packetCache.set(request.key,decoded);while(this.packetCache.size>8)this.packetCache.delete(this.packetCache.keys().next().value);
    }
    if(request.key!==this.wantedKey)return;

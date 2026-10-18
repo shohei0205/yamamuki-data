@@ -34,13 +34,14 @@ class SelectedFileVFS extends VFS.Base {
 
 globalThis._icodec_ImageData = (data, width, height, depth) => ({data, width, height, depth});
 let sqlite, vfs, decoder;
+let waterDB;
 const connections = [], tileSources = new Map();
 async function initialize() {
   if (sqlite) return;
-  sqlite = SQLite.Factory(await SQLiteFactory());
+  sqlite = SQLite.Factory(await SQLiteFactory(globalThis.terrainWasm?.sqlite ? {wasmBinary:globalThis.terrainWasm.sqlite} : {}));
   vfs = new SelectedFileVFS();
   sqlite.vfs_register(vfs, false);
-  decoder = await JxlFactory();
+  decoder = await JxlFactory(globalThis.terrainWasm?.jxl ? {wasmBinary:globalThis.terrainWasm.jxl} : {});
 }
 async function openFiles(files) {
   await initialize();
@@ -96,13 +97,43 @@ async function loadTile(key) {
   if (!result) throw Error('タイルがありません');
   return result;
 }
+async function openWater(file) {
+  await initialize();
+  if(waterDB) await sqlite.close(waterDB);
+  vfs.files.clear();
+  vfs.files.set('/water.sqlite3',file);
+  waterDB=await sqlite.open_v2('/water.sqlite3',SQLite.SQLITE_OPEN_READONLY,vfs.name);
+  await sqlite.exec(waterDB,'PRAGMA query_only=ON; PRAGMA cache_size=-4096; PRAGMA trusted_schema=OFF;');
+  const layers=[];
+  await sqlite.exec(waterDB,'SELECT DISTINCT layer FROM tiles',row=>layers.push(row[0]));
+  if(!layers.length||layers.some(layer=>!['rivers','water','sea'].includes(layer)))throw Error('海岸・河川・湖沼のベクター SQLite を選んでください');
+  return {layers};
+}
+async function loadWater(request) {
+  if(!waterDB)throw Error('水域 SQLite を選んでください');
+  const {z,x0,x1,y0,y1}=request;
+  if(![10,11,12].includes(z)||![x0,x1,y0,y1].every(Number.isInteger)||x0<0||y0<0||x1<x0||y1<y0||x1>=2**z||y1>=2**z||(x1-x0+1)*(y1-y0+1)>65536)throw Error('水域の範囲が不正です');
+  const descriptors=[],bodies=[];
+  for(const [layer,level]of [['rivers',request.riverZ||z],['water',request.riverZ||z],['sea',request.seaZ||z]]){
+    if(![10,11,12].includes(level))throw Error('水域のレベルが不正です');
+    const ratio=2**(level-z),bounds=[Math.floor(x0*ratio),Math.floor((x1+1)*ratio-1e-8),Math.floor(y0*ratio),Math.floor((y1+1)*ratio-1e-8)];
+    for await(const stmt of sqlite.statements(waterDB,'SELECT x,y,data FROM tiles WHERE layer=? AND z=? AND x BETWEEN ? AND ? AND y BETWEEN ? AND ? ORDER BY x,y')){
+      sqlite.bind_collection(stmt,[layer,level,...bounds]);
+      while(await sqlite.step(stmt)===SQLite.SQLITE_ROW){const [x,y,data]=sqlite.row(stmt),body=new Uint8Array(data);descriptors.push({layer,z:level,x,y,bytes:body.length});bodies.push(body);}
+    }
+  }
+  const header=new TextEncoder().encode(JSON.stringify(descriptors)),packet=new Uint8Array(8+header.length+bodies.reduce((n,b)=>n+b.length,0)),view=new DataView(packet.buffer);
+  view.setUint32(0,0x31515359,true);view.setUint32(4,header.length,true);packet.set(header,8);let offset=8+header.length;
+  for(const body of bodies){packet.set(body,offset);offset+=body.length;}
+  return {packet};
+}
 // 同じ SQLite 接続への問い合わせとデコーダーの利用を直列にする。
 let queue = Promise.resolve();
 onmessage = ({data}) => {
   queue = queue.then(async () => {
     try {
-      const result = data.type==='open' ? await openFiles(data.files) : await loadTile(data.key);
-      const transfer = result.values ? [result.values.buffer,result.mask.buffer] : [];
+      const result = data.type==='open' ? await openFiles(data.files) : data.type==='water-open' ? await openWater(data.file) : data.type==='water' ? await loadWater(data.request) : await loadTile(data.key);
+      const transfer = result.values ? [result.values.buffer,result.mask.buffer] : result.packet ? [result.packet.buffer] : [];
       postMessage({id:data.id,result},transfer);
     } catch(e) { postMessage({id:data.id,error:e.message}); }
   });
