@@ -22,6 +22,11 @@ const TerrainLOD={
   const reduction=Math.floor(Math.log2(1+Math.max(0,forward)*Math.sin(p.tilt)/p.scale));
   return Math.max(p.base,p.target-reduction);
  },
+ focusWeight(row,p){
+  if(p.ground||this.topView(p))return 1;
+  const r=this.distance(row,p)/Math.max(1,p.scale*.35);
+  return 1+3*Math.exp(-r*r);
+ },
  projectedPixels(item,p){
   const [z]=item.row,span=this.world/2**z*item.range[2];
   const row=item.displayRow||item.row,distance=Math.max(40,this.distance(row,p));
@@ -29,7 +34,9 @@ const TerrainLOD={
  },
  mesh(item,p){
   if(p.distanceLOD===false)return 128;
-  const pixels=this.projectedPixels(item,p);
+  const row=item.displayRow||item.row;
+  if(!p.ground&&!this.topView(p)&&this.distance(row,p)===0)return 128;
+  const pixels=this.projectedPixels(item,p)*this.focusWeight(row,p);
   return Math.max(16,Math.min(128,2**Math.ceil(Math.log2(Math.max(1,pixels/(this.topView(p)?2:5))))));
  },
  fitMeshes(items,p,budget=this.pointBudget(p)){
@@ -38,7 +45,7 @@ const TerrainLOD={
   if(this.topView(p)&&items.length){let n=Math.max(...items.map(item=>item.lodN));while(n>16&&items.length*(n+1)**2>budget)n/=2;for(const item of items)item.lodN=n;return items.length*(n+1)**2;}
   let points=items.reduce((n,item)=>n+cost(item),0);
   // 一つの遠方区画を最小まで削らず、画面上の密度が高い区画から一段ずつ減らす。
-  const projected=new Map(items.map(item=>[item,Math.max(1,this.projectedPixels(item,p))]));
+  const projected=new Map(items.map(item=>[item,Math.max(1,this.projectedPixels(item,p)*this.focusWeight(item.displayRow||item.row,p))]));
   while(points>budget){
    let candidate=null,highest=-Infinity;
    for(const item of items){if(item.lodN<=16)continue;const density=item.lodN/projected.get(item);
@@ -69,7 +76,7 @@ const TerrainLOD={
    leaves.clear();current.forEach(n=>leaves.add(n));queue.length=0;
   }
   while(queue.length){
-   queue.sort((a,b)=>(this.limit(b.row,p)-b.row[0])-(this.limit(a.row,p)-a.row[0])||this.distance(a.row,p)-this.distance(b.row,p));
+   queue.sort((a,b)=>(this.distance(a.row,p)===0?-1:0)-(this.distance(b.row,p)===0?-1:0)||(this.limit(b.row,p)-b.row[0])-(this.limit(a.row,p)-a.row[0])||this.distance(a.row,p)-this.distance(b.row,p));
    const node=queue.shift(),[z,x,y]=node.row,children=[];
    for(let dy=0;dy<2;dy++)for(let dx=0;dx<2;dx++){const row=index.get(`${z+1}/${x*2+dx}/${y*2+dy}`);if(row&&visible(row))children.push({row,parent:node});}
    if(!children.length||leaves.size+children.length-1>budget||nodes+children.length>requestBudget)continue;
