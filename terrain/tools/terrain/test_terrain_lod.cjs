@@ -8,3 +8,6 @@ const coarse={row:[8,128,128],displayRow:[8,128,128],range:[0,0,1,1],lodN:16},fi
 console.log('距離別LOD：近景詳細・遠景削減・64タイル予算・上限・混在境界の連続 OK',plan.leaves.length,Math.max(...near),Math.max(...far));
 
 const meshes=plan.leaves.map(node=>({row:node.row,displayRow:node.row,range:[0,0,1,1],lodN:128}));const points=LOD.fitMeshes(meshes,p);assert.ok(points<=LOD.meshPointBudget);assert.ok(meshes.some(i=>i.lodN===128));assert.ok(meshes.some(i=>i.lodN<128));assert.equal(points,meshes.reduce((n,i)=>n+(i.lodN+1)**2,0));console.log("総描画格子点の上限 OK",points,LOD.meshPointBudget);
+
+const uniform=LOD.choose(roots,index,()=>true,{...p,ground:false,tilt:0});assert.equal(new Set(uniform.leaves.map(n=>n.row[0])).size,1);assert.ok(uniform.leaves.length<=64);assert.ok(uniform.requests.length<=96);
+const topMeshes=Array.from({length:12},()=>({row:roots[0],displayRow:roots[0],range:[0,0,1,1],lodN:128}));const topPoints=LOD.fitMeshes(topMeshes,{...p,ground:false,tilt:0});assert.ok(topMeshes.every(i=>i.lodN===128));assert.ok(topPoints<=LOD.topMeshPointBudget);const crowdedMeshes=Array.from({length:64},()=>({row:roots[0],displayRow:roots[0],range:[0,0,1,1],lodN:128}));assert.ok(LOD.fitMeshes(crowdedMeshes,{...p,ground:false,tilt:0})<=LOD.topMeshPointBudget);assert.equal(new Set(crowdedMeshes.map(i=>i.lodN)).size,1);console.log('真上：一律レベル・一律分割・30万点以内 OK');

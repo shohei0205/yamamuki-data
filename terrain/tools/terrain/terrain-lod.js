@@ -6,6 +6,9 @@ const TerrainLOD={
  requestBudget:96,
  heightPixelBudget:64*256*256,
  meshPointBudget:131072,
+ topMeshPointBudget:300000,
+ topView(p){return !p.ground&&Math.abs(p.tilt)<.001;},
+ pointBudget(p){return this.topView(p)?this.topMeshPointBudget:this.meshPointBudget;},
  bounds(row){const [z,x,y]=row,s=1/2**z;return [x*s,y*s,s,s];},
  distance(row,p){
   const [u,v,s]=this.bounds(row),x0=u*this.world-p.center[0],x1=x0+s*this.world,y0=p.center[1]-(v+s)*this.world,y1=y0+s*this.world;
@@ -23,10 +26,11 @@ const TerrainLOD={
   const [z]=item.row,span=this.world/2**z*item.range[2];
   const row=item.displayRow||item.row,distance=Math.max(40,this.distance(row,p));
   const pixels=p.ground?span*p.height/(2*Math.tan(p.fov/2)*distance):span*p.height/(2*p.scale);
-  return Math.max(16,Math.min(128,2**Math.ceil(Math.log2(Math.max(1,pixels/5)))));
+  return Math.max(16,Math.min(128,2**Math.ceil(Math.log2(Math.max(1,pixels/(this.topView(p)?2:5))))));
  },
- fitMeshes(items,p,budget=this.meshPointBudget){
+ fitMeshes(items,p,budget=this.pointBudget(p)){
   const cost=item=>(item.lodN+1)**2;
+  if(this.topView(p)&&items.length){let n=Math.max(...items.map(item=>item.lodN));while(n>16&&items.length*(n+1)**2>budget)n/=2;for(const item of items)item.lodN=n;return items.length*(n+1)**2;}
   let points=items.reduce((n,item)=>n+cost(item),0);
   const ordered=[...items].sort((a,b)=>this.distance(b.displayRow||b.row,p)-this.distance(a.displayRow||a.row,p));
   for(const item of ordered)while(points>budget&&item.lodN>16){const previous=cost(item);item.lodN/=2;points+=cost(item)-previous;}
@@ -36,6 +40,20 @@ const TerrainLOD={
   const leaves=new Set(),queue=[];let nodes=0;
   const add=node=>{nodes++;leaves.add(node);if(node.row[0]<this.limit(node.row,p))queue.push(node);};
   const initial=roots.filter(visible).sort((a,b)=>this.distance(a,p)-this.distance(b,p));for(const row of initial.slice(0,budget))add({row,parent:null});
+  if(this.topView(p)){
+   let current=[...leaves],count=current.length;
+   for(let z=p.base;z<p.target;z++){
+    const next=[];
+    for(const node of current){const [level,x,y]=node.row;if(level!==z){next.push(node);continue;}let found=false;
+     for(let dy=0;dy<2;dy++)for(let dx=0;dx<2;dx++){const row=index.get(`${z+1}/${x*2+dx}/${y*2+dy}`);if(row&&visible(row)){next.push({row,parent:node});found=true;}}
+     if(!found)next.push(node);
+    }
+    const added=next.filter(n=>!current.includes(n)).length;
+    if(next.length>budget||count+added>requestBudget)break;
+    current=next;count+=added;
+   }
+   leaves.clear();current.forEach(n=>leaves.add(n));queue.length=0;
+  }
   while(queue.length){
    queue.sort((a,b)=>(this.limit(b.row,p)-b.row[0])-(this.limit(a.row,p)-a.row[0])||this.distance(a.row,p)-this.distance(b.row,p));
    const node=queue.shift(),[z,x,y]=node.row,children=[];
