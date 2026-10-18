@@ -160,7 +160,7 @@ def publish(version, directory, source=DATA):
     # 既存タグは create が失敗する。公開済みのアセットを差し替えない。
     release_data.gh("release", "create", tag, *(str(directory / name) for name in names),
                     "--draft", "--latest=false", "--target", os.environ["GITHUB_SHA"],
-                    "--title", "国土地理院の山頂 " + version, "--notes-file", str(notes), *options)
+                    "--title", "gsi-peaks-" + version, "--notes-file", str(notes), *options)
     checked = directory / "checked"
     release_data.gh("release", "download", tag, *(part for name in names for part in ("--pattern", name)),
                     "--dir", str(checked))
