@@ -15,7 +15,7 @@
         "source": "国土地理院の地点原本 points/gsi-peaks/gsi-peaks-source.json。日本の主な山岳標高一覧 https://www.gsi.go.jp/KOKUJYOHO/MOUNTAIN/1003zan20260331.csv ; 最適化ベクトルタイル https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/optimal_bvmap-v1.pmtiles ; 自然地名 https://github.com/gsi-cyberjapan/experimental_pni",
         "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
         "attribution": "出典：国土地理院（日本の主な山岳標高一覧・最適化ベクトルタイル・自然地名）を加工して作成",
-        "changes": "国土地理院の地点の位置・名称・別名を使って対応する OSM ノードを選定し、GSI 版の採用地点・名称・読み・別名・配布除外を反映した。作成者がビューアーで手動調整した。座標・標高は OSM 原本を維持する。"
+        "changes": "国土地理院の地点の位置・名称・別名を使って対応する OSM ノードを選定し、GSI 版の採用地点・名称・読み・別名・配布除外を反映した。作成者がビューアーで手動調整した。国土地理院の資料を使って標高の一部を補正した。座標は OSM 原本を維持する。"
       }
     ],
     "tags": [
@@ -177,7 +177,7 @@
       "nameReading": "ふじさん",
       "aliases": [
         {
-          "name": "剣ヶ峯",
+          "name": "剣ヶ峰",
           "nameReading": "けんがみね"
         },
         {
