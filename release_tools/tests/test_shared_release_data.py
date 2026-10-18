@@ -23,7 +23,7 @@ class SharedReleaseDataTests(unittest.TestCase):
             "assert point_release.site is release_data",
             "assert test_points.release_data is release_data",
             "from importlib import import_module",
-            "assert import_module('points.gsi-peaks.release_snapshot').release_data is release_data",
+            "assert import_module('points.gsi-peaks.scripts.release_snapshot').release_data is release_data",
         ])], cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr)
 

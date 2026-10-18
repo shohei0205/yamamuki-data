@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from importlib import import_module
 
-target = import_module("points.gsi-peaks.release_snapshot")
+target = import_module("points.gsi-peaks.scripts.release_snapshot")
 
 
 from document_metadata import metadata_maps

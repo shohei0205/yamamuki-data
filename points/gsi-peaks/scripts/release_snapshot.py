@@ -14,7 +14,7 @@ import re
 import shutil
 
 import sys
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 from release_tools import release_data
 from release_tools.point_validation import validate_rows

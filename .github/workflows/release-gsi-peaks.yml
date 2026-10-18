@@ -33,7 +33,7 @@ jobs:
         if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev'
         run: |
           version="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          python points/gsi-peaks/release_snapshot.py prepare --version "$version" --channel dev
+          python points/gsi-peaks/scripts/release_snapshot.py prepare --version "$version" --channel dev
       - name: 作業ブランチの生成物を保存
         if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev'
         uses: actions/upload-artifact@v4
@@ -46,4 +46,4 @@ jobs:
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
         run: |
           version="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          python points/gsi-peaks/release_snapshot.py publish --version "$version"
+          python points/gsi-peaks/scripts/release_snapshot.py publish --version "$version"

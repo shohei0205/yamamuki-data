@@ -115,8 +115,8 @@ PMTiles は全国の地図を一つのファイルで取得し、山名と山の
 
 ```bash
 python -m pip install -r points/gsi-peaks/requirements-vector.txt
-python points/gsi-peaks/download_vector.py --cache build/gsi-vector-cache
-python points/gsi-peaks/vector.py \
+python points/gsi-peaks/scripts/download_vector.py --cache build/gsi-vector-cache
+python points/gsi-peaks/scripts/vector.py \
   --archive build/gsi-vector-cache/optimal_bvmap-v1.pmtiles \
   --cache build/gsi-cache --output build/gsi-national-primary
 ```
@@ -156,7 +156,7 @@ python points/gsi-peaks/vector.py \
 `vector-only-points.json` はベクトルタイルだけから抽出した比較用の地点配列で、よみがなと標高は未補完の `null`。配布には補完後の `gsi-peaks.json` を使う。
 
 ```bash
-python points/gsi-peaks/release_snapshot.py snapshot --source build/gsi-national-primary
+python points/gsi-peaks/scripts/release_snapshot.py snapshot --source build/gsi-national-primary
 ```
 
 Release の Action はコミット済みの地点 JSON と出典要約を使う。PMTiles や SQLite はローカルに保管する。
@@ -172,7 +172,7 @@ Release の Action はコミット済みの地点 JSON と出典要約を使う�
 404 の取得記録をタイルごとに JSON で保存した SQLite も読み込める。その記録を共通化して容量を減らす場合は、取得・生成を停止し、次のコマンドで別ファイルへ変換する。
 
 ```bash
-python points/gsi-peaks/compact_cache.py build/gsi-national-all/natural-tiles.sqlite3 build/gsi-national-all/natural-tiles.compact.sqlite3
+python points/gsi-peaks/scripts/compact_cache.py build/gsi-national-all/natural-tiles.sqlite3 build/gsi-national-all/natural-tiles.compact.sqlite3
 ```
 
 変換処理は全区画の GeoJSON の圧縮バイト列と、URL・取得日時などの記録が元と一致することを確認する。成功したあと、変換後のファイルを元の `natural-tiles.sqlite3` と入れ替える。元ファイルは変換処理では変更しない。変換が失敗した場合は出力先の途中ファイルを削除してから再実行する。
@@ -180,7 +180,7 @@ python points/gsi-peaks/compact_cache.py build/gsi-national-all/natural-tiles.sq
 全取得と最初の生成が完了したあと、次のコマンドで通信せずに再生成できる。必要な元データが欠けている場合は停止し、オンラインで別のデータを混ぜない。
 
 ```bash
-python points/gsi-peaks/fetch_all.py --regenerate-only
+python points/gsi-peaks/scripts/fetch_all.py --regenerate-only
 ```
 
 取得中にバックアップする場合は、SQLite のバックアップ機能を使う。稼働中の `.sqlite3` だけをコピーすると WAL に残っている取得結果が抜けるため、通常のファイルコピーは取得プロセスの停止後に行う。`build/gsi-cache/` も一緒に保管する。
@@ -192,7 +192,7 @@ python points/gsi-peaks/fetch_all.py --regenerate-only
 生成後、次のコマンドで地点 JSON と小さな出典要約を取り込む。
 
 ```bash
-python points/gsi-peaks/release_snapshot.py snapshot --source build/gsi-national-primary
+python points/gsi-peaks/scripts/release_snapshot.py snapshot --source build/gsi-national-primary
 git add points/gsi-peaks/gsi-peaks-source.json points/gsi-peaks/supplements.json points/gsi-peaks/snapshot.json
 ```
 
@@ -205,10 +205,10 @@ Release には「[アプリ用データと確認・編集用の添付](#アプ�
 公開用ファイルの準備だけを手元で確認する場合は、次を実行する。外部通信は行わない。
 
 ```bash
-python points/gsi-peaks/release_snapshot.py prepare --channel dev --version local-test
+python points/gsi-peaks/scripts/release_snapshot.py prepare --channel dev --version local-test
 ```
 
-既定の出力先は `build/gsi-release/`。GSI 固有の検証・snapshot・配布ファイルの生成は `release_snapshot.py`、Release の作成・全添付ファイルの確認・公開は `release_tools/release_data.py` が担当する。公開処理のテストは共通 CI でも実行する。
+既定の出力先は `build/gsi-release/`。GSI 固有のスクリプトは OSM と同じく `scripts/` にまとめ、元の地点 JSON・補足・snapshot はデータセットの直下に置く。GSI 固有の検証・snapshot・配布ファイルの生成は `scripts/release_snapshot.py`、Release の作成・全添付ファイルの確認・公開は `release_tools/release_data.py` が担当する。公開処理のテストは共通 CI でも実行する。
 
 ```bash
 python -m unittest discover -s release_tools/tests -v
@@ -229,10 +229,10 @@ Python 3.12 以降を使い、リポジトリ直下で実行する。山岳一�
 
 ```bash
 # 主な山岳一覧の全国版
-python points/gsi-peaks/generate.py --output build/gsi-national
+python points/gsi-peaks/scripts/generate.py --output build/gsi-national
 
 # 富士山周辺で自然地名・標高タイルも試す
-python points/gsi-peaks/generate.py --natural --dem \
+python points/gsi-peaks/scripts/generate.py --natural --dem \
   --bbox 138.70 35.34 138.75 35.38 \
   --output build/gsi-fuji --version local-fuji
 ```
@@ -255,7 +255,7 @@ Windows で公式 CSV の TLS を Python が扱えない場合は、Windows 標�
 ### 参考：自然地名の全取得（通常の全国生成では不要）
 
 ```bash
-python points/gsi-peaks/fetch_all.py
+python points/gsi-peaks/scripts/fetch_all.py
 ```
 
 北方領土と離島を含む日本全域を囲む、西端の経度 122 度・南端の緯度 20 度・東端の経度 154 度・北端の緯度 46 度の範囲を、ズーム 15 の全 8,360,266 タイルで走査する。海上も含めて取得し、別のデータの収録範囲を根拠にタイルを省略しない。山だけを地点 JSON に出力するが、取得した自然地名タイルの全内容を保存する。

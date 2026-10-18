@@ -13,7 +13,7 @@ import re
 import sys
 import unicodedata
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from document_metadata import point_document_json, distributed_point, metadata_arrays, validate_metadata, ordered_point, source_entries
 
 from download import Cache

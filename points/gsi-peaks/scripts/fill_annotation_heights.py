@@ -7,7 +7,7 @@ import sys
 import time
 from urllib.error import HTTPError
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from all_points_io import read_points, write_points, write_report, input_record
 from download import Cache
 from heights import fill_dem
