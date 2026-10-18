@@ -299,3 +299,5 @@ WAT1 の外周と穴を復元し、穴を避けて三角形化する。河川線
 - 2026-10-18: 両ビューワーに海岸と河川・湖沼の独立したレベル選択（自動／z10／z11／z12）を追加。異なるレベルの元タイルをそのまま中継し、クライアントで共通座標へ変換する。自動は従来の表示範囲による切替。地形レベルとは独立する。
 
 - 2026-10-18: コードを `terrain/tools/terrain/` と `terrain/tools/terrain-rs/` に集約。コマンドは `terrain/` を作業ディレクトリとして実行し、生成物と外部ツールは `terrain/build/` に置く。
+
+- 2026-10-18: 元の `yamamuki-org/build/` の全資材をデータ用作業チェックアウトの `terrain/build/` へ移動。主要 SQLite 3 件の検査、Python 117 件とビューワーのブラウザーテストが成功。今後の作業ルートは `yamamuki-data-org/.worktrees/terrain-heightmap/terrain/` とする。
