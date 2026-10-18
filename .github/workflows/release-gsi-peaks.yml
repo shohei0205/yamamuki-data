@@ -12,7 +12,6 @@ concurrency:
 
 jobs:
   release:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -28,7 +27,21 @@ jobs:
           python-version: '3.12'
       - name: 公開処理とコミット済み JSON をテスト
         run: python -m unittest discover -s release_tools/tests -v
+      - name: 作業ブランチの配布ファイルを生成
+        if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev'
+        run: |
+          version="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python -m release_tools.gsi_peaks prepare --version "$version" --channel dev
+      - name: 作業ブランチの生成物を保存
+        if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gsi-peaks-test-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/gsi-release/
+          if-no-files-found: error
+          retention-days: 7
       - name: コミット済み JSON を検証・圧縮して Release に公開
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
         run: |
           version="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           python -m release_tools.gsi_peaks publish --version "$version"
