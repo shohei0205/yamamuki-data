@@ -358,3 +358,8 @@ WASM 経路は同じ最大標高幅タイルで基準との差が最大 1 コー
 
 
 2026-10-18: 全国ビューワーと単一 HTML の高さ倍率の初期値を 2 倍から 1 倍に変更。2 倍・4 倍は引き続き手動で選べる。
+
+
+2026-10-18: 生成中の L13・L14 DB を選ぶと File の内容が変化し、FileReaderSync の読み出しが disk I/O error になって旧 L12 の選択肢が残ることを確認。生成用 DB は選ばず、SQLite backup API で WAL を含めた整合した閲覧用コピーを作る。`python tools/terrain/snapshot_height_sqlite.py --source build/terrain-height-jxl-national-L13-L14-d02/terrain-height-jxl.sqlite3 --output <新しい閲覧用ファイル>`。既存の出力は上書きしない。生成元へは書き込まず、全国生成も停止しない。
+
+現在の閲覧用コピーは `build/terrain-height-jxl-national-L13-L14-d02-preview/terrain-height-jxl.sqlite3`。作成時点で L13 が 28,854 タイル、L14 が 76,864 タイル。L14 の全国完成版ではなく、画面にも生成途中のコピーであると表示する。L7〜L12 の DB と複数選択した実ファイルで、自動の最大 14 と手動 L13・L14 が出ることを確認した。読み込んだ DB のレベル範囲・件数を表示し、読み込み中はレベル選択を無効にする。file URL で未選択の場合は「SQLite 選択後に表示」とし、初期の最大 12 を表示しない。読み出しエラーでは完成済み DB または閲覧用コピーを選び直す説明を出す。L13 以上しか選ばなかった場合は広すぎる縮尺を縮める。

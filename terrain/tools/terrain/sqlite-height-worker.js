@@ -10,6 +10,7 @@ class SelectedFileVFS extends VFS.Base {
   handles = new Map();
   reader = new FileReaderSync();
   readBytes = 0;
+  readFailure = '';
   xOpen(name, id, flags, out) {
     const file = this.files.get(name);
     if (!file || flags & (VFS.SQLITE_OPEN_READWRITE | VFS.SQLITE_OPEN_CREATE)) return VFS.SQLITE_CANTOPEN;
@@ -24,7 +25,7 @@ class SelectedFileVFS extends VFS.Base {
       data.set(bytes);
       this.readBytes += bytes.length;
       return bytes.length === data.length ? VFS.SQLITE_OK : VFS.SQLITE_IOERR_SHORT_READ;
-    } catch { return VFS.SQLITE_IOERR_READ; }
+    } catch(e) { this.readFailure=e.name;return VFS.SQLITE_IOERR_READ; }
   }
   xClose(id) { this.handles.delete(id); return VFS.SQLITE_OK; }
   xFileSize(id, out) { out.setBigInt64(0, BigInt(this.handles.get(id).size), true); return VFS.SQLITE_OK; }
@@ -50,8 +51,9 @@ async function openFiles(files) {
   tileSources.clear();
   vfs.files.clear();
   vfs.readBytes = 0;
+  vfs.readFailure = '';
   const tiles = [], levels = new Set();
-  let firstConfig;
+  let firstConfig,incomplete=false;
   for (const [i, file] of files.entries()) {
     if (file.size < 100) throw Error('SQLite ファイルを選んでください');
     const name = `/height-${i}.sqlite3`;
@@ -62,7 +64,9 @@ async function openFiles(files) {
     let config;
     await sqlite.exec(db, "SELECT value FROM metadata WHERE key='config'", row => { config = JSON.parse(row[0]); });
     if (config?.tileSize !== 256 || config.normals !== false || !config.heightEncoding?.startsWith('16 bit linear gray')) throw Error('全国 JPEG XL ハイトマップの DB を選んでください');
+    await sqlite.exec(db,"SELECT value FROM metadata WHERE key='snapshot'",row=>{incomplete ||= JSON.parse(row[0]).incomplete===true;});
     firstConfig ??= config;
+    postMessage({progress:`${file.name}：L${config.minLevel}〜L${config.maxLevel} の一覧を読み込み中…`});
     await sqlite.exec(db, 'SELECT z,x,y,height_min,height_scale,length(height_jxl)+length(valid_mask_zstd) FROM tiles ORDER BY z,x,y', row => {
       const [z,x,y,min,scale] = row, key = `${z}/${x}/${y}`;
       if (!Number.isInteger(z) || z < 7 || z > 14 || !Number.isInteger(x) || !Number.isInteger(y) || x<0 || y<0 || x>=2**z || y>=2**z || !Number.isFinite(min) || !Number.isFinite(scale) || scale<=0) throw Error('標高タイルの情報が不正です');
@@ -70,13 +74,14 @@ async function openFiles(files) {
       tileSources.set(key, db);
       levels.add(z);
       tiles.push([...row, 0]);
+      if(tiles.length%2048===0)postMessage({progress:`${file.name}：${tiles.length.toLocaleString()} タイルを確認中（L${z}）`});
     });
     postMessage({progress: `${file.name}：${tiles.length.toLocaleString()} タイルの一覧を確認`});
   }
   if (!tiles.length) throw Error('標高タイルがありません');
   const sorted = [...levels].sort((a,b)=>a-b);
   if (sorted.some((z,i)=>i && z!==sorted[i-1]+1)) throw Error('レベルが連続する DB を選んでください');
-  return {version:1,tileSize:256,sourceSHA256:null,config:{...firstConfig,minLevel:sorted[0],maxLevel:sorted.at(-1)},tiles,files:files.map(f=>({name:f.name,bytes:f.size})),readBytes:vfs.readBytes};
+  return {version:1,tileSize:256,incomplete,sourceSHA256:null,config:{...firstConfig,minLevel:sorted[0],maxLevel:sorted.at(-1)},tiles,files:files.map(f=>({name:f.name,bytes:f.size})),readBytes:vfs.readBytes};
 }
 async function loadTile(key) {
   const db = tileSources.get(key);
@@ -135,6 +140,6 @@ onmessage = ({data}) => {
       const result = data.type==='open' ? await openFiles(data.files) : data.type==='water-open' ? await openWater(data.file) : data.type==='water' ? await loadWater(data.request) : await loadTile(data.key);
       const transfer = result.values ? [result.values.buffer,result.mask.buffer] : result.packet ? [result.packet.buffer] : [];
       postMessage({id:data.id,result},transfer);
-    } catch(e) { postMessage({id:data.id,error:e.message}); }
+    } catch(e) { postMessage({id:data.id,error:vfs?.readFailure?'ファイルを読み出せません。生成中・更新中の DB は使えないため、完成済み DB または閲覧用コピーを選び直してください。':e.message}); }
   });
 };
