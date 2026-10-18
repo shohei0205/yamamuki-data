@@ -94,3 +94,5 @@ JPEG XL の 16 bit 標高をブラウザーで直接復号する代わりに、`
 タイルの境界は隣接する標高画素を線形補間し、両側の境界頂点を同じ高さにする。角は最大 4 タイルを参照する。未取得の詳細タイルは共通の親標高で補い、補助の垂直面は使わない。補正は表示時だけで、保存済み JPEG XL と PNG は変更しない。検証は `node tools/terrain/test_height_boundaries.cjs` と `node tools/terrain/test_height_tile_seams.cjs`。
 
 各マスの対角線は、元ハイトマップの中央標高をよりよく再現する向きを選ぶ。同程度なら勾配差と交互の向きで固定方向への偏りを抑える。陰影は周囲の標高の差から法線を計算して補間し、タイル境界では法線の勾配も共有する。保存する法線マップや地形データの再生成は不要。`node tools/terrain/test_height_mesh.cjs`、`node tools/terrain/test_height_boundaries.cjs`、`node tools/terrain/test_height_smooth_shading.cjs` で確認する。
+
+「陰影の強さ」は 0〜8 倍で、法線の水平成分だけを強める。高さ倍率を上げたときのような明暗差を、地形形状を変えずに調整できる。既定は 1 倍。レベル切替・移動後も保持し、URL の `shading=4` でも指定できる。確認は `node tools/terrain/test_height_shading_strength.cjs`。
