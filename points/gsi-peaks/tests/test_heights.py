@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from generate import point
 from heights import png_elevation, fill_dem, apply_annotations, extract_heights, height_features
 

@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import mapbox_vector_tile
 from generate import point
 from vector import annotations, extract, supplement, natural_readings

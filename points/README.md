@@ -112,10 +112,10 @@ python points/osm-peaks/scripts/build_all.py \
 
 ```bash
 python -m pip install -r points/gsi-peaks/requirements-vector.txt
-python points/gsi-peaks/extract_annotations.py \
+python points/gsi-peaks/scripts/extract_annotations.py \
   --archive build/gsi-vector-cache/optimal_bvmap-v1.pmtiles \
   --database build/gsi-national-annotations/annotations.sqlite3
-python points/gsi-peaks/build_all.py \
+python points/gsi-peaks/scripts/build_all.py \
   --database build/gsi-national-annotations/annotations.sqlite3 \
   --peaks points/gsi-peaks/gsi-peaks.json \
   --comparison build/gsi-national-dem1a/vector-comparison.json \
@@ -129,7 +129,7 @@ python points/gsi-peaks/build_all.py \
 ### 山に関係する注記の標高を補う
 
 ```bash
-python points/gsi-peaks/fill_annotation_heights.py \
+python points/gsi-peaks/scripts/fill_annotation_heights.py \
   --input build/gsi-all-base/gsi-all-points.json \
   --output build/gsi-national-all-points \
   --cache build/gsi-cache \

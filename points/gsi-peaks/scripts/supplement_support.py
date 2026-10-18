@@ -3,10 +3,10 @@
 from pathlib import Path
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "osm-peaks"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "osm-peaks"))
 from scripts.supplements import apply_supplements, read_supplements
 
-DEFAULT_SUPPLEMENTS = Path(__file__).with_name("supplements.json")
+DEFAULT_SUPPLEMENTS = Path(__file__).resolve().parents[1] / "supplements.json"
 
 
 def supplement_points(points, path=DEFAULT_SUPPLEMENTS):

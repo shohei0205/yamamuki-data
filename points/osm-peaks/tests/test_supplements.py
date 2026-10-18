@@ -14,6 +14,7 @@ from unittest.mock import patch
 from scripts.supplements import apply_supplements, validate_supplements, validate_companions, complete_supplement, read_supplements, COMPANION_FILES
 from scripts.build_data import write_distribution
 from scripts import release_data
+from release_tools import release_data as common
 
 
 def legacy_companions(directory, original, data, manifest):
@@ -290,12 +291,12 @@ class SupplementTests(unittest.TestCase):
 
     def test_fetch_companions_when_present_and_rejects_missing_asset(self):
         assets={'assets':[{'name':name} for name in COMPANION_FILES]}
-        with patch.object(release_data,'gh',return_value=json.dumps(assets)) as gh,patch.object(release_data,'validate',return_value=({},[])):
+        with patch.object(common,'gh',return_value=json.dumps(assets)) as gh,patch.object(release_data,'validate',return_value=({},[])):
             release_data.fetch('osm-peaks-test',self.root)
             self.assertEqual(gh.call_count,3)
             for name in COMPANION_FILES:self.assertIn(name,gh.call_args.args)
         assets['assets'].pop()
-        with patch.object(release_data,'gh',return_value=json.dumps(assets)),self.assertRaises(ValueError):release_data.fetch('osm-peaks-test',self.root)
+        with patch.object(common,'gh',return_value=json.dumps(assets)),self.assertRaises(ValueError):release_data.fetch('osm-peaks-test',self.root)
 
     def test_supplement_sources_validation(self):
         from scripts.supplements import validate_supplement_sources

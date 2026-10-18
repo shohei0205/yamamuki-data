@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 import gzip
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import re
@@ -14,41 +13,10 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "points/osm-peaks"))
-from scripts import release_data
-from scripts.graphics import validate_graphics
+from release_tools import release_data
+from release_tools.point_validation import validate_rows
 from scripts.point_document import rows as document_rows, ordered_point
-from scripts.point_tags import validate_tags, validate_alias_readings
-from document_metadata import distributed_point, validate_point_identifiers
-
-
-def validate_rows(rows):
-    if not isinstance(rows, list) or not rows:
-        raise ValueError("テスト地点がありません")
-    seen = set()
-    for row in rows:
-        if not isinstance(row, dict):
-            raise ValueError("地点がオブジェクトではありません")
-        validate_point_identifiers(row)
-        identifier = row.get("id")
-        if not isinstance(identifier, str) or not identifier.strip() or identifier in seen:
-            raise ValueError("地点 ID が不正または重複しています")
-        seen.add(identifier)
-        if not isinstance(row.get("name"), str) or not row["name"].strip():
-            raise ValueError("地点名がありません")
-        if row.get("type") is not None and (not isinstance(row["type"], str) or not re.fullmatch(r"[a-z][a-z0-9_]*", row["type"])):
-            raise ValueError("地点の種別が不正です")
-        provenance = row.get("provenance")
-        if provenance is not None:
-            keys = {"dataSource", "classification", "elevationSource"}
-            if not isinstance(provenance, dict) or not set(provenance) <= keys or any(not isinstance(v, str) or not v.strip() or v.strip() != v for v in provenance.values()):
-                raise ValueError("地点の出典情報が不正です")
-        for key, limit in (("latitude", 90), ("longitude", 180)):
-            value = row.get(key)
-            if type(value) not in (int, float) or not math.isfinite(value) or abs(value) > limit:
-                raise ValueError("座標が不正です")
-    validate_tags(rows)
-    validate_alias_readings(rows)
-    validate_graphics(rows)
+from document_metadata import distributed_point
 
 
 def generate(version, directory):
@@ -89,12 +57,9 @@ def publish(version, directory):
     tag = f"testdata-dev-{version}"
     notes = directory / "notes.md"
     notes.write_text("[Codex] アプリの表示確認用の架空データです。登山・位置判断には使用しないでください。\n", encoding="utf-8")
-    release_data.gh("release", "create", tag, str(directory / manifest["fileName"]), str(directory / "manifest.json"),
-                    "--draft", "--prerelease", "--latest=false", "--target", os.environ["GITHUB_SHA"],
-                    "--title", "テスト用地点（開発版） " + version, "--notes-file", str(notes))
-    # アップロードしたデータを取り直し、同じファイルであることを公開前に確認する。
-    checked = directory / "checked"
-    release_data.gh("release", "download", tag, "--pattern", "manifest.json", "--pattern", manifest["fileName"], "--dir", str(checked))
+    checked = release_data.create_verified_release(
+        tag, directory, ("manifest.json", manifest["fileName"]), notes,
+        "テスト用地点（開発版） " + version, "dev", publish=False)
     actual = (checked / manifest["fileName"]).read_bytes()
     if (json.loads((checked / "manifest.json").read_text(encoding="utf-8")) != manifest
             or len(actual) != manifest["sizeBytes"] or hashlib.sha256(actual).hexdigest() != manifest["sha256"]):
@@ -112,7 +77,7 @@ def publish(version, directory):
         "downloadUrl": manifest["downloadUrl"],
         "actionsRunUrl": f"https://github.com/{os.environ['GH_REPO']}/actions/runs/{os.environ['GITHUB_RUN_ID']}/attempts/{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"})
     release_data.write_site(manifests, histories)
-    release_data.gh("release", "edit", tag, "--draft=false", "--latest=false")
+    release_data.publish_draft(tag)
     release_data.append_summary("\n## テスト用地点\n\n開発版だけに公開します。正式版の一覧は維持します。\n")
 
 

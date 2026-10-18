@@ -124,11 +124,11 @@ osm-peaks/
 
 利用開始時に、リポジトリの Settings → Pages → Build and deployment の Source を **GitHub Actions** にし、`github-pages` 環境の配置元として `main` と `dev` を許可する。
 
-[地点 / OSM山頂：生成・検査](https://github.com/shohei0205/yamamuki-data/actions/workflows/publish-data.yml) は、毎月 1 日の UTC 03:23（日本時間 12:23）に `main` で正式版を生成する。手動でも実行できる。
+[地点 / OSM山頂：Release 生成・検査](https://github.com/shohei0205/yamamuki-data/actions/workflows/publish-data.yml) は、毎月 1 日の UTC 03:23（日本時間 12:23）に `main` で正式版を生成する。手動でも実行できる。
 
 正式版は Release を作るところまでで、Pages には公開しない。利用する側で取得する正式版の Release を選ぶ運用としている（[#44](https://github.com/shohei0205/yamamuki-data/issues/44)）。開発版（`dev`）は今までどおり、検査に通ったら Pages の `points/osm-peaks-dev/` に公開する。
 
-手動で動かすときは Actions の「地点 / OSM山頂：生成・検査」→「Run workflow」で正式版なら `main`、開発版なら `dev` を選ぶ。この2つ以外のブランチでは公開しない。公開ジョブの `GITHUB_TOKEN` に `contents: write`・`pages: write`・`id-token: write` を付与し、追加のトークンは使わない。
+手動で動かすときは Actions の「地点 / OSM山頂：Release 生成・検査」→「Run workflow」で正式版なら `main`、開発版なら `dev` を選ぶ。この2つ以外のブランチでは公開しない。公開ジョブの `GITHUB_TOKEN` に `contents: write`・`pages: write`・`id-token: write` を付与し、追加のトークンは使わない。
 
 1. 単体テストと、小さな PBF による生成テストを行う。
 2. Geofabrik の `japan-latest.osm.pbf` から日付付き URL を確定する。取得対象日を指定した場合は、その日付の URL を直接使い、全国データを取得する。途中で切れたら同じ版の続きから再開し、配布元の MD5 と照合する。Overpass API は使わない。
@@ -187,7 +187,7 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 
 ### 正式版と開発版の実行方法
 
-月次実行は `main` から正式版（`stable`）の Release を作る。手動実行は Actions の「地点 / OSM山頂：生成・検査」→「Run workflow」でブランチを選ぶ。
+月次実行は `main` から正式版（`stable`）の Release を作る。手動実行は Actions の「地点 / OSM山頂：Release 生成・検査」→「Run workflow」でブランチを選ぶ。
 
 | 実行元ブランチ | 配布先 | 生成・公開に使う処理 |
 |---|---|---|
@@ -202,7 +202,7 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 
 ### 取得対象日を指定する
 
-「地点 / OSM山頂：生成・検査」の Run workflow で、`source_date` に `YYYY-MM-DD` を入力すると、`latest` の転送を使わず日付付き URL を直接取得する。例えば `2026-09-29` は `https://download.geofabrik.de/asia/japan-260929.osm.pbf` になる。空欄または月次実行では`latest` を使う。入力欄を表示するため、main 側の入口にも同じ入力項目が必要。
+「地点 / OSM山頂：Release 生成・検査」の Run workflow で、`source_date` に `YYYY-MM-DD` を入力すると、`latest` の転送を使わず日付付き URL を直接取得する。例えば `2026-09-29` は `https://download.geofabrik.de/asia/japan-260929.osm.pbf` になる。空欄または月次実行では`latest` を使う。入力欄を表示するため、main 側の入口にも同じ入力項目が必要。
 
 Actions の実行日はデータの配布日とは限らず、当日分はまだ存在しない場合がある。配布済みの日付を指定する。対象が404の場合は失敗とし、別の日付への自動切り替えはしない。サイズと日付付き URL の MD5 を照合し、別の版の途中ファイルを混ぜない。古い日付を指定しても、公開前の日時・件数・同一更新日時の検査はそのまま行う。
 

@@ -79,7 +79,9 @@ Actions の「共通：確認済みデータを公開」を入口とする。正
 
 検証を通すため、下書きは GitHub の公開ボタンから直接公開せず、このワークフローを使う。Pages に初めて配置するときだけ `initialize_pages` を選ぶ。既存の参照先を復旧する場合の条件は、対象データの手順を確認する。
 
-共通の振り分け処理は `release_tools/`、データ固有の検証・公開処理は各データのフォルダに置く。データ種別を追加するときは `release_tools/publish_reviewed.py` の登録表に追加する。未対応の種別や最新版参照タグを指定すると停止する。
+手動公開の検証は `release_tools/point_release.py`、Release の取得・Pages・公開履歴の共通処理は `release_tools/release_data.py` にまとめる。OSM の生成・比較・自動公開は `points/osm-peaks/scripts/release_data.py`、GSI の検証・snapshot・配布ファイルの生成は `points/gsi-peaks/scripts/release_snapshot.py` に置き、共通の公開処理を呼び出す。OSM・国土地理院の山頂は同じ処理を使い、manifest の形式・版・取得 URL、データ本体のサイズ・SHA-256、地点の ID・座標・出典・件数、添付されたオリジナルと補足から配布地点を再現できるかを確認する。生成時の出典固有の検査は、各データの生成処理で行う。旧形式の Release は従来の検証を使う。
+
+共通形式（manifest・地点 JSON とも版 6）のデータは、Release の情報から公開対象を判定する。登録表やデータ別の公開用コードは追加しない。タグは `<データ ID>-<版>`、開発版は `<データ ID>-dev-<版>` とし、添付 manifest の `version` を使ってデータ ID を取り出す。ID・版名にハイフンを含めても判定できる。データ本体のファイル名・表示名は manifest から取得する。Release の Pre-release の区分を実行元ブランチと照合し、Pages には `points/<データ ID>/manifest.json`（開発版は `points/<データ ID>-dev/manifest.json`）を配置する。最新版参照タグ、不正な ID、タグ・版・配布先の不一致は受け付けない。地形など異なる形式のデータは、この地点用の公開処理では扱わない。
 
 ### Pages への配置と参照先の復旧
 

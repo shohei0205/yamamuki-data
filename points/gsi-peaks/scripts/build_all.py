@@ -8,7 +8,7 @@ from pathlib import Path
 import sqlite3
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from all_points_io import read_points, write_points, write_report, input_record
 
 
@@ -96,7 +96,7 @@ def build(database, peaks_path, comparison_path, output, previous_path=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database", required=True, type=Path)
-    parser.add_argument("--peaks", type=Path, default=Path(__file__).with_name("gsi-peaks.json"))
+    parser.add_argument("--peaks", type=Path, default=Path(__file__).resolve().parents[1] / "gsi-peaks.json")
     parser.add_argument("--comparison", required=True, type=Path, help="山頂版と同時に生成した vector-comparison.json")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--previous", type=Path, help="同じ名前・座標の注記に取得済み標高を引き継ぐ全部入り JSON")

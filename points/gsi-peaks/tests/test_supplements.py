@@ -7,7 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
 GSI = ROOT / "points/gsi-peaks"
-sys.path.insert(0, str(GSI))
+sys.path.insert(0, str(GSI / "scripts"))
 from supplement_support import supplement_points
 from document_metadata import metadata_maps
 

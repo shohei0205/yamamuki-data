@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from download import Cache
 from generate import (CSV_URL, NATURAL_URL, DEM_URL, dem_elevation, generate, inside,
                       merge, name_parts, point, read_csv, read_natural, tile_position, tiles_for_bbox, write)

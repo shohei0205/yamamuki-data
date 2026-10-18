@@ -7,28 +7,48 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 from urllib.parse import urlsplit
 
 
-# 地形の検証・公開処理ができたら、ここに登録する。未対応の種別は公開しない。
-PUBLISHERS = {"osm-peaks": ("points/osm-peaks", "scripts.release_data")}
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def dataset_for_tag(tag, channel):
+def check_dataset(dataset):
+    if (not isinstance(dataset, str) or not re.fullmatch(r"[a-z][a-z0-9_-]*", dataset)
+            or dataset.endswith("-dev")):
+        raise ValueError("データ ID が不正です")
+
+
+def version_for_tag(dataset, tag, channel):
+    check_dataset(dataset)
     if channel not in ("stable", "dev"):
         raise ValueError("配布先は stable または dev を指定してください")
-    for dataset in PUBLISHERS:
-        prefix = dataset + ("-dev-" if channel == "dev" else "-")
-        if tag.startswith(prefix):
-            version = tag[len(prefix):]
-            if (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version)
-                    and version != "latest" and not version.startswith("dev-")):
-                return dataset
-    raise ValueError("未対応のデータ種別、最新版参照タグ、または配布先の異なるタグです")
+    prefix = dataset + ("-dev-" if channel == "dev" else "-")
+    if isinstance(tag, str) and tag.startswith(prefix):
+        version = tag[len(prefix):]
+        if (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version)
+                and version != "latest" and not version.startswith("dev-")):
+            return version
+    raise ValueError("データ ID・版・配布先とタグが一致しません")
+
+
+def dataset_for_tag(tag, channel, version):
+    # 版名にもハイフンを使えるため、タグだけを区切って推測しない。
+    if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
+        raise ValueError("manifest の版が不正です")
+    suffix = ("-dev-" if channel == "dev" else "-") + version
+    if not isinstance(tag, str) or not tag.endswith(suffix):
+        raise ValueError("タグと manifest の版が一致しません")
+    dataset = tag[:-len(suffix)]
+    if version_for_tag(dataset, tag, channel) != version:
+        raise ValueError("タグと manifest の版が一致しません")
+    return dataset
 
 
 def check_branch(channel):
+    if channel not in ("stable", "dev"):
+        raise ValueError("配布先は stable または dev を指定してください")
     if os.environ.get("GITHUB_ACTIONS") == "true":
         expected = {"refs/heads/dev": "dev", "refs/heads/main": "stable"}.get(os.environ.get("GITHUB_REF"))
         if expected != channel:
@@ -49,8 +69,8 @@ def resolve(target, channel):
                 or not parsed.path.startswith(start)
                 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", parsed.path[len(start):])):
             raise ValueError("このリポジトリの Release ページの URL を指定してください")
-    else:
-        dataset_for_tag(target, channel)
+    elif not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", target):
+        raise ValueError("タグの形式が不正です")
     result = subprocess.run(
         ["gh", "api", "--paginate", "--slurp", f"repos/{repo}/releases?per_page=100"],
         check=True, capture_output=True, text=True, encoding="utf-8")
@@ -60,21 +80,28 @@ def resolve(target, channel):
     if len(matches) != 1:
         raise ValueError("指定した Release を一意に取得できません")
     release = matches[0]
-    dataset = dataset_for_tag(release["tag_name"], channel)
     if release["prerelease"] != (channel == "dev"):
         raise ValueError("Release の正式版・開発版の区分が一致しません")
+    with tempfile.TemporaryDirectory() as temporary:
+        subprocess.run(["gh", "release", "download", release["tag_name"], "--repo", repo,
+                        "--pattern", "manifest.json", "--dir", temporary], check=True)
+        manifest = json.loads((Path(temporary) / "manifest.json").read_bytes())
+    if not isinstance(manifest, dict):
+        raise ValueError("manifest がオブジェクトではありません")
+    if manifest.get("schemaVersion") == 6 and (
+            manifest.get("schemaFormat") != "yamamuki-manifest"
+            or manifest.get("dataSchemaFormat") != "yamamuki-points"):
+        raise ValueError("未対応のデータ形式です")
+    dataset = dataset_for_tag(release["tag_name"], channel, manifest.get("version"))
     return dataset, release["tag_name"]
 
 
 def publish(dataset, tag, channel, sha256, reason):
     check_branch(channel)
-    if dataset_for_tag(tag, channel) != dataset:
-        raise ValueError("データ種別とタグが一致しません")
-    directory, module = PUBLISHERS[dataset]
-    # コマンドと作業場所は登録済みの値だけを使う。検証・公開は各種別が担当する。
-    subprocess.run([sys.executable, "-m", module, "publish", "--channel", channel,
+    version_for_tag(dataset, tag, channel)
+    subprocess.run([sys.executable, "-m", "release_tools.point_release", "--dataset", dataset, "--channel", channel,
                     "--tag", tag, "--sha256", sha256, "--manual", "--reason", reason],
-                   cwd=ROOT / directory, check=True)
+                   cwd=ROOT, check=True)
 
 
 def main():

@@ -1,4 +1,4 @@
-name: 地点 / 国土地理院山頂：JSON を Release に公開
+name: 地点 / 国土地理院山頂：Release 生成・検査
 
 on:
   workflow_dispatch:
@@ -26,12 +26,14 @@ jobs:
         with:
           python-version: '3.12'
       - name: 公開処理とコミット済み JSON をテスト
-        run: python -m unittest discover -s release_tools/tests -v
+        run: |
+          python -m unittest discover -s release_tools/tests -v
+          python -m unittest discover -s points/gsi-peaks/tests -p test_release_snapshot.py -v
       - name: 作業ブランチの配布ファイルを生成
         if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev'
         run: |
           version="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          python -m release_tools.gsi_peaks prepare --version "$version" --channel dev
+          python points/gsi-peaks/scripts/release_snapshot.py prepare --version "$version" --channel dev
       - name: 作業ブランチの生成物を保存
         if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev'
         uses: actions/upload-artifact@v4
@@ -44,4 +46,4 @@ jobs:
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
         run: |
           version="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          python -m release_tools.gsi_peaks publish --version "$version"
+          python points/gsi-peaks/scripts/release_snapshot.py publish --version "$version"

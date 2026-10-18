@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from build_vector import primary_points, elevations
 from generate import point, NATURAL_URL, tile_position
 from test_heights import png

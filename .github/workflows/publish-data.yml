@@ -1,4 +1,4 @@
-name: 地点 / OSM山頂：生成・検査
+name: 地点 / OSM山頂：Release 生成・検査
 
 # 正式版（main）は Release を作るところまでで、Pages には公開しない。アプリがどの版を読むかは yamamuki の PR で決める。
 # 開発版（dev）は検査に通ったら Pages の points/osm-peaks-dev/ に公開する。
@@ -149,8 +149,8 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v5
       - name: 配置した manifest 一覧を確認
+        working-directory: .
         if: steps.publication.outputs.pages_ready == 'true'
-        working-directory: points/osm-peaks
         env:
           GH_REPO: ${{ github.repository }}
-        run: python -m scripts.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"
+        run: python -m release_tools.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"
