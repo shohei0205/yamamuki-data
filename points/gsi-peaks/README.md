@@ -156,7 +156,7 @@ python points/gsi-peaks/vector.py \
 `vector-only-points.json` はベクトルタイルだけから抽出した比較用の地点配列で、よみがなと標高は未補完の `null`。配布には補完後の `gsi-peaks.json` を使う。
 
 ```bash
-python -m release_tools.gsi_peaks snapshot --source build/gsi-national-primary
+python points/gsi-peaks/release_snapshot.py snapshot --source build/gsi-national-primary
 ```
 
 Release の Action はコミット済みの地点 JSON と出典要約を使う。PMTiles や SQLite はローカルに保管する。
@@ -192,7 +192,7 @@ python points/gsi-peaks/fetch_all.py --regenerate-only
 生成後、次のコマンドで地点 JSON と小さな出典要約を取り込む。
 
 ```bash
-python -m release_tools.gsi_peaks snapshot --source build/gsi-national-primary
+python points/gsi-peaks/release_snapshot.py snapshot --source build/gsi-national-primary
 git add points/gsi-peaks/gsi-peaks-source.json points/gsi-peaks/supplements.json points/gsi-peaks/snapshot.json
 ```
 
@@ -205,13 +205,14 @@ Release には「[アプリ用データと確認・編集用の添付](#アプ�
 公開用ファイルの準備だけを手元で確認する場合は、次を実行する。外部通信は行わない。
 
 ```bash
-python -m release_tools.gsi_peaks prepare --channel dev --version local-test
+python points/gsi-peaks/release_snapshot.py prepare --channel dev --version local-test
 ```
 
-既定の出力先は `build/gsi-release/`。公開処理のテストは共通 CI でも実行する。
+既定の出力先は `build/gsi-release/`。GSI 固有の検証・snapshot・配布ファイルの生成は `release_snapshot.py`、Release の作成・全添付ファイルの確認・公開は `release_tools/release_data.py` が担当する。公開処理のテストは共通 CI でも実行する。
 
 ```bash
 python -m unittest discover -s release_tools/tests -v
+python -m unittest discover -s points/gsi-peaks/tests -p test_release_snapshot.py -v
 ```
 
 ### 山岳一覧・自然地名だけを試す
@@ -316,7 +317,6 @@ python points/gsi-peaks/fetch_all.py
 ```bash
 python -m pip install -r points/gsi-peaks/requirements-vector.txt
 python -m unittest discover -s points/gsi-peaks/tests -v
-python -m unittest release_tools.tests.test_gsi_peaks -v
 ```
 
 テストは外部通信を行わず、山頂名と別称、GSI 専用 ID、重複、位置の範囲、地表標高、キャッシュ、取得失敗、共通の地点形式を確かめる。CI の「共通：データ処理のテスト」の「地点 / 国土地理院山頂」でも実行する。

@@ -52,7 +52,8 @@ class PointReleaseTests(unittest.TestCase):
             self.assertEqual(manifest, target.validate(directory, dataset, tag, "dev")[0])
 
     def test_real_gsi_artifacts_and_separate_parts_are_accepted(self):
-        from release_tools import gsi_peaks
+        from importlib import import_module
+        gsi_peaks = import_module("points.gsi-peaks.release_snapshot")
         tag, manifest = gsi_peaks.prepare("test", self.root, "dev")
         self.assertEqual(manifest, target.validate(self.root, "gsi-peaks", tag, "dev")[0])
         # 補足の破損も公開前に検出する。

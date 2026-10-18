@@ -61,9 +61,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: コミット済み JSON と Release 公開処理のテスト
-        run: python -m unittest release_tools.tests.test_gsi_peaks -v
-      - name: 国土地理院だけを使う生成処理のテスト
+      - name: 国土地理院の生成・snapshot・Release 公開処理のテスト
         run: |
           python -m pip install -r points/gsi-peaks/requirements-vector.txt
           python -m unittest discover -s points/gsi-peaks/tests -v

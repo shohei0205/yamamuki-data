@@ -1,5 +1,6 @@
-from datetime import datetime, timezone
 """コミット済みの国土地理院の地点 JSON を検証し、Release に配布する。"""
+
+from datetime import datetime, timezone
 
 import argparse
 from collections import defaultdict
@@ -12,7 +13,11 @@ from pathlib import Path
 import re
 import shutil
 
-from release_tools.test_points import ROOT, release_data, validate_rows
+import sys
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+from release_tools import release_data
+from release_tools.point_validation import validate_rows
 from scripts.supplements import validate_supplement_sources, read_supplements, apply_supplements
 from scripts.point_document import rows as document_rows, metadata_of, document
 from scripts.point_tags import validate_tag_metadata
@@ -156,18 +161,7 @@ def publish(version, directory, source=DATA):
                      + "".join(f"- {key}: {value.get('attribution','')} / {value.get('license','')}\n" for key,value in metadata_maps(manifest["metadata"])["sources"].items()), encoding="utf-8", newline="\n")
     from scripts.distribution_parts import filenames
     names = (FILE, FILE + ".gz", "manifest.json", INFO, *filenames("gsi-peaks"))
-    options = ("--prerelease",) if channel == "dev" else ()
-    # 既存タグは create が失敗する。公開済みのアセットを差し替えない。
-    release_data.gh("release", "create", tag, *(str(directory / name) for name in names),
-                    "--draft", "--latest=false", "--target", os.environ["GITHUB_SHA"],
-                    "--title", "gsi-peaks-" + version, "--notes-file", str(notes), *options)
-    checked = directory / "checked"
-    release_data.gh("release", "download", tag, *(part for name in names for part in ("--pattern", name)),
-                    "--dir", str(checked))
-    for name in names:
-        if (checked / name).read_bytes() != (directory / name).read_bytes():
-            raise ValueError(f"Release の添付ファイルが一致しません: {name}")
-    release_data.gh("release", "edit", tag, "--draft=false", "--latest=false")
+    release_data.create_verified_release(tag, directory, names, notes, "gsi-peaks-" + version, channel)
     release_data.append_summary(f"\n## 国土地理院の山頂\n\n{manifest['metadata']['pointCount']:,} 地点を Release `{tag}` に公開しました。\n")
 
 

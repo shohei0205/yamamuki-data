@@ -47,6 +47,38 @@ def gh(*arguments):
     return result.stdout
 
 
+def create_verified_release(tag, directory, files, notes, title, channel, *, publish=True):
+    """下書きに添付し、取り直した全ファイルが同じ場合だけ公開する。"""
+    check_branch(channel)
+    directory = Path(directory)
+    names = tuple(files)
+    if not names or len(set(names)) != len(names) or any(
+            not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name)
+            for name in names):
+        raise ValueError("添付ファイル名が不正です")
+    for name in names:
+        if not (directory / name).is_file():
+            raise ValueError(f"添付ファイルがありません: {name}")
+    options = ("--prerelease",) if channel == "dev" else ()
+    # 既存タグは create が失敗する。公開済みのファイルを差し替えない。
+    gh("release", "create", tag, *(str(directory / name) for name in names),
+       "--draft", "--latest=false", "--target", os.environ["GITHUB_SHA"],
+       "--title", title, "--notes-file", str(notes), *options)
+    checked = directory / "checked"
+    gh("release", "download", tag, *(part for name in names for part in ("--pattern", name)),
+       "--dir", str(checked))
+    for name in names:
+        if (checked / name).read_bytes() != (directory / name).read_bytes():
+            raise ValueError(f"Release の添付ファイルが一致しません: {name}")
+    if publish:
+        publish_draft(tag)
+    return checked
+
+
+def publish_draft(tag):
+    gh("release", "edit", tag, "--draft=false", "--latest=false")
+
+
 def endpoint(suffix):
     repo = os.environ["GH_REPO"]
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
