@@ -383,12 +383,15 @@ def prepare(directory, channel="stable"):
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         previous = None
+        comparison_failed = False
         try:
             previous = previous_release(root / "previous", channel)
             warnings = assess(current, previous)
-        except (RuntimeError, ValueError, OSError, KeyError, TypeError, EOFError, zlib.error) as exc:
-            logging.warning("前回公開版を比較できません: %s", exc)
-            warnings = ["前回公開版の取得・検証に失敗したため、自動公開しません。Actions のログを確認してください"]
+        except Exception as exc:
+            # 比較の失敗で生成物を失わず、公開せずに人の確認へ回す。
+            comparison_failed = True
+            logging.exception("前回公開版を比較できません")
+            warnings = [f"前回公開版の取得・検証・比較に失敗したため、下書きに残します（{type(exc).__name__}: {exc}）"]
         notes = root / "notes.md"
         contents = report(current, previous, warnings).replace("## データの検査結果", "## データの検査結果（生成後）", 1)
         stable = channel == "stable"
@@ -396,16 +399,19 @@ def prepare(directory, channel="stable"):
             # Release 一覧で目に入るよう、要確認の理由を本文の先頭に書く。
             contents = f"{REVIEW_HEADING}\n\n" + "".join(f"- {warning}\n" for warning in warnings) + "\n" + contents
         write_report(notes, contents)
-        # 正式版は Pages に出さず、そのまま Release にする。どれをアプリが読むかは yamamuki の PR で決める。
-        state = ["--latest=false"] if stable else ["--draft"]
+        # 正式版も比較が失敗したときは下書きに残す。Pages は更新しない。
+        draft = not stable or comparison_failed
+        state = ["--draft", "--latest=false"] if draft else ["--latest=false"]
         logging.info("%s を作成し、SVG を内蔵したデータと manifest をアップロードします: %s",
-                     "Release" if stable else "下書き Release", tag)
+                     "下書き Release" if draft else "Release", tag)
         from scripts.distribution_parts import filenames
         url = gh("release", "create", tag, str(Path(directory) / FILE_NAME), str(Path(directory) / "manifest.json"),
            *[str(Path(directory) / name) for name in filenames("osm-peaks") if (Path(directory) / name).exists()],
            *state, "--target", os.environ["GITHUB_SHA"], "--title", tag,
            "--notes-file", str(notes), f"--prerelease={str(not stable).lower()}").strip()
-        if stable:
+        if comparison_failed:
+            handling = "下書きで保留（前回公開版の比較に失敗。手動確認が必要）"
+        elif stable:
             handling = "Release に出しました（要確認。本文の先頭の理由を確認してください）" if warnings else "Release に出しました"
         else:
             handling = "下書きで保留（手動確認が必要）" if warnings else "自動公開の段階へ進みます"

@@ -12,6 +12,24 @@ from test_check_release import dataset
 
 
 class ReleaseDataTests(unittest.TestCase):
+    def test_comparison_error_keeps_draft_in_both_channels(self):
+        for channel in ("stable", "dev"):
+            with self.subTest(channel=channel), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(release_data, "validate", return_value=self.current), \
+                    patch.object(release_data, "previous_release", return_value=self.current), \
+                    patch.object(release_data, "assess", side_effect=AttributeError("比較処理の失敗")), \
+                    patch.object(release_data, "gh", return_value="https://example.com/draft") as gh, \
+                    patch.object(release_data, "output") as output:
+                def check_notes(*args):
+                    notes = Path(args[args.index("--notes-file") + 1]).read_text(encoding="utf-8-sig")
+                    self.assertIn("AttributeError", notes)
+                    self.assertIn("比較処理の失敗", notes)
+                    return "https://example.com/draft"
+                gh.side_effect = check_notes
+                release_data.prepare(directory, channel)
+                self.assertIn("--draft", gh.call_args.args)
+                self.assertEqual("false", output.call_args.kwargs["auto_publish"])
+
     def setUp(self):
         self.current = dataset()
         self.current[0].update(sha256="a" * 64, sizeBytes=123, mountainCount=len(self.current[1]))
