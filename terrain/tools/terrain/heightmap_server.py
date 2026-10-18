@@ -40,7 +40,7 @@ class Handler(SimpleHTTPRequestHandler):
         route = self.path.split('?')[0]
         if route=='/national-height':
             self.path='/national_height.html';super().do_GET();return
-        if route in ('/national_height.html','/national_height.js','/national-navigation.js'):
+        if route in ('/national_height.html','/national_height.js','/national-navigation.js','/height-boundaries.js'):
             super().do_GET();return
         if route=='/national-height-data/manifest.json' or re.fullmatch(r'/national-height-data/(?:[7-9]|1[0-2])/[0-9]{1,4}/[0-9]{1,4}[.](?:png|mask)',route):
             path=ROOT/'build/terrain-height-browser'/route[len('/national-height-data/'):]
