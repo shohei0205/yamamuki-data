@@ -110,3 +110,6 @@ JPEG XL の 16 bit 標高をブラウザーで直接復号する代わりに、`
 水平表示の「足元を隠す」で、カメラ近くの地形を非表示にできる。既定は水平距離 100 m で、「隠さない」から 1 km まで選べる。近くの斜面に視界を遮られる場合は距離を増やす。カメラ標高と地形データを変えずに描画だけを除外し、俯瞰表示には適用しない。距離には表示中心の緯度によるメルカトルの倍率を補正する。確認は `node tools/terrain/test_ground_foot_hide.cjs`。
 
 地形レベルの自動切替は「自動（最大12）」〜「自動（最大7）」で上限を選べる。縮尺から求めたレベルが上限を超えると上限に留め、水平視点でも同じ上限を適用する。「全国」で縮小しても自動の上限を保つ。手動指定も引き続き利用できる。URL は最大 12 が `level=auto`、最大 9 の例が `level=auto-9`。確認は `node tools/terrain/test_height_auto_max.cjs`。
+
+
+2026-10-18: 全国ハイトマップの L13・L14 を追加生成する。JPEG XL d=0.2、16 bit 線形グレー、256×256、法線なしは既存の L7〜L12 と同じ。元標高 DB の対象は L13 が 28,854 タイル、L14 が 109,506 タイル。既存 DB を保持し、`build/terrain-height-jxl-national-L13-L14-d02/` に別途保存する。生成コマンドは `tools/terrain-rs/run-codecs.ps1 --part national-height-jxl --root build/terrain-lod.sqlite3 --output build/terrain-height-jxl-national-L13-L14-d02 --min-level 13 --max-level 14`。レベル指定の既定値は従来の 7〜12。指定範囲を小さいレベルから処理し、中断後は同じコマンドで確定済みタイルを飛ばして再開する。生成中は同フォルダーの `progress.json` にレベル別件数・サイズ・復号誤差を記録する。追加データの生成と全国ビューワーへの導入は別であり、現在のビューワーは L7〜L12 を使う。

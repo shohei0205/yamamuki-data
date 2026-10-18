@@ -1,4 +1,4 @@
-//! 全国の標高・法線を JPEG XL にする。中断後は確定済みタイルから再開する。
+//! 全国の標高を JPEG XL にする。中断後は確定済みタイルから再開する。
 use crate::{codec, write_json};
 use anyhow::{Result, ensure};
 use rayon::prelude::*;
@@ -161,14 +161,22 @@ fn generate(source: &Path, bin: &Path, z: u32, x: u32, y: u32, folder: &Path) ->
     }
     Ok(packed)
 }
-pub fn run(source: &Path, output: &Path, bin: &Path) -> Result<()> {
+fn validate_levels(min_level: u32, max_level: u32) -> Result<()> {
+    ensure!(
+        (7..=14).contains(&min_level) && (7..=14).contains(&max_level) && min_level <= max_level,
+        "生成レベルは 7〜14 の昇順で指定してください"
+    );
+    Ok(())
+}
+pub fn run(source: &Path, output: &Path, bin: &Path, min_level: u32, max_level: u32) -> Result<()> {
+    validate_levels(min_level, max_level)?;
     fs::create_dir_all(output)?;
     let lock = output.join("generation.lock");
     let handle = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&lock)?;
-    let result = run_locked(source, output, bin);
+    let result = run_locked(source, output, bin, min_level, max_level);
     if let Err(ref e) = result {
         let _ = write_json(
             &output.join("error.json"),
@@ -179,7 +187,7 @@ pub fn run(source: &Path, output: &Path, bin: &Path) -> Result<()> {
     fs::remove_file(lock)?;
     result
 }
-fn run_locked(source: &Path, output: &Path, bin: &Path) -> Result<()> {
+fn run_locked(source: &Path, output: &Path, bin: &Path, min_level: u32, max_level: u32) -> Result<()> {
     let dest = output.join("terrain-height-jxl.sqlite3");
     ensure!(
         source.canonicalize()? != dest.canonicalize().unwrap_or(dest.clone()),
@@ -190,7 +198,7 @@ fn run_locked(source: &Path, output: &Path, bin: &Path) -> Result<()> {
     let src = open(source)?;
     let mut db = Connection::open(&dest)?;
     db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS tiles(z INTEGER,x INTEGER,y INTEGER,height_min REAL,height_scale REAL,height_jxl BLOB,valid_mask_zstd BLOB,max_error REAL,squared_error REAL,valid_count INTEGER,PRIMARY KEY(z,x,y)) WITHOUT ROWID;")?;
-    let config=json!({"version":1,"tileSize":256,"minLevel":7,"maxLevel":12,"heightDistance":0.2,"heightEncoding":"16 bit linear gray; meters = height_min + decoded * height_scale; scale = max(tile range,1)/65535","encoderMode":"auto","effort":7,"normals":false,"renderCoastline":false,"mask":"Zstd; little bit order; 1=valid; missing heights render as zero without outline","source":source.canonicalize()?.to_string_lossy(),"sourceBytes":fs::metadata(source)?.len(),"attribution":"国土地理院"}).to_string();
+    let config=json!({"version":1,"tileSize":256,"minLevel":min_level,"maxLevel":max_level,"heightDistance":0.2,"heightEncoding":"16 bit linear gray; meters = height_min + decoded * height_scale; scale = max(tile range,1)/65535","encoderMode":"auto","effort":7,"normals":false,"renderCoastline":false,"mask":"Zstd; little bit order; 1=valid; missing heights render as zero without outline","source":source.canonicalize()?.to_string_lossy(),"sourceBytes":fs::metadata(source)?.len(),"attribution":"国土地理院"}).to_string();
     let old: Option<String> = db
         .query_row("SELECT value FROM metadata WHERE key='config'", [], |r| {
             r.get(0)
@@ -202,14 +210,14 @@ fn run_locked(source: &Path, output: &Path, bin: &Path) -> Result<()> {
         db.execute("INSERT INTO metadata VALUES('config',?1)", [&config])?;
     }
     let total: u64 = src.query_row(
-        "SELECT count(*) FROM tiles WHERE z BETWEEN 7 AND 12",
-        [],
+        "SELECT count(*) FROM tiles WHERE z BETWEEN ?1 AND ?2",
+        (min_level, max_level),
         |r| r.get(0),
     )?;
     let start = Instant::now();
     let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build()?;
     progress(&db, output, total, 0., false)?;
-    for z in (7..=12).rev() {
+    for z in min_level..=max_level {
         let coords: Vec<(u32, u32)> = src
             .prepare("SELECT x,y FROM tiles WHERE z=? ORDER BY y,x")?
             .query_map([z], |r| Ok((r.get(0)?, r.get(1)?)))?
@@ -273,6 +281,15 @@ fn progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn level_range() {
+        assert!(validate_levels(7, 12).is_ok());
+        assert!(validate_levels(13, 14).is_ok());
+        assert!(validate_levels(14, 14).is_ok());
+        assert!(validate_levels(14, 13).is_err());
+        assert!(validate_levels(6, 14).is_err());
+        assert!(validate_levels(7, 15).is_err());
+    }
     #[test]
     fn quantization() {
         let mut v = vec![f32::NAN; N * N];

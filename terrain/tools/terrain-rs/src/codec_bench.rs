@@ -48,6 +48,12 @@ struct Args {
     jxl: PathBuf,
     #[arg(long, default_value = "all")]
     part: String,
+    /// 全国ハイトマップの生成対象の最低レベル。
+    #[arg(long, default_value_t = 7, value_parser=clap::value_parser!(u32).range(7..=14))]
+    min_level: u32,
+    /// 全国ハイトマップの生成対象の最高レベル。
+    #[arg(long, default_value_t = 12, value_parser=clap::value_parser!(u32).range(7..=14))]
+    max_level: u32,
     #[arg(long, default_value_t = 315.)]
     sun_azimuth: f64,
     #[arg(long, default_value_t = 45.)]
@@ -109,7 +115,9 @@ fn main() -> Result<()> {
         );
     }
     if args.part == "national-height-jxl" {
-        return national_height_jxl::run(&args.root, &args.output, &args.jxl);
+        return national_height_jxl::run(
+            &args.root, &args.output, &args.jxl, args.min_level, args.max_level,
+        );
     }
     if args.part == "national-jxl" {
         return national_jxl::run(&args.root, &args.output, &args.jxl);
