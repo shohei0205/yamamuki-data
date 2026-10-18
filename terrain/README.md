@@ -119,3 +119,12 @@ JPEG XL の 16 bit 標高をブラウザーで直接復号する代わりに、`
 
 
 2026-10-18: 全国ハイトマップに「地形による影」の切替を追加（既定 ON）。太陽方向から同じ地形メッシュを描く 2048×2048 の深度マップを WebGL で作り、直射光の遮蔽を判定する。環境光は保持し、影の縁は 3×3 サンプルでぼかす。高さ倍率・足元の変形・共有境界を反映し、手動の光源と JST 日時の両方に連動する。太陽が地平線下なら影の描画を省く。影の光源方向は表示中心で代表するため、全国表示の地点ごとの太陽方向は近似になる。対象は読み込んだ表示地形で、画面外の未取得地形や海面上の影は未対応。縮小表示では地形 LOD と影画像の解像度に応じて小さな影を省く。配布データの追加はなく、描画時の深度マップと追加描画が必要。検証は `node tools/terrain/test_terrain_shadows.cjs`。
+
+
+2026-10-18: 全国ビューワーの「標高 SQLite」からローカル DB を選択できるようにした。生成が完了し、書き込みを停止した DB を使う。L7〜L12 と追加の L13〜L14 は複数選択でまとめられる（レベルは連続、同じタイルの重複は不可）。「配信データに戻す」で従来の PNG に戻る。選択したファイルはアップロードしない。wa-sqlite 1.0.0 を専用 Worker で動かし、FileReaderSync と File.slice で必要な箇所だけを読む。DB 全体のメモリー展開・ブラウザー保存領域へのコピー・サーバーでの復号は行わない。タイル一覧の走査は必要で、SQLite キャッシュは接続あたり 4 MiB。JPEG XL は icodec 0.6.0（libjxl 0.11.0）の WASM で 16 bit 整数へ復号し、min/scale と有効マスクから標高を復元する。レベル選択肢も選択 DB に合わせる。
+
+ネイティブ復号も実測した。Chrome 155 は JPEG XL を開けるが、今回の 16 bit 線形グレー標高では createImageBitmap → Canvas の rgba-unorm8 / rgba-float16 とも約 256 段階に減少。最大標高幅を持つ L12 タイルで、基準の djxl 復号に対する追加誤差は最大約 10.4 m、RMSE 約 3.94 m。ImageDecoder の出力も BGRX（8 bit/ch）だった。Edge 155 は同じ画像を開けなかった。これは検証した環境と経路の結果であり、全ブラウザーや将来版の制約を断定するものではない。画像形式の対応だけで標高の精度保持を判断しない。
+
+WASM 経路は同じ最大標高幅タイルで基準との差が最大 1 コード値。槍ヶ岳周辺のブラウザー検証では 1,376,256 点で従来 PNG 経路との差が最大 0.0467 m、SQLite の読み出し量は約 8.0 MB。元 DB は約 208 MB であり、全体を展開していない。JPEG XL の既存圧縮誤差とは別の、デコーダー間の差の測定。SQLite 表示中にサーバーの標高データを取得しないこと、配信データへの復帰を検証した。
+
+検証手順: `python tools/terrain/prepare_jxl_probe.py` → `node tools/terrain/probe_native_jxl.cjs`（`TERRAIN_BROWSER=msedge` でも比較）。結果は `build/native-jxl-probe/browser.json`。`python tools/terrain/compare_jxl_probe.py` で追加誤差を集計する。直接表示は `node tools/terrain/test_height_sqlite_file.cjs`。検証先は `TERRAIN_TEST_URL` で指定できる。依存物とライセンスは [一覧](tools/terrain/vendor/sqlite-height-dependencies.md) を参照。
