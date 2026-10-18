@@ -96,3 +96,7 @@ JPEG XL の 16 bit 標高をブラウザーで直接復号する代わりに、`
 各マスの対角線は、元ハイトマップの中央標高をよりよく再現する向きを選ぶ。同程度なら勾配差と交互の向きで固定方向への偏りを抑える。陰影は周囲の標高の差から法線を計算して補間し、タイル境界では法線の勾配も共有する。保存する法線マップや地形データの再生成は不要。`node tools/terrain/test_height_mesh.cjs`、`node tools/terrain/test_height_boundaries.cjs`、`node tools/terrain/test_height_smooth_shading.cjs` で確認する。
 
 「陰影の強さ」は 0〜8 倍で、法線の水平成分だけを強める。高さ倍率を上げたときのような明暗差を、地形形状を変えずに調整できる。既定は 1 倍。レベル切替・移動後も保持し、URL の `shading=4` でも指定できる。確認は `node tools/terrain/test_height_shading_strength.cjs`。
+
+太陽は「日時（JST）」と手動の方角・高さを切り替えられる。日時の変更、前後 1 時間、現在時刻のボタンに対応し、各地点の緯度・経度から個別に光源を計算する。日本の東西の差を反映し、太陽が地平線下では直射光を消す。日時は URL の `sunDateTime=2026-06-21T12:00`、手動は `sunMode=manual` で指定できる。地形同士が落とす影を新たに計算する機能ではなく、面の陰影を太陽位置に合わせる機能。
+
+「滑らかな陰影」を OFF にすると三角形の面法線で描画する。レベル変更・移動でも状態を保持し、URL の `smooth=0` でも OFF にできる。形状の対角線選択と境界標高の共有はどちらの陰影でも有効。検証は `node tools/terrain/test_national_height_solar.cjs`。
