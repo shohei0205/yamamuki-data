@@ -18,6 +18,6 @@ AGENTS.override.md
 /points/gsi-peaks/gsi-peaks.json
 
 # 地形生成のローカル環境と生成物
-/tools/terrain-rs/target/
+/terrain/tools/terrain-rs/target/
 /terrain/build/
 /terrain/dist/

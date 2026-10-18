@@ -10,11 +10,11 @@
 - 河川は水面ポリゴンの形状で表示し、川幅を持たない中心線は描かない。画面上で約 0.5 描画ピクセル未満になる水面を近似判定で除く。
 - 海岸と河川・湖沼は、それぞれ自動／z10／z11／z12 を選択できる。河川は北海道などに未収録範囲がある。
 
-検証経緯と制約は [調査メモ](../tools/terrain/RESEARCH.md)、過去の実行手順は [試作の作業記録](../tools/terrain/README.md) にまとめている。作業記録には元の作業環境のパスや、終了した方式の記述も含まれる。
+検証経緯と制約は [調査メモ](tools/terrain/RESEARCH.md)、過去の実行手順は [試作の作業記録](tools/terrain/README.md) にまとめている。作業記録には元の作業環境のパスや、終了した方式の記述も含まれる。
 
 ## 配置
 
-既存スクリプトの `tools/` と `build/` の相対パスを保つため、コードはリポジトリ直下の `tools/terrain/` と `tools/terrain-rs/` に置く。
+地形関連のコードと作業ファイルは `terrain/` 以下に置く。この文書のコマンドは、リポジトリ直下から `cd terrain` した後に実行する。`tools/` と `build/` はいずれも `terrain/` からの相対パス。
 
 | 場所 | 内容 |
 |---|---|
@@ -29,6 +29,7 @@
 Python 3 と、使う処理に応じた依存パッケージが必要。
 
 ```powershell
+cd terrain
 python -m venv build/terrain-venv
 build/terrain-venv/Scripts/python.exe -m pip install -r tools/terrain/requirements.txt
 build/terrain-venv/Scripts/python.exe -m pip install -r tools/terrain/requirements-overlays.txt
@@ -62,3 +63,7 @@ node tools/terrain/test_tokyo_water.cjs
 Python テストは 117 件中 110 件が成功。残る 7 件は、動的 JPEG XL の比較用法線データがない 3 件、既定の陰影画像がない 1 件、検証用 Ruby がない 2 件、サンドボックスのローカル通信制限による 1 件。必要なローカル資材を用意して再実行する必要がある。
 
 東京湾のブラウザー確認は移行元の生成済みデータとサーバーで実施済み。L4 / L7、傾き 0° / 55°、海岸と河川の異なるレベル指定、自動への復帰、地域表示で WebGL エラーがないことを確認した。移行先には生成物を含めていないため、そのままではこのブラウザーテストを実行できない。
+
+配置変更後も、スクリプトが求める作業ルートは `terrain/`。元の作業環境から生成済みデータを使う場合は `terrain/build/` に用意する。リポジトリ直下の `build/` は参照しない。
+
+配置変更後、ローカル通信を許可して SQLite 中継のテスト 5 件を再実行し、すべて成功した。比較用データ・Ruby が必要な 6 件は未解消。
