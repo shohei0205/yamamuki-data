@@ -1,0 +1,55 @@
+name: 山頂：0.5.0 向けの公開を終える
+
+# 0.5.0 が読む peaks/manifest.json だけを {"schemaVersion": 999} に置き換える。
+# 0.5.0 は読めない形式の版を見ると「アプリを更新してください」と表示する。ファイルを消すと通信の失敗に見えるため、消さずに置き換える。
+# ほかのファイルは今の Pages のカタログから引き継ぎ、配置の前後で今の Pages と比べた一覧をログに出す。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  retire:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: publish-data-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      PYTHONUNBUFFERED: '1'
+      GH_REPO: ${{ github.repository }}
+      PAGES_DIRECTORY: ${{ github.workspace }}/build/pages
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Pages の設定を確認
+        uses: actions/configure-pages@v5
+      - name: peaks/manifest.json だけを置き換えたサイトを作る
+        run: python -m release_tools.release_data retire-legacy
+      - name: 配置の前に、今の Pages と比べる
+        # 変わってよいのは置き換えるファイルと、manifest を一覧にした catalog.json だけ。
+        run: >-
+          python -m release_tools.release_data compare-pages --directory "$PAGES_DIRECTORY"
+          --allow peaks/manifest.json --allow catalog.json
+      - name: 置き換えたサイトを保存
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/pages
+      - name: Pages に配置
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: 配置したカタログと公開履歴を確認
+        run: python -m release_tools.release_data verify-pages --directory "$PAGES_DIRECTORY"
+      - name: 配置のあとに、すべてのファイルが置いたとおりか確かめる
+        run: python -m release_tools.release_data compare-pages --directory "$PAGES_DIRECTORY" --attempts 12

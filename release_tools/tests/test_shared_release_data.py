@@ -1,5 +1,6 @@
 """共通の公開処理が OSM の公開モジュールに依存しないことを確かめる。"""
 
+import json
 import subprocess
 import sys
 import os
@@ -33,6 +34,7 @@ class SharedReleaseDataTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("verify-pages", result.stdout)
         self.assertIn("remove-dataset", result.stdout)
+        self.assertIn("retire-legacy", result.stdout)
 
     def test_any_dataset_verifies_every_attachment_before_publication(self):
         for corrupt in (False, True):
@@ -71,3 +73,52 @@ class SharedReleaseDataTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     release_data.create_verified_release("custom-v1", directory, ("manifest.json",), directory / "notes.md", "任意のデータ", "stable")
                 self.assertEqual(1, calls.call_count)
+
+    def test_retire_legacy_replaces_only_old_manifest(self):
+        legacy = {"schemaVersion": 4, "version": "peaks-v1", "count": 10}
+        current = {"schemaVersion": 5, "version": "20261007T071401Z-1-1", "downloadUrl": "https://example.com/osm-peaks.json.gz"}
+        history = [{"kind": "snapshot", "version": "peaks-v1", "publishedAt": None,
+                    "releaseUrl": "https://example.com/r", "downloadUrl": "https://example.com/d", "actionsRunUrl": None}]
+        catalog = release_data.Catalog({"peaks/manifest.json": legacy, "points/osm-peaks/manifest.json": current},
+                                       {"peaks/history.json": history})
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder) / "pages"
+            with patch.dict(os.environ, PAGES_DIRECTORY=str(directory), GITHUB_ACTIONS="false"), \
+                    patch.object(release_data, "read_catalog", return_value=catalog), \
+                    patch.object(release_data, "pages_url", return_value="https://example.com"):
+                release_data.retire_legacy_manifest()
+            self.assertEqual({"schemaVersion": 999}, json.loads((directory / "peaks/manifest.json").read_text(encoding="utf-8")))
+            self.assertEqual(current, json.loads((directory / "points/osm-peaks/manifest.json").read_text(encoding="utf-8")))
+            self.assertEqual(history, json.loads((directory / "peaks/history.json").read_text(encoding="utf-8"))["entries"])
+            site = json.loads((directory / "catalog.json").read_text(encoding="utf-8"))
+            self.assertEqual({"schemaVersion": 999}, site["manifests"]["peaks/manifest.json"])
+        # 元のカタログは書き換えない。
+        self.assertEqual(legacy, catalog["peaks/manifest.json"])
+
+    def test_retire_legacy_stops_when_missing_or_already_retired(self):
+        for manifests, message in (({}, "ありません"), ({"peaks/manifest.json": {"schemaVersion": 999}}, "置き換え済み")):
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as folder, \
+                    patch.dict(os.environ, PAGES_DIRECTORY=str(Path(folder) / "pages"), GITHUB_ACTIONS="false"), \
+                    patch.object(release_data, "read_catalog", return_value=release_data.Catalog(manifests)):
+                with self.assertRaisesRegex(ValueError, message):
+                    release_data.retire_legacy_manifest()
+                self.assertFalse((Path(folder) / "pages").exists())
+
+    def test_retire_legacy_runs_only_from_main(self):
+        with patch.dict(os.environ, GITHUB_ACTIONS="true", GITHUB_REF="refs/heads/dev"), \
+                patch.object(release_data, "read_catalog") as read:
+            with self.assertRaisesRegex(ValueError, "main"):
+                release_data.retire_legacy_manifest()
+            read.assert_not_called()
+
+    def test_compare_pages_allows_only_listed_changes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            (directory / "peaks").mkdir()
+            (directory / "peaks/manifest.json").write_text('{"schemaVersion": 999}', encoding="utf-8")
+            (directory / "catalog.json").write_text('{"a": 1}', encoding="utf-8")
+            live = {"peaks/manifest.json": {"schemaVersion": 4}, "catalog.json": {"a": 1}}
+            with patch.object(release_data, "read_pages_file", side_effect=live.get):
+                release_data.compare_pages(directory, ["peaks/manifest.json"])
+                with self.assertRaisesRegex(ValueError, "peaks/manifest.json"):
+                    release_data.compare_pages(directory)
