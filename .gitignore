@@ -16,3 +16,8 @@ AGENTS.override.md
 
 # オリジナルと補足から配布時に生成する。
 /points/gsi-peaks/gsi-peaks.json
+
+# 地形生成のローカル環境と生成物
+/tools/terrain-rs/target/
+/terrain/build/
+/terrain/dist/

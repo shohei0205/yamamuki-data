@@ -1,0 +1,32 @@
+// 手動固定・自動への復帰・保存・広域エラーからの復帰を実データで確認する。
+const assert=require('node:assert/strict');
+const {chromium}=require('playwright');
+(async()=>{const browser=await chromium.launch({headless:true,channel:'msedge'});
+try{const page=await browser.newPage({viewport:{width:1000,height:800}});const errors=[];
+page.on('pageerror',e=>errors.push(e.message));
+await page.addInitScript(()=>localStorage.setItem('terrain-preview-occludeLayers','false'));
+await page.goto('http://127.0.0.1:61434/terrain?lat=36.32155&lon=137.6476&size=30&levelMode=auto',{timeout:60000});
+async function loaded(z,mode){await page.waitForFunction(({z,mode})=>data.coverage.zoom===z&&data.coverage.levelMode===mode&&!lodBusy,{z,mode},{timeout:60000});}
+await page.selectOption('#terrainLevel','11');await loaded(11,'manual');
+assert.deepEqual(await page.evaluate(()=>Object.keys(data.coverage.levels)),['11']);
+await page.evaluate(()=>{window.originalCanvas=canvas;document.getElementById('tilt').value=80;document.getElementById('tilt').dispatchEvent(new Event('input'));});
+await page.waitForTimeout(600);await loaded(11,'manual');assert.equal(await page.evaluate(()=>data.coverage.viewLOD),null);
+await page.evaluate(()=>{const e=document.getElementById('zoom');e.value=Number(e.value)*2;e.dispatchEvent(new Event('input'));});
+await page.waitForTimeout(1000);await loaded(11,'manual');
+await page.selectOption('#terrainLevel','4');await loaded(4,'manual');
+assert.equal(await page.evaluate(()=>canvas===window.originalCanvas),true);
+await page.evaluate(()=>{document.getElementById('tilt').value=0;draw();});
+await page.selectOption('#terrainLevel','auto');
+await page.waitForFunction(()=>data.coverage.levelMode==='auto'&&data.coverage.zoom!==4&&!lodBusy,null,{timeout:60000});
+await page.selectOption('#terrainLevel','9');await loaded(9,'manual');await page.reload({timeout:60000});await loaded(9,'manual');
+assert.equal(await page.inputValue('#terrainLevel'),'9');assert.equal(await page.evaluate(()=>localStorage.getItem('terrain-preview-level')),'9');
+await page.goto('http://127.0.0.1:61434/terrain?lat=35.4&lon=138.73&size=3600&levelMode=auto',{timeout:60000});
+await page.selectOption('#terrainLevel','14');
+await page.waitForFunction(()=>document.getElementById('lodStatus').textContent.includes('拡大')&&!lodBusy,null,{timeout:60000});
+assert.equal(await page.evaluate(()=>data.coverage.zoom),4);
+await page.evaluate(()=>{document.getElementById('zoom').value=1000;document.getElementById('zoom').dispatchEvent(new Event('input'));});
+await loaded(14,'manual');assert.deepEqual(await page.evaluate(()=>Object.keys(data.coverage.levels)),['14']);
+assert.equal(await page.evaluate(()=>gl.getError()),0);assert.deepEqual(errors,[]);
+await page.screenshot({path:'build/terrain-national/manual-level-viewer.png'});
+console.log('手動固定、拡大・傾き変更、自動復帰、再読み込み、広域エラーからの復帰を確認しました。');
+}finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1;});

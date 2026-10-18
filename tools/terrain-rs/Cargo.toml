@@ -1,0 +1,29 @@
+[package]
+name = "terrain-generator"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+flate2 = "1"
+lzma-rust2 = "0.22"
+rusqlite = { version = "0.37", features = ["bundled"] }
+libloading = "0.8"
+rayon = "1"
+rstar = "0.12"
+delaunator = "1"
+earcutr = "0.5"
+meshopt = "0.7"
+png = "0.18"
+zstd = "0.13"
+
+[[bin]]
+name = "terrain-codec-bench"
+path = "src/codec_bench.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

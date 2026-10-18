@@ -1,0 +1,977 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>実 DEM の地形ワイヤーフレーム</title>
+<style>
+body{margin:0;background:#f7f7f3;color:#26352b;font:14px system-ui,sans-serif}header{padding:12px 18px;background:#fff;border-bottom:1px solid #ddd}h1{font-size:18px;margin:0 0 8px}label{display:inline-block;margin:4px 12px 4px 0}canvas{display:block;width:100%;height:75vh}footer{padding:8px 18px}input[type=range]{width:110px;vertical-align:middle}select,button{font:inherit;padding:3px}#error{color:#b00}
+#dataSize{position:fixed;right:8px;bottom:8px;z-index:5;background:#ffffffed;color:#26352b;padding:7px 10px;border:1px solid #cbd2cc;border-radius:5px;font-size:12px;font-variant-numeric:tabular-nums;pointer-events:none;max-width:calc(100vw - 38px)}
+</style>
+<header>
+<h1>実 DEM の地形ワイヤーフレーム（試作）</h1>
+<label>表示 <select id="method"><option value="wireframe">地形ワイヤーフレーム</option><option value="shaded">陰影のみ（格子なし）</option><option value="watershed">尾根抽出の比較：流域境界</option><option value="inverse-flow">尾根抽出の比較：反転流路</option></select></label>
+<label>回転 <input id="bearing" type="range" min="0" max="360" value="0"></label>
+<label>傾き <input id="tilt" type="range" min="0" max="90" value="55"></label>
+<label>拡大 <input id="zoom" type="range" min="0.5" max="4" step="0.1" value="1"></label>
+<label>地形の細かさ <select id="spacing"><option value="1">細かい</option><option value="2">やや細かい</option><option value="4" selected>標準</option><option value="8">粗い</option></select> <output id="spacingValue"></output></label>
+<label><input id="diagonal" type="checkbox" checked>対角線も描く</label>
+<label><input id="shading" type="checkbox" checked>地形に陰影をつける</label>
+<label><input id="smooth" type="checkbox" checked>滑らかな陰影</label>
+<label>光の向き <input id="light" type="range" min="0" max="360" value="315"> <output id="lightValue">315°</output></label>
+<label>光の高さ <input id="sunHeight" type="range" min="5" max="80" value="30"> <output id="sunHeightValue">30°</output></label>
+<label><input id="castShadow" type="checkbox" checked>地形が落とす影</label>
+<label>陰影の強さ <input id="strength" type="range" min="0" max="1" step="0.05" value="0.85"></label>
+<label>線の最小長 <input id="length" type="range" min="0" max="2000" step="50" value="0"> <output id="lengthValue">0 m</output></label>
+<label><input id="hidden" type="checkbox" checked>地形に隠れる線を消す</label>
+<p>DEM の標高から尾根・鞍部・斜面を透視投影で描きます。真上からでも高い場所ほど大きく見えます。斜面の明暗に加え、読み込んだ地形が日光を遮る影を描きます。範囲外の山が落とす影は含みません。光の向きは北が 0°、東が 90°です。標高は誇張していません。欠損部分には線や面を作りません。山頂アイコンと山名の統合、端末の性能評価は未実施です。</p>
+<div id="stats"></div><div id="error"></div>
+</header>
+<section id="layerControls" hidden style="padding:8px 18px;background:white">
+<label>地形レベル <select id="terrainLevel"><option value="auto">自動</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option><option value="13">13</option><option value="14">14</option></select></label>
+<label><input id="peakNames" type="checkbox" checked>山頂名</label>
+<label><input id="terrainLayer" type="checkbox" checked> 地形</label>
+<label id="normalMapLabel"><input id="normalMap" type="checkbox" checked> 法線マップ</label>
+<label><input id="waterLayer" type="checkbox" checked> 水域（水色）</label>
+<label><input id="trailLayer" type="checkbox" checked> 登山道・徒歩道（橙）</label>
+<label><input id="boundaryLayer" type="checkbox" checked> 都道府県境（紫）</label>
+<label><input id="occludeLayers" type="checkbox" checked> 地形による遮蔽</label>
+<label><input id="fullscreenLayer" type="checkbox"> 全画面</label>
+<button id="resetView" type="button">視点を戻す</button>
+<small id="lodStatus" role="status"></small>
+<small>ドラッグ：移動 ／ ホイール：拡大・縮小 ／ 右ドラッグ・Shift＋ドラッグ：方角・傾き</small>
+<p id="layerStatus"></p>
+</section>
+<div id="fullscreenCredit" style="display:none">地理院タイル・国土地理院最適化ベクトルタイルを加工して作成 ／ © OpenStreetMap contributors</div>
+<canvas id="canvas"></canvas>
+<canvas id="peakLabels" style="position:fixed;pointer-events:none;z-index:1"></canvas>
+<footer id="credit"></footer>
+<output id="dataSize" title="本文のサイズ。通信ヘッダー・GPU バッファー・キャッシュの使用量は含みません。">表示データ：読み込み待ち</output>
+<script>
+"use strict";
+const data = /*DATA*/;
+const transferStats={total:0,unknown:0,pending:new Map(),sequence:0};
+function formatDataBytes(bytes){
+  if(bytes<1024)return `${bytes.toLocaleString('ja-JP')} B`;
+  if(bytes<1024**2)return `${(bytes/1024).toFixed(1)} KiB`;
+  return `${(bytes/1024**2).toFixed(2)} MiB`;
+}
+function updateDataSize(){
+  const current=data.transferSize;
+  const shown=current?`表示データ：${current.compressed===null?'不明':formatDataBytes(current.compressed)}（${current.source==='sqlite'?'保存形式':'gzip'}） ／ ${formatDataBytes(current.decoded)}（${current.source==='sqlite'?'描画用配列':'展開後'}）`:'表示データ：読み込み待ち';
+  const base=data.nationalBaseSize&&!data.coverage?.overviewFallback?` ／ 常駐レベル ${data.nationalBaseSize.level||4}：${formatDataBytes(data.nationalBaseSize.compressed)}`:'';
+  const total=`累計取得：${formatDataBytes(transferStats.total)}${transferStats.unknown?'＋サイズ不明分':''}`;
+  const pending=[...transferStats.pending.values()];
+  const loading=pending.length?` ／ 取得中 ${pending.length} 件：${formatDataBytes(pending.reduce((sum,item)=>sum+item.received,0))}（${data.sqliteRelay?'受信本文':'展開後'}）`:'';
+  const phases=pending.map(item=>{
+    const elapsed=((performance.now()-item.started)/1000).toFixed(1);
+    const phase=item.phase==='waiting'?(data.sqliteRelay?'SQLite 応答待ち':'サーバー処理待ち'):item.phase==='receiving'?'受信中':'ブラウザーで処理中';
+    const expected=item.compressed===null?'':` ／ 取得予定 ${formatDataBytes(item.compressed)}（${data.sqliteRelay?'保存形式':'gzip'}）`;
+    return `${item.label}：${phase} ${elapsed} 秒${item.detail?' ／ '+item.detail:''}${expected}`;
+  });
+  document.getElementById('dataSize').textContent=shown+base+' ／ '+total+loading+(phases.length?' ／ '+phases.join(' ／ '):'');
+}
+async function fetchTerrain(url){
+  if(data.sqliteRelay)return terrainClient.load(url);
+  const transferID=++transferStats.sequence;
+  const query=new URL(url,location.href).searchParams;
+  const transfer={received:0,started:performance.now(),phase:'waiting',compressed:null,label:query.get('stage')==='full'?'追加レイヤー':`地形${query.has('z')?' 縮尺 '+query.get('z'):''}`};
+  transferStats.pending.set(transferID,transfer);updateDataSize();
+  // 応答が届く前も経過時間を更新し、受信停止とサーバー処理待ちを区別する。
+  const progressTimer=setInterval(updateDataSize,250);
+  try{
+  const response=await fetch(url,{signal:AbortSignal.timeout(120000)});
+  if(!response.ok){let detail;try{detail=await response.json();}catch{}throw Error(detail?.error||'地形を読み込めませんでした');}
+  transfer.phase='receiving';
+  const contentLength=response.headers.get('content-length');
+  transfer.compressed=contentLength!==null&&Number.isSafeInteger(Number(contentLength))&&Number(contentLength)>=0?Number(contentLength):null;
+  updateDataSize();
+  const chunks=[];let received=0;
+  const reader=response.body.getReader();
+  for(;;){
+    const {done,value}=await reader.read();if(done)break;
+    chunks.push(value);received+=value.byteLength;
+    transfer.received=received;updateDataSize();
+  }
+  transfer.phase='decoding';updateDataSize();
+  const joined=new Uint8Array(received);let cursor=0;
+  for(const chunk of chunks){joined.set(chunk,cursor);cursor+=chunk.byteLength;}
+  const bytes=joined.buffer,view=new DataView(bytes);
+  const length=response.headers.get('content-length');
+  const compressed=length!==null&&Number.isSafeInteger(Number(length))&&Number(length)>=0?Number(length):null;
+  if(compressed===null)transferStats.unknown++;else transferStats.total+=compressed;
+  if(bytes.byteLength<8||view.getUint32(0,true)!==0x31425459)throw Error('地形データの形式が不正です');
+  const headerSize=view.getUint32(4,true);
+  if(headerSize%4||headerSize>bytes.byteLength-8)throw Error('地形データの長さが不正です');
+  const header=JSON.parse(new TextDecoder().decode(new Uint8Array(bytes,8,headerSize)));
+  let offset=8+headerSize;
+  for(const item of header.arrays){
+    if(!Number.isSafeInteger(item.count)||item.count<0||offset+item.count*4>bytes.byteLength)throw Error('地形配列の長さが不正です');
+    const Type=item.type==='<f4'?Float32Array:item.type==='<u4'?Uint32Array:null;
+    if(!Type)throw Error('地形配列の型が不正です');
+    let values=new Type(bytes,offset,item.count);offset+=item.count*4;
+    if(item.path[0]==='mesh'){
+      if(values.length%3)throw Error('頂点数が不正です');
+      values=Array.from({length:values.length/3},(_,i)=>Array.from(values.subarray(i*3,i*3+3)));
+    }
+    let target=header.metadata;
+    for(const key of item.path.slice(0,-1))target=target[key];
+    target[item.path.at(-1)]=values;
+  }
+  if(offset!==bytes.byteLength)throw Error('地形データの末尾が不正です');
+  header.metadata.transferSize={compressed,decoded:bytes.byteLength};
+  return header.metadata;
+  }finally{clearInterval(progressTimer);transferStats.pending.delete(transferID);updateDataSize();}
+}
+async function restoreTerrain(field){
+  if(field.encoding!=="gzip-float32-le-base64")throw Error("Unknown height encoding");
+  const packed=Uint8Array.from(atob(field.values),c=>c.charCodeAt(0));
+  const stream=new Blob([packed]).stream().pipeThrough(new DecompressionStream("gzip"));
+  const bytes=await new Response(stream).arrayBuffer();
+  const [height,width]=field.shape;
+  if(bytes.byteLength!==height*width*4)throw Error("Invalid heightfield size");
+  const view=new DataView(bytes),heights=new Float32Array(height*width);
+  for(let i=0;i<heights.length;i++)heights[i]=view.getFloat32(i*4,true);
+  const rows=[],columns=[];
+  for(let r=0;r<height-1;r+=field.step)rows.push(r);rows.push(height-1);
+  for(let c=0;c<width-1;c+=field.step)columns.push(c);columns.push(width-1);
+  const size=256*2**field.zoom,R=6378137,[lon,lat,z]=field.center;
+  const mesh=[];
+  for(const row of rows)for(const column of columns){
+    const offset=field.sampleOffsetPixels||0;
+    const x=field.originPixel[0]+column+offset,y=field.originPixel[1]+row+offset;
+    const longitude=x/size*360-180;
+    const latitude=Math.atan(Math.sinh(Math.PI*(1-2*y/size)))*180/Math.PI;
+    const h=heights[row*width+column];
+    mesh.push(Number.isFinite(h)?[(longitude-lon)*Math.PI/180*R*Math.cos(lat*Math.PI/180),(latitude-lat)*Math.PI/180*R,h-z]:[0,0,0]);
+  }
+  const indices=[];
+  for(let r=0;r<rows.length-1;r++)for(let c=0;c<columns.length-1;c++){
+    let valid=true;
+    // 間引いた頂点の間に欠損があれば、その区画全体を描かない。
+    for(let y=rows[r];y<=rows[r+1]&&valid;y++)for(let x=columns[c];x<=columns[c+1];x++)if(!Number.isFinite(heights[y*width+x])){valid=false;break;}
+    if(!valid)continue;
+    const a=r*columns.length+c,b=a+1,d=a+columns.length,e=d+1;
+    indices.push(a,d,b,b,d,e);
+  }
+  return {mesh,indices,meshShape:[rows.length,columns.length]};
+}
+const terrainReady=data.bootstrap?fetchTerrain(data.bootstrap).then(result=>{Object.assign(data,result);return result.polygon?result:restoreTerrain(result.heightfield);}):data.polygon?Promise.resolve({mesh:data.mesh,indices:data.indices}):restoreTerrain(data.heightfield);
+terrainReady.then(async result=>{
+  if(document.readyState==='loading')await new Promise(resolve=>document.addEventListener('DOMContentLoaded',resolve,{once:true}));
+  Object.assign(data,result);updateDataSize();
+  const renderer=document.createElement("script");
+  renderer.textContent=document.getElementById("renderer").textContent;
+  document.body.appendChild(renderer);
+}).catch(error=>{document.getElementById("error").textContent="地形データを読み込めません: "+error.message;});
+</script>
+<script id="renderer" type="text/plain">
+"use strict";
+document.getElementById("credit").textContent="地理院タイル（標高タイル）を加工して山むきが作成 ／ https://maps.gsi.go.jp/development/demtile.html ／ © OpenStreetMap contributors";
+const canvas=document.getElementById("canvas");
+const gl=canvas.getContext("webgl2",{antialias:true,preserveDrawingBuffer:true});
+if(!gl){document.getElementById("error").textContent="このプレビューには WebGL 2 が必要です。";throw Error("WebGL 2 unavailable");}
+function shader(type,source){const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s;}
+const program=gl.createProgram();
+gl.attachShader(program,shader(gl.VERTEX_SHADER,`#version 300 es
+in vec3 position;
+in vec3 vertexNormal;
+out vec3 terrainPosition;
+out vec3 interpolatedNormal;
+uniform float bearing,tilt,focalLength,aspect,cameraDistance,nearPlane,farPlane;
+uniform vec2 viewPan;
+uniform vec3 viewCenter;
+void main(){
+  terrainPosition=position;
+  interpolatedNormal=vertexNormal;
+  vec3 relative=position-viewCenter;
+  float x=cos(bearing)*relative.x-sin(bearing)*relative.y;
+  float y=sin(bearing)*relative.x+cos(bearing)*relative.y;
+  float vertical=cos(tilt)*y+sin(tilt)*relative.z;
+  float depth=sin(tilt)*y-cos(tilt)*relative.z;
+  // カメラまでの距離を w に入れ、標高・奥行きによる遠近を GPU の除算で表す。
+  float distance=cameraDistance+depth;
+  float projectedDepth=((farPlane+nearPlane)*distance-2.0*farPlane*nearPlane)/(farPlane-nearPlane);
+  gl_Position=vec4(x*focalLength/aspect+viewPan.x*distance,vertical*focalLength+viewPan.y*distance,projectedDepth,distance);
+}`));
+gl.attachShader(program,shader(gl.FRAGMENT_SHADER,`#version 300 es
+precision highp float;
+in vec3 terrainPosition;
+in vec3 interpolatedNormal;
+uniform vec4 color;
+uniform bool shaded;
+uniform bool smoothShading;
+uniform vec3 lightDirection;
+uniform float shadeStrength;
+uniform bool castShadow;
+uniform sampler2D shadowMap;
+uniform vec3 shadowRight,shadowUp,shadowCenter;
+uniform float shadowRadius;
+uniform float shadowBiasMeters;
+uniform bool coarsePass;
+uniform bool useNormalMap;
+uniform highp sampler2DArray normalAtlas;
+uniform vec2 normalKeys[4];
+uniform int normalTileCount;
+uniform sampler2D detailCoverage;
+uniform vec4 detailGrid;
+uniform vec3 coarseReference;
+uniform float detailZoom,detailOffset;
+float sunlight(vec3 normal){
+  vec3 relative=terrainPosition-shadowCenter;
+  vec3 p=vec3(dot(relative,shadowRight),dot(relative,shadowUp),-dot(relative,lightDirection))/shadowRadius*0.5+0.5;
+  if(any(lessThan(p,vec3(0.0)))||any(greaterThan(p,vec3(1.0))))return 1.0;
+  // 影の各画素の中心まで、実際の三角形の奥行きを補間する。
+  // 滑らかな陰影用法線と面の向きの差で、自分自身に点状の影を落とさないようにする。
+  vec3 dx=dFdx(p),dy=dFdy(p);
+  float determinant=dx.x*dy.y-dx.y*dy.x;
+  vec2 gradient=abs(determinant)>1e-14?vec2(dx.z*dy.y-dy.z*dx.y,dx.x*dy.z-dy.x*dx.z)/determinant:vec2(0.0);
+  vec2 texel=1.0/vec2(textureSize(shadowMap,0));
+  // 隣の面が同じ影の画素に入る場合も、斜面を自己影と誤判定しにくくする。
+  float bias=shadowBiasMeters/(2.0*shadowRadius)+0.00006+max(texel.x,texel.y)*(0.25+0.75*(1.0-abs(dot(normal,lightDirection))));
+  float visible=0.0,totalWeight=0.0;
+  for(int y=-2;y<=2;y++)for(int x=-2;x<=2;x++){
+    vec2 uv=(floor(p.xy/texel)+vec2(float(x),float(y))+0.5)*texel;
+    // 面の端で外挿した奥行きが隣の斜面より後ろへ飛ぶのを抑える。
+    float receiver=p.z+min(dot(gradient,uv-p.xy),0.0)-bias;
+    float weight=float((3-abs(x))*(3-abs(y)));
+    visible+=(receiver<=texture(shadowMap,uv).r?1.0:0.0)*weight;
+    totalWeight+=weight;
+  }
+  return visible/totalWeight;
+}
+vec3 mappedNormal(vec3 fallback){
+  float longitude=coarseReference.x+terrainPosition.x/(111319.49079327358*coarseReference.z);
+  float latitude=coarseReference.y+terrainPosition.y/111319.49079327358;
+  vec2 tile=vec2((longitude+180.0)/360.0,(1.0-log(tan(0.7853981633974483+radians(latitude)*0.5))/3.141592653589793)*0.5)*16.0;
+  for(int i=0;i<4;i++){
+    if(i>=normalTileCount)break;
+    if(all(equal(floor(tile),normalKeys[i]))){
+      vec2 xy=texture(normalAtlas,vec3(fract(tile),float(i))).rg*2.0-1.0;
+      return normalize(vec3(xy,sqrt(max(0.0001,1.0-dot(xy,xy)))));
+    }
+  }
+  return fallback;
+}
+out vec4 outputColor;
+void main(){
+  if(coarsePass){
+    float longitude=coarseReference.x+terrainPosition.x/(111319.49079327358*coarseReference.z);
+    float latitude=coarseReference.y+terrainPosition.y/111319.49079327358;
+    vec2 tile=vec2((longitude+180.0)/360.0,(1.0-log(tan(0.7853981633974483+radians(latitude)*0.5))/3.141592653589793)*0.5)*exp2(detailZoom)-vec2(detailOffset/256.0);
+    ivec2 cell=ivec2(floor(tile)-detailGrid.xy);
+    if(all(greaterThanEqual(cell,ivec2(0)))&&all(lessThan(cell,ivec2(detailGrid.zw)))&&texelFetch(detailCoverage,cell,0).r>0.5)discard;
+  }
+  float illumination=1.0;
+  if(shaded){
+    vec3 faceNormal=normalize(cross(dFdx(terrainPosition),dFdy(terrainPosition)));
+    if(faceNormal.z<0.0)faceNormal=-faceNormal;
+    vec3 normal=faceNormal;
+    if(smoothShading){
+      // 面ごとの法線へ戻すと三角形の境界が現れるため、頂点法線を連続して補間する。
+      normal=normalize(interpolatedNormal);
+    }
+    if(normal.z<0.0)normal=-normal;
+    if(useNormalMap)normal=mappedNormal(normal);
+    float diffuse=max(dot(normal,lightDirection),0.0)*(castShadow?sunlight(normal):1.0);
+    illumination=mix(1.0,0.45+0.55*diffuse,shadeStrength);
+  }
+  outputColor=vec4(color.rgb*illumination,color.a);
+}`));
+gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(program));
+gl.useProgram(program);
+const position=gl.getAttribLocation(program,"position");
+const normalAttribute=gl.getAttribLocation(program,"vertexNormal");
+const uniforms=Object.fromEntries(["bearing","tilt","focalLength","aspect","cameraDistance","nearPlane","farPlane","viewPan","viewCenter","color","shaded","smoothShading","lightDirection","shadeStrength","castShadow","shadowMap","shadowRight","shadowUp","shadowRadius","shadowCenter","shadowBiasMeters","coarsePass","useNormalMap","normalAtlas","normalTileCount","detailCoverage","detailGrid","coarseReference","detailZoom","detailOffset"].map(n=>[n,gl.getUniformLocation(program,n)]));
+const viewPan=[0,0];
+const viewCenter=[0,0,0],shadowCenter=[0,0,0];
+const dynamicLOD=!!data.dynamicLOD&&location.protocol.startsWith('http');
+const referenceCenter=data.projectionCenter?[...data.projectionCenter]:null;
+const baseSpan=data.span;
+if(dynamicLOD&&referenceCenter){
+  viewCenter[0]=(data.coverage.longitude-referenceCenter[0])*Math.PI/180*6378137*Math.cos(referenceCenter[1]*Math.PI/180);
+  viewCenter[1]=(data.coverage.latitude-referenceCenter[1])*Math.PI/180*6378137;
+  viewCenter[2]=data.initialViewHeight||0;
+}
+function buffer(values,target=gl.ARRAY_BUFFER,Type=Float32Array){const b=gl.createBuffer();gl.bindBuffer(target,b);gl.bufferData(target,new Type(values),gl.STATIC_DRAW);return b;}
+function vertices(b){gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,3,gl.FLOAT,false,0,0);}
+let terrain=buffer(data.mesh.flat());
+let triangles=buffer(data.indices,gl.ELEMENT_ARRAY_BUFFER,Uint32Array);
+let normalCacheMesh=null,normalCache=new WeakMap();
+function terrainNormals(indices){
+  if(normalCacheMesh!==data.mesh){normalCacheMesh=data.mesh;normalCache=new WeakMap();}
+  if(normalCache.has(indices))return normalCache.get(indices);
+  let normals=new Float32Array(data.mesh.length*3);
+  // 隣接する面の法線を面積で重み付けして共有頂点に足す。地形の座標は変えない。
+  for(let i=0;i<indices.length;i+=3){
+    const a=data.mesh[indices[i]],b=data.mesh[indices[i+1]],c=data.mesh[indices[i+2]];
+    const u=b.map((v,j)=>v-a[j]),v=c.map((v,j)=>v-a[j]);
+    const n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
+    if(n[2]<0)for(let j=0;j<3;j++)n[j]=-n[j];
+    for(let k=0;k<3;k++)for(let j=0;j<3;j++)normals[indices[i+k]*3+j]+=n[j];
+  }
+  for(let i=0;i<normals.length;i+=3){
+    const length=Math.hypot(normals[i],normals[i+1],normals[i+2]);
+    if(length)for(let j=0;j<3;j++)normals[i+j]/=length;
+    else normals[i+2]=1;
+  }
+  if(data.polygon){
+    // 適応分割の扇形や標高の丸めが、点・放射状の陰影として目立つのを抑える。
+    // 元の法線の角度差で重みを落とし、急な折れ目を越えた平均化を避ける。
+    const originalNormals=normals;
+    for(let pass=0;pass<2;pass++){
+      const next=new Float32Array(normals.length);
+      for(let i=0;i<normals.length;i++)next[i]=normals[i]*3;
+      for(let i=0;i<indices.length;i+=3){
+        for(let j=0;j<3;j++){
+          const a=indices[i+j],b=indices[i+(j+1)%3],c=indices[i+(j+2)%3];
+          for(const neighbor of [b,c]){
+            const dot=originalNormals[a*3]*originalNormals[neighbor*3]+originalNormals[a*3+1]*originalNormals[neighbor*3+1]+originalNormals[a*3+2]*originalNormals[neighbor*3+2];
+            const t=Math.max(0,Math.min(1,(dot-0.819152)/(0.965926-0.819152)));
+            const weight=0.5*t*t*(3-2*t);
+            for(let axis=0;axis<3;axis++)next[a*3+axis]+=normals[neighbor*3+axis]*weight;
+          }
+        }
+      }
+      for(let i=0;i<next.length;i+=3){
+        const length=Math.hypot(next[i],next[i+1],next[i+2]);
+        if(length)for(let j=0;j<3;j++)next[i+j]/=length;
+      }
+      normals=next;
+    }
+  }
+  normalCache.set(indices,normals);
+  return normals;
+}
+let fullNormals=buffer(terrainNormals(data.indices));
+let landTriangles=data.landIndices?buffer(data.landIndices,gl.ELEMENT_ARRAY_BUFFER,Uint32Array):triangles;
+let landNormals=data.landIndices?buffer(terrainNormals(data.landIndices)):fullNormals;
+// 全国の粗い地形は、詳細地形の差し替えでも GPU 上に残す。
+const overviewTerrain=data.coverage?.overviewFallback?{vertices:terrain,indices:triangles,normals:fullNormals,count:data.indices.length,radius:data.mesh.reduce((r,p)=>Math.max(r,Math.hypot(...p)),1)}:null;
+// 詳細な面の向きを低レベルの面へ貼り、頂点数を増やさず陰影を補う。
+const normalMapTexture=gl.createTexture(),normalMaps=data.normalMaps||[],normalMapCount=normalMaps.length;
+if(normalMapCount>4)throw Error('陰影マップの数が多すぎます');
+const normalMapControl=document.getElementById('normalMap');
+let normalMapPreference=true;
+try{normalMapPreference=localStorage.getItem('terrain-preview-normal-map')!=='off';}catch{}
+const normalMapQuery=new URLSearchParams(location.search).get('normalMap');
+if(normalMapQuery==='0'||normalMapQuery==='1')normalMapPreference=normalMapQuery==='1';
+normalMapControl.checked=!!normalMapCount&&normalMapPreference;
+normalMapControl.disabled=false;
+if(!normalMapCount){const hint=document.createElement('small');hint.textContent='（未収録）';document.getElementById('normalMapLabel').append(hint);}
+document.getElementById('normalMapLabel').title=normalMapCount?'レベル 4 の地形と全国背景の陰影に使います。オフではポリゴンの面の向きだけで陰影を描きます。':'このデータには法線マップが収録されていません。';
+
+gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D_ARRAY,normalMapTexture);
+gl.texParameteri(gl.TEXTURE_2D_ARRAY,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D_ARRAY,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D_ARRAY,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D_ARRAY,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+const normalSize=normalMapCount?normalMaps[0].width:1;
+gl.texImage3D(gl.TEXTURE_2D_ARRAY,0,gl.RG8,normalSize,normalSize,Math.max(1,normalMapCount),0,gl.RG,gl.UNSIGNED_BYTE,null);
+if(normalMapCount){
+  const keys=new Float32Array(8);
+  normalMaps.forEach((map,index)=>{if(map.width!==normalSize||map.height!==normalSize)throw Error('陰影マップの大きさが一致しません');keys[index*2]=map.x;keys[index*2+1]=map.y;gl.texSubImage3D(gl.TEXTURE_2D_ARRAY,0,0,0,index,normalSize,normalSize,1,gl.RG,gl.UNSIGNED_BYTE,map.pixels);});
+  gl.uniform2fv(gl.getUniformLocation(program,'normalKeys[0]'),keys);
+}
+gl.uniform1i(uniforms.normalAtlas,2);gl.uniform1i(uniforms.normalTileCount,normalMapCount);
+if(referenceCenter)gl.uniform3f(uniforms.coarseReference,referenceCenter[0],referenceCenter[1],Math.cos(referenceCenter[1]*Math.PI/180));
+delete data.normalMaps;normalMaps.length=0;gl.activeTexture(gl.TEXTURE0);
+const detailCoverageTexture=gl.createTexture();
+gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,detailCoverageTexture);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+gl.texImage2D(gl.TEXTURE_2D,0,gl.R8,1,1,0,gl.RED,gl.UNSIGNED_BYTE,new Uint8Array(1));
+gl.uniform1i(uniforms.detailCoverage,1);gl.activeTexture(gl.TEXTURE0);
+function updateDetailCoverage(coverage){
+ if(!overviewTerrain)return;
+ const spatial=level=>coverage.geometryZoomByLevel?.[level]??level;
+ const tiles=coverage.tileIDs||[],z=Math.max(4,...tiles.map(t=>spatial(t[0])));
+ const cells=tiles.map(([level,x,y])=>{const scale=2**(z-spatial(level));return [x*scale,y*scale,(x+1)*scale,(y+1)*scale];});
+ const x0=Math.min(...cells.map(c=>c[0])),y0=Math.min(...cells.map(c=>c[1])),width=Math.max(...cells.map(c=>c[2]))-x0,height=Math.max(...cells.map(c=>c[3]))-y0;
+ if(!cells.length||width*height>1048576)throw Error('詳細地形の範囲が不正です');
+ const pixels=new Uint8Array(width*height);
+ for(const [left,top,right,bottom] of cells)for(let y=top;y<bottom;y++)pixels.fill(255,(y-y0)*width+left-x0,(y-y0)*width+right-x0);
+ gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,detailCoverageTexture);gl.pixelStorei(gl.UNPACK_ALIGNMENT,1);
+ gl.texImage2D(gl.TEXTURE_2D,0,gl.R8,width,height,0,gl.RED,gl.UNSIGNED_BYTE,pixels);gl.activeTexture(gl.TEXTURE0);
+ gl.uniform4f(uniforms.detailGrid,x0,y0,width,height);gl.uniform1f(uniforms.detailZoom,z);
+ gl.uniform1f(uniforms.detailOffset,(coverage.pixelOrigin==='highest-grid-corners'||new Set(tiles.map(t=>t[0])).size>1)?0:(1-2**(z-14))/2);
+ gl.uniform3f(uniforms.coarseReference,referenceCenter[0],referenceCenter[1],Math.cos(referenceCenter[1]*Math.PI/180));
+}
+const layerBuffers={};
+function rebuildOverlays(){
+for(const layer of Object.values(layerBuffers)){gl.deleteBuffer(layer.triangles);gl.deleteBuffer(layer.lines);}
+for(const key of Object.keys(layerBuffers))delete layerBuffers[key];
+if(data.overlays){
+  document.getElementById('layerControls').hidden=false;
+  for(const [key,layer] of Object.entries(data.overlays.layers))layerBuffers[key]={triangles:buffer(layer.triangles),lines:buffer(layer.lines),triangleCount:layer.triangles.length/3,lineCount:layer.lines.length/3};
+  const c=data.overlays.counts;
+  document.getElementById('layerStatus').textContent=data.overlays.message||`保存済み実データ：水域 ${c.water} 件・河川 ${c.river} 件・徒歩道 ${c.trail} 件・県境 ${c.boundary} 件。徒歩道は登山道以外も含みます。識別できた湖の水面標高は岸からの推定です。${data.overlays.nationalLines?'河川・徒歩道・県境は全国対応。水域の面は富士山周辺のみ。':data.overlays.complete?'':'取得範囲外には追加レイヤーを表示しません。'}`;
+  document.getElementById('credit').textContent='地理院タイル（DEM10B）を加工して作成 ／ '+data.overlays.attribution+' ／ © OpenStreetMap contributors';
+}
+}
+rebuildOverlays();
+function useNormals(b){gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.enableVertexAttribArray(normalAttribute);gl.vertexAttribPointer(normalAttribute,3,gl.FLOAT,false,0,0);}
+// 回転・傾きによらず地形全体がカメラの前に収まる距離と描画範囲を決める。
+let terrainRadius=data.mesh.reduce((radius,p)=>Math.max(radius,Math.hypot(...p)),data.span/2);
+const baseCameraDistance=data.initialCameraDistance||terrainRadius*1.6;
+let cameraDistance=baseCameraDistance;
+let nearPlane=cameraDistance-terrainRadius*1.05,farPlane=cameraDistance+terrainRadius*1.05;
+// 平行光源から見た奥行きを保存する。カメラ操作では作り直さない。
+const shadowSize=Math.min(2048,gl.getParameter(gl.MAX_TEXTURE_SIZE));
+const shadowTexture=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,shadowTexture);
+gl.texImage2D(gl.TEXTURE_2D,0,gl.DEPTH_COMPONENT24,shadowSize,shadowSize,0,gl.DEPTH_COMPONENT,gl.UNSIGNED_INT,null);
+for(const name of [gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER])gl.texParameteri(gl.TEXTURE_2D,name,gl.NEAREST);
+for(const name of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T])gl.texParameteri(gl.TEXTURE_2D,name,gl.CLAMP_TO_EDGE);
+const shadowFramebuffer=gl.createFramebuffer();gl.bindFramebuffer(gl.FRAMEBUFFER,shadowFramebuffer);
+gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.DEPTH_ATTACHMENT,gl.TEXTURE_2D,shadowTexture,0);
+gl.drawBuffers([gl.NONE]);gl.readBuffer(gl.NONE);
+if(gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE)throw Error("Shadow framebuffer unavailable");
+gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+const shadowProgram=gl.createProgram();
+gl.attachShader(shadowProgram,shader(gl.VERTEX_SHADER,`#version 300 es
+layout(location=0) in vec3 position;
+uniform vec3 right,up,light,center;
+uniform float radius;
+void main(){vec3 relative=position-center;gl_Position=vec4(dot(relative,right),dot(relative,up),-dot(relative,light),radius);}`));
+gl.attachShader(shadowProgram,shader(gl.FRAGMENT_SHADER,`#version 300 es
+precision highp float;
+void main(){}`));
+gl.linkProgram(shadowProgram);
+if(!gl.getProgramParameter(shadowProgram,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(shadowProgram));
+const shadowUniforms=Object.fromEntries(["right","up","light","radius","center"].map(n=>[n,gl.getUniformLocation(shadowProgram,n)]));
+let shadowKey="",shadowRevision=0;
+function updateShadow(light,right,up,key){
+  if(key===shadowKey)return;
+  gl.bindFramebuffer(gl.FRAMEBUFFER,shadowFramebuffer);gl.viewport(0,0,shadowSize,shadowSize);
+  gl.useProgram(shadowProgram);
+  gl.uniform3fv(shadowUniforms.right,right);gl.uniform3fv(shadowUniforms.up,up);gl.uniform3fv(shadowUniforms.light,light);
+  gl.uniform1f(shadowUniforms.radius,terrainRadius*1.01);
+  gl.uniform3fv(shadowUniforms.center,shadowCenter);
+  gl.bindBuffer(gl.ARRAY_BUFFER,terrain);gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,triangles);
+  gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.clearDepth(1);gl.clear(gl.DEPTH_BUFFER_BIT);
+  gl.colorMask(false,false,false,false);gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(2,4);
+  gl.drawElements(gl.TRIANGLES,data.indices.length,gl.UNSIGNED_INT,0);
+  gl.disable(gl.POLYGON_OFFSET_FILL);gl.colorMask(true,true,true,true);
+  gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.useProgram(program);
+  shadowKey=key;shadowRevision++;
+}
+// 同じ頂点を共有する格子を作り、尾根抽出の区間選別による切れ目をなくす。
+const [meshRows,meshColumns]=data.meshShape||[0,0];
+const validCells=new Uint8Array((meshRows-1)*(meshColumns-1));
+if(!data.polygon)for(let i=0;i<data.indices.length;i+=6){const a=data.indices[i];validCells[Math.floor(a/meshColumns)*(meshColumns-1)+a%meshColumns]=1;}
+let wireBuffer=null,wireCount=0,wireSurface=null,wireSurfaceCount=0,wireNormals=null;
+function rebuildWire(){
+  if(data.polygon){
+    const edges=new Set(),lines=[];
+    for(let i=0;i<data.indices.length;i+=3)for(let j=0;j<3;j++){
+      const a=data.indices[i+j],b=data.indices[i+(j+1)%3],key=Math.min(a,b)+':'+Math.max(a,b);
+      if(!edges.has(key)){edges.add(key);lines.push(a,b);}
+    }
+    if(wireBuffer)gl.deleteBuffer(wireBuffer);if(wireSurface)gl.deleteBuffer(wireSurface);if(wireNormals)gl.deleteBuffer(wireNormals);
+    wireBuffer=buffer(lines,gl.ELEMENT_ARRAY_BUFFER,Uint32Array);wireCount=lines.length;
+    wireSurface=buffer(data.indices,gl.ELEMENT_ARRAY_BUFFER,Uint32Array);wireSurfaceCount=data.indices.length;
+    wireNormals=buffer(terrainNormals(data.indices));return;
+  }
+  const step=Number(document.getElementById("spacing").value);
+  const rows=[],columns=[];
+  for(let r=0;r<meshRows-1;r+=step)rows.push(r);rows.push(meshRows-1);
+  for(let c=0;c<meshColumns-1;c+=step)columns.push(c);columns.push(meshColumns-1);
+  const edges=new Set(),indices=[],surface=[];
+  function edge(a,b){const key=Math.min(a,b)+":"+Math.max(a,b);if(!edges.has(key)){edges.add(key);indices.push(a,b);}}
+  for(let r=0;r<rows.length-1;r++)for(let c=0;c<columns.length-1;c++){
+    let valid=true;
+    for(let y=rows[r];y<rows[r+1]&&valid;y++)for(let x=columns[c];x<columns[c+1];x++)if(!validCells[y*(meshColumns-1)+x]){valid=false;break;}
+    if(!valid)continue;
+    const a=rows[r]*meshColumns+columns[c],b=rows[r]*meshColumns+columns[c+1];
+    const d=rows[r+1]*meshColumns+columns[c],e=rows[r+1]*meshColumns+columns[c+1];
+    edge(a,b);edge(a,d);edge(b,e);edge(d,e);
+    surface.push(a,d,b,b,d,e);
+    if(document.getElementById("diagonal").checked)edge(b,d);
+  }
+  if(wireBuffer)gl.deleteBuffer(wireBuffer);
+  wireBuffer=buffer(indices,gl.ELEMENT_ARRAY_BUFFER,Uint32Array);wireCount=indices.length;
+  if(wireSurface)gl.deleteBuffer(wireSurface);
+  wireSurface=buffer(surface,gl.ELEMENT_ARRAY_BUFFER,Uint32Array);wireSurfaceCount=surface.length;
+  if(wireNormals)gl.deleteBuffer(wireNormals);
+  wireNormals=buffer(terrainNormals(surface));
+  document.getElementById("spacingValue").textContent="約 "+Math.round(data.meshStepMeters*step)+" m";
+}
+let linesBuffer=null,lineVertices=0;
+let shadingPreference=document.getElementById("shading").checked;
+let spacingPreference=document.getElementById("spacing").value;
+function rebuildLines(){
+  const method=document.getElementById("method").value;
+  const minimum=Number(document.getElementById("length").value);
+  const points=[];
+  document.getElementById("length").disabled=method==="wireframe"||method==="shaded";
+  for(const path of data.methods[method]||[]){
+    let length=0;
+    for(let i=1;i<path.length;i++)length+=Math.hypot(path[i][0]-path[i-1][0],path[i][1]-path[i-1][1]);
+    if(length<minimum)continue;
+    for(let i=1;i<path.length;i++)points.push(...path[i-1],...path[i]);
+  }
+  if(linesBuffer)gl.deleteBuffer(linesBuffer);
+  linesBuffer=buffer(points);lineVertices=points.length/3;
+  document.getElementById("lengthValue").textContent=minimum+" m";
+}
+// 山頂は配布データの緯度・経度・標高を、地形と同じ透視変換で投影する。
+const peakCanvas=document.getElementById('peakLabels'),peakContext=peakCanvas.getContext('2d');
+let peakOcclusionMesh=null,peakOcclusionGrid=null;
+function terrainOccludesPeak(camera,target,tolerance){
+  // 地形の面を平面の区画に分け、視線が通る区画だけ調べる。
+  if(peakOcclusionMesh!==data.mesh){
+    peakOcclusionMesh=data.mesh;
+    const bounds=boundsOf(data.mesh),n=48,dx=Math.max(1,(bounds[2]-bounds[0])/n),dy=Math.max(1,(bounds[3]-bounds[1])/n);
+    const bins=Array.from({length:n*n},()=>[]);
+    const cell=(v,start,step)=>Math.max(0,Math.min(n-1,Math.floor((v-start)/step)));
+    for(let i=0;i<data.indices.length;i+=3){
+      const a=data.mesh[data.indices[i]],b=data.mesh[data.indices[i+1]],c=data.mesh[data.indices[i+2]];
+      if(Math.abs((b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]))<1e-6)continue;
+      const x0=cell(Math.min(a[0],b[0],c[0]),bounds[0],dx),x1=cell(Math.max(a[0],b[0],c[0]),bounds[0],dx);
+      const y0=cell(Math.min(a[1],b[1],c[1]),bounds[1],dy),y1=cell(Math.max(a[1],b[1],c[1]),bounds[1],dy);
+      for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++)bins[y*n+x].push(i);
+    }
+    peakOcclusionGrid={bounds,n,dx,dy,bins};
+  }
+  const {bounds,n,dx,dy,bins}=peakOcclusionGrid;
+  const origin=[camera[0],camera[1],camera[2]+tolerance],end=[target[0],target[1],target[2]+tolerance];
+  const direction=end.map((v,i)=>v-origin[i]);
+  let enter=0,leave=1;
+  for(let axis=0;axis<2;axis++){
+    if(Math.abs(direction[axis])<1e-9){if(origin[axis]<bounds[axis]||origin[axis]>bounds[axis+2])return false;continue;}
+    const a=(bounds[axis]-origin[axis])/direction[axis],b=(bounds[axis+2]-origin[axis])/direction[axis];
+    enter=Math.max(enter,Math.min(a,b));leave=Math.min(leave,Math.max(a,b));
+  }
+  if(enter>leave)return false;
+  let x=Math.max(0,Math.min(n-1,Math.floor((origin[0]+direction[0]*(enter+1e-10)-bounds[0])/dx)));
+  let y=Math.max(0,Math.min(n-1,Math.floor((origin[1]+direction[1]*(enter+1e-10)-bounds[1])/dy)));
+  const stepX=direction[0]>=0?1:-1,stepY=direction[1]>=0?1:-1;
+  const deltaX=Math.abs(dx/direction[0]),deltaY=Math.abs(dy/direction[1]);
+  let nextX=Math.abs(direction[0])<1e-9?Infinity:(bounds[0]+(x+(stepX>0?1:0))*dx-origin[0])/direction[0];
+  let nextY=Math.abs(direction[1])<1e-9?Infinity:(bounds[1]+(y+(stepY>0?1:0))*dy-origin[1])/direction[1];
+  const visited=new Set();
+  const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+  const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+  while(x>=0&&x<n&&y>=0&&y<n){
+    for(const index of bins[y*n+x]){
+      if(visited.has(index))continue;visited.add(index);
+      const a=data.mesh[data.indices[index]],b=data.mesh[data.indices[index+1]],c=data.mesh[data.indices[index+2]];
+      const e1=b.map((v,i)=>v-a[i]),e2=c.map((v,i)=>v-a[i]),p=cross(direction,e2),det=dot(e1,p);
+      if(Math.abs(det)<1e-8)continue;
+      const t=origin.map((v,i)=>v-a[i]),u=dot(t,p)/det;if(u<0||u>1)continue;
+      const q=cross(t,e1),v=dot(direction,q)/det;if(v<0||u+v>1)continue;
+      const hit=dot(e2,q)/det;
+      if(hit>1e-5&&hit<.9999)return true;
+    }
+    if(Math.min(nextX,nextY)>leave)break;
+    if(nextX<nextY){x+=stepX;nextX+=deltaX;}else{y+=stepY;nextY+=deltaY;}
+  }
+  return false;
+}
+function drawPeakLabels(){
+  const rect=canvas.getBoundingClientRect(),ratio=Math.min(devicePixelRatio||1,2);
+  peakCanvas.style.left=rect.left+'px';peakCanvas.style.top=rect.top+'px';
+  peakCanvas.style.width=rect.width+'px';peakCanvas.style.height=rect.height+'px';
+  peakCanvas.width=Math.round(rect.width*ratio);peakCanvas.height=Math.round(rect.height*ratio);
+  const ctx=peakContext;ctx.scale(ratio,ratio);ctx.font='bold 14px system-ui,sans-serif';
+  if(!data.projectionCenter||!document.getElementById('peakNames').checked)return;
+  const reference=dynamicLOD?referenceCenter:data.projectionCenter;
+  const sx=Math.PI/180*6378137*Math.cos(reference[1]*Math.PI/180),sy=Math.PI/180*6378137;
+  const bearing=Number(document.getElementById('bearing').value)*Math.PI/180;
+  const tilt=Number(document.getElementById('tilt').value)*Math.PI/180;
+  const focal=dynamicLOD?1.65*baseCameraDistance/baseSpan:Number(document.getElementById('zoom').value)*1.65*cameraDistance/data.span;
+  const candidates=[];
+  for(const peak of data.peaks||[]){
+    const east=(peak.longitude-reference[0])*sx-viewCenter[0],north=(peak.latitude-reference[1])*sy-viewCenter[1],height=peak.elevationM-reference[2]-viewCenter[2];
+    const x=Math.cos(bearing)*east-Math.sin(bearing)*north,y=Math.sin(bearing)*east+Math.cos(bearing)*north;
+    const distance=cameraDistance+Math.sin(tilt)*y-Math.cos(tilt)*height;
+    if(distance<Math.max(100,nearPlane)||distance>farPlane)continue;
+    const px=(x*focal/(rect.width/rect.height)/distance+viewPan[0]+1)*rect.width/2;
+    const py=(1-(Math.cos(tilt)*y+Math.sin(tilt)*height)*focal/distance-viewPan[1])*rect.height/2;
+    if(px<5||px>rect.width-5||py<85||py>rect.height-20)continue;
+    candidates.push({peak,px,py,distance});
+  }
+  candidates.sort((a,b)=>a.distance-b.distance);
+  const occupied=[];let count=0;
+  for(const {peak,px,py} of candidates.slice(0,300)){
+    const width=ctx.measureText(peak.name).width+12,left=Math.max(4,Math.min(rect.width-width-4,px-width/2)),top=py-32;
+    if(occupied.some(b=>left<b[2]&&left+width>b[0]&&top<b[3]&&top+22>b[1]))continue;
+    if(document.getElementById('occludeLayers').checked){
+      const camera=[viewCenter[0]-cameraDistance*Math.sin(tilt)*Math.sin(bearing),viewCenter[1]-cameraDistance*Math.sin(tilt)*Math.cos(bearing),viewCenter[2]+cameraDistance*Math.cos(tilt)];
+      const target=[(peak.longitude-reference[0])*sx,(peak.latitude-reference[1])*sy,peak.elevationM-reference[2]];
+      if(terrainOccludesPeak(camera,target,Math.max(5,data.coverage?.meshErrorMeters||5)))continue;
+    }
+    occupied.push([left,top,left+width,top+22]);
+    ctx.fillStyle='#ffffffdf';ctx.fillRect(left,top,width,22);ctx.fillStyle='#243529';ctx.fillText(peak.name,left+6,top+16);
+    ctx.strokeStyle='#fff';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(px,py-4);ctx.lineTo(px-4,py+3);ctx.lineTo(px+4,py+3);ctx.closePath();ctx.stroke();ctx.fill();
+    if(++count>=50)break;
+  }
+}
+function draw(){
+  const start=performance.now();
+  const ratio=Math.min(devicePixelRatio||1,2);
+  canvas.width=Math.round(canvas.clientWidth*ratio);canvas.height=Math.round(canvas.clientHeight*ratio);
+  if(dynamicLOD){
+    cameraDistance=baseCameraDistance/Number(document.getElementById('zoom').value);
+    nearPlane=Math.max(.1,cameraDistance*.005);
+    farPlane=cameraDistance+Math.max(terrainRadius,overviewTerrain?.radius||0)*3+Math.hypot(...viewCenter.map((v,i)=>v-shadowCenter[i]));
+  }
+  const angle=Number(document.getElementById("light").value)*Math.PI/180;
+  const elevation=Number(document.getElementById("sunHeight").value)*Math.PI/180;
+  const lightVector=[Math.sin(angle)*Math.cos(elevation),Math.cos(angle)*Math.cos(elevation),Math.sin(elevation)];
+  const right=[Math.cos(angle),-Math.sin(angle),0];
+  const up=[-Math.sin(angle)*Math.sin(elevation),-Math.cos(angle)*Math.sin(elevation),Math.cos(elevation)];
+  const shadows=document.getElementById("castShadow").checked&&!data.coverage?.overviewFallback;
+  if(shadows)updateShadow(lightVector,right,up,angle+":"+elevation);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,shadowTexture);
+  gl.uniform1i(uniforms.shadowMap,0);gl.uniform1i(uniforms.castShadow,shadows?1:0);
+  gl.uniform3fv(uniforms.shadowRight,right);gl.uniform3fv(uniforms.shadowUp,up);
+  gl.uniform1f(uniforms.shadowRadius,terrainRadius*1.01);
+  gl.uniform1f(uniforms.shadowBiasMeters,Math.max(5,data.coverage?.meshErrorMeters||5));
+  gl.uniform3fv(uniforms.shadowCenter,shadowCenter);
+  gl.viewport(0,0,canvas.width,canvas.height);
+  gl.clearColor(0.97,0.97,0.95,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  gl.uniform1f(uniforms.bearing,Number(document.getElementById("bearing").value)*Math.PI/180);
+  gl.uniform1f(uniforms.tilt,Number(document.getElementById("tilt").value)*Math.PI/180);
+  // 拡大は画角を変える。カメラが地形へ入り込んで手前が切れるのを防ぐ。
+  gl.uniform1f(uniforms.focalLength,dynamicLOD?1.65*baseCameraDistance/baseSpan:Number(document.getElementById("zoom").value)*1.65*cameraDistance/data.span);
+  gl.uniform1f(uniforms.aspect,canvas.width/canvas.height);
+  gl.uniform2fv(uniforms.viewPan,viewPan);
+  gl.uniform3fv(uniforms.viewCenter,viewCenter);
+  gl.uniform1f(uniforms.cameraDistance,cameraDistance);
+  gl.uniform1f(uniforms.nearPlane,nearPlane);gl.uniform1f(uniforms.farPlane,farPlane);
+  const lightDegrees=Number(document.getElementById("light").value);
+  // 地形と同じ東・北・上の座標系で光を当て、表示を回しても光源を動かさない。
+  gl.uniform3fv(uniforms.lightDirection,lightVector);
+  document.getElementById("sunHeightValue").textContent=document.getElementById("sunHeight").value+"°";
+  gl.uniform1f(uniforms.shadeStrength,Number(document.getElementById("strength").value));
+  document.getElementById("lightValue").textContent=lightDegrees+"°";
+  const wireframe=document.getElementById("method").value==="wireframe";
+  const shadingOnly=document.getElementById("method").value==="shaded";
+  const terrainMode=wireframe;
+  const shading=shadingOnly||shadingPreference;
+  document.getElementById("shading").checked=shading;
+  document.getElementById("shading").disabled=shadingOnly;
+  document.getElementById("diagonal").disabled=shadingOnly||!!data.polygon;
+  document.getElementById("hidden").disabled=shadingOnly;
+  document.getElementById("spacing").disabled=shadingOnly||!!data.polygon;
+  document.getElementById("spacing").value=shadingOnly?"1":spacingPreference;
+  document.getElementById("spacingValue").textContent="約 "+Math.round(data.meshStepMeters*(shadingOnly?1:Number(document.getElementById("spacing").value)))+" m";
+  if(data.polygon)document.getElementById("spacingValue").textContent="地形に応じた三角形";
+  document.getElementById("smooth").disabled=!shading;
+  gl.uniform1i(uniforms.smoothShading,document.getElementById("smooth").checked?1:0);
+  document.getElementById("light").disabled=!shading;document.getElementById("strength").disabled=!shading;
+  gl.uniform1i(uniforms.coarsePass,0);
+  gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);
+  const showTerrain=document.getElementById('terrainLayer').checked;
+  const showWater=!!data.overlays&&document.getElementById('waterLayer').checked;
+  const occlude=data.overlays?document.getElementById('occludeLayers').checked:document.getElementById('hidden').checked;
+  if(overviewTerrain&&!data.coverage.overviewFallback&&(showTerrain||occlude)&&(!boundsContain(loadedBounds,viewFootprint().bounds)||Number(document.getElementById('tilt').value)>=45)){
+    // 詳細タイルの外側だけ粗い面を描き、通常の奥行き判定で前後関係を保つ。
+    gl.uniform1i(uniforms.coarsePass,1);gl.uniform1i(uniforms.castShadow,0);gl.uniform1i(uniforms.useNormalMap,normalMapCount&&normalMapControl.checked?1:0);
+    vertices(overviewTerrain.vertices);useNormals(overviewTerrain.normals);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,overviewTerrain.indices);
+    gl.uniform1i(uniforms.shaded,showTerrain?1:0);gl.uniform4f(uniforms.color,.88,.90,.85,1);gl.colorMask(showTerrain,showTerrain,showTerrain,showTerrain);
+    gl.drawElements(gl.TRIANGLES,overviewTerrain.count,gl.UNSIGNED_INT,0);
+    gl.colorMask(true,true,true,true);gl.uniform1i(uniforms.coarsePass,0);gl.uniform1i(uniforms.castShadow,shadows?1:0);
+  }
+  gl.uniform1i(uniforms.useNormalMap,normalMapCount&&normalMapControl.checked&&data.coverage.zoom===4?1:0);
+  const surfaceIndices=showWater&&data.landIndices?landTriangles:triangles;
+  const surfaceCount=showWater&&data.landIndices?data.landIndices.length:data.indices.length;
+  const surfaceNormals=showWater&&data.landIndices?landNormals:fullNormals;
+  if((showTerrain&&shading)||occlude){
+    // 表示する格子と同じ面で隠れ判定し、自分の地形で線が途切れるのを防ぐ。
+    vertices(terrain);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,terrainMode?wireSurface:surfaceIndices);
+    useNormals(terrainMode?wireNormals:surfaceNormals);
+    const visible=showTerrain&&shading;
+    gl.colorMask(visible,visible,visible,visible);
+    gl.uniform1i(uniforms.shaded,visible?1:0);gl.uniform4f(uniforms.color,0.88,0.90,0.85,1);
+    gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1,1);
+    gl.drawElements(gl.TRIANGLES,terrainMode?wireSurfaceCount:surfaceCount,gl.UNSIGNED_INT,0);
+    gl.disable(gl.POLYGON_OFFSET_FILL);gl.colorMask(true,true,true,true);
+  }
+  if(!occlude)gl.disable(gl.DEPTH_TEST);
+  // 線同士で奥行きを書き換えず、地形の奥行きだけと比較する。
+  gl.depthMask(false);
+  gl.uniform1i(uniforms.shaded,0);
+  gl.disableVertexAttribArray(normalAttribute);gl.vertexAttrib3f(normalAttribute,0,0,1);
+  gl.uniform4f(uniforms.color,0.22,0.36,0.29,1);
+  if(showTerrain&&wireframe){vertices(terrain);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,wireBuffer);gl.drawElements(gl.LINES,wireCount,gl.UNSIGNED_INT,0);}
+  else if(showTerrain&&!shadingOnly){vertices(linesBuffer);gl.drawArrays(gl.LINES,0,lineVertices);}
+  const layerColors={water:[.12,.51,.83,1],trail:[.9,.24,.03,1],boundary:[.55,.13,.72,1]};
+  for(const [key,layer] of Object.entries(layerBuffers)){
+    if(!document.getElementById(key+'Layer').checked)continue;
+    gl.uniform4fv(uniforms.color,layerColors[key]);
+    vertices(layer.triangles);gl.drawArrays(gl.TRIANGLES,0,layer.triangleCount);
+    vertices(layer.lines);gl.drawArrays(gl.LINES,0,layer.lineCount);
+  }
+  gl.depthMask(true);
+  drawPeakLabels();
+  document.getElementById("stats").textContent=`線分 ${(wireframe?wireCount:lineVertices)/2} 本 ／ 地形 ${(terrainMode?wireSurfaceCount:data.indices.length)/3} 三角形 ／ 描画命令の送信 ${(performance.now()-start).toFixed(1)} ms（GPU の描画完了時間ではありません）`;
+}
+for(const id of ["method","length"])document.getElementById(id).addEventListener("input",()=>{rebuildLines();draw();});
+document.getElementById("spacing").addEventListener("input",event=>{spacingPreference=event.target.value;rebuildWire();draw();});
+document.getElementById("diagonal").addEventListener("input",()=>{rebuildWire();draw();});
+document.getElementById("shading").addEventListener("input",event=>{shadingPreference=event.target.checked;draw();});
+normalMapControl.addEventListener('change',()=>{
+  try{localStorage.setItem('terrain-preview-normal-map',normalMapControl.checked?'on':'off');}catch{}
+  const url=new URL(location.href);url.searchParams.set('normalMap',normalMapControl.checked?'1':'0');history.replaceState(null,'',url);
+  draw();
+});
+for(const id of ["bearing","tilt","zoom","hidden","light","strength","smooth","sunHeight","castShadow"])document.getElementById(id).addEventListener("input",()=>{draw();if(['bearing','tilt','zoom'].includes(id))scheduleLOD();});
+document.getElementById("peakNames").addEventListener("change",draw);
+window.addEventListener("resize",()=>{draw();scheduleLOD();});rebuildWire();rebuildLines();draw();
+for(const id of ['terrainLayer','waterLayer','trailLayer','boundaryLayer','occludeLayers','smooth']){
+  try{const saved=localStorage.getItem('terrain-preview-'+id);if(saved!==null)document.getElementById(id).checked=saved==='true';}catch{}
+  document.getElementById(id).addEventListener('change',e=>{try{localStorage.setItem('terrain-preview-'+id,e.target.checked);}catch{}draw();});
+}
+document.getElementById('fullscreenLayer').addEventListener('change',e=>{
+  document.body.classList.toggle('fullscreen',e.target.checked);draw();
+});
+const fullscreenStyle=document.createElement('style');fullscreenStyle.textContent='body.fullscreen{overflow:hidden}body.fullscreen header,body.fullscreen footer{display:none}body.fullscreen #layerControls{position:fixed;z-index:2;left:8px;top:8px;max-width:calc(100vw - 52px);background:#ffffffd9;border-radius:6px;padding:6px 12px}body.fullscreen #layerStatus{display:none}body.fullscreen canvas{position:fixed;inset:0;width:100vw;height:100vh}';document.head.appendChild(fullscreenStyle);
+fullscreenStyle.textContent+='body.fullscreen #fullscreenCredit{display:block!important;position:fixed;z-index:2;bottom:4px;right:4px;background:#ffffffd9;font-size:10px;padding:3px 6px}';
+if(new URLSearchParams(location.search).get('fullscreen')==='1'){
+  document.getElementById('fullscreenLayer').checked=true;document.body.classList.add('fullscreen');
+  document.getElementById('zoom').value='1.7';document.getElementById('tilt').value='35';document.getElementById('bearing').value='180';
+}
+if(data.qemComparison){document.getElementById('zoom').value='1';document.getElementById('tilt').value='55';}
+const initialView=Object.fromEntries(['bearing','tilt','zoom'].map(id=>[id,document.getElementById(id).value]));
+const initialCenter=[...viewCenter];
+let drag=null,viewFrame=null;
+function requestViewDraw(){if(viewFrame===null)viewFrame=requestAnimationFrame(()=>{viewFrame=null;draw();});scheduleLOD();}
+function resetView(){altitudeRevision++;viewPan[0]=viewPan[1]=0;viewCenter.splice(0,3,...initialCenter);for(const [id,value] of Object.entries(initialView))document.getElementById(id).value=value;requestViewDraw();}
+document.getElementById('resetView').addEventListener('click',resetView);
+canvas.title='ドラッグで移動、ホイールで拡大・縮小、右ドラッグまたは Shift＋ドラッグで方角と傾きを変更。ダブルクリックで視点を戻します。';
+canvas.style.cursor='grab';canvas.style.touchAction='none';
+canvas.addEventListener('contextmenu',event=>event.preventDefault());
+canvas.addEventListener('dblclick',resetView);
+canvas.addEventListener('pointerdown',event=>{
+  if(event.button!==0&&event.button!==2)return;
+  drag={id:event.pointerId,x:event.clientX,y:event.clientY,rotate:event.button===2||event.shiftKey||event.ctrlKey};
+  canvas.setPointerCapture(event.pointerId);canvas.style.cursor='grabbing';event.preventDefault();
+});
+canvas.addEventListener('pointermove',event=>{
+  if(!drag||event.pointerId!==drag.id)return;
+  const dx=event.clientX-drag.x,dy=event.clientY-drag.y;drag.x=event.clientX;drag.y=event.clientY;
+  if(drag.rotate){
+    const bearing=document.getElementById('bearing'),tilt=document.getElementById('tilt');
+    bearing.value=((Number(bearing.value)+dx*.3)%360+360)%360;
+    tilt.value=Math.max(Number(tilt.min),Math.min(Number(tilt.max),Number(tilt.value)+dy*.25));
+  }else if(dynamicLOD){
+    const angle=Number(document.getElementById('bearing').value)*Math.PI/180;
+    const meters=baseSpan/(Number(document.getElementById('zoom').value)*1.65*canvas.clientHeight);
+    const x=-dx*meters,y=dy*meters/Math.max(.25,Math.cos(Number(document.getElementById('tilt').value)*Math.PI/180));
+    viewCenter[0]+=Math.cos(angle)*x+Math.sin(angle)*y;
+    viewCenter[1]+=-Math.sin(angle)*x+Math.cos(angle)*y;
+  }else{viewPan[0]+=dx/canvas.clientWidth*2;viewPan[1]-=dy/canvas.clientHeight*2;}
+  requestViewDraw();
+});
+function endViewDrag(event){if(drag&&event.pointerId===drag.id){drag=null;canvas.style.cursor='grab';if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId);}}
+for(const name of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(name,endViewDrag);
+document.getElementById('zoom').step='0.01';
+if(dynamicLOD){document.getElementById('zoom').step='any';document.getElementById('zoom').min='.001';document.getElementById('zoom').max=String(Math.max(4,Math.min(2048,baseSpan/2000)));}
+canvas.addEventListener('wheel',event=>{
+  event.preventDefault();
+  const zoom=document.getElementById('zoom');
+  const delta=event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?canvas.clientHeight:1);
+  zoom.value=String(Math.max(Number(zoom.min),Math.min(Number(zoom.max),Number(zoom.value)*Math.exp(-delta*.0015))));
+  requestViewDraw();
+},{passive:false});
+let lodTimer=null,lodRevision=0,lodBusy=false,lodQueued=false,lastLODKey='',failedLODKey='',altitudeRevision=0;
+let loadedSize=data.coverage?.sizeKm||baseSpan/1000;
+const lodCache=new Map();
+const levelSelector=document.getElementById('terrainLevel');
+const levelQuery=new URLSearchParams(location.search);
+let preferredLevel='auto';
+try{preferredLevel=localStorage.getItem('terrain-preview-level')||'auto';}catch{}
+if(levelQuery.get('levelMode')==='manual')preferredLevel=levelQuery.get('z')||String(data.coverage.zoom);
+else if(levelQuery.get('levelMode')==='auto')preferredLevel='auto';
+if(!Array.from(levelSelector.options).some(o=>o.value===preferredLevel))preferredLevel='auto';
+levelSelector.value=dynamicLOD?preferredLevel:String(data.coverage?.zoom||14);
+levelSelector.disabled=!dynamicLOD&&!data.qemComparison;
+if(dynamicLOD||normalMapCount)document.getElementById('layerControls').hidden=false;
+else levelSelector.title='保存した HTML は収録済みのレベルに固定されています。';
+if(data.qemComparison){
+  document.getElementById('layerControls').hidden=false;
+  for(const id of ['peakNames','waterLayer','trailLayer','boundaryLayer','occludeLayers'])document.getElementById(id).closest('label').style.display='none';
+  levelSelector.querySelector('option[value="auto"]').remove();
+  const referenceOption=document.createElement('option');referenceOption.value='reference';referenceOption.textContent='旧方式（最高詳細）';levelSelector.append(referenceOption);
+  levelSelector.title='最高詳細の地形から QEM で削減した地域試作です。全国版のレベルとはデータ量が異なります。';
+  levelSelector.value=data.qemComparison.kind==='reference'?'reference':String(data.coverage.zoom);
+  document.getElementById('lodStatus').style.display='inline';
+  const info=data.qemComparison;
+  document.getElementById('lodStatus').textContent=info.kind==='reference'?'槍ヶ岳周辺 ／ 旧方式の比較用データ':`槍ヶ岳周辺 ／ 最高詳細から段階的に削減 ／ ${info.triangles.toLocaleString()} 三角形 ／ 標高差 最大 ${info.maxSampleErrorMeters.toFixed(1)} m（頂点・面中心の標本）`;
+  const surfaceLabel=document.createElement('label');surfaceLabel.textContent=' 表示 ';
+  const surfaceSelect=document.createElement('select');surfaceSelect.id='qemSurface';
+  for(const [value,label] of [['shaded','陰影のみ'],['wireframe','三角形＋陰影']]){const option=document.createElement('option');option.value=value;option.textContent=label;surfaceSelect.append(option);}
+  surfaceLabel.append(surfaceSelect);document.getElementById('layerControls').append(surfaceLabel);
+  for(const id of ['smooth','castShadow'])document.getElementById('layerControls').append(document.getElementById(id).closest('label'));
+  const method=document.getElementById('method');method.value=levelQuery.get('qemSurface')||'shaded';surfaceSelect.value=method.value;
+  surfaceSelect.addEventListener('change',()=>{method.value=surfaceSelect.value;method.dispatchEvent(new Event('input'));});
+  for(const id of ['bearing','tilt','zoom']){
+    const value=Number(levelQuery.get('qem'+id));const control=document.getElementById(id);
+    if(levelQuery.has('qem'+id)&&Number.isFinite(value)&&value>=Number(control.min)&&value<=Number(control.max))control.value=String(value);
+    initialView[id]=control.value;
+  }
+  for(let axis=0;axis<2;axis++){const value=Number(levelQuery.get('qemPan'+axis));if(Number.isFinite(value)&&Math.abs(value)<100)viewPan[axis]=value;}
+}
+levelSelector.addEventListener('change',()=>{
+  if(data.qemComparison){
+    const url=new URL(location.href);url.searchParams.set('z',levelSelector.value);
+    for(const id of ['bearing','tilt','zoom'])url.searchParams.set('qem'+id,document.getElementById(id).value);
+    url.searchParams.set('qemSurface',document.getElementById('method').value);
+    viewPan.forEach((value,axis)=>url.searchParams.set('qemPan'+axis,String(value)));
+    location.href=url;return;
+  }
+  try{localStorage.setItem('terrain-preview-level',levelSelector.value);}catch{}
+  const url=new URL(location.href);url.searchParams.set('levelMode',levelSelector.value==='auto'?'auto':'manual');
+  if(levelSelector.value==='auto')url.searchParams.delete('z');else url.searchParams.set('z',levelSelector.value);
+  history.replaceState(null,'',url);failedLODKey='';scheduleLOD();
+});
+function levelStatus(){const river=data.overlays?.riverLevel?` ／ ${data.overlays.nationalLines?'河川・県境・道':'河川'} ${data.overlays.riverLevel}`:'';return ( levelSelector.value==='auto'?`縮尺 ${Object.keys(data.coverage.levels||{[data.coverage.zoom]:1}).join('・')} ／ 表示範囲に合わせて自動切り替え`:`レベル ${levelSelector.value} 固定 ／ 表示中 ${data.coverage.zoom}`)+river+(overviewTerrain?` ／ 全国レベル ${data.nationalBaseSize.level||4} を常駐`:'');}
+
+function boundsOf(points){const bounds=[Infinity,Infinity,-Infinity,-Infinity];for(const p of points){bounds[0]=Math.min(bounds[0],p[0]);bounds[1]=Math.min(bounds[1],p[1]);bounds[2]=Math.max(bounds[2],p[0]);bounds[3]=Math.max(bounds[3],p[1]);}return bounds;}
+let loadedBounds=boundsOf(data.mesh);
+function scheduleLOD(){if(!dynamicLOD)return;lodRevision++;clearTimeout(lodTimer);lodTimer=setTimeout(updateLOD,240);}
+function riverLevelFor(size,lat){const desired=Math.floor(Math.log2(40075016.686*Math.cos(lat*Math.PI/180)*1800/(Math.max(2,size)*1000*256)));return (data.overlays?.lineLevels?[...data.overlays.lineLevels].sort((a,b)=>b-a):[14,12,10,8,6,4]).find(level=>level<=desired)||4;}
+function viewFootprint(){
+  const zoom=Number(document.getElementById('zoom').value),distance=baseCameraDistance/zoom;
+  const focal=1.65*baseCameraDistance/baseSpan,aspect=canvas.clientWidth/canvas.clientHeight;
+  const tilt=Number(document.getElementById('tilt').value)*Math.PI/180,bearing=Number(document.getElementById('bearing').value)*Math.PI/180;
+  const limit=Math.min(2000000,baseSpan/zoom*4),points=[[0,0]];
+  // 画面四隅の視線と、視点中心と同じ標高の面の交点を求める。
+  // 地平線より上の視線は有限の先読み距離に抑える。
+  for(const vertical of [-1,1]){
+    const denominator=focal*Math.cos(tilt)-vertical*Math.sin(tilt);
+    const y=denominator<=0?limit:Math.max(-limit,Math.min(limit,vertical*distance/denominator));
+    const halfWidth=aspect*(distance+Math.sin(tilt)*y)/focal;
+    for(const x of [-halfWidth,halfWidth])points.push([Math.cos(bearing)*x+Math.sin(bearing)*y,-Math.sin(bearing)*x+Math.cos(bearing)*y]);
+  }
+  const relative=boundsOf(points),padding=baseSpan/zoom*.1;
+  relative[0]-=padding;relative[1]-=padding;relative[2]+=padding;relative[3]+=padding;
+  return {bounds:[relative[0]+viewCenter[0],relative[1]+viewCenter[1],relative[2]+viewCenter[0],relative[3]+viewCenter[1]],size:Math.max(2,Math.min(4000,Math.max(...relative.map(Math.abs))*2.3/1000))};
+}
+function boundsContain(outer,inner){return outer[0]<=inner[0]&&outer[1]<=inner[1]&&outer[2]>=inner[2]&&outer[3]>=inner[3];}
+function usefulPanResponse(request,current){
+  return request.manual===current.manual&&(request.targetZ??request.z)===current.z&&request.viewKey===current.viewKey&&boundsContain(request.coverageBounds,current.bounds);
+}
+function viewRequest(){
+  const sx=Math.PI/180*6378137*Math.cos(referenceCenter[1]*Math.PI/180),sy=Math.PI/180*6378137;
+  const lon=Math.max(-179,Math.min(179,referenceCenter[0]+viewCenter[0]/sx));
+  const lat=Math.max(-79,Math.min(79,referenceCenter[1]+viewCenter[1]/sy));
+  const visible=baseSpan/Number(document.getElementById('zoom').value)/1000;
+  const footprint=viewFootprint(),size=footprint.size;
+  const halfY=size*500,halfX=halfY*Math.cos(referenceCenter[1]*Math.PI/180)/Math.cos(lat*Math.PI/180);
+  const coverageBounds=[viewCenter[0]-halfX,viewCenter[1]-halfY,viewCenter[0]+halfX,viewCenter[1]+halfY];
+  const desired=Math.max(4,Math.min(14,Math.floor(Math.log2(40075016.686*Math.cos(lat*Math.PI/180)*1800/(size*1000*256)))));
+  const manual=levelSelector.value!=='auto';
+  const z=manual?Number(levelSelector.value):[14,13,12,11,10,9,8,7,6,5,4].find(level=>level<=desired);
+  const tilt=Math.round(Number(document.getElementById('tilt').value)/5)*5;
+  const bearing=Math.round(Number(document.getElementById('bearing').value)/5)*5;
+  const distance=baseCameraDistance/Number(document.getElementById('zoom').value);
+  const viewKey=manual?'manual':[tilt,bearing,distance.toFixed(1)].join(',');
+  const key=[lat.toFixed(5),lon.toFixed(5),size.toFixed(3),z,viewKey].join(',');
+  return {lat,lon,size,z,key,visible,tilt,bearing,distance,viewKey,manual,bounds:footprint.bounds,coverageBounds};
+}
+function reprojectPayload(incoming){
+  const [lon,lat,alt]=incoming.projectionCenter;
+  const sx=Math.PI/180*6378137*Math.cos(lat*Math.PI/180),sy=Math.PI/180*6378137;
+  const bx=Math.PI/180*6378137*Math.cos(referenceCenter[1]*Math.PI/180);
+  const convert=p=>[(p[0]/sx+lon-referenceCenter[0])*bx,(p[1]/sy+lat-referenceCenter[1])*sy,p[2]+alt-referenceCenter[2]];
+  const next={...incoming,mesh:incoming.mesh.map(convert)};
+  const center=convert([0,0,0]);
+  if(incoming.overlays){
+    const layers={};
+    for(const [key,layer] of Object.entries(incoming.overlays.layers)){
+      const projectFlat=values=>{const out=[];for(let i=0;i<values.length;i+=3)out.push(...convert(values.slice(i,i+3)));return out;};
+      layers[key]={triangles:projectFlat(layer.triangles),lines:projectFlat(layer.lines)};
+    }
+    next.overlays={...incoming.overlays,layers};
+  }
+  return {next,center};
+}
+function swapTerrain(incoming){
+  const {next,center}=reprojectPayload(incoming);
+  // 表示原点を維持し、旧バッファーを解放してから同じ描画面に差し替える。
+  for(const b of new Set([terrain,triangles,fullNormals,landTriangles,landNormals]))if(!overviewTerrain||![overviewTerrain.vertices,overviewTerrain.indices,overviewTerrain.normals].includes(b))gl.deleteBuffer(b);
+  delete data.landIndices;delete data.overlays;delete data.layerURL;Object.assign(data,next);updateDataSize();
+  terrain=buffer(data.mesh.flat());triangles=buffer(data.indices,gl.ELEMENT_ARRAY_BUFFER,Uint32Array);
+  fullNormals=buffer(terrainNormals(data.indices));
+  landTriangles=data.landIndices?buffer(data.landIndices,gl.ELEMENT_ARRAY_BUFFER,Uint32Array):triangles;
+  landNormals=data.landIndices?buffer(terrainNormals(data.landIndices)):fullNormals;
+  for(let i=0;i<3;i++)shadowCenter[i]=center[i];
+  terrainRadius=data.mesh.reduce((radius,p)=>Math.max(radius,Math.hypot(...p.map((v,i)=>v-center[i]))),1);
+  shadowKey='';loadedBounds=boundsOf(data.mesh);updateDetailCoverage(data.coverage);
+  rebuildOverlays();rebuildWire();rebuildLines();draw();
+  easeGroundHeight();
+  parent.postMessage({type:'terrain-ready',coverage:data.coverage,triangles:data.indices.length/3},location.origin);
+}
+function easeGroundHeight(){
+  const x=viewCenter[0],y=viewCenter[1];let height=null;
+  for(let i=0;i<data.indices.length;i+=3){
+    const a=data.mesh[data.indices[i]],b=data.mesh[data.indices[i+1]],c=data.mesh[data.indices[i+2]];
+    if(x<Math.min(a[0],b[0],c[0])||x>Math.max(a[0],b[0],c[0])||y<Math.min(a[1],b[1],c[1])||y>Math.max(a[1],b[1],c[1]))continue;
+    const den=(b[1]-c[1])*(a[0]-c[0])+(c[0]-b[0])*(a[1]-c[1]);
+    const w=((b[1]-c[1])*(x-c[0])+(c[0]-b[0])*(y-c[1]))/den;
+    const v=((c[1]-a[1])*(x-c[0])+(a[0]-c[0])*(y-c[1]))/den;
+    if(w>=-1e-6&&v>=-1e-6&&w+v<=1+1e-6){height=w*a[2]+v*b[2]+(1-w-v)*c[2];break;}
+  }
+  if(height===null)return;
+  if(Math.hypot(x-initialCenter[0],y-initialCenter[1])<1)initialCenter[2]=height;
+  const from=viewCenter[2],start=performance.now(),revision=++altitudeRevision;
+  function animate(now){if(revision!==altitudeRevision)return;const t=Math.min(1,(now-start)/400);viewCenter[2]=from+(height-from)*t*t*(3-2*t);draw();if(t<1)requestAnimationFrame(animate);}
+  requestAnimationFrame(animate);
+}
+let layerGeneration=0,pendingLayerURL=null;
+async function loadAdditionalLayers(incoming){
+  if(!incoming.layerURL||pendingLayerURL===incoming.layerURL)return;
+  pendingLayerURL=incoming.layerURL;const generation=++layerGeneration;
+  document.getElementById('layerStatus').textContent='河川・徒歩道・県境・水域を読み込み中…';
+  try{
+    const complete=await fetchTerrain(incoming.layerURL);
+    if(generation!==layerGeneration||data.coverage!==incoming.coverage)return;
+    swapTerrain(complete);document.getElementById('lodStatus').textContent=levelStatus();
+  }catch(error){if(generation===layerGeneration)document.getElementById('layerStatus').textContent='追加レイヤーを読み込めませんでした。'+error.message;}
+}
+async function updateLOD(){
+  if(lodBusy){lodQueued=true;return;}
+  const request=viewRequest();
+  if(!request.manual&&!data.coverage.progressiveTarget&&data.coverage.levelMode==='auto'&&request.z!==data.coverage.zoom&&request.size>loadedSize*.85&&request.size<loadedSize*1.15){
+    request.z=data.coverage.zoom;request.key=[request.lat.toFixed(5),request.lon.toFixed(5),request.size.toFixed(3),request.z,request.viewKey].join(',');
+  }
+  const inside=boundsContain(loadedBounds,request.bounds);
+  const resize=request.size<loadedSize*.55||request.size>loadedSize*1.8;
+  request.targetZ=request.z;
+  if(!request.manual&&overviewTerrain){
+    if(data.coverage.progressiveTarget&&data.coverage.zoom>=request.targetZ)delete data.coverage.progressiveTarget;
+    if(data.coverage.overviewFallback)request.z=Math.min(request.z,8);
+    else if(data.coverage.zoom<request.z)request.z=Math.min(request.z,Math.max(8,data.coverage.zoom+2));
+    request.key=[request.lat.toFixed(5),request.lon.toFixed(5),request.size.toFixed(3),request.z,request.viewKey].join(',');
+  }
+  if(request.key===failedLODKey)return;
+  const previousView=data.coverage.viewLOD;
+  const sameRiver=!data.overlays||data.overlays.riverLevel===riverLevelFor(request.size,request.lat);
+  const sameMode=data.coverage.levelMode===(request.manual?'manual':'auto');
+  const sameView=request.manual?!previousView:request.tilt<45?(!previousView||previousView[0]<45):(previousView&&previousView[0]===request.tilt&&previousView[1]===request.bearing&&Math.abs(previousView[2]/request.distance-1)<.1);
+  if((request.z===data.coverage.zoom&&inside&&!resize&&sameView&&sameMode&&sameRiver)||request.key===lastLODKey){if(!data.overlays&&!data.coverage.progressiveTarget&&!data.coverage.overviewFallback)loadAdditionalLayers(data);document.getElementById('lodStatus').textContent=levelStatus();return;}
+  lodBusy=true;const revision=lodRevision;
+  const status=document.getElementById('lodStatus');status.textContent=`地形を読み込み中（縮尺 ${request.z}${request.z<request.targetZ?' → '+request.targetZ:''}）…`;
+  try{
+    let incoming=lodCache.get(request.key);
+    if(!incoming){
+      const query=new URLSearchParams({lat:request.lat.toFixed(5),lon:request.lon.toFixed(5),size:request.size.toFixed(3),z:request.z,levelMode:request.manual?'manual':'auto',tilt:request.tilt,bearing:request.bearing,distance:request.distance.toFixed(1)});
+      query.set('format','binary');query.set('stage','terrain');
+      incoming=await fetchTerrain('/terrain-data?'+query);
+      incoming.layerURL='/terrain-data?'+new URLSearchParams({...Object.fromEntries(query),stage:'full'});
+      lodCache.set(request.key,incoming);while(lodCache.size>2)lodCache.delete(lodCache.keys().next().value);
+    }
+    if(revision!==lodRevision&&!usefulPanResponse(request,viewRequest()))return;
+    if(!incoming.polygon||!incoming.projectionCenter||!incoming.mesh?.length||!incoming.indices?.length)throw Error('表示できる地形がありません');
+    if(request.z<request.targetZ)incoming.coverage.progressiveTarget=request.targetZ;else delete incoming.coverage.progressiveTarget;
+    swapTerrain(incoming);loadedSize=request.size;lastLODKey=request.key;failedLODKey='';
+    status.textContent=levelStatus();if(request.z<request.targetZ)scheduleLOD();else loadAdditionalLayers(incoming);
+  }catch(error){if(revision===lodRevision){failedLODKey=request.key;status.textContent='地形を切り替えられませんでした。'+error.message+' 現在の表示を残しています。';}}
+  finally{lodBusy=false;if(lodQueued||revision!==lodRevision){lodQueued=false;clearTimeout(lodTimer);lodTimer=setTimeout(updateLOD,0);}}
+}
+if(dynamicLOD){document.getElementById('lodStatus').textContent=levelStatus();scheduleLOD();}
+else if(data.experimentalTIN&&!data.qemComparison)document.getElementById('lodStatus').textContent=`不規則 TIN の比較試作 ／ 縮尺 ${data.coverage.zoom} 固定`;
+draw();
+</script>
+</html>

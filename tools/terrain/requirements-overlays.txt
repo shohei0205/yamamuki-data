@@ -1,0 +1,5 @@
+pmtiles==3.8.1
+mapbox-vector-tile==2.2.0
+shapely==2.2.0
+
+scipy==1.18.1

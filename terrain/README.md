@@ -1,0 +1,64 @@
+﻿# 地形データの生成と表示の試作
+
+国土地理院の標高データから地形を生成し、圧縮方式・表示品質・データ量を比較するためのコード。アプリへの組み込みと Releases / Pages への公開処理は未実装。
+
+## 現在の方式
+
+- 全国分は L7〜L12、JPEG XL distance=0.2 のハイトマップ。法線マップは付けない。
+- 生成済み SQLite は 11,304 タイル、208,162,816 バイト。データ本体の合計は 189,770,484 バイト。
+- 海域と河川・湖沼は保存済み WAT1 / RIV1 ベクターを別に取得する。海域は三角形を直接描画し、地形の切り抜きには補助マスクを使う。河川・湖沼は補助マスクを通して描画する。
+- 河川は水面ポリゴンの形状で表示し、川幅を持たない中心線は描かない。画面上で約 0.5 描画ピクセル未満になる水面を近似判定で除く。
+- 海岸と河川・湖沼は、それぞれ自動／z10／z11／z12 を選択できる。河川は北海道などに未収録範囲がある。
+
+検証経緯と制約は [調査メモ](../tools/terrain/RESEARCH.md)、過去の実行手順は [試作の作業記録](../tools/terrain/README.md) にまとめている。作業記録には元の作業環境のパスや、終了した方式の記述も含まれる。
+
+## 配置
+
+既存スクリプトの `tools/` と `build/` の相対パスを保つため、コードはリポジトリ直下の `tools/terrain/` と `tools/terrain-rs/` に置く。
+
+| 場所 | 内容 |
+|---|---|
+| `tools/terrain/` | 標高取得、変換、比較用 HTML / JavaScript、中継サーバー、テスト |
+| `tools/terrain-rs/` | Rust の地形・LOD・JPEG XL 生成器と圧縮比較 |
+| `build/` | ローカルの元データ・生成物・外部ツール。Git 対象外 |
+
+生成済みデータと実行ファイル、Python 仮想環境は移行元に残しており、このブランチには含めていない。元データの取り直しや全国生成を始める前に、必要な保存済みファイルを用意する。
+
+## ローカルの準備と表示
+
+Python 3 と、使う処理に応じた依存パッケージが必要。
+
+```powershell
+python -m venv build/terrain-venv
+build/terrain-venv/Scripts/python.exe -m pip install -r tools/terrain/requirements.txt
+build/terrain-venv/Scripts/python.exe -m pip install -r tools/terrain/requirements-overlays.txt
+build/terrain-venv/Scripts/python.exe tools/terrain/heightmap_server.py --port 61440
+```
+
+比較用の PNG / JPEG XL、SQLite、海域・水域データを `build/` に用意した後、`http://127.0.0.1:61440/heightmap` と `http://127.0.0.1:61440/national-shading` で確認する。ファイルがない状態では比較画面は動かない。JPEG XL の動的圧縮には別途エンコーダー／デコーダーが必要で、導入は `tools/terrain/setup_codec_tools.py` を参照する。
+
+Rust のビルドは `tools/terrain-rs/build.ps1`、実行は `tools/terrain-rs/run.ps1` を使う。GEOS を使うポリゴン生成と、JPEG XL の処理には対応する外部ライブラリが必要。利用可能なコマンドはビルド後に `tools/terrain-rs/run.ps1 --help` で確認できる。
+
+## テスト
+
+```powershell
+build/terrain-venv/Scripts/python.exe -m unittest discover -s tools/terrain -p 'test_*.py'
+```
+
+ブラウザーのテストは Node.js、Playwright、Microsoft Edge と、生成済みの比較データおよび起動済みのローカルサーバーを必要とする。例：
+
+```powershell
+node tools/terrain/test_tokyo_water.cjs
+```
+
+過去の方式を対象とするテストは、その方式の生成物も必要。すべての比較データを再生成するテストではない。
+
+## 出典
+
+標高は国土地理院。海域・河川・湖沼は参照用に保存したデータパックから取得する。各データの由来と利用条件は調査メモに記載している。OpenStreetMap 由来の情報には © OpenStreetMap contributors（ODbL）が適用される。データを配布するときは、出典とライセンスを添付する。
+
+## 移行時の検証（2026-10-18）
+
+Python テストは 117 件中 110 件が成功。残る 7 件は、動的 JPEG XL の比較用法線データがない 3 件、既定の陰影画像がない 1 件、検証用 Ruby がない 2 件、サンドボックスのローカル通信制限による 1 件。必要なローカル資材を用意して再実行する必要がある。
+
+東京湾のブラウザー確認は移行元の生成済みデータとサーバーで実施済み。L4 / L7、傾き 0° / 55°、海岸と河川の異なるレベル指定、自動への復帰、地域表示で WebGL エラーがないことを確認した。移行先には生成物を含めていないため、そのままではこのブラウザーテストを実行できない。
