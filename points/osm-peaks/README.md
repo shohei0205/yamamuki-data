@@ -314,3 +314,7 @@ Python 3.12 と osmium-tool を使い、単体テストと小さな PBF によ�
 ```bash
 python -m unittest discover -s tests -v
 ```
+
+### 作業ブランチでの生成確認
+
+Actions の手動実行で作業ブランチを選ぶと、生成と検査まで実行し、配布ファイルを artifact に 7 日間保存する。Release の作成と Pages の更新は行わない。生成された manifest の URL は確認用で、配布先への公開を意味しない。
