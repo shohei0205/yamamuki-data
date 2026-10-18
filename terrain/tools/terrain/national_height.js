@@ -84,12 +84,8 @@ function selection(){
  lodParameters={distanceLOD:mode.startsWith('auto'),base:baseLevel,target:targetLevel,ground:!!groundCamera,scale,center,bearing,tilt:Number($('tilt').value)*Math.PI/180,height:canvas.height,fov:groundCamera?.fov||Math.PI/3};
  const plan=TerrainLOD.choose(lodRoots,index,visible,lodParameters);wanted=plan.requests;lodCoverageLimited=plan.coverageLimited;const draw=[];
  const available=plan.leaves.map(leaf=>{let node=leaf;while(node&&!cache.has(key(...node.row)))node=node.parent;return {leaf,node};}).filter(record=>record.node);
- let commonLevel=null;
- if(lodParameters.distanceLOD&&TerrainLOD.topView(lodParameters)&&available.length){
-  for(let z=Math.min(...available.map(r=>r.node.row[0]));z>=baseLevel;z--){if(available.every(({leaf})=>{let node=leaf;while(node&&node.row[0]>z)node=node.parent;return node?.row[0]===z&&cache.has(key(...node.row));})){commonLevel=z;break;}}
- }
- const uniformSeen=new Set();
- for(const record of available){let {leaf,node}=record;if(commonLevel!==null){node=leaf;while(node.row[0]>commonLevel)node=node.parent;const id=key(...node.row);if(uniformSeen.has(id))continue;uniformSeen.add(id);leaf=node;}const item=cache.get(key(...node.row));const [z,x,y]=leaf.row,factor=2**(z-item.row[0]);item.used=frame;const patch={...item,displayRow:leaf.row,range:[x/factor-item.row[1],y/factor-item.row[2],1/factor,1/factor]};patch.lodN=TerrainLOD.mesh(patch,lodParameters);draw.push(patch);}
+ // 新しく見えた区画だけを親データで補い、取得済みの画面全体を親へ戻さない。
+ for(const {leaf,node} of available){const item=cache.get(key(...node.row));const [z,x,y]=leaf.row,factor=2**(z-item.row[0]);item.used=frame;const patch={...item,displayRow:leaf.row,range:[x/factor-item.row[1],y/factor-item.row[2],1/factor,1/factor]};patch.lodN=TerrainLOD.mesh(patch,lodParameters);draw.push(patch);}
  lodMeshPoints=TerrainLOD.fitMeshes(draw,lodParameters);
  const signature=draw.map(i=>`${i.displayRow.slice(0,3)}/${i.row[0]}/${i.lodN}`).join(';');if(signature!==lodSignature){lodSignature=signature;lodRevision++;}
  lodEdges=HeightLODEdges.create(draw,lodParameters,(u,v,z)=>HeightBoundaries.sample(u,v,z,cache,index));pump();return draw;
