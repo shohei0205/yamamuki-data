@@ -174,6 +174,8 @@ class GsiReleaseTests(unittest.TestCase):
                         else:
                             target.publish('test-1', root)
                         create = calls.call_args_list[0].args
+                        self.assertEqual(create[2], 'gsi-peaks-' + ('dev-' if branch == 'dev' else '') + 'test-1')
+                        self.assertEqual(create[create.index('--title') + 1], 'gsi-peaks-test-1')
                         self.assertEqual('--prerelease' in create, branch == 'dev')
                         self.assertIn('--latest=false', create)
                         edits = [call for call in calls.call_args_list if call.args[:2] == ('release', 'edit')]
