@@ -11,3 +11,16 @@ const meshes=plan.leaves.map(node=>({row:node.row,displayRow:node.row,range:[0,0
 
 const uniform=LOD.choose(roots,index,()=>true,{...p,ground:false,tilt:0});assert.equal(new Set(uniform.leaves.map(n=>n.row[0])).size,1);assert.ok(uniform.leaves.length<=64);assert.ok(uniform.requests.length<=96);
 const topMeshes=Array.from({length:12},()=>({row:roots[0],displayRow:roots[0],range:[0,0,1,1],lodN:128}));const topPoints=LOD.fitMeshes(topMeshes,{...p,ground:false,tilt:0});assert.ok(topMeshes.every(i=>i.lodN===128));assert.ok(topPoints<=LOD.topMeshPointBudget);const crowdedMeshes=Array.from({length:64},()=>({row:roots[0],displayRow:roots[0],range:[0,0,1,1],lodN:128}));assert.ok(LOD.fitMeshes(crowdedMeshes,{...p,ground:false,tilt:0})<=LOD.topMeshPointBudget);assert.equal(new Set(crowdedMeshes.map(i=>i.lodN)).size,1);console.log('真上：一律レベル・一律分割・30万点以内 OK');
+
+// 手動では自動予算を超えても選んだデータレベルと分割数を保つ。
+for(const ground of [false,true]){
+ const manual={...p,target:11,ground,distanceLOD:false};
+ const selected=LOD.choose(roots,index,()=>true,manual,4,8);
+ assert.equal(selected.leaves.length,256);
+ assert.ok(selected.leaves.every(n=>n.row[0]===11));
+ assert.equal(selected.coverageLimited,false);
+ const items=selected.leaves.map(n=>({row:n.row,range:[0,0,1,1],lodN:LOD.mesh({row:n.row,range:[0,0,1,1]},manual)}));
+ assert.equal(LOD.fitMeshes(items,manual,100),256*129**2);
+ assert.ok(items.every(i=>i.lodN===128));
+}
+console.log('手動：指定レベルと分割数を維持 OK');

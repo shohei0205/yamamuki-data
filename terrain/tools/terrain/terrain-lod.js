@@ -23,6 +23,7 @@ const TerrainLOD={
   return Math.max(p.base,p.target-reduction);
  },
  mesh(item,p){
+  if(p.distanceLOD===false)return 128;
   const [z]=item.row,span=this.world/2**z*item.range[2];
   const row=item.displayRow||item.row,distance=Math.max(40,this.distance(row,p));
   const pixels=p.ground?span*p.height/(2*Math.tan(p.fov/2)*distance):span*p.height/(2*p.scale);
@@ -30,6 +31,7 @@ const TerrainLOD={
  },
  fitMeshes(items,p,budget=this.pointBudget(p)){
   const cost=item=>(item.lodN+1)**2;
+  if(p.distanceLOD===false)return items.reduce((n,item)=>n+cost(item),0);
   if(this.topView(p)&&items.length){let n=Math.max(...items.map(item=>item.lodN));while(n>16&&items.length*(n+1)**2>budget)n/=2;for(const item of items)item.lodN=n;return items.length*(n+1)**2;}
   let points=items.reduce((n,item)=>n+cost(item),0);
   const ordered=[...items].sort((a,b)=>this.distance(b.displayRow||b.row,p)-this.distance(a.displayRow||a.row,p));
@@ -37,6 +39,7 @@ const TerrainLOD={
   return points;
  },
  choose(roots,index,visible,p,budget=this.tileBudget,requestBudget=this.requestBudget){
+  if(p.distanceLOD===false){budget=Infinity;requestBudget=Infinity;}
   const leaves=new Set(),queue=[];let nodes=0;
   const add=node=>{nodes++;leaves.add(node);if(node.row[0]<this.limit(node.row,p))queue.push(node);};
   const initial=roots.filter(visible).sort((a,b)=>this.distance(a,p)-this.distance(b,p));for(const row of initial.slice(0,budget))add({row,parent:null});
