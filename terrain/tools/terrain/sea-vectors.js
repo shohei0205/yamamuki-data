@@ -6,15 +6,15 @@ window.SeaVectors=class {
   const shader=(type,source)=>{const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s;};
   this.program=gl.createProgram();
   gl.attachShader(this.program,shader(gl.VERTEX_SHADER,`#version 300 es
-  precision highp float;in vec2 uv;out vec2 mapUV;uniform mat4 matrix;uniform vec2 worldSize;uniform bool national;uniform vec2 center;uniform float scale;uniform float aspect;uniform float bearing;uniform float tilt;uniform float depthRange;
+  precision highp float;in vec2 uv;out vec2 mapUV;uniform mat4 matrix;uniform vec2 worldSize;uniform bool national;uniform vec2 center;uniform float scale;uniform float aspect;uniform float bearing;uniform float tilt;uniform float depthRange;uniform bool groundView;uniform float eyeHeight;uniform float viewPitch;uniform float viewDistance;uniform float fieldOfView;
   void main(){mapUV=uv;vec3 p=vec3((uv-0.5)*worldSize*vec2(1.0,-1.0),0.3);
-   if(national){p.xy-=center;p.xy=mat2(cos(bearing),-sin(bearing),sin(bearing),cos(bearing))*p.xy;vec3 q=vec3(p.x,p.y*cos(tilt)+p.z*sin(tilt),-p.y*sin(tilt)+p.z*cos(tilt));gl_Position=vec4(q.x/(scale*aspect),q.y/scale,-q.z/depthRange,1.0);}
+   if(national){p.xy-=center;p.xy=mat2(cos(bearing),-sin(bearing),sin(bearing),cos(bearing))*p.xy;vec3 q=vec3(p.x,p.y*cos(tilt)+p.z*sin(tilt),-p.y*sin(tilt)+p.z*cos(tilt));if(groundView){float dz=p.z-eyeHeight,forward=p.y*cos(viewPitch)+dz*sin(viewPitch),vertical=dz*cos(viewPitch)-p.y*sin(viewPitch),f=1.0/tan(fieldOfView*.5),near=.5;gl_Position=vec4(p.x*f/aspect,vertical*f,(viewDistance+near)/(viewDistance-near)*forward-2.0*viewDistance*near/(viewDistance-near),forward);}else gl_Position=vec4(q.x/(scale*aspect),q.y/scale,-q.z/depthRange,1.0);}
    else gl_Position=matrix*vec4(p,1.0);
   }`));
   gl.attachShader(this.program,shader(gl.FRAGMENT_SHADER,`#version 300 es
   precision highp float;in vec2 mapUV;uniform bool maskSea;uniform sampler2D waterMask;uniform vec4 waterBounds;out vec4 color;void main(){if(maskSea){vec2 uv=(mapUV-waterBounds.xy)/waterBounds.zw;if(any(lessThan(uv,vec2(0.0)))||any(greaterThan(uv,vec2(1.0)))||texture(waterMask,uv).b<0.5)discard;}color=vec4(0.12,0.35,0.55,1.0);}`));
   gl.linkProgram(this.program);if(!gl.getProgramParameter(this.program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(this.program));
-  this.uniforms=Object.fromEntries(['maskSea','waterMask','waterBounds','matrix','worldSize','national','center','scale','aspect','bearing','tilt','depthRange'].map(k=>[k,gl.getUniformLocation(this.program,k)]));
+  this.uniforms=Object.fromEntries(['groundView','eyeHeight','viewPitch','viewDistance','fieldOfView','maskSea','waterMask','waterBounds','matrix','worldSize','national','center','scale','aspect','bearing','tilt','depthRange'].map(k=>[k,gl.getUniformLocation(this.program,k)]));
   this.vao=gl.createVertexArray();this.buffer=gl.createBuffer();
   const previous=gl.getParameter(gl.VERTEX_ARRAY_BINDING);gl.bindVertexArray(this.vao);gl.bindBuffer(gl.ARRAY_BUFFER,this.buffer);const location=gl.getAttribLocation(this.program,'uv');gl.enableVertexAttribArray(location);gl.vertexAttribPointer(location,2,gl.FLOAT,false,0,0);gl.bindVertexArray(previous);
   this.maskVAO=gl.createVertexArray();const quad=gl.createBuffer();gl.bindVertexArray(this.maskVAO);gl.bindBuffer(gl.ARRAY_BUFFER,quad);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([0,0,1,0,0,1,1,0,1,1,0,1]),gl.STATIC_DRAW);gl.enableVertexAttribArray(location);gl.vertexAttribPointer(location,2,gl.FLOAT,false,0,0);gl.bindVertexArray(previous);
@@ -35,7 +35,7 @@ window.SeaVectors=class {
  }
  draw(options){
   if(options.source)this.updateDetailed(options.source);const detailed=!!options.source?.hasSea&&!!this.detailedVAO;if(!this.count&&!options.mask&&!detailed)return;const gl=this.gl,program=gl.getParameter(gl.CURRENT_PROGRAM),vao=gl.getParameter(gl.VERTEX_ARRAY_BINDING),u=this.uniforms;
-  gl.useProgram(this.program);gl.bindVertexArray(detailed?this.detailedVAO:options.mask?this.maskVAO:this.vao);gl.uniform1i(u.maskSea,!detailed&&!!options.mask);gl.uniform1i(u.waterMask,6);gl.uniform4fv(u.waterBounds,options.bounds||[0,0,1,1]);gl.uniform1f(u.depthRange,options.depthRange||2*Math.max(...options.worldSize));gl.uniform1i(u.national,!!options.national);gl.uniform2f(u.worldSize,...options.worldSize);
+  gl.useProgram(this.program);gl.uniform1i(u.groundView,!!options.groundView);for(const k of ['eyeHeight','viewPitch','viewDistance','fieldOfView'])gl.uniform1f(u[k],options[k]||(k==='viewDistance'?50000:k==='fieldOfView'?Math.PI/3:0));gl.bindVertexArray(detailed?this.detailedVAO:options.mask?this.maskVAO:this.vao);gl.uniform1i(u.maskSea,!detailed&&!!options.mask);gl.uniform1i(u.waterMask,6);gl.uniform4fv(u.waterBounds,options.bounds||[0,0,1,1]);gl.uniform1f(u.depthRange,options.depthRange||2*Math.max(...options.worldSize));gl.uniform1i(u.national,!!options.national);gl.uniform2f(u.worldSize,...options.worldSize);
   if(options.national){gl.uniform2f(u.center,...options.center);for(const k of ['scale','aspect','bearing','tilt'])gl.uniform1f(u[k],options[k]);}else gl.uniformMatrix4fv(u.matrix,false,options.matrix);
   gl.drawArrays(gl.TRIANGLES,0,detailed?this.detailedCount:options.mask?6:this.count);gl.bindVertexArray(vao);gl.useProgram(program);
  }

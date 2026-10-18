@@ -1,0 +1,6 @@
+const assert=require('node:assert/strict'),g=require('./ground-camera.js');global.HeightMesh=require('./height-mesh.js');
+const near=(a,b)=>assert.ok(Math.abs(a-b)<1e-6,`${a} != ${b}`);
+for(const bearing of [0,.7,Math.PI/2])for(const tilt of [0,.6,1.2]){const east=700,north=350,z=2300,c=Math.cos(bearing),s=Math.sin(bearing),x=c*east+s*north,y=-s*east+c*north,qy=y*Math.cos(tilt)+z*Math.sin(tilt),qz=-y*Math.sin(tilt)+z*Math.cos(tilt),out=g.unproject(x/2000/1.5,qy/2000,.5-qz/40000000,{scale:2000,aspect:1.5,bearing,tilt});[east,north,z].forEach((v,i)=>near(v,out[i]));}
+for(const pitch of [0,.4,-.3]){const forward=2000,up=300,x=500,far=50000,nearClip=.5,f=1/Math.tan(Math.PI/6),ndcZ=(far+nearClip)/(far-nearClip)-2*far*nearClip/(far-nearClip)/forward,out=g.unproject(x*f/1.5/forward,up*f/forward,(ndcZ+1)/2,{perspective:true,aspect:1.5,bearing:0,pitch,eyeHeight:1000,distance:far});near(out[0],x);near(out[1],forward*Math.cos(pitch)-up*Math.sin(pitch));near(out[2],1000+forward*Math.sin(pitch)+up*Math.cos(pitch));}
+const values=new Float32Array(65536).fill(500),edges=new Float32Array(16);for(let i=0;i<8;i++){edges[i*2]=500;edges[i*2+1]=1;}const indices=HeightMesh.indices(values,[0,0,1,1],1,edges);near(g.surface(values,[0,0,1,1],1,edges,indices,.3,.7),500);
+console.log('カメラ：俯瞰の逆投影・透視変換の逆投影・表示三角形上の標高 OK');
