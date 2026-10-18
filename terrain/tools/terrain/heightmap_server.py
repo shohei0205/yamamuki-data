@@ -38,6 +38,14 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         route = self.path.split('?')[0]
+        if route=='/national-height':
+            self.path='/national_height.html';super().do_GET();return
+        if route in ('/national_height.html','/national_height.js'):
+            super().do_GET();return
+        if route=='/national-height-data/manifest.json' or re.fullmatch(r'/national-height-data/(?:[7-9]|1[0-2])/[0-9]{1,4}/[0-9]{1,4}[.](?:png|mask)',route):
+            path=ROOT/'build/terrain-height-browser'/route[len('/national-height-data/'):]
+            if not path.is_file():self.send_error(404);return
+            body=path.read_bytes();self.send_response(200);self.send_header('Content-Type','application/json' if path.suffix=='.json' else 'image/png' if path.suffix=='.png' else 'application/octet-stream');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
         if route=='/water-tiles':
             try:
                 from water_tile_relay import relay

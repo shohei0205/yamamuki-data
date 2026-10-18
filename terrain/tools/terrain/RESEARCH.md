@@ -301,3 +301,7 @@ WAT1 の外周と穴を復元し、穴を避けて三角形化する。河川線
 - 2026-10-18: コードを `terrain/tools/terrain/` と `terrain/tools/terrain-rs/` に集約。コマンドは `terrain/` を作業ディレクトリとして実行し、生成物と外部ツールは `terrain/build/` に置く。
 
 - 2026-10-18: 元の `yamamuki-org/build/` の全資材をデータ用作業チェックアウトの `terrain/build/` へ移動。主要 SQLite 3 件の検査、Python 117 件とビューワーのブラウザーテストが成功。今後の作業ルートは `yamamuki-data-org/.worktrees/terrain-heightmap/terrain/` とする。
+
+- 2026-10-18: 新しい作業先で全国 L7〜L12・JPEG XL d=0.2・法線なしを再生成。出力は `build/terrain-height-jxl-national-L7-L12-d02-regenerated/terrain-height-jxl.sqlite3`。11,304 タイル、208,162,816 バイト、約 207 秒。SQLite integrity_check、元 DEM との座標一致、既存完成版との全タイルの標高 BLOB・有効マスク・標高スケール一致を検証。元データパスを含むメタデータが変わるため DB 全体の SHA-256 は旧版と異なる。旧完成版も保持。
+
+- 2026-10-18: 再生成 DB を使う全国ブラウザー `/national-height` を追加。事前復号した 16 bit 相当の RG PNG と元の Zstd 有効マスクを配信し、ブラウザーで標高復元・地形投影・陰影・L7〜L12 自動／手動切替を処理する。全国 42 タイル、富士山 L9〜L12、北海道、移動・傾き、元 DB の SHA-256 一致をブラウザーで検証。表示用 PNG は JPEG XL より転送量が増えるため両方の量を表示し、配布形式と区別する。

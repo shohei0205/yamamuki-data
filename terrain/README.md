@@ -69,3 +69,20 @@ Python テストは 117 件中 110 件が成功。残る 7 件は、動的 JPEG 
 配置変更後、ローカル通信を許可して SQLite 中継のテスト 5 件を再実行し、すべて成功した。比較用データ・Ruby が必要な 6 件は未解消。
 
 2026-10-18 に元のアプリ作業先から `terrain/build/` へローカルデータと実行環境を移動した。移動後は Python テスト 117 件がすべて成功し、主要 SQLite 3 件の quick_check と、移行先での東京湾・地域表示のブラウザー確認も成功した。ビューワーは引き続きポート 61440 で利用できる。移動記録と主要ファイルの SHA-256 はローカルの `build/data-migration.json` に保存している。
+
+## 全国ハイトマップをブラウズする
+
+全国 L7〜L12・JPEG XL d=0.2・法線なしの再生成済みデータから、ブラウザー表示用キャッシュを作成する。以下は `terrain/` 内で実行する。
+
+```powershell
+build/terrain-venv/Scripts/python.exe tools/terrain/prepare_height_browser.py
+build/terrain-venv/Scripts/python.exe tools/terrain/heightmap_server.py --port 61440
+```
+
+`http://127.0.0.1:61440/national-height` を開く。初期表示は全国 L7。移動・拡大に応じて L12 まで切り替え、レベルの手動指定もできる。左ドラッグで移動、ホイールで拡大縮小、右ドラッグで方角と傾きを変える。槍ヶ岳・富士山・筑波山への移動ボタンもある。高レベルの広域指定は、表示範囲を拡大するまでタイル数を制限する。
+
+JPEG XL の 16 bit 標高をブラウザーで直接復号する代わりに、`djxl` で一度だけ復号した値を PNG の R・G に分けて保存する。標高値を 8 bit へ落とさず、元の最小標高・スケールと有効範囲マスクも使用する。サーバーは保存済みファイルを中継し、投影・陰影・LOD・キャッシュはブラウザーで処理する。法線マップと海岸線の追加レイヤーは使わない。表示用 PNG の転送量と、配布用 JPEG XL の容量は画面で区別して表示する。
+
+キャッシュは `build/terrain-height-browser/` に置く。生成途中から再開でき、別の元 DB と混在させないため SHA-256 を確認する。ブラウザーのタイルキャッシュには上限を設け、未取得部分は親レベルで補う。中心の緯度経度を URL で指定する例は `/national-height?lat=35.3606&lon=138.7274&span=45`（表示範囲の基準 45 km）。
+
+検証は `python -m unittest discover -s tools/terrain -p test_prepare_height_browser.py` と `node tools/terrain/test_national_height.cjs`。後者は全国、富士山 L9〜L12、北海道、傾き、移動と元 DB の SHA-256 を確認する。

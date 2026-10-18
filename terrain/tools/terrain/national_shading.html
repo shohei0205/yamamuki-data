@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>全国の法線・縮小陰影比較</title>
 <style>body{margin:0;font:14px system-ui;color:#203e4c;background:#cedfe8}canvas{display:block;width:100vw;height:100vh}header{position:fixed;left:10px;right:10px;top:10px;background:#fffffff0;border-radius:10px;padding:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}button,select{padding:6px}button[aria-pressed=true]{background:#205c77;color:white}label{white-space:nowrap}#status,#description,#metrics{width:100%;font-size:12px}#status[role=alert]{color:#a22720}footer{position:fixed;bottom:8px;left:8px;background:#ffffffe8;border-radius:6px;padding:7px;font-size:12px}a{color:#155c8c}input[type=range]{width:95px}</style>
-<header><strong>全国・陰影の比較</strong><button id="normalMode" aria-pressed="true" disabled>詳細法線</button><button id="shadeMode" aria-pressed="false" disabled>縮小した陰影画像</button>
+<header><a href="/national-height">全国ハイトマップ</a><strong>全国・陰影の比較</strong><button id="normalMode" aria-pressed="true" disabled>詳細法線</button><button id="shadeMode" aria-pressed="false" disabled>縮小した陰影画像</button>
 <label>表示レベル <select id="geometryLevel" disabled><option value="4">L4</option><option value="5">L5</option><option value="6">L6</option><option value="7">L7</option></select></label>
 <label>法線の細かさ <select id="normalResolution"><option value="detail">表示より 1 段詳細（上限 L7）</option><option value="equal" selected>表示レベルと同じ</option></select></label>
 <label>太陽の方角 <input title="0°＝北、90°＝東、180°＝南、270°＝西" id="sunAzimuth" type="range" min="0" max="360" step="1" value="315"><output id="sunAzimuthValue">315°</output></label>
