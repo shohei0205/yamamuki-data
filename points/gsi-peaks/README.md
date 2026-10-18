@@ -198,7 +198,7 @@ git add points/gsi-peaks/gsi-peaks-source.json points/gsi-peaks/supplements.json
 
 オリジナルの地点 JSON と `snapshot.json` を同じコミットで更新する。地点 JSON だけを編集すると SHA-256 が一致せず、公開処理は停止する。元データは手元で保管し、JSON の取り込み後も削除しない。
 
-取り込んだ変更を `dev` または `main` にマージしたあと、Actions の「地点 / 国土地理院山頂：生成・検査」から「Run workflow」で実行元ブランチを選ぶ。元データの取得・山頂の再抽出・標高補完は行わず、コミット済みの JSON を検証して gzip を作る。実行元が `dev` なら `gsi-peaks-dev-<version>` のプレリリース、`main` なら `gsi-peaks-<version>` の Release を作る。版には UTC 日時・実行番号・再実行番号を使う。
+取り込んだ変更を `dev` または `main` にマージしたあと、Actions の「地点 / 国土地理院山頂：Release 生成・検査」から「Run workflow」で実行元ブランチを選ぶ。元データの取得・山頂の再抽出・標高補完は行わず、コミット済みの JSON を検証して gzip を作る。実行元が `dev` なら `gsi-peaks-dev-<version>` のプレリリース、`main` なら `gsi-peaks-<version>` の Release を作る。版には UTC 日時・実行番号・再実行番号を使う。
 
 Release には「[アプリ用データと確認・編集用の添付](#アプリ用データと確認編集用の添付)」のファイルを添付する。下書きにアップロードしたあと、全ファイルを取り直してバイト列の一致を確認してから公開する。既存の Release は差し替えず、リポジトリ全体の Latest にも設定しない。この Action では Pages の manifest や地点カタログは更新しない。
 

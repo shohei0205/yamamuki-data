@@ -1,4 +1,4 @@
-name: 地点 / 国土地理院山頂：生成・検査
+name: 地点 / 国土地理院山頂：Release 生成・検査
 
 on:
   workflow_dispatch:
