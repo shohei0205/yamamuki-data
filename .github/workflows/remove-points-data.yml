@@ -26,9 +26,6 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    defaults:
-      run:
-        working-directory: points/osm-peaks
     env:
       PYTHONUNBUFFERED: '1'
       GH_REPO: ${{ github.repository }}
@@ -44,7 +41,7 @@ jobs:
           DATASET: ${{ inputs.dataset }}
           RELEASE_CHANNEL: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
           PAGES_DIRECTORY: ${{ github.workspace }}/build/pages
-        run: python -m scripts.release_data remove-dataset --dataset "$DATASET" --channel "$RELEASE_CHANNEL"
+        run: python -m release_tools.release_data remove-dataset --dataset "$DATASET" --channel "$RELEASE_CHANNEL"
       - name: 更新した配布サイトを保存
         uses: actions/upload-pages-artifact@v4
         with:
@@ -53,4 +50,4 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
       - name: 配置したカタログと公開履歴を確認
-        run: python -m scripts.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"
+        run: python -m release_tools.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"

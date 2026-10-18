@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: 公開入口と実行概要のテスト
-        run: python -m unittest release_tools.tests.test_publish_reviewed release_tools.tests.test_point_release release_tools.tests.test_workflow_summary -v
+        run: python -m unittest release_tools.tests.test_publish_reviewed release_tools.tests.test_point_release release_tools.tests.test_shared_release_data release_tools.tests.test_workflow_summary -v
 
   points-viewer:
     name: 地点 / 共通ビューア

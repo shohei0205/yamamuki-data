@@ -106,7 +106,8 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v5
       - name: 配置した manifest 一覧を確認
+        working-directory: .
         if: steps.publication.outputs.pages_ready == 'true'
         env:
           GH_REPO: ${{ github.repository }}
-        run: python -m release_tools.point_release --verify-pages "$GITHUB_WORKSPACE/build/pages"
+        run: python -m release_tools.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"

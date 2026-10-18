@@ -12,11 +12,11 @@ import sys
 import tempfile
 import zlib
 
-from release_tools.publish_reviewed import ROOT, check_branch, check_dataset, dataset_for_tag, version_for_tag
+from release_tools.publish_reviewed import ROOT, check_branch, dataset_for_tag, version_for_tag
 
 # 地点の形式検証と Pages の処理は既存の共通実装を使う。
 sys.path.insert(0, str(ROOT / "points/osm-peaks"))
-from scripts import release_data as site
+from release_tools import release_data as site
 from scripts.check_release import source_time, MAX_UNCOMPRESSED_BYTES
 from scripts.build_data import MAX_SIZE_BYTES
 from scripts.distribution_parts import filenames, validate_parts
@@ -27,17 +27,11 @@ from document_metadata import validate_metadata, name_reading, metadata_maps
 
 
 def release_tag(dataset, version, channel):
-    tag = dataset + ("-dev-" if channel == "dev" else "-") + version
-    version_for_tag(dataset, tag, channel)
-    return tag
+    return site.release_tag(version, channel, dataset=dataset)
 
 
 def manifest_path(dataset, channel):
-    # Release から得た ID を検証し、地点データ共通のパスに配置する。
-    check_dataset(dataset)
-    if channel not in ("stable", "dev"):
-        raise ValueError("データ種別または配布先が不正です")
-    return "points/" + dataset + ("-dev" if channel == "dev" else "") + "/manifest.json"
+    return site.manifest_path(channel, dataset=dataset)
 
 
 def validate(directory, dataset, tag, channel):

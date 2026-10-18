@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts import release_data
+from release_tools import release_data as common
 from test_check_release import dataset
 
 
@@ -18,8 +19,8 @@ class ReleaseDataTests(unittest.TestCase):
                     patch.object(release_data, "validate", return_value=self.current), \
                     patch.object(release_data, "previous_release", return_value=self.current), \
                     patch.object(release_data, "assess", side_effect=AttributeError("比較処理の失敗")), \
-                    patch.object(release_data, "gh", return_value="https://example.com/draft") as gh, \
-                    patch.object(release_data, "output") as output:
+                    patch.object(common, "gh", return_value="https://example.com/draft") as gh, \
+                    patch.object(common, "output") as output:
                 def check_notes(*args):
                     notes = Path(args[args.index("--notes-file") + 1]).read_text(encoding="utf-8-sig")
                     self.assertIn("AttributeError", notes)
@@ -41,11 +42,11 @@ class ReleaseDataTests(unittest.TestCase):
         self.addCleanup(self.environment.stop)
 
     def run_publish(self, *, warnings=None, manual=False, expected=None, draft=True):
-        with patch.object(release_data, "gh", return_value=json.dumps([[dict(tag_name='osm-peaks-test', draft=draft, prerelease=False)]])) as gh, \
+        with patch.object(common, "gh", return_value=json.dumps([[dict(tag_name='osm-peaks-test', draft=draft, prerelease=False)]])) as gh, \
                 patch.object(release_data, "fetch", return_value=self.current), \
                 patch.object(release_data, "previous_release", return_value=self.current), \
                 patch.object(release_data, "assess", return_value=warnings or []), \
-                patch.object(release_data, "update_latest") as update:
+                patch.object(common, "update_latest") as update:
             release_data.publish("osm-peaks-test", expected or "a" * 64, manual=manual, reason="意図した減少を確認")
             self.assertEqual(update.called, manual or not warnings)
             return [call.args for call in gh.call_args_list]
@@ -62,7 +63,7 @@ class ReleaseDataTests(unittest.TestCase):
                     patch.object(release_data, "validate", return_value=self.current), \
                     patch.object(release_data, "previous_release", return_value=self.current), \
                     patch.object(release_data, "assess", return_value=warnings), \
-                    patch.object(release_data, "gh", return_value="https://github.com/owner/repo/releases/tag/untagged-123\n"):
+                    patch.object(common, "gh", return_value="https://github.com/owner/repo/releases/tag/untagged-123\n"):
                 summary_path = self.test_output / "summary.md"
                 summary_path.write_text("", encoding="utf-8")
                 release_data.prepare(directory, "dev")
@@ -77,7 +78,7 @@ class ReleaseDataTests(unittest.TestCase):
                     patch.object(release_data, "validate", return_value=self.current), \
                     patch.object(release_data, "previous_release", return_value=self.current), \
                     patch.object(release_data, "assess", return_value=[]), \
-                    patch.object(release_data, "gh", return_value="https://example.com/release") as gh:
+                    patch.object(common, "gh", return_value="https://example.com/release") as gh:
                 release_data.prepare(directory, channel)
                 arguments = gh.call_args.args
                 self.assertEqual(arguments[arguments.index("--title") + 1], arguments[2])
@@ -87,25 +88,25 @@ class ReleaseDataTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(release_data, "validate", return_value=self.current), \
                 patch.object(release_data, "previous_release", return_value=None), \
-                patch.object(release_data, "gh", side_effect=RuntimeError("作成失敗")):
+                patch.object(common, "gh", side_effect=RuntimeError("作成失敗")):
             with self.assertRaises(RuntimeError):
                 release_data.prepare(directory)
             self.assertNotIn("生成したリリースを開く", (self.test_output / "summary.md").read_text(encoding="utf-8"))
 
     def test_missing_previous_release_requires_manual_initialization(self):
-        for manual, initialize, error in ((True, "true", release_data.MissingPreviousRelease("削除済み")),
-                                          (True, "false", release_data.MissingPreviousRelease("削除済み")),
-                                          (False, "true", release_data.MissingPreviousRelease("削除済み")),
+        for manual, initialize, error in ((True, "true", common.MissingPreviousRelease("削除済み")),
+                                          (True, "false", common.MissingPreviousRelease("削除済み")),
+                                          (False, "true", common.MissingPreviousRelease("削除済み")),
                                           (True, "true", RuntimeError("通信失敗")),
                                           (True, "true", ValueError("データ破損"))):
-            allowed = manual and initialize == "true" and isinstance(error, release_data.MissingPreviousRelease)
+            allowed = manual and initialize == "true" and isinstance(error, common.MissingPreviousRelease)
             with self.subTest(manual=manual, initialize=initialize, error=type(error)), \
                     patch.dict(os.environ, {"PAGES_INITIALIZE": initialize}), \
                     patch.object(release_data, "find_release", return_value=dict(tag_name="osm-peaks-test", draft=True, prerelease=False)), \
                     patch.object(release_data, "fetch", return_value=self.current), \
                     patch.object(release_data, "previous_release", side_effect=error), \
-                    patch.object(release_data, "gh") as gh, \
-                    patch.object(release_data, "update_latest") as update:
+                    patch.object(common, "gh") as gh, \
+                    patch.object(common, "update_latest") as update:
                 if allowed:
                     release_data.publish("osm-peaks-test", "a" * 64, manual=manual)
                     update.assert_called_once()
@@ -135,11 +136,11 @@ class ReleaseDataTests(unittest.TestCase):
         for reason in ("", "   ", "件数を確認"):
             with self.subTest(reason=reason), \
                     patch.object(release_data, "find_release", return_value=dict(tag_name="osm-peaks-test", draft=True, prerelease=False)), \
-                    patch.object(release_data, "gh"), \
+                    patch.object(common, "gh"), \
                     patch.object(release_data, "fetch", return_value=self.current), \
                     patch.object(release_data, "previous_release", return_value=None), \
-                    patch.object(release_data, "write_report") as report, \
-                    patch.object(release_data, "update_latest") as update:
+                    patch.object(common, "write_report") as report, \
+                    patch.object(common, "update_latest") as update:
                 release_data.publish("osm-peaks-test", "a" * 64, manual=True, reason=reason)
                 update.assert_called_once()
                 self.assertIn("確認者: tester", report.call_args.args[1])
@@ -148,7 +149,7 @@ class ReleaseDataTests(unittest.TestCase):
     def test_corrupt_asset_and_baseline_failure_never_publish(self):
         for method in ("fetch", "previous_release"):
             with self.subTest(method=method), \
-                    patch.object(release_data, "gh", return_value='[[{"tag_name": "osm-peaks-test", "draft": true, "prerelease": false}]]') as gh, \
+                    patch.object(common, "gh", return_value='[[{"tag_name": "osm-peaks-test", "draft": true, "prerelease": false}]]') as gh, \
                     patch.object(release_data, "fetch", return_value=self.current), \
                     patch.object(release_data, "previous_release", return_value=self.current), \
                     patch.object(release_data, method, side_effect=ValueError("検証失敗")):
@@ -163,7 +164,7 @@ class ReleaseDataTests(unittest.TestCase):
                     patch.object(release_data, "validate", return_value=self.current), \
                     patch.object(release_data, "previous_release", return_value=None,
                                  side_effect=RuntimeError("通信失敗") if failure else None), \
-                    patch.object(release_data, "gh", return_value="https://github.com/owner/repo/releases/tag/untagged-123\n") as gh:
+                    patch.object(common, "gh", return_value="https://github.com/owner/repo/releases/tag/untagged-123\n") as gh:
                 release_data.prepare(directory, "dev")
                 self.assertIn("auto_publish=false", (Path(directory) / "output").read_text())
                 self.assertIn("--draft", gh.call_args.args)
@@ -181,7 +182,7 @@ class ReleaseDataTests(unittest.TestCase):
                     patch.object(release_data, "validate", return_value=self.current), \
                     patch.object(release_data, "previous_release", return_value=self.current), \
                     patch.object(release_data, "assess", return_value=warnings), \
-                    patch.object(release_data, "gh", side_effect=gh) as mock:
+                    patch.object(common, "gh", side_effect=gh) as mock:
                 release_data.prepare(directory)
                 arguments = mock.call_args.args
                 self.assertNotIn("--draft", arguments)
@@ -191,14 +192,14 @@ class ReleaseDataTests(unittest.TestCase):
                 self.assertIn("auto_publish=false", (Path(directory) / "output").read_text())
                 if warnings:
                     self.assertTrue(notes[0].startswith("## 要確認\n\n- 全国の件数が減りました\n- 比較不能\n\n## データの検査結果（生成後）"))
-                    self.assertTrue(release_data.needs_review(dict(body="\ufeff" + notes[0])))
+                    self.assertTrue(common.needs_review(dict(body="\ufeff" + notes[0])))
                 else:
                     self.assertTrue(notes[0].startswith("## データの検査結果（生成後）"))
-                    self.assertFalse(release_data.needs_review(dict(body=notes[0])))
+                    self.assertFalse(common.needs_review(dict(body=notes[0])))
 
 
     def test_invalid_tag_never_calls_github(self):
-        with patch.object(release_data, "gh") as gh:
+        with patch.object(common, "gh") as gh:
             with self.assertRaises(ValueError):
                 release_data.publish("--bad-tag", "a" * 64)
             gh.assert_not_called()
@@ -216,10 +217,10 @@ class ReleaseDataTests(unittest.TestCase):
                 release_data.check_tag(tag)
 
     def test_published_repair_can_restore_missing_pointer_asset(self):
-        with patch.object(release_data, "gh", return_value='[[{"tag_name": "osm-peaks-test", "draft": false, "prerelease": false}]]'), \
+        with patch.object(common, "gh", return_value='[[{"tag_name": "osm-peaks-test", "draft": false, "prerelease": false}]]'), \
                 patch.object(release_data, "fetch", return_value=self.current), \
                 patch.object(release_data, "previous_release", side_effect=RuntimeError("manifest 欠落")), \
-                patch.object(release_data, "update_latest") as update:
+                patch.object(common, "update_latest") as update:
             release_data.publish("osm-peaks-test", "a" * 64, manual=True, reason="参照先更新の失敗を確認")
             update.assert_called_once()
 
@@ -228,10 +229,10 @@ class ReleaseDataTests(unittest.TestCase):
             if "--draft=false" in args:
                 raise RuntimeError("公開失敗")
             return '[[{"tag_name": "osm-peaks-test", "draft": true, "prerelease": false}]]'
-        with patch.object(release_data, "gh", side_effect=gh), \
+        with patch.object(common, "gh", side_effect=gh), \
                 patch.object(release_data, "fetch", return_value=self.current), \
                 patch.object(release_data, "previous_release", return_value=None), \
-                patch.object(release_data, "update_latest") as update:
+                patch.object(common, "update_latest") as update:
             with self.assertRaises(RuntimeError):
                 release_data.publish("osm-peaks-test", "a" * 64, manual=True, reason="確認済み")
             update.assert_not_called()
@@ -240,7 +241,7 @@ class ReleaseDataTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(release_data, "validate", return_value=self.current), \
                 patch.object(release_data, "previous_release", return_value=None) as previous, \
-                patch.object(release_data, "gh", return_value="https://github.com/owner/repo/releases/tag/untagged-123\n") as gh:
+                patch.object(common, "gh", return_value="https://github.com/owner/repo/releases/tag/untagged-123\n") as gh:
             release_data.prepare(directory, "dev")
             self.assertEqual("dev", previous.call_args.args[1])
             self.assertEqual("osm-peaks-dev-test", gh.call_args.args[2])
@@ -250,11 +251,11 @@ class ReleaseDataTests(unittest.TestCase):
     def test_dev_publish_and_warning_use_only_dev_channel(self):
         for warnings, manual in (([], False), (["更新なし"], False), (["件数減少"], True)):
             with self.subTest(warnings=warnings, manual=manual), \
-                    patch.object(release_data, "gh", return_value='[[{"tag_name": "osm-peaks-dev-test", "draft": true, "prerelease": true}]]') as gh, \
+                    patch.object(common, "gh", return_value='[[{"tag_name": "osm-peaks-dev-test", "draft": true, "prerelease": true}]]') as gh, \
                     patch.object(release_data, "fetch", return_value=self.current) as fetch, \
                     patch.object(release_data, "previous_release", return_value=self.current) as previous, \
                     patch.object(release_data, "assess", return_value=warnings), \
-                    patch.object(release_data, "update_latest") as update:
+                    patch.object(common, "update_latest") as update:
                 release_data.publish("osm-peaks-dev-test", "a" * 64, channel="dev", manual=manual, reason="確認済み")
                 self.assertEqual("dev", fetch.call_args.args[2])
                 self.assertEqual("dev", previous.call_args.args[1])
@@ -266,7 +267,7 @@ class ReleaseDataTests(unittest.TestCase):
     def test_cross_channel_tags_rejected_before_github(self):
         for tag, channel in (("osm-peaks-test", "dev"), ("osm-peaks-dev-test", "stable"),
                              ("osm-peaks-dev-latest", "dev"), ("osm-peaks-test", "unknown")):
-            with self.subTest(tag=tag, channel=channel), patch.object(release_data, "gh") as gh:
+            with self.subTest(tag=tag, channel=channel), patch.object(common, "gh") as gh:
                 with self.assertRaises(ValueError):
                     release_data.publish(tag, "a" * 64, channel=channel)
                 gh.assert_not_called()
@@ -274,7 +275,7 @@ class ReleaseDataTests(unittest.TestCase):
     def test_prerelease_mismatch_stops_before_downloading(self):
         for channel, tag, prerelease in (("stable", "osm-peaks-test", True), ("dev", "osm-peaks-dev-test", False)):
             with self.subTest(channel=channel), \
-                    patch.object(release_data, "gh", return_value=json.dumps([[dict(tag_name=tag, draft=True, prerelease=prerelease)]])), \
+                    patch.object(common, "gh", return_value=json.dumps([[dict(tag_name=tag, draft=True, prerelease=prerelease)]])), \
                     patch.object(release_data, "fetch") as fetch:
                 with self.assertRaises(ValueError):
                     release_data.publish(tag, "a" * 64, channel=channel)
@@ -287,7 +288,7 @@ class ReleaseDataTests(unittest.TestCase):
                                 ("feature", "dev"), ("test", "dev"), ("test", "stable")):
             with self.subTest(branch=branch, channel=channel), \
                     patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_REF": "refs/heads/" + branch}), \
-                    patch.object(release_data, "gh") as gh, \
+                    patch.object(common, "gh") as gh, \
                     patch.object(release_data, "validate") as validate:
                 with self.assertRaises(ValueError):
                     release_data.prepare(Path("unused"), channel)
@@ -300,7 +301,7 @@ class ReleaseDataTests(unittest.TestCase):
         entry = dict(tag_name="osm-peaks-test", draft=True, prerelease=False,
                      html_url="https://github.com/owner/repo/releases/tag/untagged-123")
         for target in ("osm-peaks-test", entry["html_url"]):
-            with self.subTest(target=target), patch.object(release_data, "gh", return_value=json.dumps([[], [entry]])) as gh:
+            with self.subTest(target=target), patch.object(common, "gh", return_value=json.dumps([[], [entry]])) as gh:
                 self.assertEqual(entry, release_data.find_release(target))
                 gh.assert_called_once_with("api", "--paginate", "--slurp", "repos/owner/repo/releases?per_page=100")
 
@@ -308,20 +309,20 @@ class ReleaseDataTests(unittest.TestCase):
         for target in ("https://example.com/owner/repo/releases/tag/osm-peaks-test",
                        "https://github.com/other/repo/releases/tag/osm-peaks-test",
                        "https://github.com/owner/repo/releases/tag/osm-peaks-test?x=1"):
-            with self.subTest(target=target), patch.object(release_data, "releases") as entries:
+            with self.subTest(target=target), patch.object(common, "releases") as entries:
                 with self.assertRaises(ValueError):
                     release_data.find_release(target)
                 entries.assert_not_called()
         url = "https://github.com/owner/repo/releases/tag/untagged-123"
-        with patch.object(release_data, "releases", return_value=[dict(tag_name="osm-peaks-dev-test", html_url=url)]):
+        with patch.object(common, "releases", return_value=[dict(tag_name="osm-peaks-dev-test", html_url=url)]):
             with self.assertRaises(ValueError):
                 release_data.find_release(url, "stable")
 
     def test_missing_duplicate_and_unavailable_release_stop(self):
         for entries in ([], [dict(tag_name="osm-peaks-test")] * 2):
-            with patch.object(release_data, "releases", return_value=entries), self.assertRaises(ValueError):
+            with patch.object(common, "releases", return_value=entries), self.assertRaises(ValueError):
                 release_data.find_release("osm-peaks-test")
-        with patch.object(release_data, "releases", side_effect=RuntimeError("HTTP 403")), self.assertRaises(RuntimeError):
+        with patch.object(common, "releases", side_effect=RuntimeError("HTTP 403")), self.assertRaises(RuntimeError):
             release_data.find_release("osm-peaks-test")
 
     def test_manual_url_uses_recorded_checksum_and_checks_assets(self):
@@ -329,11 +330,11 @@ class ReleaseDataTests(unittest.TestCase):
         for checksum in ("a" * 64, "b" * 64):
             entry = dict(tag_name="osm-peaks-test", html_url=url, draft=True, prerelease=False,
                          body=f"- SHA-256: `{checksum}`")
-            with self.subTest(checksum=checksum), patch.object(release_data, "releases", return_value=[entry]), \
-                    patch.object(release_data, "gh") as gh, \
+            with self.subTest(checksum=checksum), patch.object(common, "releases", return_value=[entry]), \
+                    patch.object(common, "gh") as gh, \
                     patch.object(release_data, "fetch", return_value=self.current), \
                     patch.object(release_data, "previous_release", return_value=None), \
-                    patch.object(release_data, "update_latest") as update:
+                    patch.object(common, "update_latest") as update:
                 if checksum == "a" * 64:
                     release_data.publish(url, manual=True, reason="初回の件数を確認")
                     update.assert_called_once()
@@ -347,10 +348,10 @@ class ReleaseDataTests(unittest.TestCase):
         line = "- SHA-256: `" + "a" * 64 + "`"
         for body in (None, "", line + "\n" + line, "- SHA-256: `invalid`"):
             with self.subTest(body=body), self.assertRaises(ValueError):
-                release_data.reviewed_checksum(dict(body=body))
+                common.reviewed_checksum(dict(body=body))
 
     def test_automatic_publish_still_requires_checksum(self):
-        with patch.object(release_data, "gh") as gh, self.assertRaises(ValueError):
+        with patch.object(common, "gh") as gh, self.assertRaises(ValueError):
             release_data.publish("osm-peaks-test")
         gh.assert_not_called()
 

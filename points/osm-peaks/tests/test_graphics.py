@@ -11,6 +11,7 @@ from scripts.build_data import write_distribution, build
 from scripts.check_release import validate
 from scripts.graphics import validate_svg, validate_graphics
 from scripts import release_data
+from release_tools import release_data as common
 
 
 SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 24 L12 0 L24 24 Z"/></svg>'
@@ -47,7 +48,7 @@ class GraphicsTests(unittest.TestCase):
             self.assertEqual(self.rows, validate(self.output, channel=channel)[1])
             self.assertEqual({"manifest.json", "osm-peaks.json.gz"}, {p.name for p in self.output.iterdir()})
             with patch.dict(release_data.os.environ, {"GH_REPO": "shohei0205/yamamuki-data"}):
-                entry = release_data.points_catalog({release_data.manifest_path(channel): manifest}, channel)["datasets"][0]
+                entry = common.points_catalog({release_data.manifest_path(channel): manifest}, channel)["datasets"][0]
                 self.assertNotIn("graphics", entry["manifest"])
 
     def test_build_applies_supplement_graphic_and_keeps_original(self):
@@ -116,7 +117,7 @@ class GraphicsTests(unittest.TestCase):
 
     def test_fetch_old_release_downloads_data_and_manifest(self):
         manifest = self.generate()
-        with patch.object(release_data, "gh", return_value='{"assets":[]}') as download, \
+        with patch.object(common, "gh", return_value='{"assets":[]}') as download, \
                 patch.object(release_data, "validate", return_value=(manifest, self.rows)):
             release_data.fetch("osm-peaks-test", self.root / "download")
             self.assertEqual(2, download.call_count)

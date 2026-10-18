@@ -1,20 +1,18 @@
 """下書きの作成と、確認済みの同じファイルの公開を分けて行う。"""
 
 import argparse
-from datetime import datetime, timezone
 import json
 import logging
 import os
 from pathlib import Path
 import re
-import subprocess
 import tempfile
-import time
 import zlib
-import uuid
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
 from urllib.parse import urlsplit
+
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from release_tools import release_data as shared
 
 from scripts.build_data import FILE_NAME
 from scripts.supplements import COMPANION_FILES, LEGACY_COMPANION_FILE
@@ -22,44 +20,24 @@ from scripts.check_release import assess, report, validate
 from scripts.release_channels import check_branch, check_tag, prefix, release_tag, download_url
 
 
-def gh(*arguments):
-    result = subprocess.run(["gh", *arguments], capture_output=True, text=True, encoding="utf-8")
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or "GitHub CLI が失敗しました")
-    return result.stdout
-
-
-def endpoint(suffix):
-    repo = os.environ["GH_REPO"]
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
-        raise ValueError("リポジトリ名が不正です")
-    return f"repos/{repo}/{suffix}"
-
-
 def fetch(tag, directory, channel="stable"):
     check_tag(tag, channel)
-    gh("release", "download", tag, "--pattern", "manifest.json", "--pattern", FILE_NAME, "--dir", str(directory))
-    assets = json.loads(gh("release", "view", tag, "--json", "assets"))["assets"]
+    shared.gh("release", "download", tag, "--pattern", "manifest.json", "--pattern", FILE_NAME, "--dir", str(directory))
+    assets = json.loads(shared.gh("release", "view", tag, "--json", "assets"))["assets"]
     names = {asset["name"] for asset in assets}
     from scripts.distribution_parts import filenames
     parts = filenames("osm-peaks")
     if any(name in names for name in parts[1:]):
         if not all(name in names for name in parts):
             raise ValueError("別配布データと manifest がそろっていません")
-        gh("release", "download", tag, *[v for name in parts for v in ("--pattern", name)], "--dir", str(directory))
+        shared.gh("release", "download", tag, *[v for name in parts for v in ("--pattern", name)], "--dir", str(directory))
     elif any(name in names for name in (*COMPANION_FILES, LEGACY_COMPANION_FILE)):
         if not all(name in names for name in COMPANION_FILES):
             raise ValueError("Release の補足ファイルがそろっていません")
         files = (*COMPANION_FILES, LEGACY_COMPANION_FILE) if LEGACY_COMPANION_FILE in names else COMPANION_FILES
         patterns = [part for name in files for part in ("--pattern", name)]
-        gh("release", "download", tag, *patterns, "--dir", str(directory))
+        shared.gh("release", "download", tag, *patterns, "--dir", str(directory))
     return validate(directory, tag=tag, channel=channel)
-
-
-def releases():
-    # 通信失敗や権限不足を「初回」と扱わない。
-    pages = json.loads(gh("api", "--paginate", "--slurp", endpoint("releases?per_page=100")))
-    return [release for page in pages for release in page]
 
 
 def find_release(target, channel="stable"):
@@ -75,19 +53,11 @@ def find_release(target, channel="stable"):
             raise ValueError("このリポジトリの Release ページの URL を指定してください")
     else:
         check_tag(target, channel)
-    matches = [entry for entry in releases()
+    matches = [entry for entry in shared.releases()
                if (entry.get("html_url") == target if is_url else entry["tag_name"] == target)]
     if len(matches) != 1:
         raise ValueError("指定した Release を一意に取得できません。URL・タグと読み取り権限を確認してください")
     check_tag(matches[0]["tag_name"], channel)
-    return matches[0]
-
-
-def reviewed_checksum(release):
-    """生成時の検査結果に記録した値を使い、手入力の転記を省く。"""
-    matches = re.findall(r"^- SHA-256: `([0-9a-f]{64})`$", release.get("body") or "", re.MULTILINE)
-    if len(matches) != 1:
-        raise ValueError("Release の検査結果から SHA-256 を取得できません。確認した値を明示してください")
     return matches[0]
 
 
@@ -96,98 +66,19 @@ def manifest_path(channel):
     return ("points/osm-peaks" if channel == "stable" else "points/osm-peaks-dev") + "/manifest.json"
 
 
-def pages_url():
-    endpoint("")
-    owner, repo = os.environ["GH_REPO"].split("/")
-    return f"https://{owner.lower()}.github.io/{repo}"
-
-
-class Catalog(dict):
-    """既存の manifest 一覧の使い方を保ち、公開履歴も同じ応答から引き継ぐ。"""
-
-    def __init__(self, manifests, histories=None):
-        super().__init__(manifests)
-        self.histories = histories or {}
-
-
-def history_entry(manifest, channel, *, snapshot=False, dataset=None):
-    tag = (dataset + ("-dev-" if channel == "dev" else "-") + manifest["version"]) if dataset else release_tag(manifest["version"], channel)
-    endpoint("")
-    repo = os.environ["GH_REPO"]
-    run = os.environ.get("GITHUB_RUN_ID")
-    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
-    return {
-        "kind": "snapshot" if snapshot else "publication",
-        "publishedAt": None if snapshot else datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
-        "version": manifest["version"],
-        "releaseUrl": f"https://github.com/{repo}/releases/tag/{tag}",
-        "downloadUrl": manifest.get("downloadUrl") or download_url(manifest["version"], channel),
-        "actionsRunUrl": None if snapshot or not run else f"https://github.com/{repo}/actions/runs/{run}/attempts/{attempt}",
-    }
-
-
-def read_catalog():
-    # 更新直後の古いキャッシュを避け、サイト全体を1回の応答から引き継ぐ。
-    request = Request(f"{pages_url()}/catalog.json?update={uuid.uuid4().hex}",
-                      headers={"Cache-Control": "no-cache", "User-Agent": "yamamuki-data"})
-    try:
-        with urlopen(request, timeout=60) as response:
-            catalog = json.load(response)
-    except HTTPError as exc:
-        if exc.code == 404:
-            return None
-        raise
-    if not isinstance(catalog, dict) or catalog.get("schemaVersion") != 1:
-        raise ValueError("配布サイトの一覧の形式が不正です")
-    manifests = catalog.get("manifests")
-    if not isinstance(manifests, dict):
-        raise ValueError("配布サイトの manifest 一覧が不正です")
-    for path, manifest in manifests.items():
-        if (not re.fullmatch(r"(?:[a-z][a-z0-9_-]*/)+manifest\.json", path)
-                or not isinstance(manifest, dict)):
-            raise ValueError("配布サイトに不正な manifest のパスや内容があります")
-    histories = catalog.get("histories", {})
-    if not isinstance(histories, dict):
-        raise ValueError("公開履歴の一覧が不正です")
-    for path, entries in histories.items():
-        if (not re.fullmatch(r"(?:[a-z][a-z0-9_-]*/)+history\.json", path)
-                or path.replace("/history.json", "/manifest.json") not in manifests
-                or not isinstance(entries, list)
-                or not all(isinstance(entry, dict) and isinstance(entry.get("version"), str)
-                           and entry.get("kind") in ("snapshot", "publication")
-                           and isinstance(entry.get("releaseUrl"), str)
-                           and isinstance(entry.get("downloadUrl"), str)
-                           and (entry.get("publishedAt") is None or isinstance(entry["publishedAt"], str))
-                           and (entry.get("actionsRunUrl") is None or isinstance(entry["actionsRunUrl"], str))
-                           for entry in entries)):
-            raise ValueError("公開履歴のパスや内容が不正です")
-    return Catalog(manifests, histories)
-
-
 def read_manifest(channel):
     path = manifest_path(channel)
-    catalog = read_catalog()
+    catalog = shared.read_catalog()
     if catalog is None:
         return None
     return catalog.get(path)
 
 
-class MissingPreviousRelease(ValueError):
-    """公開サイトが指すReleaseが削除されている。"""
-
-
-REVIEW_HEADING = "## 要確認"
-
-
-def needs_review(release):
-    return (release.get("body") or "").lstrip("\ufeff").startswith(REVIEW_HEADING)
-
-
 def stable_baseline(directory):
     """正式版は Pages に出さないので、要確認でない最新の正式版 Release と比べる。"""
     candidates = []
-    for release in releases():
-        if release["draft"] or release["prerelease"] or needs_review(release):
+    for release in shared.releases():
+        if release["draft"] or release["prerelease"] or shared.needs_review(release):
             continue
         try:
             check_tag(release["tag_name"], "stable")
@@ -210,9 +101,9 @@ def previous_release(directory, channel="stable"):
     if manifest is None:
         return None
     tag = release_tag(manifest["version"], channel)
-    target = next((r for r in releases() if r["tag_name"] == tag), None)
+    target = next((r for r in shared.releases() if r["tag_name"] == tag), None)
     if target is None:
-        raise MissingPreviousRelease("前回の公開Releaseがありません。削除後の再開は手動公開の初期化を指定してください")
+        raise shared.MissingPreviousRelease("前回の公開Releaseがありません。削除後の再開は手動公開の初期化を指定してください")
     if target["draft"] or target["prerelease"] != (channel == "dev"):
         raise ValueError("山頂の参照先が公開済みの版ではありません")
     logging.info("前回の山頂公開版を取得しています: %s", tag)
@@ -220,165 +111,6 @@ def previous_release(directory, channel="stable"):
     if previous[0] != manifest:
         raise ValueError("山頂の最新版参照と公開版の manifest が一致しません")
     return previous
-
-
-def points_catalog(manifests, selected_channel="stable"):
-    """公開済み地点データの取得先とダウンロード検証情報をまとめる。"""
-    prefix(selected_channel)
-    datasets = []
-    for path in sorted(manifests):
-        match = re.fullmatch(r"points/([a-z][a-z0-9_-]*)/manifest\.json", path)
-        if match:
-            name = match[1]
-            channel = "dev" if name.endswith("-dev") else "stable"
-            if channel != selected_channel:
-                continue
-            dataset_id = name[:-4] if channel == "dev" else name
-            manifest = dict(manifests[path])
-            # 従来の山頂は manifest の版で本体の形式も管理していた。
-            if (dataset_id == "osm-peaks" and "dataSchemaVersion" not in manifest
-                    and type(manifest.get("schemaVersion")) is int and manifest["schemaVersion"] in (1, 2, 3, 4, 5, 6)):
-                manifest["dataSchemaVersion"] = manifest["schemaVersion"]
-            # 版1〜3の山頂 manifest にも、本体を直接取得できる URL を補う。
-            if dataset_id == "osm-peaks" and "downloadUrl" not in manifest and "version" in manifest:
-                manifest["downloadUrl"] = download_url(manifest["version"], channel)
-            display_name = manifest.get("name", "山頂" if dataset_id == "osm-peaks" else dataset_id)
-            if not isinstance(display_name, str) or not display_name.strip():
-                raise ValueError("データセットの表示名が不正です")
-            datasets.append({"id": dataset_id, "name": display_name.strip(),
-                             "manifestUrl": f"{pages_url()}/{path}", "manifest": manifest})
-    return {"schemaVersion": 2, "datasets": datasets}
-
-
-def read_points_catalog(channel="stable"):
-    prefix(channel)
-    filename = "catalog.json" if channel == "stable" else "catalog-dev.json"
-    request = Request(f"{pages_url()}/points/{filename}?update={uuid.uuid4().hex}",
-                      headers={"Cache-Control": "no-cache", "User-Agent": "yamamuki-data"})
-    with urlopen(request, timeout=60) as response:
-        return json.load(response)
-
-
-def update_latest(directory, manifest, channel="stable", *, dataset=None):
-    if dataset:
-        from release_tools.point_release import manifest_path as common_path, release_tag as common_tag
-        common_tag(dataset, manifest["version"], channel)
-        def target_path(target_channel):
-            return common_path(dataset, target_channel)
-    else:
-        release_tag(manifest["version"], channel)
-        target_path = manifest_path
-    path = target_path(channel)
-    catalog = read_catalog()
-    if catalog is None:
-        if os.environ.get("PAGES_INITIALIZE") != "true":
-            raise ValueError("配布サイトの一覧を取得できません。初回公開だけ手動公開の初期化を指定してください")
-        catalog = {}
-    histories = {key: list(entries) for key, entries in getattr(catalog, "histories", {}).items()}
-    # 履歴機能の導入前の最新版も残す。分からない公開日時や実行 URL は補わない。
-    for previous_channel in ("stable", "dev"):
-        previous_path = target_path(previous_channel)
-        history_path = previous_path.replace("manifest.json", "history.json")
-        if previous_path in catalog and history_path not in histories:
-            histories[history_path] = [history_entry(catalog[previous_path], previous_channel, snapshot=True, **({"dataset": dataset} if dataset else {}))]
-    history_path = path.replace("manifest.json", "history.json")
-    histories.setdefault(history_path, []).append(history_entry(manifest, channel, **({"dataset": dataset} if dataset else {})))
-    catalog[path] = manifest
-    write_site(catalog, histories)
-    # Actions の Pages 配置が成功するまで「更新完了」とは扱わない。
-    output(pages_ready="true")
-    append_summary(f"\n## 配置する最新版の参照先\n\n[manifest.json を開く]({pages_url()}/{path})\n"
-                   "\nPages の配置結果は後続のステップで確認してください。\n")
-
-
-def write_site(catalog, histories):
-    """公開・削除で共通のサイト一式を生成する。"""
-    destination = Path(os.environ.get("PAGES_DIRECTORY", Path(__file__).resolve().parents[3] / "build/pages"))
-    if destination.exists():
-        raise ValueError("Pages の出力先が既にあります。空の出力先を指定してください")
-    destination.mkdir(parents=True)
-    for target, contents in catalog.items():
-        file = destination / target
-        file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_text(json.dumps(contents, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
-    for target, entries in histories.items():
-        file = destination / target
-        file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_text(json.dumps({"schemaVersion": 1, "entries": entries}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
-    (destination / "catalog.json").write_text(
-        json.dumps({"schemaVersion": 1, "manifests": catalog, "histories": histories}, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8", newline="\n")
-    points_directory = destination / "points"
-    points_directory.mkdir(exist_ok=True)
-    for channel, filename in (("stable", "catalog.json"), ("dev", "catalog-dev.json")):
-        (points_directory / filename).write_text(
-            json.dumps(points_catalog(catalog, channel), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8", newline="\n")
-    (destination / ".nojekyll").write_text("", encoding="utf-8")
-
-
-def remove_dataset(dataset, channel):
-    check_branch(channel)
-    if (not re.fullmatch(r"[a-z][a-z0-9_-]*", dataset) or dataset.endswith("-dev")):
-        raise ValueError("正式版のデータセット名を指定してください")
-    prefix(channel)
-    path = f"points/{dataset}{'-dev' if channel == 'dev' else ''}/manifest.json"
-    catalog = read_catalog()
-    if catalog is None:
-        raise ValueError("既存のカタログを取得できないため削除を中止します")
-    targets = [path]
-    if not any(target in catalog for target in targets):
-        raise ValueError("指定したデータセット・配布先はカタログにありません")
-    manifests = dict(catalog)
-    histories = dict(getattr(catalog, "histories", {}))
-    for target in targets:
-        manifests.pop(target, None)
-        histories.pop(target.replace("manifest.json", "history.json"), None)
-    write_site(manifests, histories)
-    output(pages_ready="true")
-    append_summary(f"\n## カタログから削除\n\n- データセット: `{dataset}`\n- 配布先: `{channel}`\n"
-                   "- Release とデータ本体は保持します。Pages の配置後に削除が反映されます。\n")
-
-
-def verify_pages(directory):
-    expected = json.loads((directory / "catalog.json").read_text(encoding="utf-8"))
-    expected_points = {}
-    for channel, filename in (("stable", "catalog.json"), ("dev", "catalog-dev.json")):
-        points_file = directory / "points" / filename
-        if points_file.exists():
-            expected_points[channel] = json.loads(points_file.read_text(encoding="utf-8"))
-    # 配置直後の反映を待ってから、次の公開ジョブに進ませる。
-    for attempt in range(12):
-        try:
-            actual = read_catalog()
-            if (actual == expected["manifests"]
-                    and getattr(actual, "histories", {}) == expected.get("histories", {})
-                    and all(read_points_catalog(channel) == contents for channel, contents in expected_points.items())):
-                append_summary("\n## Pages の配置結果\n\n成功: 公開先の manifest 一覧が配置内容と一致しました。\n")
-                return
-        except (OSError, ValueError):
-            logging.warning("Pages の反映をまだ確認できません", exc_info=True)
-        if attempt < 11:
-            time.sleep(5)
-    raise RuntimeError("Pages の配置内容を取得できません。次の公開前に配布サイトを確認してください")
-
-
-def write_report(path, contents):
-    path.write_text(contents, encoding="utf-8-sig", newline="\n")
-    append_summary(contents)
-
-
-def append_summary(contents):
-    if os.environ.get("GITHUB_STEP_SUMMARY"):
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
-            stream.write(contents)
-
-
-def output(**values):
-    if os.environ.get("GITHUB_OUTPUT"):
-        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
-            for key, value in values.items():
-                stream.write(f"{key}={value}\n")
 
 
 def prepare(directory, channel="stable"):
@@ -404,15 +136,15 @@ def prepare(directory, channel="stable"):
         stable = channel == "stable"
         if stable and warnings:
             # Release 一覧で目に入るよう、要確認の理由を本文の先頭に書く。
-            contents = f"{REVIEW_HEADING}\n\n" + "".join(f"- {warning}\n" for warning in warnings) + "\n" + contents
-        write_report(notes, contents)
+            contents = f"{shared.REVIEW_HEADING}\n\n" + "".join(f"- {warning}\n" for warning in warnings) + "\n" + contents
+        shared.write_report(notes, contents)
         # 正式版も比較が失敗したときは下書きに残す。Pages は更新しない。
         draft = not stable or comparison_failed
         state = ["--draft", "--latest=false"] if draft else ["--latest=false"]
         logging.info("%s を作成し、SVG を内蔵したデータと manifest をアップロードします: %s",
                      "下書き Release" if draft else "Release", tag)
         from scripts.distribution_parts import filenames
-        url = gh("release", "create", tag, str(Path(directory) / FILE_NAME), str(Path(directory) / "manifest.json"),
+        url = shared.gh("release", "create", tag, str(Path(directory) / FILE_NAME), str(Path(directory) / "manifest.json"),
            *[str(Path(directory) / name) for name in filenames("osm-peaks") if (Path(directory) / name).exists()],
            *state, "--target", os.environ["GITHUB_SHA"], "--title", tag,
            "--notes-file", str(notes), f"--prerelease={str(not stable).lower()}").strip()
@@ -422,10 +154,10 @@ def prepare(directory, channel="stable"):
             handling = "Release に出しました（要確認。本文の先頭の理由を確認してください）" if warnings else "Release に出しました"
         else:
             handling = "下書きで保留（手動確認が必要）" if warnings else "自動公開の段階へ進みます"
-        append_summary(f"\n## 生成したリリース\n\n[生成したリリースを開く]({url})\n\n"
+        shared.append_summary(f"\n## 生成したリリース\n\n[生成したリリースを開く]({url})\n\n"
                        f"- タグ: `{tag}`\n"
                        f"- 生成後の扱い: {handling}\n")
-    output(tag=tag, sha256=current[0]["sha256"], auto_publish=str(not stable and not warnings).lower())
+    shared.output(tag=tag, sha256=current[0]["sha256"], auto_publish=str(not stable and not warnings).lower())
     logging.info("Release の保存完了: %s（%s）", tag, "要確認" if warnings else "検査合格")
 
 
@@ -437,7 +169,7 @@ def publish(tag, expected_sha256="", *, manual=False, reason="", channel="stable
     release = find_release(tag, channel)
     tag = release["tag_name"]
     if not expected_sha256:
-        expected_sha256 = reviewed_checksum(release)
+        expected_sha256 = shared.reviewed_checksum(release)
     logging.info("公開対象: %s、照合する SHA-256: %s", tag, expected_sha256)
     if release["prerelease"] != (channel == "dev"):
         raise ValueError("Release の正式版・開発版の区分が一致しません")
@@ -452,7 +184,7 @@ def publish(tag, expected_sha256="", *, manual=False, reason="", channel="stable
         try:
             previous = previous_release(root / "previous", channel)
             warnings = assess(current, previous)
-        except MissingPreviousRelease:
+        except shared.MissingPreviousRelease:
             if not manual or os.environ.get("PAGES_INITIALIZE") != "true":
                 raise
             previous = None
@@ -467,17 +199,17 @@ def publish(tag, expected_sha256="", *, manual=False, reason="", channel="stable
         if manual:
             contents += f"\n## 手動公開の確認\n\n確認者: {os.environ.get('GITHUB_ACTOR', '不明')}\n\n{reason.strip() or '理由の記入なし'}\n"
         notes = root / "notes.md"
-        write_report(notes, contents)
+        shared.write_report(notes, contents)
         if release["draft"]:
-            gh("release", "edit", tag, "--notes-file", str(notes))
+            shared.gh("release", "edit", tag, "--notes-file", str(notes))
         if warnings and not manual:
             logging.warning("公開直前の検査で要確認になったため、下書きのまま残します")
             return
         logging.info("検証済みの山頂データを公開します: %s", tag)
         if release["draft"]:
-            gh("release", "edit", tag, "--draft=false", "--latest=false")
-        update_latest(root, current[0], channel)
-        append_summary(f"\n## 公開したリリース\n\n"
+            shared.gh("release", "edit", tag, "--draft=false", "--latest=false")
+        shared.update_latest(root, current[0], channel)
+        shared.append_summary(f"\n## 公開したリリース\n\n"
                        f"[公開したリリースを開く](https://github.com/{os.environ['GH_REPO']}/releases/tag/{tag})\n")
         logging.info("公開完了: %s", tag)
 
@@ -506,9 +238,9 @@ def main():
     elif args.command == "publish":
         publish(args.tag, args.sha256, manual=args.manual, reason=args.reason, channel=args.channel)
     elif args.command == "remove-dataset":
-        remove_dataset(args.dataset, args.channel)
+        shared.remove_dataset(args.dataset, args.channel)
     else:
-        verify_pages(args.directory)
+        shared.verify_pages(args.directory)
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "points/osm-peaks"))
-from scripts import release_data
+from release_tools import release_data
 from scripts.graphics import validate_graphics
 from scripts.point_document import rows as document_rows, ordered_point
 from scripts.point_tags import validate_tags, validate_alias_readings
