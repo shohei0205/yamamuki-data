@@ -110,8 +110,8 @@ class Catalog(dict):
         self.histories = histories or {}
 
 
-def history_entry(manifest, channel, *, snapshot=False):
-    tag = release_tag(manifest["version"], channel)
+def history_entry(manifest, channel, *, snapshot=False, dataset=None):
+    tag = (dataset + ("-dev-" if channel == "dev" else "-") + manifest["version"]) if dataset else release_tag(manifest["version"], channel)
     endpoint("")
     repo = os.environ["GH_REPO"]
     run = os.environ.get("GITHUB_RUN_ID")
@@ -259,9 +259,16 @@ def read_points_catalog(channel="stable"):
         return json.load(response)
 
 
-def update_latest(directory, manifest, channel="stable"):
-    path = manifest_path(channel)
-    release_tag(manifest["version"], channel)
+def update_latest(directory, manifest, channel="stable", *, dataset=None):
+    if dataset:
+        from release_tools.point_release import manifest_path as common_path, release_tag as common_tag
+        common_tag(dataset, manifest["version"], channel)
+        def target_path(target_channel):
+            return common_path(dataset, target_channel)
+    else:
+        release_tag(manifest["version"], channel)
+        target_path = manifest_path
+    path = target_path(channel)
     catalog = read_catalog()
     if catalog is None:
         if os.environ.get("PAGES_INITIALIZE") != "true":
@@ -270,12 +277,12 @@ def update_latest(directory, manifest, channel="stable"):
     histories = {key: list(entries) for key, entries in getattr(catalog, "histories", {}).items()}
     # 履歴機能の導入前の最新版も残す。分からない公開日時や実行 URL は補わない。
     for previous_channel in ("stable", "dev"):
-        previous_path = manifest_path(previous_channel)
+        previous_path = target_path(previous_channel)
         history_path = previous_path.replace("manifest.json", "history.json")
         if previous_path in catalog and history_path not in histories:
-            histories[history_path] = [history_entry(catalog[previous_path], previous_channel, snapshot=True)]
+            histories[history_path] = [history_entry(catalog[previous_path], previous_channel, snapshot=True, **({"dataset": dataset} if dataset else {}))]
     history_path = path.replace("manifest.json", "history.json")
-    histories.setdefault(history_path, []).append(history_entry(manifest, channel))
+    histories.setdefault(history_path, []).append(history_entry(manifest, channel, **({"dataset": dataset} if dataset else {})))
     catalog[path] = manifest
     write_site(catalog, histories)
     # Actions の Pages 配置が成功するまで「更新完了」とは扱わない。

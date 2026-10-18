@@ -1,7 +1,8 @@
-"""共通入口の対象選択と種別ごとの振り分けを、公開せずに確認する。"""
+"""Release のタグと manifest から、登録表なしで対象を判定する。"""
 
 import json
 import os
+from pathlib import Path
 import subprocess
 import unittest
 from types import SimpleNamespace
@@ -16,27 +17,28 @@ class PublishReviewedTests(unittest.TestCase):
         environment.start()
         self.addCleanup(environment.stop)
 
-    def test_draft_url_and_tag_select_same_dataset(self):
-        release = dict(tag_name="osm-peaks-dev-test", prerelease=True,
-                       html_url="https://github.com/owner/repo/releases/tag/untagged-123")
-        for target in (release["tag_name"], release["html_url"]):
-            with self.subTest(target=target), patch.object(entry.subprocess, "run", return_value=SimpleNamespace(stdout=json.dumps([[], [release]]))) as run:
-                self.assertEqual(("osm-peaks", "osm-peaks-dev-test"), entry.resolve(target, "dev"))
-                self.assertIn("--paginate", run.call_args.args[0])
+    def resolve_with_manifest(self, target, release, manifest, channel):
+        def run(arguments, **kwargs):
+            if arguments[:2] == ["gh", "api"]:
+                return SimpleNamespace(stdout=json.dumps([[], [release]]))
+            self.assertEqual(["gh", "release", "download"], arguments[:3])
+            directory = Path(arguments[-1])
+            (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        with patch.object(entry.subprocess, "run", side_effect=run):
+            return entry.resolve(target, channel)
 
-    def test_unsupported_and_cross_channel_tags_stop(self):
-        for tag, channel in (("terrain-v1", "stable"), ("osm-peaks-latest", "stable"),
-                             ("osm-peaks-dev-latest", "dev"), ("osm-peaks-dev-v1", "stable"),
-                             ("osm-peaks-v1", "dev"), ("osm-peaks-v1\ninjected=x", "stable")):
-            with self.subTest(tag=tag), patch.object(entry.subprocess, "run") as run:
-                with self.assertRaises(ValueError):
-                    entry.resolve(tag, channel)
-                run.assert_not_called()
-
-    def test_foreign_url_stops_before_network(self):
-        with patch.object(entry.subprocess, "run") as run, self.assertRaises(ValueError):
-            entry.resolve("https://github.com/other/repo/releases/tag/osm-peaks-v1", "stable")
-        run.assert_not_called()
+    def test_url_and_tag_use_manifest_version_to_resolve_hyphenated_ids(self):
+        for dataset in ("osm-peaks", "gsi-peaks", "new-custom-landmarks"):
+            for channel in ("stable", "dev"):
+                version = "20261018T105830Z-39121313669-1"
+                tag = dataset + ("-dev-" if channel == "dev" else "-") + version
+                release = dict(tag_name=tag, prerelease=channel == "dev",
+                               html_url="https://github.com/owner/repo/releases/tag/untagged-123")
+                manifest = dict(schemaVersion=6, schemaFormat="yamamuki-manifest",
+                                dataSchemaFormat="yamamuki-points", version=version)
+                for target in (tag, release["html_url"]):
+                    with self.subTest(dataset=dataset, channel=channel, target=target):
+                        self.assertEqual((dataset, tag), self.resolve_with_manifest(target, release, manifest, channel))
 
     def test_missing_ambiguous_or_wrong_prerelease_stops(self):
         release = dict(tag_name="osm-peaks-v1", prerelease=True)
@@ -45,37 +47,46 @@ class PublishReviewedTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     entry.resolve("osm-peaks-v1", "stable")
 
-    def test_future_dataset_can_be_registered_without_another_workflow(self):
-        with patch.dict(entry.PUBLISHERS, terrain=("terrain", "scripts.release_data")):
-            self.assertEqual("terrain", entry.dataset_for_tag("terrain-dev-v1", "dev"))
-            with patch.object(entry.subprocess, "run") as run:
-                entry.publish("terrain", "terrain-dev-v1", "dev", "", "確認済み")
-                self.assertEqual(entry.ROOT / "terrain", run.call_args.kwargs["cwd"])
-                self.assertIn("terrain-dev-v1", run.call_args.args[0])
+    def test_foreign_url_and_injected_tag_stop_before_network(self):
+        for target in ("https://github.com/other/repo/releases/tag/osm-peaks-v1", "osm-peaks-v1\ninjected=x"):
+            with patch.object(entry.subprocess, "run") as run, self.assertRaises(ValueError):
+                entry.resolve(target, "stable")
+            run.assert_not_called()
 
-    def test_publish_passes_arguments_without_shell_and_propagates_failure(self):
+    def test_invalid_manifest_or_tag_stops(self):
+        for tag, version, channel in (("osm-peaks-latest", "latest", "stable"),
+                ("osm-peaks-dev-latest", "latest", "dev"), ("osm-peaks-dev-v1", "v1", "stable"),
+                ("osm-peaks-v1", "v1", "dev"), ("osm-peaks-v1", "other", "stable"),
+                ("../peaks-v1", "v1", "stable"), ("osm-peaks-v1", None, "stable")):
+            with self.subTest(tag=tag, version=version, channel=channel), self.assertRaises(ValueError):
+                entry.dataset_for_tag(tag, channel, version)
+        release = dict(tag_name="terrain-v1", prerelease=False)
+        for manifest in ([], dict(version="v1", schemaVersion=6, schemaFormat="yamamuki-manifest", dataSchemaFormat="terrain")):
+            with self.assertRaises(ValueError):
+                self.resolve_with_manifest("terrain-v1", release, manifest, "stable")
+
+    def test_new_dataset_publishes_without_registration_and_without_shell(self):
         reason = "確認済み; $(command)"
         with patch.object(entry.subprocess, "run") as run:
-            entry.publish("osm-peaks", "osm-peaks-dev-v1", "dev", "", reason)
-            self.assertEqual(entry.ROOT / "points" / "osm-peaks", run.call_args.kwargs["cwd"])
+            entry.publish("landmarks", "landmarks-dev-v1", "dev", "", reason)
+            self.assertEqual(entry.ROOT, run.call_args.kwargs["cwd"])
+            self.assertIn("release_tools.point_release", run.call_args.args[0])
             self.assertNotIn("shell", run.call_args.kwargs)
             self.assertEqual(reason, run.call_args.args[0][-1])
-            self.assertIn("--manual", run.call_args.args[0])
         with patch.object(entry.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "publisher")):
             with self.assertRaises(subprocess.CalledProcessError):
-                entry.publish("osm-peaks", "osm-peaks-v1", "stable", "", reason)
+                entry.publish("landmarks", "landmarks-v1", "stable", "", reason)
 
     def test_empty_reason_is_passed_to_publisher(self):
         for reason in ("", "   "):
-            with self.subTest(reason=reason), patch.object(entry.subprocess, "run") as run:
+            with patch.object(entry.subprocess, "run") as run:
                 entry.publish("osm-peaks", "osm-peaks-dev-v1", "dev", "", reason)
                 self.assertEqual(reason, run.call_args.args[0][-1])
 
     def test_branch_and_dataset_mismatch_stop_before_publish(self):
-        for dataset, reason in (("terrain", "確認済み"), ("terrain", "")):
-            with patch.object(entry.subprocess, "run") as run, self.assertRaises(ValueError):
-                entry.publish(dataset, "osm-peaks-v1", "stable", "", reason)
-            run.assert_not_called()
+        with patch.object(entry.subprocess, "run") as run, self.assertRaises(ValueError):
+            entry.publish("terrain", "osm-peaks-v1", "stable", "", "確認済み")
+        run.assert_not_called()
         with patch.dict(os.environ, GITHUB_ACTIONS="true", GITHUB_REF="refs/heads/dev"), patch.object(entry.subprocess, "run") as run:
             with self.assertRaises(ValueError):
                 entry.resolve("osm-peaks-v1", "stable")
