@@ -14,13 +14,26 @@ from release_tools import test_points as target
 
 
 class TestPoints(unittest.TestCase):
+    def test_provenance_is_optional_and_validated(self):
+        rows = json.loads((target.ROOT / 'points/testdata/points.json').read_bytes())
+        target.validate_rows(rows)
+        rows[0]['provenance'] = {'dataSource': 'vector', 'classification': '661', 'elevationSource': 'unassigned'}
+        target.validate_rows(rows)
+        for valid in [{}, {'dataSource': 'vector'}, {'classification': '661'}, {'elevationSource': 'osm'}]:
+            rows[0]['provenance'] = valid
+            target.validate_rows(rows)
+        for invalid in [[], {'extra': 'vector'}, {'dataSource': None}, {'dataSource': 'vector', 'classification': '661', 'elevationSource': ''}]:
+            rows[0]['provenance'] = invalid
+            with self.assertRaisesRegex(ValueError, '出典情報'):
+                target.validate_rows(rows)
+
     def test_generate(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             manifest = target.generate("test-1", directory)
             contents = (directory / manifest["fileName"]).read_bytes()
-            rows = json.loads(gzip.decompress(contents))
-            self.assertEqual(len(rows), manifest["pointCount"])
+            rows = json.loads(gzip.decompress(contents))["points"]
+            self.assertEqual(len(rows), manifest["metadata"]["pointCount"])
             self.assertEqual(len({row["type"] for row in rows}), 11)
             self.assertEqual(rows[0]["graphic"]["scale"], 1.5)
             self.assertEqual(rows[0]["tags"], ["テスト用百名山", "展望確認"])

@@ -18,17 +18,19 @@ import xml.etree.ElementTree as ET
 
 
 if __package__:
+    from scripts.point_document import document, source_entries, point_document_json
     from scripts.release_channels import download_url
     from scripts.graphics import validate_graphics
-    from scripts.point_tags import validate_tags
+    from scripts.point_tags import validate_tags, validate_alias_readings, validate_tag_metadata
     from scripts.tag_json import apply_tag_jsons
-    from scripts.supplements import DEFAULT_SUPPLEMENTS, read_supplements, apply_supplements, write_companions, validate_supplement_sources
+    from scripts.supplements import DEFAULT_SUPPLEMENTS, read_supplements, apply_supplements, validate_supplement_sources
 else:
+    from point_document import document, source_entries, point_document_json
     from release_channels import download_url
     from graphics import validate_graphics
-    from point_tags import validate_tags
+    from point_tags import validate_tags, validate_alias_readings, validate_tag_metadata
     from tag_json import apply_tag_jsons
-    from supplements import DEFAULT_SUPPLEMENTS, read_supplements, apply_supplements, write_companions, validate_supplement_sources
+    from supplements import DEFAULT_SUPPLEMENTS, read_supplements, apply_supplements, validate_supplement_sources
 
 
 SOURCE_URL = "https://download.geofabrik.de/asia/japan-latest.osm.pbf"
@@ -104,14 +106,16 @@ def read_mountains(path):
                     raise ValueError(f"ノード {osm_id} の最終編集日時がありません")
                 timestamp = normalize_timestamp(timestamp)
                 latest_timestamp = max(latest_timestamp or timestamp, timestamp)
+                elevation = parse_elevation(tags.get("ele"))
                 mountains[osm_id] = {
-                    "id": str(osm_id),
+                    "id": f"osm:{osm_id}",
                     "type": "peak",
-                    "osmId": osm_id,
                     "name": name,
                     "latitude": lat,
                     "longitude": lon,
-                    "elevationM": parse_elevation(tags.get("ele")),
+                    "elevationM": elevation,
+                    "provenance": {"dataSource": "osm", "classification": "natural=" + tags["natural"],
+                                   **({"elevationSource": "osm"} if elevation is not None else {})},
                     "nameReading": tags.get("name:ja-Hira", "").strip() or None,
                     "aliases": read_aliases(tags, name),
                     "wikipediaUrl": wikipedia_url(tags.get("wikipedia")),
@@ -134,7 +138,9 @@ def normalize_timestamp(value):
     return stamp.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL, channel="stable", supplement_sources=None):
+def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL, channel="stable", supplement_sources=None, tag_metadata=None):
+    if tag_metadata is not None:
+        validate_tag_metadata(tag_metadata)
     if supplement_sources is not None:
         validate_supplement_sources(supplement_sources)
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
@@ -145,9 +151,10 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
     if latest_mountain_timestamp > source_timestamp:
         raise ValueError("山頂の最終編集日時が元データの基準日時より新しくなっています")
     validate_tags(mountains)
+    validate_alias_readings(mountains)
     validate_graphics(mountains)
     logging.info("%s 件を JSON に変換しています", format(len(mountains), ","))
-    raw = (json.dumps(mountains, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+    raw = point_document_json(document(mountains, tag_metadata, sources=source_entries("osm-peaks",source_url,"ODbL-1.0","© OpenStreetMap contributors",supplement_sources,latestTimestamp=latest_mountain_timestamp))).encode("utf-8")
     # ファイル名と生成時刻をヘッダーに含めず、同じ内容の圧縮結果をそろえる。
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -163,8 +170,8 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
             raise ValueError(f"圧縮後のサイズが {MAX_SIZE_BYTES} バイトを超えました。分割を検討してください")
         logging.info("SHA-256 を計算し、manifest を作成しています")
         manifest = {
-            "schemaVersion": 5,
-            "dataSchemaVersion": 5,
+            "schemaVersion": 6,
+            "dataSchemaVersion": 6,
             "name": "山頂",
             "version": version,
             "fileName": FILE_NAME,
@@ -173,14 +180,13 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
             "sizeBytes": size,
             "uncompressedSizeBytes": len(raw),
             "pointCount": len(mountains),
-            "sourceTimestamp": source_timestamp,
-            "latestPointTimestamp": latest_mountain_timestamp,
-            "sourceUrl": source_url,
-            "license": "ODbL-1.0",
-            "attribution": "© OpenStreetMap contributors",
+            "dataTimestamp": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            "sources": source_entries("osm-peaks",source_url,"ODbL-1.0","© OpenStreetMap contributors",supplement_sources,latestTimestamp=latest_mountain_timestamp),
         }
-        if supplement_sources:
-            manifest["supplementSources"] = supplement_sources
+        if tag_metadata:
+            manifest["tags"]=tag_metadata
+        from document_metadata import copy_manifest_metadata
+        copy_manifest_metadata(manifest, json.loads(raw)["metadata"])
         manifest_path = Path(temporary) / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
         archive.replace(output_dir / FILE_NAME)
@@ -231,7 +237,7 @@ def build(pbf, output_dir, version, *, channel="stable", tags_directory=None, su
         )
         logging.info("osmium の抽出完了")
         mountains, latest_timestamp = read_mountains(extracted)
-        # 補足適用前の地点データを別添付として保存する。
+        # 配布前に補足を適用する。
         supplements = read_supplements(supplements_path) if tags_directory is None else None
         if supplements is not None:
             supplement_sources = supplements.get("sources", {})
@@ -241,9 +247,10 @@ def build(pbf, output_dir, version, *, channel="stable", tags_directory=None, su
         original = mountains
         if supplements is not None:
             mountains = apply_supplements(original, supplements)
-        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel, supplement_sources=supplement_sources)
+        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel, supplement_sources=supplement_sources, tag_metadata=supplements.get("tags") if supplements is not None else None)
         if supplements is not None:
-            write_companions(output_dir, original, supplements, manifest)
+            from scripts.distribution_parts import write_parts
+            write_parts(output_dir, original, supplements, manifest)
     logging.info("全国データの生成完了（経過 %.1f 秒）", time.monotonic() - started)
     return manifest
 

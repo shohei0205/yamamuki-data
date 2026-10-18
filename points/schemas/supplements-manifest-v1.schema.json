@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "廃止済み。旧版の補足専用 manifest を検証するために保持する。補足 JSON を単体配布する場合も、共通の manifest 形式（formats/manifest.md、schemas/manifest-v6.schema.json）を使う。",
   "title": "地点補足 manifest（版1）",
   "type": "object",
   "additionalProperties": false,

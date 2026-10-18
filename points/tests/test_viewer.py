@@ -32,9 +32,9 @@ tables.set('分類',table(1,'自由なメモ\n改行も可'));assert.equal(apply
 const edited=applyTagEdits(result.entries,new Map([[0,{add:new Set(['手動']),remove:new Set(['既存'])}]]));
 assert.deepEqual(edited[0].tags,['分類','手動']);assert.deepEqual(original.tags,['既存']);
 const mountains=[{osmId:'1',pointName:'羊蹄山',latitude:42,longitude:140,source:{aliases:['蝦夷富士']}},{osmId:'2',pointName:'同名山',latitude:35,longitude:139},{osmId:'3',pointName:'同名山',latitude:36,longitude:140}];
-for(const text of ['羊蹄山','1','1,羊蹄山','羊蹄山,1','#osmId,name\n,羊蹄山','#osmId,name\n,羊蹄山','name\n蝦夷富士','osmId\n1','#name\tosmId\n羊蹄山\t1']){const completed=completeTagList(text,mountains);assert.deepEqual(completed.issues,[]);assert.deepEqual(completed.mappings,[{osmId:'1',name:'羊蹄山'}]);}
+for(const text of ['羊蹄山','1','1,羊蹄山','羊蹄山,1','#osmId,name\n,羊蹄山','#osmId,name\n,羊蹄山','name\n蝦夷富士','osmId\n1','#name\tosmId\n羊蹄山\t1']){const completed=completeTagList(text,mountains);assert.deepEqual(completed.issues,[]);assert.deepEqual(completed.mappings,[{id:'osm:1',name:'羊蹄山'}]);}
 for(const text of ['不明山','999','1,違う山','1\n羊蹄山','0','#osmId,name\n1','osmId\n1.5'])assert.ok(completeTagList(text,mountains).issues.length,text);
-const multiple=completeTagList('同名山',mountains);assert.deepEqual(multiple.issues,[]);assert.deepEqual(multiple.mappings,[{osmId:'2',name:'同名山'},{osmId:'3',name:'同名山'}]);assert.equal(multiple.reviews[0].includedCount,2);assert.ok(completeTagList('同名山\n2',mountains).issues.length);
+const multiple=completeTagList('同名山',mountains);assert.deepEqual(multiple.issues,[]);assert.deepEqual(multiple.mappings,[{id:'osm:2',name:'同名山'},{id:'osm:3',name:'同名山'}]);assert.equal(multiple.reviews[0].includedCount,2);assert.ok(completeTagList('同名山\n2',mountains).issues.length);
 const review=completeTagList('同名山\n1,違う山\n999',mountains).reviews;assert.equal(review.length,3);assert.deepEqual(review[0].candidates.map(p=>p.osmId),['2','3']);assert.equal(review[1].osmId,'1');assert.equal(review[1].name,'違う山');assert.equal(review[1].candidates[0].pointName,'羊蹄山');assert.equal(review[2].osmId,'999');assert.equal(review[2].candidates.length,0);
 assert.throws(()=>completeTagList('',mountains));assert.throws(()=>completeTagList('name',mountains));
 assert.equal(mappingListText([{osmId:'1',name:'山,"一'}]),'#osmId,name\n1,"山,""一"\n');
@@ -48,7 +48,7 @@ for(const extra of [{nameReading:''},{nameReading:null},{aliases:['同じ','同�
 assert.throws(()=>parseTagJson(JSON.stringify({points:[{osmId:1,note:'山'}]}),'補足.json'));
 tables.set('不明',table(999,'不明','不明'));assert.throws(()=>applyTagTables(base,tables));
 '''
-        result = subprocess.run([shutil.which("node"), "-e", source + checks], capture_output=True)
+        result = subprocess.run([shutil.which("node"), "-"], input=(source + checks).encode("utf-8"), capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
 
     @unittest.skipUnless(shutil.which("node"), "Node.js がないため保存処理のテストを実行できません")
@@ -66,10 +66,11 @@ window.showSaveFilePicker=async value=>{options=value;return{createWritable:asyn
 assert.equal(await saveFile('分類.json','{}\n','application/json;charset=utf-8'),'saved');assert.equal(options.suggestedName,'分類.json');assert.deepEqual(options.types[0].accept,{'application/json':['.json']});assert.equal(written,'{}\n');assert.equal(closed,true);
 window.showSaveFilePicker=async()=>{throw new DOMException('cancel','AbortError');};assert.equal(await saveFile('x.json','{}\n','application/json'),null);assert.match(status.textContent,/キャンセル/);assert.equal(clicked,false);
 let aborted=false;window.showSaveFilePicker=async()=>({createWritable:async()=>({write:async()=>{throw Error('失敗');},abort:async()=>aborted=true})});assert.equal(await saveFile('x.json','{}\n','application/json'),null);assert.equal(aborted,true);assert.match(status.textContent,/失敗/);assert.equal(saving,false);
+window.showSaveFilePicker=async()=>{throw Error('ダウンロード時は保存ダイアログを開かない');};assert.equal(await saveFile('x.json','{}\n','application/json',true),'download');assert.equal(clicked,true);clicked=false;
 window.showSaveFilePicker=undefined;assert.equal(await saveFile('x.json','{}\n','application/json'),'download');assert.equal(clicked,true);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 '''
-        result = subprocess.run([shutil.which("node"), "-e", source + checks], capture_output=True)
+        result = subprocess.run([shutil.which("node"), "-"], input=(source + checks).encode("utf-8"), capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
 
     @unittest.skipUnless(shutil.which("node"), "Node.js がないため未保存状態のテストを実行できません")
@@ -96,13 +97,14 @@ assert.equal(document.title,'地点の確認');
 tagTables.set('既存',{metadata:{source:'出典'}});updateDirtyTags();assert.deepEqual([...dirtyTags],['既存']);savedTagStates.set('既存',tagState('既存'));updateDirtyTags();assert.equal(dirtyTags.size,0);
 prevented=false;beforeUnload({preventDefault:()=>prevented=true});assert.equal(prevented,false);
 """
-        result = subprocess.run([shutil.which("node"), "-e", setup + source + checks], capture_output=True)
+        result = subprocess.run([shutil.which("node"), "-"], input=(setup + source + checks).encode("utf-8"), capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
 
     @unittest.skipUnless(shutil.which("node"), "Node.js がないためタグ索引のテストを実行できません")
     def test_filter_index_merges_tag_origins(self):
         page = (Path(__file__).resolve().parents[1] / "viewer.html").read_text(encoding="utf-8")
-        source = "const tableIdSets=" + page.split("const tableIdSets=", 1)[1].split("function renderView", 1)[0]
+        references = "function supplementKey(" + page.split("function supplementKey(", 1)[1].split("function addSupplementTags", 1)[0]
+        source = next(line for line in page.splitlines() if line.startswith("function readingText("))+"\n" + references + "const tableIdSets=" + page.split("const tableIdSets=", 1)[1].split("function renderView", 1)[0]
         checks = """
 const assert=require('node:assert/strict');const tagFilterIndex=new Map();
 const basePoints=[{tags:['分類']},{tags:[]},{tags:[]}];
@@ -110,8 +112,15 @@ const points=[{osmId:'1',tags:['分類']},{osmId:'2',tags:['分類']},{osmId:'3'
 const tagTables=new Map([['分類',{mappings:[{osmId:'2'}]}]]),tagEdits=new Map();
 assert.deepEqual(tagFilterOptions(),[['tag:分類','分類']]);
 assert.deepEqual([...tagFilterIndex.get('tag:分類')],[0,1]);assert.deepEqual([...tagFilterIndex.get('supplemented')],[]);points[2].supplement={nameReading:'やま'};tagFilterOptions();assert.deepEqual([...tagFilterIndex.get('supplemented')],[2]);assert.equal(matchesTagFilter(2,'supplemented'),true);assert.equal(matchesTagFilter(0,'supplemented'),false);assert.deepEqual([...tagFilterIndex.get('untagged')],[2]);
-points[1].tags=[];tagFilterOptions();assert.deepEqual([...tagFilterIndex.get('tag:分類')],[0]);
-points[2].tags=['分類'];tagEdits.set(2,{add:new Set(['分類'])});tagFilterOptions();assert.deepEqual([...tagFilterIndex.get('tag:分類')],[0,2]);points[0].tags=[];points[2].tags=[];assert.deepEqual(tagFilterOptions(),[]);assert.equal(tagFilterIndex.has('tag:分類'),false);
+let supplementDocument={tags:{'分類':{nameReading:'ぶんるい'}}};points[1].tags=[];tagFilterOptions();assert.deepEqual([...tagFilterIndex.get('tag:分類')],[0]);
+points[2].tags=['分類'];tagEdits.set(2,{add:new Set(['分類'])});tagFilterOptions();assert.deepEqual([...tagFilterIndex.get('tag:分類')],[0,2]);points[0].tags=[];points[2].tags=[];assert.deepEqual(tagFilterOptions(),[]);assert.equal(tagFilterIndex.has('tag:分類'),false);points[0].tags=['日本百名山','北海道百名山','九州百名山','関東百名山','信州百名山','東北百名山','読みなし'];supplementDocument.tags=Object.fromEntries([['関東','かんとう'],['九州','きゅうしゅう'],['信州','しんしゅう'],['東北','とうほく'],['日本','にほん'],['北海道','ほっかいどう']].map(([name,reading])=>[name+'百名山',{nameReading:reading+'ひゃくめいざん'}]));assert.deepEqual(tagFilterOptions().map(row=>row[1]),['関東百名山','九州百名山','信州百名山','東北百名山','日本百名山','北海道百名山','読みなし']);supplementDocument.tags['日本百名山'].nameReading=['にほんひゃくめいざん','にっぽんひゃくめいざん'];assert.equal(tagFilterOptions()[4][1],'日本百名山');
+points.splice(0,points.length,{source:{id:'1'},pointName:'燧ヶ岳',aliases:['柴安嵓'],tags:['日本百名山','地域の山']},{source:{id:'2'},pointName:'燧ヶ岳',aliases:[],tags:[],excluded:true},{source:{id:'3'},pointName:'柴安嵓',aliases:[],tags:[],excluded:true},{source:{id:'4'},pointName:'丸山',aliases:[],tags:[],excluded:true},{source:{id:'5'},pointName:'燧ヶ岳',aliases:[],tags:['除外のタグ'],excluded:true});
+const untouched=JSON.stringify(points);let options=tagFilterOptions();assert.equal(JSON.stringify(points),untouched);assert.deepEqual([...tagFilterIndex.get('excluded:tag:日本百名山')],[1,2,4]);assert.deepEqual([...tagFilterIndex.get('excluded:unrelated')],[3]);assert.equal(tagFilterIndex.has('excluded:tag:除外のタグ'),false);assert.ok(options.some(([key,label])=>key==='excluded:tag:日本百名山'&&label==='除外地点：日本百名山'));assert.equal(matchesTagFilter(0,'excluded:tag:日本百名山'),false);assert.equal(matchesTagFilter(1,['excluded:unrelated','excluded:tag:日本百名山']),true);
+points[0]={...points[0],pointName:'別の山',aliases:[]};updateExclusionRelations([0]);assert.equal(tagFilterIndex.has('excluded:tag:日本百名山'),false);assert.deepEqual([...tagFilterIndex.get('excluded:unrelated')].sort(),[1,2,3,4]);
+points[0]={...points[0],pointName:'燧ヶ岳',aliases:[{name:'柴安嵓'}]};updateExclusionRelations([0]);assert.deepEqual([...tagFilterIndex.get('excluded:tag:日本百名山')].sort(),[1,2,4]);points[0]={...points[0],tags:[]};updateExclusionRelations([0]);assert.equal(tagFilterIndex.has('excluded:tag:日本百名山'),false);
+points[0]={...points[0],tags:['日本百名山']};updateExclusionRelations([0]);points[2]={...points[2],excluded:false};updateExclusionRelations([2]);assert.equal(matchesTagFilter(2,'excluded'),false);assert.deepEqual([...tagFilterIndex.get('excluded:tag:日本百名山')].sort(),[1,4]);const expected=[...tagFilterIndex.get('excluded:tag:日本百名山')].sort();tagFilterOptions();assert.deepEqual([...tagFilterIndex.get('excluded:tag:日本百名山')].sort(),expected);
+points[0]={...points[0],excluded:true};updateExclusionRelations([0]);assert.equal(tagFilterIndex.has('excluded:tag:日本百名山'),false);
+
 """
-        result = subprocess.run([shutil.which("node"), "-e", source + checks], capture_output=True)
+        result = subprocess.run([shutil.which("node"), "-"], input=(source + checks).encode("utf-8"), capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))

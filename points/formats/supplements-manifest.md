@@ -1,6 +1,8 @@
-﻿# 補足 manifest フォーマット
+﻿# 補足 manifest フォーマット (廃止)
 
 [地点データの README に戻る](../README.md)
+
+補足ファイルを単体で配布するときの manifest は、[共通の manifest フォーマット](../../formats/manifest.md) を使う。補足専用の manifest 形式は定義しない。この文書は従来の専用形式を説明する。
 
 ## 概要
 
@@ -10,7 +12,7 @@
 
 ## 版について
 
-補足 manifestの版は `schemaVersion` で確認する。現行版は `1`。ほかの形式の版とは独立して管理する。
+補足 manifestの版は `schemaVersion` で確認する。従来の専用形式の最終版は `1`。ほかの形式の版とは独立して管理する。
 
 版内の変更は `版1.1` のように小数点以下で区別する。小数点以下は文書上の番号で、JSON の版の値には含めない。
 
@@ -24,30 +26,29 @@
 
 トップレベルの項目はすべて必須。スキーマにない項目は追加できない。
 
-| 項目 | JSON の型 | 内容・制約 | 版の履歴 |
-|---|---|---|---|
-| `schemaVersion` | integer | 補足 manifest 自体の形式の版。`1` | [版1] 追加 |
-| `version` | string | 対応する配布データの版。通常の manifest の `version` と同じ。英数字で始まり、英数字・ピリオド・ハイフン・下線で構成する | [版1] 追加 |
-| `dataSchemaVersion` | integer | 補足を適用する前の地点データの形式の版。`5`。補足 JSON 自体の版ではない | [版1] 追加 |
-| `distributionSha256` | string | 補足を適用した配布 gzip の SHA-256。通常の manifest の `sha256` と同じ。小文字の 16 進数 64 文字 | [版1] 追加 |
-| `base` | object | 補足を適用する前の地点データのファイル情報。下表を参照 | [版1] 追加 |
-| `supplements` | object | 補足 JSON のファイル情報。下表を参照 | [版1] 追加 |
-| `sources` | object | 補足 JSON の出典一覧。出典 ID ごとに `source`・`license`・`attribution`・`changes` を任意の文字列で記載する。出典がない場合は `{}` | [版1] 追加 |
-| `license` | string | 元の地点データの利用条件。通常の manifest と同じ。OSM 由来は `ODbL-1.0` | [版1] 追加 |
-| `attribution` | string | 元の地点データの出典表示。通常の manifest と同じ。OSM 由来は `© OpenStreetMap contributors` | [版1] 追加 |
+| 項目 | JSON の型 | 必須 | 内容・制約 | 版の履歴 |
+|---|---|---|---|---|
+| `schemaVersion` | integer | 必須 | 補足 manifest 自体の形式の版。`1` | [版1] 追加 |
+| `version` | string | 必須 | 対応する配布データの版。通常の manifest の `version` と同じ。英数字で始まり、英数字・ピリオド・ハイフン・下線で構成する | [版1] 追加 |
+| `dataSchemaVersion` | integer | 必須 | 補足を適用する前の地点データの形式の版。`5`。補足 JSON 自体の版ではない | [版1] 追加 |
+| `distributionSha256` | string | 必須 | 補足を適用した配布 gzip の SHA-256。通常の manifest の `sha256` と同じ。小文字の 16 進数 64 文字 | [版1] 追加 |
+| `base` | object | 必須 | 補足を適用する前の地点データのファイル情報。下表を参照 | [版1] 追加 |
+| `supplements` | object | 必須 | 補足 JSON のファイル情報。下表を参照 | [版1] 追加 |
+| `sources` | object | 必須 | 補足 JSON の出典一覧。補足データのスキーマの出典定義を共用する。出典 ID をキーとし、各値に任意の `source`・`license`・`attribution`・`changes` を持つ。構造は [版1の補足データスキーマ](../schemas/supplements-data-v1.schema.json) を参照。出典がない場合は `{}`。元の地点データの出典と補足の出典を両方保持する | [版1] 追加 |
+
+| `license` | string | 必須 | 元の地点データの利用条件。通常の manifest と同じ | [版1] 追加 |
+| `attribution` | string | 必須 | 元の地点データの出典表示。通常の manifest と同じ | [版1] 追加 |
 
 ### ファイル情報
 
 `base` と `supplements` はそれぞれ次の 4 項目をすべて持つ。ほかの項目は追加できない。
 
-| 項目 | JSON の型 | 内容・制約 | 版の履歴 |
-|---|---|---|---|
-| `fileName` | string | `base` はパス区切りを含まない `.json.gz` のファイル名。`supplements` は `supplements.json` | [版1] 追加 |
-| `downloadUrl` | string | ファイルを取得する HTTPS URL | [版1] 追加 |
-| `sizeBytes` | integer | 取得するファイルのバイト数。正の整数。`base` は gzip のままの大きさ | [版1] 追加 |
-| `sha256` | string | 取得するファイルそのものの SHA-256。小文字の 16 進数 64 文字。`base` は展開前の gzip のハッシュ | [版1] 追加 |
-
-`sources` の構造は補足データのスキーマにある出典一覧の定義を共用する。出典の記載方法は [補足データフォーマット](supplements-data.md) を参照する。元の地点データの出典と、補足の出典を両方保持する。
+| 項目 | JSON の型 | 必須 | 内容・制約 | 版の履歴 |
+|---|---|---|---|---|
+| `fileName` | string | 必須 | `base` はパス区切りを含まない `.json.gz` のファイル名。`supplements` は `supplements.json` | [版1] 追加 |
+| `downloadUrl` | string | 必須 | ファイルを取得する HTTPS URL | [版1] 追加 |
+| `sizeBytes` | integer | 必須 | 取得するファイルのバイト数。正の整数。`base` は gzip のままの大きさ | [版1] 追加 |
+| `sha256` | string | 必須 | 取得するファイルそのものの SHA-256。小文字の 16 進数 64 文字。`base` は展開前の gzip のハッシュ | [版1] 追加 |
 
 ## 読み込みと検証
 
@@ -88,7 +89,14 @@ URL・サイズ・ハッシュ・配布版は説明用の仮の値。実際の�
     "sizeBytes": 200,
     "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
   },
-  "sources": {},
+  "sources": {
+    "補足資料": {
+      "source": "見本の資料 https://example.com/supplement",
+      "license": "CC0-1.0",
+      "attribution": "見本資料の作成者",
+      "changes": "山名・読み・別名を抽出"
+    }
+  },
   "license": "ODbL-1.0",
   "attribution": "© OpenStreetMap contributors"
 }
