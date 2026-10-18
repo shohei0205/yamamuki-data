@@ -92,3 +92,5 @@ JPEG XL の 16 bit 標高をブラウザーで直接復号する代わりに、`
 全国ハイトマップでも海・河川・湖沼を個別に表示できる。海域はベクター面を直接描画し、地形の切り抜きと河川・湖沼は既存の補助マスクを使う。海岸と河川・湖沼のレベルは独立した自動／z10／z11／z12。川幅のない中心線は表示せず、水面ポリゴンが約 0.5 描画ピクセル未満になる部分を非表示にする。水域の元データには既知の未収録範囲がある。水域転送量も地形とは別に表示する。確認は `node tools/terrain/test_national_height_water.cjs`。
 
 タイルの境界は隣接する標高画素を線形補間し、両側の境界頂点を同じ高さにする。角は最大 4 タイルを参照する。未取得の詳細タイルは共通の親標高で補い、補助の垂直面は使わない。補正は表示時だけで、保存済み JPEG XL と PNG は変更しない。検証は `node tools/terrain/test_height_boundaries.cjs` と `node tools/terrain/test_height_tile_seams.cjs`。
+
+各マスの対角線は、元ハイトマップの中央標高をよりよく再現する向きを選ぶ。同程度なら勾配差と交互の向きで固定方向への偏りを抑える。陰影は周囲の標高の差から法線を計算して補間し、タイル境界では法線の勾配も共有する。保存する法線マップや地形データの再生成は不要。`node tools/terrain/test_height_mesh.cjs`、`node tools/terrain/test_height_boundaries.cjs`、`node tools/terrain/test_height_smooth_shading.cjs` で確認する。

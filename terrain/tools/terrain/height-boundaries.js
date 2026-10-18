@@ -10,6 +10,12 @@ const HeightBoundaries={
   }
   return partial||[0,0];
  },
+ gradients(row,range,n,level,cache,index,memo=new Map()){
+  const [z,x,y]=row,scale=2**z,step=1/(2**level*256),meters=40075016.68557849*step,out=new Float32Array((n+1)*4*2),at=(u,v)=>{const key=u+','+v;let p=memo.get(key);if(!p){p=this.sample(u,v,level,cache,index);memo.set(key,p);}return p;};
+  for(let edge=0;edge<4;edge++)for(let i=0;i<=n;i++){const t=i/n,uv=edge===0?[t,0]:edge===1?[1,t]:edge===2?[t,1]:[0,t],u=(x+range[0]+uv[0]*range[2])/scale,v=(y+range[1]+uv[1]*range[3])/scale,center=at(u,v),height=(a,b)=>{const p=at(a,b);return p[1]>=.5?p[0]:center[0];};out.set([(height(u+step,v)-height(u-step,v))/(2*meters),(height(u,v-step)-height(u,v+step))/(2*meters)],(edge*(n+1)+i)*2);}
+  return out;
+ },
+
  edges(row,range,n,level,cache,index,memo=new Map()){
   const [z,x,y]=row,scale=2**z,out=new Float32Array((n+1)*4*2);
   for(let edge=0;edge<4;edge++)for(let i=0;i<=n;i++){const t=i/n,uv=edge===0?[t,0]:edge===1?[1,t]:edge===2?[t,1]:[0,t],u=(x+range[0]+uv[0]*range[2])/scale,v=(y+range[1]+uv[1]*range[3])/scale,key=u+','+v;let value=memo.get(key);if(!value){value=this.sample(u,v,level,cache,index);memo.set(key,value);}out.set(value,(edge*(n+1)+i)*2);}
