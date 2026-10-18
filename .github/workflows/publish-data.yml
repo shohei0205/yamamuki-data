@@ -26,12 +26,11 @@ env:
   RELEASE_CHANNEL: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
 
 concurrency:
-  group: publish-osm-peaks-${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
+  group: publish-osm-peaks-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   generate:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     outputs:
@@ -90,7 +89,16 @@ jobs:
           version="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           python scripts/build_data.py build/japan-latest.osm.pbf --version "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: 作業ブランチの生成物を保存
+        if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev'
+        uses: actions/upload-artifact@v4
+        with:
+          name: osm-peaks-test-${{ github.run_id }}-${{ github.run_attempt }}
+          path: points/osm-peaks/dist/
+          if-no-files-found: error
+          retention-days: 7
       - name: 前回と比較して Release を作成
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
         id: review
         env:
           GH_TOKEN: ${{ github.token }}

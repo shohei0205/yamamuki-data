@@ -18,6 +18,7 @@ import xml.etree.ElementTree as ET
 
 
 if __package__:
+    from scripts.distribution_parts import write_parts
     from scripts.point_document import document, source_entries, point_document_json
     from scripts.release_channels import download_url
     from scripts.graphics import validate_graphics
@@ -25,6 +26,7 @@ if __package__:
     from scripts.tag_json import apply_tag_jsons
     from scripts.supplements import DEFAULT_SUPPLEMENTS, read_supplements, apply_supplements, validate_supplement_sources
 else:
+    from distribution_parts import write_parts
     from point_document import document, source_entries, point_document_json
     from release_channels import download_url
     from graphics import validate_graphics
@@ -249,7 +251,6 @@ def build(pbf, output_dir, version, *, channel="stable", tags_directory=None, su
             mountains = apply_supplements(original, supplements)
         manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel, supplement_sources=supplement_sources, tag_metadata=supplements.get("tags") if supplements is not None else None)
         if supplements is not None:
-            from scripts.distribution_parts import write_parts
             write_parts(output_dir, original, supplements, manifest)
     logging.info("全国データの生成完了（経過 %.1f 秒）", time.monotonic() - started)
     return manifest

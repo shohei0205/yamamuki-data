@@ -6,8 +6,12 @@ import hashlib
 import json
 from pathlib import Path
 
-from scripts.point_document import document, rows
-from scripts.supplements import apply_supplements, supplement_document
+if __package__:
+    from .point_document import document, rows
+    from .supplements import apply_supplements, supplement_document, validate_supplements
+else:
+    from point_document import document, rows
+    from supplements import apply_supplements, supplement_document, validate_supplements
 from document_metadata import point_document_json, distributed_point, metadata_maps, ordered_point, validate_metadata
 
 
@@ -60,7 +64,6 @@ def validate_parts(directory, manifest, integrated):
             raise ValueError("各配布データの出典がマージ済み manifest に保持されていません")
     source = rows(documents[0], 6)
     # 補足の通常読み込みと同じ検証を通す。
-    from scripts.supplements import validate_supplements
     supplement = validate_supplements(documents[1])
     if [distributed_point(p) for p in apply_supplements(source, supplement)] != [distributed_point(p) for p in integrated]:
         raise ValueError("オリジナルと補足から配布地点を再現できません")
