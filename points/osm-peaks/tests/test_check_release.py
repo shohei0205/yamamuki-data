@@ -21,6 +21,15 @@ def dataset(count=10000, latitude=35):
 
 
 class CheckReleaseTests(unittest.TestCase):
+    def test_latest_timestamp_in_array_sources(self):
+        before, after = dataset(), dataset()
+        for manifest, _ in (before, after):
+            manifest.update(schemaVersion=6, dataTimestamp="2026-09-30T20:00:00Z",
+                            metadata={"sources": [{"name": "osm-peaks", "latestTimestamp": "2026-09-29T08:00:00Z"}]})
+        self.assertTrue(any("最新編集日時が前回公開版と同じ" in w for w in assess(after, before)))
+        after[0]["metadata"]["sources"][0]["latestTimestamp"] = "2026-09-29T08:00:01Z"
+        self.assertEqual([], assess(after, before))
+
     def test_normal_and_minimum_boundary(self):
         self.assertEqual([], assess(dataset(), dataset()))
         self.assertTrue(any("最低目安" in w for w in assess(dataset(9999), dataset())))

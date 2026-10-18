@@ -198,8 +198,8 @@ def assess(current, previous=None):
     old_timestamp_key = "dataTimestamp" if old_manifest["schemaVersion"] >= 6 else "sourceTimestamp"
     if timestamp_key == old_timestamp_key and source_time(manifest[timestamp_key]) < source_time(old_manifest[old_timestamp_key]):
         warnings.append("データの基準日時が前回公開版より古くなっています")
-    latest = manifest["metadata"].get("sources", {}).get("osm-peaks", {}).get("latestTimestamp") if manifest["schemaVersion"] >= 6 else manifest.get("latestPointTimestamp" if manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
-    old_latest = old_manifest["metadata"].get("sources", {}).get("osm-peaks", {}).get("latestTimestamp") if old_manifest["schemaVersion"] >= 6 else old_manifest.get("latestPointTimestamp" if old_manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
+    latest = manifest_metadata(manifest).get("sources", {}).get("osm-peaks", {}).get("latestTimestamp") if manifest["schemaVersion"] >= 6 else manifest.get("latestPointTimestamp" if manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
+    old_latest = manifest_metadata(old_manifest).get("sources", {}).get("osm-peaks", {}).get("latestTimestamp") if old_manifest["schemaVersion"] >= 6 else old_manifest.get("latestPointTimestamp" if old_manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
     if latest is not None and old_latest is not None and source_time(latest) == source_time(old_latest):
         warnings.append(f"収録山頂の最新編集日時が前回公開版と同じです: {latest}。自動公開せず下書きに残します")
     if manifest["schemaVersion"] != old_manifest["schemaVersion"]:
