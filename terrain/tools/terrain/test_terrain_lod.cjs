@@ -24,3 +24,11 @@ for(const ground of [false,true]){
  assert.ok(items.every(i=>i.lodN===128));
 }
 console.log('手動：指定レベルと分割数を維持 OK');
+
+// 富士山の画像のように同じ L12 が並ぶ場合、中央だけ詳細・周辺だけ最粗にしない。
+const equalTiles=Array.from({length:48},(_,i)=>({row:[12,2064+i%8,2064+Math.floor(i/8)],range:[0,0,1,1],lodN:128}));
+const equalPoints=LOD.fitMeshes(equalTiles,{...p,ground:false,tilt:.6});
+assert.ok(equalPoints<=LOD.meshPointBudget);
+assert.ok(Math.max(...equalTiles.map(i=>i.lodN))/Math.min(...equalTiles.map(i=>i.lodN))<=2);
+assert.ok(equalTiles.every(i=>i.lodN>=32));
+console.log('同じ投影サイズの区画は分割数の差を一段以内に保つ OK');

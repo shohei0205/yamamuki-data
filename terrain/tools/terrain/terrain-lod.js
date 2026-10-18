@@ -22,11 +22,14 @@ const TerrainLOD={
   const reduction=Math.floor(Math.log2(1+Math.max(0,forward)*Math.sin(p.tilt)/p.scale));
   return Math.max(p.base,p.target-reduction);
  },
- mesh(item,p){
-  if(p.distanceLOD===false)return 128;
+ projectedPixels(item,p){
   const [z]=item.row,span=this.world/2**z*item.range[2];
   const row=item.displayRow||item.row,distance=Math.max(40,this.distance(row,p));
-  const pixels=p.ground?span*p.height/(2*Math.tan(p.fov/2)*distance):span*p.height/(2*p.scale);
+  return p.ground?span*p.height/(2*Math.tan(p.fov/2)*distance):span*p.height/(2*p.scale);
+ },
+ mesh(item,p){
+  if(p.distanceLOD===false)return 128;
+  const pixels=this.projectedPixels(item,p);
   return Math.max(16,Math.min(128,2**Math.ceil(Math.log2(Math.max(1,pixels/(this.topView(p)?2:5))))));
  },
  fitMeshes(items,p,budget=this.pointBudget(p)){
@@ -34,8 +37,16 @@ const TerrainLOD={
   if(p.distanceLOD===false)return items.reduce((n,item)=>n+cost(item),0);
   if(this.topView(p)&&items.length){let n=Math.max(...items.map(item=>item.lodN));while(n>16&&items.length*(n+1)**2>budget)n/=2;for(const item of items)item.lodN=n;return items.length*(n+1)**2;}
   let points=items.reduce((n,item)=>n+cost(item),0);
-  const ordered=[...items].sort((a,b)=>this.distance(b.displayRow||b.row,p)-this.distance(a.displayRow||a.row,p));
-  for(const item of ordered)while(points>budget&&item.lodN>16){const previous=cost(item);item.lodN/=2;points+=cost(item)-previous;}
+  // 一つの遠方区画を最小まで削らず、画面上の密度が高い区画から一段ずつ減らす。
+  const projected=new Map(items.map(item=>[item,Math.max(1,this.projectedPixels(item,p))]));
+  while(points>budget){
+   let candidate=null,highest=-Infinity;
+   for(const item of items){if(item.lodN<=16)continue;const density=item.lodN/projected.get(item);
+    if(density>highest){candidate=item;highest=density;}
+   }
+   if(!candidate)break;
+   const previous=cost(candidate);candidate.lodN/=2;points+=cost(candidate)-previous;
+  }
   return points;
  },
  choose(roots,index,visible,p,budget=this.tileBudget,requestBudget=this.requestBudget){
