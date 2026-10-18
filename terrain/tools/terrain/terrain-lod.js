@@ -22,6 +22,20 @@ const TerrainLOD={
   const reduction=Math.floor(Math.log2(1+Math.max(0,forward)*Math.sin(p.tilt)/p.scale));
   return Math.max(p.base,p.target-reduction);
  },
+ overviewVisible(row,p){
+  const [z,x,y,min=0,step=0]=row,span=this.world/2**z;
+  const c=Math.cos(p.bearing),b=Math.sin(p.bearing),ct=Math.cos(p.tilt),st=Math.sin(p.tilt);
+  const low=Math.min(0,min)*p.exaggeration,high=Math.max(0,min+65535*step)*p.exaggeration;
+  let left=Infinity,right=-Infinity,bottom=Infinity,top=-Infinity;
+  // 標高ゼロの四隅だけでは、手前の山が画面内へせり上がる範囲を落としてしまう。
+  for(const dx of [0,1])for(const dy of [0,1]){
+   const px=(x+dx)*span-p.center[0],py=p.center[1]-(y+dy)*span;
+   const rx=c*px+b*py,ry=(-b*px+c*py)*ct;
+   left=Math.min(left,rx);right=Math.max(right,rx);
+   bottom=Math.min(bottom,ry+low*st);top=Math.max(top,ry+high*st);
+  }
+  return left<p.scale*p.aspect&&right>-p.scale*p.aspect&&bottom<p.scale&&top>-p.scale;
+ },
  focusWeight(row,p){
   if(p.ground||this.topView(p))return 1;
   const r=this.distance(row,p)/Math.max(1,p.scale*.35);

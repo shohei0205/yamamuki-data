@@ -32,3 +32,11 @@ assert.ok(equalPoints<=LOD.meshPointBudget);
 assert.ok(Math.max(...equalTiles.map(i=>i.lodN))/Math.min(...equalTiles.map(i=>i.lodN))<=2);
 assert.ok(equalTiles.every(i=>i.lodN>=32));
 console.log('同じ投影サイズの区画は分割数の差を一段以内に保つ OK');
+
+// 地面の四隅は画面外でも、高い山の上部が手前から画面へ入る。
+const span=LOD.world/2**12,edgeRow=[12,2064,2064,2000,.03];
+const view={center:[2064.5*span,2064*span-3000],bearing:0,tilt:Math.PI/3,scale:1000,aspect:1.5,exaggeration:1};
+assert.equal(LOD.overviewVisible([12,2064,2064,0,0],view),false);
+assert.equal(LOD.overviewVisible(edgeRow,view),true);
+assert.equal(LOD.overviewVisible(edgeRow,{...view,tilt:0}),false);
+console.log('傾斜時は標高を含む表示範囲で手前の山を残す OK');

@@ -76,7 +76,8 @@ cache.set(k,{row,heights,validValues:valid,height:texture(0,heights,gl.RED,gl.R3
 }catch(e){failures.set(k,e.message);}finally{active--;pending.delete(k);dirty=true;pump();}}
 function pump(){if(sourceSwitching)return;for(const row of wanted){const k=key(...row);if(active>=6)break;if(!cache.has(k)&&!pending.has(k)&&!failures.has(k))load(row);}}
 function visible(row){if(groundCamera){const [z,x,y]=row,s=WORLD/2**z,c=Math.cos(bearing),b=Math.sin(bearing),points=[];for(const dx of [0,1])for(const dy of [0,1]){const px=(x+dx)*s-center[0],py=center[1]-(y+dy)*s;points.push([c*px+b*py,-b*px+c*py]);}const far=Math.max(...points.map(p=>p[1])),near=Math.min(...points.map(p=>p[1])),width=Math.max(0,far)*Math.tan(groundCamera.fov/2)*canvas.width/canvas.height;return far>0&&near<groundCamera.distance&&Math.min(...points.map(p=>p[0]))<=width&&Math.max(...points.map(p=>p[0]))>=-width;}
-const [z,x,y]=row,s=WORLD/2**z,c=Math.cos(bearing),b=Math.sin(bearing),t=Number($('tilt').value)*Math.PI/180,points=[];for(const dx of [0,1])for(const dy of [0,1]){const px=(x+dx)*s-center[0],py=center[1]-(y+dy)*s;const rx=c*px+b*py,ry=-b*px+c*py;points.push([rx,ry*Math.cos(t)]);}const w=scale*canvas.width/canvas.height,h=scale;return Math.min(...points.map(p=>p[0]))<w&&Math.max(...points.map(p=>p[0]))>-w&&Math.min(...points.map(p=>p[1]))<h&&Math.max(...points.map(p=>p[1]))>-h;}
+return TerrainLOD.overviewVisible(row,{center,bearing,tilt:Number($('tilt').value)*Math.PI/180,scale,aspect:canvas.width/canvas.height,exaggeration:Number($('exaggeration').value)});}
+
 function selection(){
  const mode=$('level').value,auto=groundCamera?maxLevel:Math.max(baseLevel,Math.min(maxLevel,Math.round(Math.log2(WORLD*canvas.height/(2*scale*256)))));
  targetLevel=mode.startsWith('auto')?Math.min(auto,mode==='auto'?maxLevel:Number(mode.slice(5))):Number(mode);
