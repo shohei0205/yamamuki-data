@@ -44,7 +44,7 @@ def decode_irregular(body):
     return vertices,faces
 
 
-def simplify_irregular(grid,tolerance):
+def simplify_irregular(grid,tolerance,*,max_iterations=200,batch_size=512):
     from scipy.spatial import Delaunay
     import shapely
     from shapely.geometry import box
@@ -80,7 +80,7 @@ def simplify_irregular(grid,tolerance):
         selected.add(int(interior[np.argmax(grid.ravel()[interior])]))
         selected.add(int(interior[np.argmin(grid.ravel()[interior])]))
     if len(selected)<3:return np.empty((0,3),np.float32),np.empty((0,3),np.uint32),0.
-    for iteration in range(200):
+    for iteration in range(max_iterations):
         ids=np.asarray(sorted(selected));xy=points[ids]
         try:tri=Delaunay(xy)
         except Exception:
@@ -98,7 +98,7 @@ def simplify_irregular(grid,tolerance):
         order=np.argsort(-errors);order=order[errors[order]>tolerance]
         # 1つの三角形に点を固めず、誤差が大きい三角形ごとに最大の地点を追加する。
         _,first=np.unique(simplexes[order],return_index=True)
-        chosen=order[np.sort(first)[:512]]
+        chosen=order[np.sort(first)[:batch_size]]
         additions=set(map(int,finite[chosen]))-selected
         if not additions:raise ValueError('誤差を減らす頂点を追加できません')
         selected.update(additions)
