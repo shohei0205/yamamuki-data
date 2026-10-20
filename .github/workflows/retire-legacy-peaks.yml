@@ -29,12 +29,12 @@ jobs:
       GH_REPO: ${{ github.repository }}
       PAGES_DIRECTORY: ${{ github.workspace }}/build/pages
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Pages の設定を確認
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
       - name: peaks/manifest.json だけを置き換えたサイトを作る
         run: python -m release_tools.release_data retire-legacy
       - name: 配置の前に、今の Pages と比べる
@@ -43,12 +43,12 @@ jobs:
           python -m release_tools.release_data compare-pages --directory "$PAGES_DIRECTORY"
           --allow peaks/manifest.json --allow catalog.json
       - name: 置き換えたサイトを保存
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v5
         with:
           path: build/pages
       - name: Pages に配置
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
       - name: 配置したカタログと公開履歴を確認
         run: python -m release_tools.release_data verify-pages --directory "$PAGES_DIRECTORY"
       - name: 配置のあとに、すべてのファイルが置いたとおりか確かめる
