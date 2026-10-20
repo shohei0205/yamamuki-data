@@ -142,7 +142,7 @@ class GenerationTests(unittest.TestCase):
             self.assertEqual(original,(output/'gsi-peaks.json.gz').read_bytes())
             self.assertEqual(points,json.loads(gzip.decompress(original))["points"])
             self.assertEqual(hashlib.sha256(original).hexdigest(),manifest['sha256'])
-            self.assertEqual("PDL-1.0", metadata_maps(manifest['metadata'])["sources"]['gsi-peaks']['license'].split()[0])
+            self.assertEqual("PDL-1.0", metadata_maps(manifest['metadata'])["sources"]['国土地理院（日本の主な山岳標高）']['license'].split()[0])
             self.assertNotIn('latestPointTimestamp',manifest)
             self.assertNotIn('sourceTimestamp',manifest)
             schema=json.loads((Path(__file__).resolve().parents[3]/'points/schemas/data-v6.schema.json').read_text(encoding='utf-8'))

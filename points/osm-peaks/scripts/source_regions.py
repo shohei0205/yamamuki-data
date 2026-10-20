@@ -7,6 +7,10 @@ SOURCES = {
     "japan": "https://download.geofabrik.de/asia/japan",
     "far-eastern-fed-district": "https://download.geofabrik.de/russia/far-eastern-fed-district",
 }
+SOURCE_NAMES = {
+    "japan": "OpenStreetMap（日本・Geofabrik 配布）",
+    "far-eastern-fed-district": "OpenStreetMap（ロシア極東連邦管区・Geofabrik 配布）",
+}
 REGIONS = json.loads((Path(__file__).resolve().parent.parent / "regions.json").read_text(encoding="utf-8"))
 
 

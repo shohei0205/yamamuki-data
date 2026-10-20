@@ -239,7 +239,7 @@ class SupplementTests(unittest.TestCase):
         with gzip.open(self.root/manifest['fileName'],'rt',encoding='utf-8') as stream:
             self.assertEqual(json.load(stream)["points"],[distributed_point(p) for p in integrated])
         with gzip.open(self.root/COMPANION_FILES[0],'rt',encoding='utf-8') as f:self.assertEqual(json.load(f)["points"],[distributed_point(p) for p in self.points])
-        self.assertEqual({k:v for k,v in companion['sources'].items() if k != 'osm-peaks'},self.data['sources'])
+        self.assertEqual({k:v for k,v in companion['sources'].items() if k != 'OpenStreetMap（日本・Geofabrik 配布）'},self.data['sources'])
         self.assertIn(manifest['version'],companion['supplements']['downloadUrl'])
         self.assertEqual(supplement_document(read_supplements(self.root/'supplements.json')),supplement_document(self.data))
 
@@ -317,7 +317,7 @@ class SupplementTests(unittest.TestCase):
 
         with patch('scripts.build_data.verified_source_url',return_value='https://example.com/source'), patch('scripts.build_data.subprocess.check_output',return_value='2026-10-01T00:00:00Z'), patch('scripts.build_data.subprocess.run'), patch('scripts.build_data.read_mountains',side_effect=read_fixture):
             manifest=build(self.root/'source.pbf',self.root/'dist','test',supplements_path=path)
-        self.assertEqual({k:v for k,v in metadata_maps(manifest['metadata'])["sources"].items() if k != 'osm-peaks'},self.data['sources'])
+        self.assertEqual({k:v for k,v in metadata_maps(manifest['metadata'])["sources"].items() if k != 'OpenStreetMap（日本・Geofabrik 配布）'},self.data['sources'])
         self.assertNotIn('tagSources',manifest)
         with gzip.open(self.root/'dist/osm-peaks.json.gz','rt',encoding='utf-8') as f:
             integrated=json.load(f)

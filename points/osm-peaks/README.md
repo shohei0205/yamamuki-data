@@ -60,10 +60,10 @@ manifest の項目・型は [リポジトリ共通の manifest.json](../../forma
 | `downloadUrl` | 正式版は `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>` の Release の gzip ファイル |
 | `pointCount` | 収録した名前付き山頂ノードの件数 |
 | `dataTimestamp` | 配布データを生成した UTC 日時。PBF の基準日時とは区別する |
-| `metadata.sources.osm-peaks.latestTimestamp` | 収録する山頂ノードの OSM 最終編集日時の最大値。収録対象外のノードは集計しない |
-| `metadata.sources.osm-peaks.source` | 実際に取得・検証した日付付き全国 PBF の URL。latest 指定でも確定した日付付き URL を記録 |
-| `metadata.sources.osm-peaks.license` | `ODbL-1.0` |
-| `metadata.sources.osm-peaks.attribution` | `© OpenStreetMap contributors` |
+| `metadata.sources` の `OpenStreetMap（日本・Geofabrik 配布）` の `latestTimestamp` | 収録する山頂ノードの OSM 最終編集日時の最大値。収録対象外のノードは集計しない |
+| `metadata.sources` の `OpenStreetMap（日本・Geofabrik 配布）` の `source` | 実際に取得・検証した日付付き全国 PBF の URL。latest 指定でも確定した日付付き URL を記録 |
+| `metadata.sources` の `OpenStreetMap（日本・Geofabrik 配布）` の `license` | `ODbL-1.0` |
+| `metadata.sources` の `OpenStreetMap（日本・Geofabrik 配布）` の `attribution` | `© OpenStreetMap contributors` |
 
 元データと収録ノードの日時は必須とし、欠落・形式不正・収録ノードの日時が元データより新しい場合は生成・公開を止める。元データの日付はダウンロード日時ではない。同じ元データで再実行しても配布の `version` は変わる。
 
@@ -262,7 +262,7 @@ python scripts/build_data.py build/japan-latest.osm.pbf \
 
 開発版を手元で生成するときは、生成コマンドに `--channel dev` を指定する。省略時は `RELEASE_CHANNEL` の値、未設定なら正式版を使う。取得 URL のリポジトリは `GH_REPO`、未設定なら `GITHUB_REPOSITORY`、どちらも未設定なら `shohei0205/yamamuki-data` を使う。
 
-取得時に PBF の隣へ `<PBF のファイル名>.source.json` を保存し、URL・サイズ・MD5 を記録する。取得済みファイルを再利用した場合も記録を作る。生成時に記録と PBF を照合し、日付付き URL を manifest の `metadata.sources.osm-peaks.source` に引き継ぐ。記録の欠落や不一致は生成を止める。既存の PBF に記録がない場合は、同じ対象日で取得コマンドを再実行すると、内容が一致すれば再ダウンロードせずに記録を作れる。
+取得時に PBF の隣へ `<PBF のファイル名>.source.json` を保存し、URL・サイズ・MD5 を記録する。取得済みファイルを再利用した場合も記録を作る。生成時に記録と PBF を照合し、日付付き URL を manifest の `metadata.sources` の `OpenStreetMap（日本・Geofabrik 配布）` の `source` に引き継ぐ。記録の欠落や不一致は生成を止める。既存の PBF に記録がない場合は、同じ対象日で取得コマンドを再実行すると、内容が一致すれば再ダウンロードせずに記録を作れる。
 
 元データの取得には数 GB の通信量と空き容量が必要。元データは `points/osm-peaks/build/`、配布ファイルは `points/osm-peaks/dist/` に保存し、どちらも git に入れない。
 
@@ -329,7 +329,7 @@ python -m unittest discover -s tests -v
 
 追加 PBF も取得元の地域・配布日・MD5 ごとにキャッシュし、復元後に照合する。2026-10-10 時点の配布ページの目安では、ロシア極東は約 371 MB。日本 PBF に加えて約 371 MB の取得・保存が必要になる。実際のサイズと取得時間はログで確認する。
 
-生成コマンドは追加 PBF も必須とする。保存先を変える場合は `--far-eastern-pbf` で指定する。全取得元の URL・サイズ・MD5・基準日時は manifest の `sourcePbfs` に記録する。日本 PBF の URL は `metadata.sources` の OSM 出典にも記録する。
+生成コマンドは追加 PBF も必須とする。保存先を変える場合は `--far-eastern-pbf` で指定する。全取得元の URL・サイズ・MD5・基準日時は manifest の `sourcePbfs` に記録する。日本 PBF の URL は `metadata.sources` の `OpenStreetMap（日本・Geofabrik 配布）`、極東連邦管区 PBF の URL は `OpenStreetMap（ロシア極東連邦管区・Geofabrik 配布）` にも記録する。どちらにもライセンスと帰属表示を付け、地点 JSON と manifest に同じ出典を記録する。
 
 ### 作業ブランチでの生成確認
 

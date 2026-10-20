@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 from scripts.build_data import FILE_NAME, write_distribution
-from scripts.check_release import assess, validate
+from scripts.check_release import assess, validate, report, osm_source
 from document_metadata import metadata_maps
 
 
@@ -21,14 +21,48 @@ def dataset(count=10000, latitude=35):
 
 
 class CheckReleaseTests(unittest.TestCase):
+    def test_report_separates_sources_from_checks_and_regions(self):
+        current = dataset(1)
+        current[0].update(sizeBytes=100, sha256='abc')
+        contents = report(current, None, [])
+        self.assertIn('\n## 出典\n\n© OpenStreetMap contributors', contents)
+        self.assertNotIn('元データ: [Geofabrik]', contents)
+        self.assertIn('\n## 追加範囲の山頂\n', contents)
+        self.assertLess(contents.index('### 確認事項'), contents.index('## 出典'))
+
+    def test_report_includes_all_metadata_sources(self):
+        current = dataset(1)
+        sources = [
+            {"name": "OpenStreetMap（日本・Geofabrik 配布）", "attribution": "© OpenStreetMap contributors", "license": "ODbL-1.0"},
+            {"name": "国土地理院", "attribution": "国土地理院のデータを加工", "license": "PDL-1.0"},
+            {"name": "日本百名山", "attribution": "Wikipedia の投稿者", "license": "CC BY-SA 4.0"},
+        ]
+        for version in (5, 6):
+            with self.subTest(version=version):
+                current[0].update(schemaVersion=version, sizeBytes=100, sha256='abc')
+                if version == 6:
+                    current[0].pop('sources', None)
+                    current[0]['metadata'] = {'sources': sources}
+                else:
+                    current[0]['sources'] = metadata_maps({'sources': sources})['sources']
+                contents = report(current, None, [])
+                section = contents.split('## 出典\n\n', 1)[1].split('## 追加範囲の山頂', 1)[0]
+                for source in sources:
+                    self.assertIn(f"- {source['name']}: {source['attribution']} / {source['license']}", section)
+                self.assertEqual(section.count('- OpenStreetMap（日本・Geofabrik 配布）:'), 1)
+
     def test_latest_timestamp_in_array_sources(self):
         before, after = dataset(), dataset()
         for manifest, _ in (before, after):
             manifest.update(schemaVersion=6, dataTimestamp="2026-09-30T20:00:00Z",
-                            metadata={"sources": [{"name": "osm-peaks", "latestTimestamp": "2026-09-29T08:00:00Z"}]})
+                            metadata={"sources": [{"name": "OpenStreetMap（日本・Geofabrik 配布）", "latestTimestamp": "2026-09-29T08:00:00Z"}]})
         self.assertTrue(any("最新編集日時が前回公開版と同じ" in w for w in assess(after, before)))
         after[0]["metadata"]["sources"][0]["latestTimestamp"] = "2026-09-29T08:00:01Z"
         self.assertEqual([], assess(after, before))
+
+    def test_legacy_osm_source_name(self):
+        source = {"source": "https://example.com/japan.osm.pbf", "latestTimestamp": "2026-09-29T08:00:00Z"}
+        self.assertEqual(source, osm_source({"osm-peaks": source}))
 
     def test_normal_and_minimum_boundary(self):
         self.assertEqual([], assess(dataset(), dataset()))
@@ -118,7 +152,7 @@ class CheckReleaseTests(unittest.TestCase):
             original = json.loads(path.read_text(encoding="utf-8"))
             for value in (None, "bad", "2026-09-29T12:00:00", "2026-09-30T00:00:00Z"):
                 with self.subTest(value=value):
-                    manifest = {**original, "metadata": {**original["metadata"], "sources": {**metadata_maps(original["metadata"])["sources"], "osm-peaks": {**metadata_maps(original["metadata"])["sources"]["osm-peaks"], "latestTimestamp": value}}}}
+                    manifest = {**original, "metadata": {**original["metadata"], "sources": {**metadata_maps(original["metadata"])["sources"], "OpenStreetMap（日本・Geofabrik 配布）": {**metadata_maps(original["metadata"])["sources"]["OpenStreetMap（日本・Geofabrik 配布）"], "latestTimestamp": value}}}}
                     path.write_text(json.dumps(manifest), encoding="utf-8")
                     with self.assertRaises(ValueError):
                         validate(root)
@@ -207,7 +241,7 @@ class CheckReleaseTests(unittest.TestCase):
             write_distribution(rows, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z")
             legacy = dict(manifest)
             legacy.update(legacy.pop("metadata"))
-            legacy["latestPointTimestamp"] = metadata_maps(legacy)["sources"]["osm-peaks"]["latestTimestamp"]
+            legacy["latestPointTimestamp"] = metadata_maps(legacy)["sources"]["OpenStreetMap（日本・Geofabrik 配布）"]["latestTimestamp"]
             legacy["sourceTimestamp"] = "2026-09-29T20:22:51Z"
             legacy["schemaVersion"] = 5
             del legacy["dataSchemaVersion"]
@@ -319,7 +353,7 @@ class DownloadUrlTests(unittest.TestCase):
                 (root / FILE_NAME).write_bytes(archive)
                 changed["dataSchemaVersion"] = 3
                 changed.update(changed.pop("metadata"))
-                changed["latestPointTimestamp"] = metadata_maps(changed)["sources"]["osm-peaks"]["latestTimestamp"]
+                changed["latestPointTimestamp"] = metadata_maps(changed)["sources"]["OpenStreetMap（日本・Geofabrik 配布）"]["latestTimestamp"]
                 changed["sourceTimestamp"] = "2026-09-29T20:22:51Z"
                 changed["mountainCount"] = changed.pop("pointCount")
                 changed["latestMountainTimestamp"] = changed.pop("latestPointTimestamp")
