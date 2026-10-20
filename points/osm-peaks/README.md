@@ -8,7 +8,13 @@
 
 ## 配るもの
 
-OpenStreetMap に登録された日本全国の名前付き山頂・火山の地点を、`osm-peaks.json.gz` 1 ファイルにまとめて配布する。
+Geofabrik の日本全国の OSM データから、`natural=peak` または `natural=volcano` の名前付きノードを抽出する。ロシア極東の PBF から国後島・択捉島・色丹島・歯舞群島の範囲にある同じ条件のノードも補い、`osm-peaks.json.gz` 1 ファイルにまとめる。way・relation と名前のないノードは含めない。収録する地点の `type` は山頂を表す `peak` とし、火山ノードも同じ種別で出力する。名前は前後の空白を除き、日本 PBF では `name:ja`、`name` の順に使う（`name:ja` だけのノードも含む）。日本以外の PBF では、空欄でない `name:ja` があるノードだけを収録し、その値を名前に使う。
+
+追加範囲は [regions.json](regions.json) の島ごとの矩形（西端の経度、南端の緯度、東端の経度、北端の緯度の順）で指定する。国名や行政境界のタグでは判定しない。国後島・択捉島の日本語名付き山頂が 0 件の場合は欠落として生成を止める。尖閣諸島は既存の日本 PBF の収録分を使い、日本語名のない地点の名前は推測して補わない。
+
+2026-10-03 配布分を確認すると、日本以外の PBF から追加する日本語名付き山頂は国後島 13 件、択捉島 37 件、色丹島 5 件、歯舞群島 0 件だった。爺爺岳（OSM ID `281896663`）には `name:ja` があり、統合後は 14,088 件になる。これらは確認時点の件数で、以後の生成では OSM の登録内容に従う。
+
+複数の取得元に同じ OSM ID があれば、ノードの版、編集日時の順で新しい方を使う。同じ版・編集日時で内容が異なる場合は生成を止める。
 
 地点 JSON の項目と制約は [地点データフォーマット](../formats/data.md) を参照する。
 
@@ -247,7 +253,9 @@ Actions では取得前に配布元の日付付き URL・サイズ・MD5 を確�
 ```bash
 # リポジトリのルートから移動する。
 cd points/osm-peaks
-python -u scripts/download_source.py
+python -u scripts/download_source.py --source-date YYYY-MM-DD
+python -u scripts/download_source.py --region far-eastern-fed-district \
+  --source-date YYYY-MM-DD --output build/far-eastern-fed-district.osm.pbf
 python scripts/build_data.py build/japan-latest.osm.pbf \
   --version local-20260930 --output-dir dist
 ```
@@ -316,6 +324,12 @@ Python 3.12 と osmium-tool を使い、単体テストと小さな PBF によ�
 ```bash
 python -m unittest discover -s tests -v
 ```
+
+追加 PBF の取得はそれぞれ全体15分、Actions の取得ステップ20分で打ち切る。日本 PBF の配布日を追加 PBF に指定し、その日の追加 PBF が未配布なら失敗とする。日付を自動でずらして生成しない。
+
+追加 PBF も取得元の地域・配布日・MD5 ごとにキャッシュし、復元後に照合する。2026-10-10 時点の配布ページの目安では、ロシア極東は約 371 MB。日本 PBF に加えて約 371 MB の取得・保存が必要になる。実際のサイズと取得時間はログで確認する。
+
+生成コマンドは追加 PBF も必須とする。保存先を変える場合は `--far-eastern-pbf` で指定する。全取得元の URL・サイズ・MD5・基準日時は manifest の `sourcePbfs` に記録する。日本 PBF の URL は `metadata.sources` の OSM 出典にも記録する。
 
 ### 作業ブランチでの生成確認
 

@@ -57,11 +57,15 @@ class GraphicsTests(unittest.TestCase):
             {"osmId": 1, "graphic": {"svg": SVG.decode("utf-8"), "scale": 1.5}}
         ]}), encoding="utf-8")
         rows = [{key: value for key, value in self.rows[0].items() if key != "graphic"}]
-        rows[0]["osmId"] = 1
+        rows[0]["id"] = "osm:1"
+        def read_fixture(path, **kwargs):
+            kwargs["revisions"][1] = (1, "2026-09-29T12:00:00Z")
+            return rows, "2026-09-29T12:00:00Z"
+
         with patch("scripts.build_data.verified_source_url", return_value="https://download.geofabrik.de/asia/japan-260929.osm.pbf"), \
                 patch("scripts.build_data.subprocess.check_output", return_value="2026-09-29T20:00:00Z"), \
                 patch("scripts.build_data.subprocess.run"), \
-                patch("scripts.build_data.read_mountains", return_value=(rows, "2026-09-29T12:00:00Z")):
+                patch("scripts.build_data.read_mountains", side_effect=read_fixture):
             manifest = build(self.root / "unused.pbf", self.output, "test", supplements_path=supplements)
         self.assertNotIn("graphic", rows[0])
         distributed = validate(self.output)[1]

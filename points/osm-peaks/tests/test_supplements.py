@@ -311,7 +311,11 @@ class SupplementTests(unittest.TestCase):
         from scripts.build_data import build
         path=self.root/'input-supplements.json'
         path.write_text(json.dumps(self.data,ensure_ascii=False),encoding='utf-8')
-        with patch('scripts.build_data.verified_source_url',return_value='https://example.com/source'), patch('scripts.build_data.subprocess.check_output',return_value='2026-10-01T00:00:00Z'), patch('scripts.build_data.subprocess.run'), patch('scripts.build_data.read_mountains',return_value=(deepcopy(self.points),'2026-10-01T00:00:00Z')):
+        def read_fixture(path, **kwargs):
+            kwargs['revisions'].update({row['osmId']: (1, '2026-10-01T00:00:00Z') for row in self.points})
+            return deepcopy(self.points), '2026-10-01T00:00:00Z'
+
+        with patch('scripts.build_data.verified_source_url',return_value='https://example.com/source'), patch('scripts.build_data.subprocess.check_output',return_value='2026-10-01T00:00:00Z'), patch('scripts.build_data.subprocess.run'), patch('scripts.build_data.read_mountains',side_effect=read_fixture):
             manifest=build(self.root/'source.pbf',self.root/'dist','test',supplements_path=path)
         self.assertEqual({k:v for k,v in metadata_maps(manifest['metadata'])["sources"].items() if k != 'osm-peaks'},self.data['sources'])
         self.assertNotIn('tagSources',manifest)

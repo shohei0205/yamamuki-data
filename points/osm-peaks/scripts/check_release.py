@@ -11,6 +11,7 @@ import re
 
 from scripts.point_document import rows as document_rows, metadata_of
 from scripts.build_data import FILE_NAME, MAX_SIZE_BYTES
+from scripts.source_regions import REGIONS, region_for
 from scripts.graphics import validate_graphics
 from scripts.point_tags import validate_tags, validate_alias_readings, validate_tag_metadata
 from scripts.supplements import validate_supplement_sources
@@ -91,6 +92,34 @@ def validate(directory, *, tag=None, channel="stable"):
         latest = source_time(value)
         if latest > source_time(manifest[timestamp_key]):
             raise ValueError("山頂の最終編集日時が元データの基準日時より新しくなっています")
+    if "sourcePbfs" in manifest:
+        from scripts.download_source import source_region
+        sources = manifest["sourcePbfs"]
+        if not isinstance(sources, list) or len(sources) != 2:
+            raise ValueError("追加 PBF を含む取得元記録が不正です")
+        regions, dates, timestamps = set(), set(), []
+        for source in sources:
+            if not isinstance(source, dict):
+                raise ValueError("PBF の取得元記録が不正です")
+            url = source.get("url")
+            if not isinstance(url, str) or not re.search(r"-[0-9]{6}\.osm\.pbf$", url):
+                raise ValueError("取得元は日付付き PBF の URL で指定してください")
+            regions.add(source_region(url))
+            dates.add(url[-14:])
+            if type(source.get("sizeBytes")) is not int or source["sizeBytes"] <= 0:
+                raise ValueError("PBF のサイズが不正です")
+            if not isinstance(source.get("md5"), str) or not re.fullmatch(r"[0-9a-f]{32}", source["md5"]):
+                raise ValueError("PBF の MD5 が不正です")
+            timestamps.append(source_time(source.get("sourceTimestamp")))
+        if regions != {"japan", "far-eastern-fed-district"} or len(dates) != 1:
+            raise ValueError("取得元の地域または配布日が一致しません")
+        if ((manifest["schemaVersion"] < 6 and max(timestamps) != source_time(manifest["sourceTimestamp"]))
+                or (manifest["schemaVersion"] >= 6 and latest > max(timestamps))):
+            raise ValueError("元データ全体の基準日時が PBF の記録と一致しません")
+        japan_url = next(source["url"] for source in sources if source_region(source["url"]) == "japan")
+        recorded_url = manifest["sources"].get("osm-peaks", {}).get("source") if manifest["schemaVersion"] >= 6 else manifest.get("sourceUrl")
+        if recorded_url != japan_url:
+            raise ValueError("全国 PBF の URL が取得元記録と一致しません")
     archive_path = directory / FILE_NAME
     if not 0 < archive_path.stat().st_size <= MAX_SIZE_BYTES:
         raise ValueError("gzip のサイズが許容範囲外です")
@@ -189,6 +218,16 @@ def assess(current, previous=None):
     old_manifest, old_rows = previous
     if len(rows) * 5 <= len(old_rows) * 4:
         warnings.append(f"全国の件数が20%以上減少: {len(old_rows):,} → {len(rows):,} 件 ({1 - len(rows) / len(old_rows):.1%}減)")
+    # 追加分で既存範囲の減少が隠れないよう、別々に比較する。
+    old_base = sum(region_for(row["latitude"], row["longitude"]) is None for row in old_rows)
+    new_base = sum(region_for(row["latitude"], row["longitude"]) is None for row in rows)
+    if old_base and new_base * 5 <= old_base * 4:
+        warnings.append(f"追加範囲を除く件数が20%以上減少: {old_base:,} → {new_base:,} 件")
+    for region in REGIONS:
+        old_count = sum(region_for(row["latitude"], row["longitude"]) == region for row in old_rows)
+        new_count = sum(region_for(row["latitude"], row["longitude"]) == region for row in rows)
+        if old_count and new_count * 5 <= old_count * 4:
+            warnings.append(f"{region['name']}の件数が20%以上減少: {old_count:,} → {new_count:,} 件")
     before, after = cells(old_rows), cells(rows)
     for cell, count in sorted(before.items()):
         if count >= MIN_CELL_COUNT and after[cell] * 5 <= count * 4:
@@ -223,4 +262,11 @@ def report(current, previous, warnings):
              "### 確認事項", "", *([f"- {warning}" for warning in warnings] or ["- 件数と元データの日時に異常はありません"]), "",
              "© OpenStreetMap contributors — [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/)", "",
              "元データ: [Geofabrik](https://download.geofabrik.de/asia/japan.html)", ""]
+    lines.extend(["### 追加範囲の山頂", ""])
+    for region in REGIONS:
+        count = sum(region_for(row["latitude"], row["longitude"]) == region for row in rows)
+        lines.append(f"- {region['name']}: {count:,} 件")
+    for source in manifest.get("sourcePbfs", []):
+        lines.append(f"- 取得元: {source['url']}（基準日時 {source['sourceTimestamp']}）")
+    lines.append("")
     return "\n".join(lines)

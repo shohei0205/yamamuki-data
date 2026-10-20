@@ -245,6 +245,11 @@ class BuildDataTests(unittest.TestCase):
         self.save_fixture_source(pbf)
         supplements = self.root / "supplements.json"
         supplements.write_text(json.dumps({"schemaVersion": 1, "sources": {}, "points": []}), encoding="utf-8")
+        additional = self.root / "far-eastern.osm.pbf"
+        additional.write_bytes(b"fixture")
+        from scripts.download_source import save_source_info
+        import hashlib
+        save_source_info(additional, {"url": "https://download.geofabrik.de/russia/far-eastern-fed-district-260929.osm.pbf", "sizeBytes": 7, "md5": hashlib.md5(b"fixture").hexdigest()})
         output = self.root / "output"
         script = Path(__file__).resolve().parents[1] / "scripts" / "build_data.py"
         # 直接実行と同じ検索先にし、外部の osmium だけを置き換える。
@@ -258,18 +263,22 @@ script, xml, timestamp, *arguments = sys.argv[1:]
 sys.path.insert(0, str(Path(script).parent))
 sys.argv = [script, *arguments]
 def extract(command, **kwargs):
-    shutil.copyfile(xml, command[command.index("-o") + 1])
+    destination = command[command.index("-o") + 1]
+    if "far-eastern" in command[2]:
+        Path(destination).write_text('<osm><node id="101" version="1" timestamp="2026-09-29T12:00:00Z" lat="44.35" lon="146.25"><tag k="natural" v="peak"/><tag k="name:ja" v="国後山"/></node><node id="102" version="1" timestamp="2026-09-29T12:00:00Z" lat="45.03" lon="147.87"><tag k="natural" v="peak"/><tag k="name:ja" v="択捉山"/></node></osm>', encoding="utf-8")
+    else:
+        shutil.copyfile(xml, destination)
 with patch("subprocess.check_output", return_value=timestamp), patch("subprocess.run", side_effect=extract):
     runpy.run_path(script, run_name="__main__")
 """
         result = subprocess.run(
             [sys.executable, "-I", "-X", "utf8", "-c", runner, str(script), str(self.xml), TIMESTAMP,
-             str(pbf), "--version", "test", "--output-dir", str(output), "--supplements", str(supplements)],
+             str(pbf), "--version", "test", "--output-dir", str(output), "--supplements", str(supplements), "--far-eastern-pbf", str(additional)],
             cwd=self.root, capture_output=True, text=True, encoding="utf-8",
         )
         self.assertEqual(0, result.returncode, result.stderr)
         manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(4, manifest["metadata"]["pointCount"])
+        self.assertEqual(6, manifest["metadata"]["pointCount"])
         from scripts.distribution_parts import validate_parts
         integrated = json.loads(gzip.decompress((output / FILE_NAME).read_bytes()))["points"]
         for name in ("osm-peaks-source.json.gz", "osm-peaks-source-manifest.json",
