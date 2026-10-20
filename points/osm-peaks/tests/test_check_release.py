@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 from scripts.build_data import FILE_NAME, write_distribution
-from scripts.check_release import assess, validate
+from scripts.check_release import assess, validate, report
 from document_metadata import metadata_maps
 
 
@@ -21,6 +21,36 @@ def dataset(count=10000, latitude=35):
 
 
 class CheckReleaseTests(unittest.TestCase):
+    def test_report_separates_sources_from_checks_and_regions(self):
+        current = dataset(1)
+        current[0].update(sizeBytes=100, sha256='abc')
+        contents = report(current, None, [])
+        self.assertIn('\n## 出典\n\n© OpenStreetMap contributors', contents)
+        self.assertNotIn('元データ: [Geofabrik]', contents)
+        self.assertIn('\n## 追加範囲の山頂\n', contents)
+        self.assertLess(contents.index('### 確認事項'), contents.index('## 出典'))
+
+    def test_report_includes_all_metadata_sources(self):
+        current = dataset(1)
+        sources = [
+            {"name": "osm-peaks", "attribution": "© OpenStreetMap contributors", "license": "ODbL-1.0"},
+            {"name": "国土地理院", "attribution": "国土地理院のデータを加工", "license": "PDL-1.0"},
+            {"name": "日本百名山", "attribution": "Wikipedia の投稿者", "license": "CC BY-SA 4.0"},
+        ]
+        for version in (5, 6):
+            with self.subTest(version=version):
+                current[0].update(schemaVersion=version, sizeBytes=100, sha256='abc')
+                if version == 6:
+                    current[0].pop('sources', None)
+                    current[0]['metadata'] = {'sources': sources}
+                else:
+                    current[0]['sources'] = metadata_maps({'sources': sources})['sources']
+                contents = report(current, None, [])
+                section = contents.split('## 出典\n\n', 1)[1].split('## 追加範囲の山頂', 1)[0]
+                for source in sources:
+                    self.assertIn(f"- {source['name']}: {source['attribution']} / {source['license']}", section)
+                self.assertEqual(section.count('- osm-peaks:'), 1)
+
     def test_latest_timestamp_in_array_sources(self):
         before, after = dataset(), dataset()
         for manifest, _ in (before, after):

@@ -155,9 +155,10 @@ def publish(version, directory, source=DATA):
     channel = "dev" if ref == "refs/heads/dev" else "stable"
     tag, manifest = prepare(version, directory, channel, source)
     notes = directory / "notes.md"
-    notes.write_text("[Codex] コミット済みの国土地理院の地点 JSON を配布します。\n\n"
+    notes.write_text("コミット済みの国土地理院の地点 JSON を配布します。\n\n"
                      + f"- 地点数: {manifest['metadata']['pointCount']}\n- SHA-256: `{manifest['sha256']}`\n"
                      + f"- 入力コミット: `{os.environ['GITHUB_SHA']}`\n"
+                     + "\n## 出典\n\n"
                      + "".join(f"- {key}: {value.get('attribution','')} / {value.get('license','')}\n" for key,value in metadata_maps(manifest["metadata"])["sources"].items()), encoding="utf-8", newline="\n")
     from scripts.distribution_parts import filenames
     names = (FILE, FILE + ".gz", "manifest.json", INFO, *filenames("gsi-peaks"))
