@@ -1,4 +1,4 @@
-name: 地点 / OSM山頂：生成・検査
+name: 地点 / OSM山頂：Release 生成・検査
 
 # 正式版（main）は Release を作るところまでで、Pages には公開しない。アプリがどの版を読むかは yamamuki の PR で決める。
 # 開発版（dev）は検査に通ったら Pages の points/osm-peaks-dev/ に公開する。
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       source_date:
-        description: '取得対象日（YYYY-MM-DD）。空欄は latest。実行当日分は未配布の場合があります'
+        description: '取得対象日（YYYY-MM-DD）。空欄は latest。実行当日分は未配布の場合があります。公開中の日付一覧: https://download.geofabrik.de/asia/japan.html'
         required: false
         default: ''
         type: string
@@ -26,14 +26,13 @@ env:
   RELEASE_CHANNEL: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
 
 concurrency:
-  group: publish-osm-peaks-${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
+  group: publish-osm-peaks-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   generate:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 150
     outputs:
       tag: ${{ steps.review.outputs.tag }}
       sha256: ${{ steps.review.outputs.sha256 }}
@@ -84,17 +83,50 @@ jobs:
         with:
           path: points/osm-peaks/build/japan-latest.osm.pbf
           key: ${{ steps.download.outputs.cache-key }}
+      - name: ロシア極東 PBF の配布日と MD5 を確認
+        id: far-eastern-fed-district-source
+        timeout-minutes: 5
+        env:
+          SOURCE_DATE: ${{ steps.source.outputs.source-date }}
+        run: python -u scripts/download_source.py --region far-eastern-fed-district --resolve-only --max-seconds 240 --source-date "$SOURCE_DATE"
+      - name: ロシア極東 PBF をキャッシュから復元
+        id: far-eastern-fed-district-cache
+        uses: actions/cache/restore@v4
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          path: points/osm-peaks/build/far-eastern-fed-district.osm.pbf
+          key: ${{ steps.far-eastern-fed-district-source.outputs.cache-key }}
+      - name: ロシア極東 PBF を検証し、未取得なら取得
+        id: far-eastern-fed-district-download
+        timeout-minutes: 20
+        env:
+          SOURCE_DATE: ${{ steps.source.outputs.source-date }}
+        run: python -u scripts/download_source.py --region far-eastern-fed-district --output build/far-eastern-fed-district.osm.pbf --max-seconds 900 --source-date "$SOURCE_DATE"
+      - name: 検証済みのロシア極東 PBF を次回用に保存
+        if: steps.far-eastern-fed-district-cache.outputs.cache-hit != 'true' || steps.far-eastern-fed-district-source.outputs.cache-key != steps.far-eastern-fed-district-download.outputs.cache-key
+        uses: actions/cache/save@v4
+        timeout-minutes: 10
+        continue-on-error: true
+        with:
+          path: points/osm-peaks/build/far-eastern-fed-district.osm.pbf
+          key: ${{ steps.far-eastern-fed-district-download.outputs.cache-key }}
       - name: 配布ファイルと manifest を生成
         id: build
         run: |
           version="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          graphics_options=()
-          if [ -f graphics/points.json ]; then
-            graphics_options=(--graphics-directory graphics --graphics-map graphics/points.json)
-          fi
-          python scripts/build_data.py build/japan-latest.osm.pbf --version "$version" "${graphics_options[@]}"
+          python scripts/build_data.py build/japan-latest.osm.pbf --version "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: 作業ブランチの生成物を保存
+        if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev'
+        uses: actions/upload-artifact@v4
+        with:
+          name: osm-peaks-test-${{ github.run_id }}-${{ github.run_attempt }}
+          path: points/osm-peaks/dist/
+          if-no-files-found: error
+          retention-days: 7
       - name: 前回と比較して Release を作成
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
         id: review
         env:
           GH_TOKEN: ${{ github.token }}
@@ -145,8 +177,8 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v5
       - name: 配置した manifest 一覧を確認
+        working-directory: .
         if: steps.publication.outputs.pages_ready == 'true'
-        working-directory: points/osm-peaks
         env:
           GH_REPO: ${{ github.repository }}
-        run: python -m scripts.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"
+        run: python -m release_tools.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"

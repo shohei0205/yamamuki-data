@@ -11,6 +11,7 @@ from scripts.build_data import write_distribution, build
 from scripts.check_release import validate
 from scripts.graphics import validate_svg, validate_graphics
 from scripts import release_data
+from release_tools import release_data as common
 
 
 SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 24 L12 0 L24 24 Z"/></svg>'
@@ -21,11 +22,8 @@ class GraphicsTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.source = self.root / "graphics"
-        self.source.mkdir()
-        (self.source / "fuji.svg").write_bytes(SVG)
         self.output = self.root / "dist"
-        self.rows = [{"id": "1", "type": "peak", "name": "富士山", "latitude": 35,
+        self.rows = [{"id": "osm:1", "type": "peak", "name": "富士山", "latitude": 35,
                       "longitude": 139, "graphic": {"svg": SVG.decode("utf-8"), "scale": 1.5}}]
 
     def generate(self, channel="stable"):
@@ -33,7 +31,7 @@ class GraphicsTests(unittest.TestCase):
                                   "2026-09-29T12:00:00Z", channel=channel)
 
     def test_null_optional_fields_round_trip(self):
-        for key in ("osmId", "type", "elevationM", "nameReading", "aliases", "tags", "wikipediaUrl", "wikidataUrl", "graphic"):
+        for key in ("type", "elevationM", "nameReading", "aliases", "tags", "wikipediaUrl", "wikidataUrl", "graphic"):
             self.rows[0][key] = None
         self.generate()
         self.assertEqual(validate(self.output)[1], self.rows)
@@ -50,21 +48,28 @@ class GraphicsTests(unittest.TestCase):
             self.assertEqual(self.rows, validate(self.output, channel=channel)[1])
             self.assertEqual({"manifest.json", "osm-peaks.json.gz"}, {p.name for p in self.output.iterdir()})
             with patch.dict(release_data.os.environ, {"GH_REPO": "shohei0205/yamamuki-data"}):
-                entry = release_data.points_catalog({release_data.manifest_path(channel): manifest}, channel)["datasets"][0]
+                entry = common.points_catalog({release_data.manifest_path(channel): manifest}, channel)["datasets"][0]
                 self.assertNotIn("graphics", entry["manifest"])
 
-    def test_build_applies_point_to_asset_map(self):
-        tags = self.root / "tags"
-        tags.mkdir()
-        mappings = self.root / "points.json"
-        mappings.write_text('{"1":"fuji"}', encoding="utf-8")
+    def test_build_applies_supplement_graphic_and_keeps_original(self):
+        supplements = self.root / "supplements.json"
+        supplements.write_text(json.dumps({"schemaVersion": 1, "points": [
+            {"osmId": 1, "graphic": {"svg": SVG.decode("utf-8"), "scale": 1.5}}
+        ]}), encoding="utf-8")
         rows = [{key: value for key, value in self.rows[0].items() if key != "graphic"}]
+        rows[0]["id"] = "osm:1"
+        def read_fixture(path, **kwargs):
+            kwargs["revisions"][1] = (1, "2026-09-29T12:00:00Z")
+            return rows, "2026-09-29T12:00:00Z"
+
         with patch("scripts.build_data.verified_source_url", return_value="https://download.geofabrik.de/asia/japan-260929.osm.pbf"), \
                 patch("scripts.build_data.subprocess.check_output", return_value="2026-09-29T20:00:00Z"), \
                 patch("scripts.build_data.subprocess.run"), \
-                patch("scripts.build_data.read_mountains", return_value=(rows, "2026-09-29T12:00:00Z")):
-            manifest = build(self.root / "unused.pbf", self.output, "test", graphics_directory=self.source, graphics_map=mappings, tags_directory=tags)
-        self.assertEqual({"svg": SVG.decode("utf-8")}, rows[0]["graphic"])
+                patch("scripts.build_data.read_mountains", side_effect=read_fixture):
+            manifest = build(self.root / "unused.pbf", self.output, "test", supplements_path=supplements)
+        self.assertNotIn("graphic", rows[0])
+        distributed = validate(self.output)[1]
+        self.assertEqual({"svg": SVG.decode("utf-8"), "scale": 1.5}, distributed[0]["graphic"])
         self.assertNotIn("graphics", manifest)
 
     def test_inline_svg_and_scale_are_validated(self):
@@ -116,7 +121,7 @@ class GraphicsTests(unittest.TestCase):
 
     def test_fetch_old_release_downloads_data_and_manifest(self):
         manifest = self.generate()
-        with patch.object(release_data, "gh", return_value='{"assets":[]}') as download, \
+        with patch.object(common, "gh", return_value='{"assets":[]}') as download, \
                 patch.object(release_data, "validate", return_value=(manifest, self.rows)):
             release_data.fetch("osm-peaks-test", self.root / "download")
             self.assertEqual(2, download.call_count)

@@ -1,19 +1,40 @@
 {
-  "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
-  "attribution": "出典：国土地理院（日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成",
-  "sourceUrl": "https://www.gsi.go.jp/KOKUJYOHO/MOUNTAIN/1003zan20260331.csv",
-  "sourceDate": "2026-03-31",
+  "sourceDate": null,
   "experimental": true,
-  "coordinatePolicy": "主な山岳一覧の最高地点。自然地名を追加した場合は山の代表点を含む。",
-  "elevationPolicy": "山岳一覧の標高を優先。任意の DEM 補完は代表点の地表標高であり公称の山頂標高ではない。",
-  "inputSha256": "db263d963da76ba0ff7d41168a96008d8f38053872a7a07472940a1f3c7891e9",
-  "pointCount": 17040,
+  "coordinatePolicy": "山名・座標は最適化ベクトルタイルを優先し、一意に照合できた山岳一覧の最高地点を優先する。未収録の山は山岳一覧・取得済み自然地名から追加する。注記・代表点は最高地点とは限らない。",
+  "elevationPolicy": "山岳一覧の公称標高、25 m 以内で双方に一意な三角点・標高点、DEM1A・DEM5A・DEM5B・DEM5C・DEM10B の順に採用。DEM は指定座標の地表標高であり、最高地点の標高とは限らない。",
+  "inputSha256": "57b2947840e79b714e0cd5072670705d785ca0fae65cdddda4b7c320d0f47009",
+  "pointCount": 17248,
   "sourceSnapshot": {
-    "dem": {
-      "fileCount": 14286,
-      "firstFetchedAt": "2026-10-12T04:03:23Z",
-      "lastFetchedAt": "2026-10-12T15:00:35Z",
-      "urlTemplate": "https://cyberjapandata.gsi.go.jp/xyz/dem/14/{x}/{y}.txt"
+    "dem1a_png": {
+      "fileCount": 1225,
+      "firstFetchedAt": "2026-10-13T17:03:24Z",
+      "lastFetchedAt": "2026-10-13T17:03:47Z",
+      "urlTemplate": "https://cyberjapandata.gsi.go.jp/xyz/dem1a_png/17/{x}/{y}.png"
+    },
+    "dem5a_png": {
+      "fileCount": 258,
+      "firstFetchedAt": "2026-10-13T17:03:47Z",
+      "lastFetchedAt": "2026-10-13T17:03:51Z",
+      "urlTemplate": "https://cyberjapandata.gsi.go.jp/xyz/dem5a_png/15/{x}/{y}.png"
+    },
+    "dem5b_png": {
+      "fileCount": 64,
+      "firstFetchedAt": "2026-10-13T17:03:51Z",
+      "lastFetchedAt": "2026-10-13T17:03:52Z",
+      "urlTemplate": "https://cyberjapandata.gsi.go.jp/xyz/dem5b_png/15/{x}/{y}.png"
+    },
+    "dem5c_png": {
+      "fileCount": 58,
+      "firstFetchedAt": "2026-10-13T17:03:52Z",
+      "lastFetchedAt": "2026-10-13T17:03:53Z",
+      "urlTemplate": "https://cyberjapandata.gsi.go.jp/xyz/dem5c_png/15/{x}/{y}.png"
+    },
+    "dem_png": {
+      "fileCount": 48,
+      "firstFetchedAt": "2026-10-13T17:03:53Z",
+      "lastFetchedAt": "2026-10-13T17:03:53Z",
+      "urlTemplate": "https://cyberjapandata.gsi.go.jp/xyz/dem_png/14/{x}/{y}.png"
     },
     "mountainList": {
       "fileCount": 1,
@@ -37,6 +58,48 @@
       "firstFetchedAt": "2026-10-12T04:33:35Z",
       "lastFetchedAt": "2026-10-12T11:17:17Z",
       "urlTemplate": "https://cyberjapandata.gsi.go.jp/xyz/experimental_nnfpt/15/{x}/{y}.geojson"
+    },
+    "vector": {
+      "fileCount": 1,
+      "firstFetchedAt": "2026-10-13T01:38:06Z",
+      "lastFetchedAt": "2026-10-13T01:38:06Z",
+      "files": [
+        {
+          "url": "https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/optimal_bvmap-v1.pmtiles",
+          "sizeBytes": 16900763181,
+          "etag": "\"dfa81a9cba11aad28247d63a2d8361ec-2015\"",
+          "lastModified": "Thu, 17 Sep 2026 07:32:00 GMT",
+          "fetchedAt": "2026-10-13T01:38:06Z",
+          "sha256": "e8e84ba5ae6f565f3bed4d30191189d77e3cbd32b38236eb4e8f3f6e61e39ee7"
+        }
+      ]
     }
-  }
+  },
+  "dataSchemaVersion": 6,
+  "sources": [
+    {
+      "source": "https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/optimal_bvmap-v1.pmtiles",
+      "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
+      "attribution": "出典：国土地理院（最適化ベクトルタイル・日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成",
+      "name": "gsi-peaks"
+    },
+    {
+      "source": "https://www.gsi.go.jp/KOKUJYOHO/MOUNTAIN/1003zan20260331.csv",
+      "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
+      "attribution": "出典：国土地理院（最適化ベクトルタイル・日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成",
+      "name": "gsi-mountain-list"
+    },
+    {
+      "source": "https://cyberjapandata.gsi.go.jp/xyz/experimental_nnfpt/{z}/{x}/{y}.geojson",
+      "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
+      "attribution": "出典：国土地理院（最適化ベクトルタイル・日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成",
+      "name": "gsi-natural"
+    },
+    {
+      "source": "https://maps.gsi.go.jp/development/ichiran.html",
+      "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
+      "attribution": "出典：国土地理院（最適化ベクトルタイル・日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成",
+      "name": "gsi-dem"
+    }
+  ]
 }

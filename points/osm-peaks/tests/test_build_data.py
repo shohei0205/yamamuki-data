@@ -1,3 +1,4 @@
+from scripts.point_document import ordered_point
 """外部通信をせずに抽出・圧縮・manifest の対応を確かめる。"""
 
 import gzip
@@ -6,6 +7,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -48,6 +50,8 @@ OSM = '''<?xml version="1.0" encoding="UTF-8"?>
 TIMESTAMP = "2026-09-30T20:21:22Z"
 
 
+from document_metadata import metadata_maps
+
 class BuildDataTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -58,16 +62,29 @@ class BuildDataTests(unittest.TestCase):
 
     def test_named_nodes_and_display_names(self):
         mountains = read_mountains(self.xml)[0]
-        self.assertEqual(["1", "2", "5", "6"], [m["id"] for m in mountains])
-        self.assertEqual({"id": "1", "type": "peak", "osmId": 1, "name": "富士山", "latitude": 35.3606,
+        self.assertEqual(["osm:1", "osm:2", "osm:5", "osm:6"], [m["id"] for m in mountains])
+        self.assertEqual({"id": "osm:1", "type": "peak", "name": "富士山", "latitude": 35.3606,
                           "longitude": 138.7274, "elevationM": 3776,
+                          "provenance": {"dataSource": "osm", "classification": "natural=peak", "elevationSource": "osm"},
                           "nameReading": "ふじさん", "aliases": ["富岳", "芙蓉峰"],
                           "wikipediaUrl": "https://ja.wikipedia.org/wiki/%E5%AF%8C%E5%A3%AB%E5%B1%B1",
                           "wikidataUrl": "https://www.wikidata.org/wiki/Q39231"}, mountains[0])
         self.assertTrue(all(mountain["type"] == "peak" for mountain in mountains))
         self.assertAlmostEqual(304.8, mountains[1]["elevationM"])
+        self.assertEqual("natural=volcano", mountains[1]["provenance"]["classification"])
+        self.assertEqual("osm", mountains[1]["provenance"]["elevationSource"])
+        self.assertTrue(all("elevationSource" not in m["provenance"] for m in mountains[2:]))
         self.assertEqual("標高不明の山", mountains[2]["name"])
         self.assertIsNone(mountains[2]["elevationM"])
+
+    def test_provenance_survives_supplements(self):
+        from scripts.supplements import apply_supplements
+        mountains = read_mountains(self.xml)[0]
+        before = dict(mountains[0]['provenance'])
+        supplemented = apply_supplements(mountains, {'schemaVersion': 1, 'sources': {},
+            'points': [{'osmId': 1, 'name': '補正した富士山', 'reason': '表記を確認'}]})
+        self.assertEqual(supplemented[0]['provenance'], before)
+        self.assertEqual(mountains[0]['name'], '富士山')
 
     def test_missing_optional_details(self):
         mountain = read_mountains(self.xml)[0][1]
@@ -147,17 +164,21 @@ class BuildDataTests(unittest.TestCase):
         manifest = write_distribution(mountains, self.root, "20260930-1", TIMESTAMP, "2026-09-29T12:00:00Z")
         archive = (self.root / FILE_NAME).read_bytes()
         raw = gzip.decompress(archive)
-        self.assertEqual(mountains, json.loads(raw))
+        self.assertEqual([ordered_point(p) for p in mountains], json.loads(raw)["points"])
+        self.assertEqual(json.loads(raw)["metadata"],manifest["metadata"])
+        self.assertFalse({"tags","sources","pointCount","latestPointTimestamp","sourceTimestamp"} & manifest.keys())
+        self.assertEqual(metadata_maps(json.loads(raw)["metadata"])["sources"]["osm-peaks"]["latestTimestamp"],metadata_maps(manifest["metadata"])["sources"]["osm-peaks"]["latestTimestamp"])
         self.assertEqual(manifest, json.loads((self.root / "manifest.json").read_text(encoding="utf-8")))
-        self.assertEqual(5, manifest["schemaVersion"])
+        self.assertEqual(6, manifest["schemaVersion"])
         self.assertEqual("山頂", manifest["name"])
         self.assertEqual("20260930-1", manifest["version"])
-        self.assertEqual(TIMESTAMP, manifest["sourceTimestamp"])
-        self.assertEqual("2026-09-29T12:00:00Z", manifest["latestPointTimestamp"])
+        self.assertRegex(manifest["dataTimestamp"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        self.assertNotIn("sourceTimestamp", manifest["metadata"])
+        self.assertEqual("2026-09-29T12:00:00Z", metadata_maps(manifest["metadata"])["sources"]["osm-peaks"]["latestTimestamp"])
         self.assertEqual(hashlib.sha256(archive).hexdigest(), manifest["sha256"])
         self.assertEqual(len(archive), manifest["sizeBytes"])
         self.assertEqual(len(raw), manifest["uncompressedSizeBytes"])
-        self.assertEqual(4, manifest["pointCount"])
+        self.assertEqual(4, manifest["metadata"]["pointCount"])
         write_distribution(mountains, self.root / "again", "20260930-2", TIMESTAMP, "2026-09-29T12:00:00Z")
         self.assertEqual(archive, (self.root / "again" / FILE_NAME).read_bytes())
 
@@ -215,8 +236,55 @@ class BuildDataTests(unittest.TestCase):
         url = "https://download.geofabrik.de/asia/japan-260929.osm.pbf"
         manifest = write_distribution(read_mountains(self.xml)[0], self.root / "dated", "test",
                                       TIMESTAMP, "2026-09-29T12:00:00Z", source_url=url)
-        self.assertEqual(url, manifest["sourceUrl"])
-        self.assertEqual(url, json.loads((self.root / "dated/manifest.json").read_text(encoding="utf-8"))["sourceUrl"])
+        self.assertEqual(url, metadata_maps(manifest["metadata"])["sources"]["osm-peaks"]["source"])
+        self.assertEqual(url, metadata_maps(json.loads((self.root / "dated/manifest.json").read_text(encoding="utf-8"))["metadata"])["sources"]["osm-peaks"]["source"])
+
+    def test_script_entry_point_writes_distribution_parts(self):
+        pbf = self.root / "fixture.osm.pbf"
+        pbf.write_bytes(b"fixture")
+        self.save_fixture_source(pbf)
+        supplements = self.root / "supplements.json"
+        supplements.write_text(json.dumps({"schemaVersion": 1, "sources": {}, "points": []}), encoding="utf-8")
+        additional = self.root / "far-eastern.osm.pbf"
+        additional.write_bytes(b"fixture")
+        from scripts.download_source import save_source_info
+        import hashlib
+        save_source_info(additional, {"url": "https://download.geofabrik.de/russia/far-eastern-fed-district-260929.osm.pbf", "sizeBytes": 7, "md5": hashlib.md5(b"fixture").hexdigest()})
+        output = self.root / "output"
+        script = Path(__file__).resolve().parents[1] / "scripts" / "build_data.py"
+        # 直接実行と同じ検索先にし、外部の osmium だけを置き換える。
+        runner = """
+from pathlib import Path
+import runpy
+import shutil
+import sys
+from unittest.mock import patch
+script, xml, timestamp, *arguments = sys.argv[1:]
+sys.path.insert(0, str(Path(script).parent))
+sys.argv = [script, *arguments]
+def extract(command, **kwargs):
+    destination = command[command.index("-o") + 1]
+    if "far-eastern" in command[2]:
+        Path(destination).write_text('<osm><node id="101" version="1" timestamp="2026-09-29T12:00:00Z" lat="44.35" lon="146.25"><tag k="natural" v="peak"/><tag k="name:ja" v="国後山"/></node><node id="102" version="1" timestamp="2026-09-29T12:00:00Z" lat="45.03" lon="147.87"><tag k="natural" v="peak"/><tag k="name:ja" v="択捉山"/></node></osm>', encoding="utf-8")
+    else:
+        shutil.copyfile(xml, destination)
+with patch("subprocess.check_output", return_value=timestamp), patch("subprocess.run", side_effect=extract):
+    runpy.run_path(script, run_name="__main__")
+"""
+        result = subprocess.run(
+            [sys.executable, "-I", "-X", "utf8", "-c", runner, str(script), str(self.xml), TIMESTAMP,
+             str(pbf), "--version", "test", "--output-dir", str(output), "--supplements", str(supplements), "--far-eastern-pbf", str(additional)],
+            cwd=self.root, capture_output=True, text=True, encoding="utf-8",
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(6, manifest["metadata"]["pointCount"])
+        from scripts.distribution_parts import validate_parts
+        integrated = json.loads(gzip.decompress((output / FILE_NAME).read_bytes()))["points"]
+        for name in ("osm-peaks-source.json.gz", "osm-peaks-source-manifest.json",
+                     "supplements.json.gz", "supplements-manifest.json"):
+            self.assertTrue((output / name).is_file(), name)
+        validate_parts(output, manifest, integrated)
 
     @unittest.skipUnless(shutil.which("osmium"), "osmium がないため、PBF の生成テストは CI で実行")
     def test_real_pbf_to_distribution(self):
@@ -227,10 +295,14 @@ class BuildDataTests(unittest.TestCase):
         supplements = self.root / "supplements.json"
         supplements.write_text(json.dumps({"schemaVersion": 1, "sources": {}, "points": []}), encoding="utf-8")
         manifest = build(pbf, self.root / "output", "test", supplements_path=supplements)
-        self.assertEqual("https://download.geofabrik.de/asia/japan-260929.osm.pbf", manifest["sourceUrl"])
-        self.assertEqual(4, manifest["pointCount"])
-        self.assertEqual(TIMESTAMP, manifest["sourceTimestamp"])
-        self.assertEqual(read_mountains(self.xml)[0], json.loads(gzip.decompress((self.root / "output" / FILE_NAME).read_bytes())))
+        self.assertEqual("https://download.geofabrik.de/asia/japan-260929.osm.pbf", metadata_maps(manifest["metadata"])["sources"]["osm-peaks"]["source"])
+        self.assertEqual(4, manifest["metadata"]["pointCount"])
+        self.assertRegex(manifest["dataTimestamp"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        self.assertNotIn("sourceTimestamp", manifest["metadata"])
+        expected = read_mountains(self.xml)[0]
+        for point in expected:
+            point["aliases"] = [{"name": name} for name in point["aliases"]]
+        self.assertEqual(expected, json.loads(gzip.decompress((self.root / "output" / FILE_NAME).read_bytes()))["points"])
 
 
 if __name__ == "__main__":

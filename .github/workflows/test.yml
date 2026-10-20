@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: 公開入口と実行概要のテスト
-        run: python -m unittest release_tools.tests.test_publish_reviewed release_tools.tests.test_workflow_summary -v
+        run: python -m unittest release_tools.tests.test_publish_reviewed release_tools.tests.test_point_release release_tools.tests.test_shared_release_data release_tools.tests.test_workflow_summary -v
 
   points-viewer:
     name: 地点 / 共通ビューア
@@ -49,7 +49,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y osmium-tool
       - name: 単体テストと小さな PBF での生成テスト
-        run: python -m unittest discover -s tests -v
+        run: |
+          python -m pip install -r requirements-all.txt
+          python -m unittest discover -s tests -v
 
   gsi-peaks:
     name: 地点 / 国土地理院山頂
@@ -59,8 +61,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - name: コミット済み JSON と Release 公開処理のテスト
-        run: python -m unittest release_tools.tests.test_gsi_peaks -v
+      - name: 国土地理院の生成・snapshot・Release 公開処理のテスト
+        run: |
+          python -m pip install -r points/gsi-peaks/requirements-vector.txt
+          python -m unittest discover -s points/gsi-peaks/tests -v
 
   test-points:
     name: 地点 / テストデータ

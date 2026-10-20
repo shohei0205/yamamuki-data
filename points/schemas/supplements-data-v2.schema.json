@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "単一の地点補足 JSON（版2）",
+  "type": "object",
+  "required": [
+    "schemaFormat",
+    "schemaVersion",
+    "points"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schemaFormat": {
+      "type": "string",
+      "const": "yamamuki-point-supplements"
+    },
+    "schemaVersion": {
+      "const": 2
+    },
+    "metadata": {
+      "$ref": "../../schemas/metadata-v1.schema.json",
+      "not": {
+        "required": [
+          "pointCount"
+        ]
+      }
+    },
+    "points": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "$ref": "point-common-v1.schema.json#/$defs/id"
+          },
+          "osmId": false,
+          "note": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^\\S(?:.*\\S)?$"
+          },
+          "nameReading": {
+            "anyOf": [
+              {
+                "$ref": "../../schemas/metadata-v1.schema.json#/$defs/nameReading"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^\\S(?:.*\\S)?$"
+            }
+          },
+          "aliases": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "required": [
+                "name"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "pattern": "^\\S(?:.*\\S)?$"
+                },
+                "nameReading": {
+                  "$ref": "../../schemas/metadata-v1.schema.json#/$defs/nameReading"
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "aliasesRemove": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^\\S(?:.*\\S)?$"
+            }
+          },
+          "exclude": {
+            "type": "boolean"
+          },
+          "expected": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "nameReading": {
+                "$ref": "../../schemas/metadata-v1.schema.json#/$defs/nameReading"
+              },
+              "aliases": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "^\\S(?:.*\\S)?$"
+                    },
+                    "nameReading": {
+                      "$ref": "../../schemas/metadata-v1.schema.json#/$defs/nameReading"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              },
+              "relatedIds": {
+                "$ref": "point-common-v1.schema.json#/$defs/relatedIds"
+              },
+              "elevationM": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            }
+          },
+          "tagsRemove": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^\\S(?:.*\\S)?$"
+            }
+          },
+          "graphic": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "required": [
+              "svg"
+            ],
+            "additionalProperties": true,
+            "properties": {
+              "svg": {
+                "type": "string",
+                "minLength": 1
+              },
+              "scale": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "exclusiveMinimum": 0
+              }
+            }
+          },
+          "relatedIds": {
+            "$ref": "point-common-v1.schema.json#/$defs/relatedIds"
+          },
+          "elevationM": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "標高（m）を置き換える。null は標高を削除する。"
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "name"
+            ]
+          },
+          {
+            "required": [
+              "nameReading"
+            ]
+          },
+          {
+            "required": [
+              "tags"
+            ]
+          },
+          {
+            "required": [
+              "aliases"
+            ]
+          },
+          {
+            "required": [
+              "aliasesRemove"
+            ]
+          },
+          {
+            "required": [
+              "exclude"
+            ]
+          },
+          {
+            "required": [
+              "tagsRemove"
+            ]
+          },
+          {
+            "required": [
+              "graphic"
+            ]
+          },
+          {
+            "required": [
+              "relatedIds"
+            ]
+          },
+          {
+            "required": [
+              "elevationM"
+            ]
+          }
+        ],
+        "required": [
+          "id"
+        ]
+      }
+    }
+  },
+  "$comment": "osmId の重複、別名の追加・削除の競合、expected と元データの一致は生成処理で検査する。"
+}

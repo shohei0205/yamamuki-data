@@ -24,3 +24,5 @@ python -m release_tools.test_points generate --version local-test
 ```
 
 単体テストでは、入力の形式、SVG、生成物の整合性、dev 以外での拒否、他のデータを残したカタログ更新を確かめる。ローカル生成物は `points/testdata/dist/` に出力する。CIの「共通：データ処理のテスト」の「地点 / テストデータ」ジョブでも実行する。
+
+出典・利用条件の一覧は、[ルート README のライセンス](../../README.md#ライセンス)を参照する。
