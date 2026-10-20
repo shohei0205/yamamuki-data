@@ -74,6 +74,8 @@ def primary_points(records, mountains, natural, features, reading_radius=100):
             reviews.append({"id": p["id"], "reason": "山岳一覧と山名注記の対応が一対一ではない", "candidateIds": [source["id"] for _, source in matches]})
         if mountain:
             p.update(id=mountain["id"], latitude=mountain["latitude"], longitude=mountain["longitude"], elevationM=mountain["elevationM"])
+            if mountain.get("tags"):
+                p["tags"] = list(dict.fromkeys([*p.get("tags", []), *mountain["tags"]]))
             p["aliases"] = list(dict.fromkeys([*mountain["aliases"], mountain["name"]]))
             if normalized(p["name"]) == normalized(mountain["name"]):
                 p["nameReading"] = mountain["nameReading"]

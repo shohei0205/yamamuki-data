@@ -18,6 +18,9 @@ from document_metadata import point_document_json, distributed_point, metadata_a
 
 from download import Cache
 
+MOUNTAIN_LIST_TAG = "日本の主な山岳標高"
+MOUNTAIN_LIST_TAG_METADATA = {"nameReading": "にほんのおもなさんがくひょうこう"}
+
 CSV_URL = "https://www.gsi.go.jp/KOKUJYOHO/MOUNTAIN/1003zan20260331.csv"
 # 公式 CSV に実際の「?」が含まれる表記を、同じ山の公式ベクトルタイルで確認した名前に補正する。
 # 索引番号と補正前の表記が両方一致する場合だけ適用し、元 CSV は変更しない。
@@ -95,7 +98,9 @@ def read_csv(payload):
         repair = MOUNTAIN_NAME_REPAIRS.get(index)
         if repair and name == repair[0]:
             name = repair[1]
-        points.append(point("gsi-mountain-list:" + index, name, kana, row["緯度"], row["経度"], float(row["標高値(m)"]), aliases))
+        mountain = point("gsi-mountain-list:" + index, name, kana, row["緯度"], row["経度"], float(row["標高値(m)"]), aliases)
+        mountain["tags"] = [MOUNTAIN_LIST_TAG]
+        points.append(mountain)
     if not points:
         raise ValueError("山岳一覧が空です")
     return points
@@ -230,6 +235,9 @@ def generate(cache, bbox=None, natural=False, dem=False, max_tiles=10000, csv_ur
 def write(points, report, output, version, tags=None, metadata=None):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
         raise ValueError("版の文字が不正です")
+    tags = dict(tags or {})
+    if any(MOUNTAIN_LIST_TAG in p.get("tags", []) for p in points):
+        tags[MOUNTAIN_LIST_TAG] = MOUNTAIN_LIST_TAG_METADATA.copy()
     legacy = dict(metadata or {})
     source_url = legacy.pop("sourceUrl",CSV_URL)
     license = legacy.pop("license",LICENSE)

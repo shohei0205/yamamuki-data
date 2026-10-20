@@ -25,6 +25,13 @@ class GsiReleaseTests(unittest.TestCase):
             expected = metadata_maps(json.loads((target.DATA / 'supplements.json').read_bytes())['metadata'])['sources']
             self.assertEqual({k:v for k,v in metadata_maps(manifest['metadata'])["sources"].items() if not k.startswith('gsi-')}, expected)
             self.assertEqual(metadata_maps(json.loads((root / 'release' / target.FILE).read_bytes())['metadata'])['tags']['日本百名山']['nameReading'],'にほんひゃくめいざん')
+            tag = '日本の主な山岳標高'
+            released = json.loads((root / 'release' / target.FILE).read_bytes())
+            self.assertEqual(metadata_maps(manifest['metadata'])['tags'][tag]['nameReading'],
+                             'にほんのおもなさんがくひょうこう')
+            expected_ids = {p['id'] for p in released['points'] if p['id'].startswith('gsi-mountain-list:')}
+            self.assertTrue(expected_ids)
+            self.assertEqual({p['id'] for p in released['points'] if tag in p.get('tags', [])}, expected_ids)
             manifest['sourceFiles'] = [{'url': 'https://example.com/mountains.csv',
                                     'fetchedAt': '2026-10-14T00:00:00Z'}]
             (root / 'release/manifest.json').write_text(json.dumps(manifest), encoding='utf-8')

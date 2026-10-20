@@ -52,6 +52,7 @@ class GenerationTests(unittest.TestCase):
     def test_csv_has_gsi_ids_and_no_osm_fields(self):
         result = read_csv(mountain_csv())[0]
         self.assertEqual("gsi-mountain-list:1", result["id"])
+        self.assertEqual(["日本の主な山岳標高"], result["tags"])
         self.assertEqual("やま", result["nameReading"])
         self.assertEqual(100, result["elevationM"])
         self.assertNotIn("osmId", result)
@@ -110,6 +111,8 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual("やま", primary["nameReading"])
         self.assertEqual(100, primary["elevationM"])
         self.assertEqual(["別名"], primary["aliases"])
+        self.assertEqual(["日本の主な山岳標高"], primary["tags"])
+        self.assertNotIn("tags", next(p for p in result if p["id"].startswith("gsi-natural:")))
         self.assertEqual([], csv_points[0]["aliases"])
 
     def test_dem_values_missing_and_shape(self):
