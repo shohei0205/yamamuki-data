@@ -167,14 +167,14 @@ class BuildDataTests(unittest.TestCase):
         self.assertEqual([ordered_point(p) for p in mountains], json.loads(raw)["points"])
         self.assertEqual(json.loads(raw)["metadata"],manifest["metadata"])
         self.assertFalse({"tags","sources","pointCount","latestPointTimestamp","sourceTimestamp"} & manifest.keys())
-        self.assertEqual(metadata_maps(json.loads(raw)["metadata"])["sources"]["osm-peaks"]["latestTimestamp"],metadata_maps(manifest["metadata"])["sources"]["osm-peaks"]["latestTimestamp"])
+        self.assertEqual(metadata_maps(json.loads(raw)["metadata"])["sources"]["OpenStreetMap（日本・Geofabrik 配布）"]["latestTimestamp"],metadata_maps(manifest["metadata"])["sources"]["OpenStreetMap（日本・Geofabrik 配布）"]["latestTimestamp"])
         self.assertEqual(manifest, json.loads((self.root / "manifest.json").read_text(encoding="utf-8")))
         self.assertEqual(6, manifest["schemaVersion"])
         self.assertEqual("山頂", manifest["name"])
         self.assertEqual("20260930-1", manifest["version"])
         self.assertRegex(manifest["dataTimestamp"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
         self.assertNotIn("sourceTimestamp", manifest["metadata"])
-        self.assertEqual("2026-09-29T12:00:00Z", metadata_maps(manifest["metadata"])["sources"]["osm-peaks"]["latestTimestamp"])
+        self.assertEqual("2026-09-29T12:00:00Z", metadata_maps(manifest["metadata"])["sources"]["OpenStreetMap（日本・Geofabrik 配布）"]["latestTimestamp"])
         self.assertEqual(hashlib.sha256(archive).hexdigest(), manifest["sha256"])
         self.assertEqual(len(archive), manifest["sizeBytes"])
         self.assertEqual(len(raw), manifest["uncompressedSizeBytes"])
@@ -236,8 +236,8 @@ class BuildDataTests(unittest.TestCase):
         url = "https://download.geofabrik.de/asia/japan-260929.osm.pbf"
         manifest = write_distribution(read_mountains(self.xml)[0], self.root / "dated", "test",
                                       TIMESTAMP, "2026-09-29T12:00:00Z", source_url=url)
-        self.assertEqual(url, metadata_maps(manifest["metadata"])["sources"]["osm-peaks"]["source"])
-        self.assertEqual(url, metadata_maps(json.loads((self.root / "dated/manifest.json").read_text(encoding="utf-8"))["metadata"])["sources"]["osm-peaks"]["source"])
+        self.assertEqual(url, metadata_maps(manifest["metadata"])["sources"]["OpenStreetMap（日本・Geofabrik 配布）"]["source"])
+        self.assertEqual(url, metadata_maps(json.loads((self.root / "dated/manifest.json").read_text(encoding="utf-8"))["metadata"])["sources"]["OpenStreetMap（日本・Geofabrik 配布）"]["source"])
 
     def test_script_entry_point_writes_distribution_parts(self):
         pbf = self.root / "fixture.osm.pbf"
@@ -285,6 +285,15 @@ with patch("subprocess.check_output", return_value=timestamp), patch("subprocess
                      "supplements.json.gz", "supplements-manifest.json"):
             self.assertTrue((output / name).is_file(), name)
         validate_parts(output, manifest, integrated)
+        expected_url = "https://download.geofabrik.de/russia/far-eastern-fed-district-260929.osm.pbf"
+        for name in ("manifest.json", "osm-peaks-source-manifest.json", FILE_NAME, "osm-peaks-source.json.gz"):
+            payload = (output / name).read_bytes()
+            body = json.loads(gzip.decompress(payload) if name.endswith(".gz") else payload)
+            sources = metadata_maps(body["metadata"])["sources"]
+            self.assertEqual(expected_url, sources["OpenStreetMap（ロシア極東連邦管区・Geofabrik 配布）"]["source"])
+            self.assertEqual("ODbL-1.0", sources["OpenStreetMap（ロシア極東連邦管区・Geofabrik 配布）"]["license"])
+            self.assertEqual("© OpenStreetMap contributors", sources["OpenStreetMap（ロシア極東連邦管区・Geofabrik 配布）"]["attribution"])
+            self.assertEqual("https://download.geofabrik.de/asia/japan-260929.osm.pbf", sources["OpenStreetMap（日本・Geofabrik 配布）"]["source"])
 
     @unittest.skipUnless(shutil.which("osmium"), "osmium がないため、PBF の生成テストは CI で実行")
     def test_real_pbf_to_distribution(self):
@@ -295,7 +304,7 @@ with patch("subprocess.check_output", return_value=timestamp), patch("subprocess
         supplements = self.root / "supplements.json"
         supplements.write_text(json.dumps({"schemaVersion": 1, "sources": {}, "points": []}), encoding="utf-8")
         manifest = build(pbf, self.root / "output", "test", supplements_path=supplements)
-        self.assertEqual("https://download.geofabrik.de/asia/japan-260929.osm.pbf", metadata_maps(manifest["metadata"])["sources"]["osm-peaks"]["source"])
+        self.assertEqual("https://download.geofabrik.de/asia/japan-260929.osm.pbf", metadata_maps(manifest["metadata"])["sources"]["OpenStreetMap（日本・Geofabrik 配布）"]["source"])
         self.assertEqual(4, manifest["metadata"]["pointCount"])
         self.assertRegex(manifest["dataTimestamp"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
         self.assertNotIn("sourceTimestamp", manifest["metadata"])

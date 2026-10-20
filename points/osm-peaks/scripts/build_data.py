@@ -23,7 +23,7 @@ if __package__:
     from scripts.release_channels import download_url
     from scripts.graphics import validate_graphics
     from scripts.point_tags import validate_tags, validate_alias_readings, validate_tag_metadata
-    from scripts.source_regions import SOURCES, REGIONS, in_source_region, region_for
+    from scripts.source_regions import SOURCES, SOURCE_NAMES, REGIONS, in_source_region, region_for
     from scripts.tag_json import apply_tag_jsons
     from scripts.supplements import DEFAULT_SUPPLEMENTS, read_supplements, apply_supplements, validate_supplement_sources
 else:
@@ -32,7 +32,7 @@ else:
     from release_channels import download_url
     from graphics import validate_graphics
     from point_tags import validate_tags, validate_alias_readings, validate_tag_metadata
-    from source_regions import SOURCES, REGIONS, in_source_region, region_for
+    from source_regions import SOURCES, SOURCE_NAMES, REGIONS, in_source_region, region_for
     from tag_json import apply_tag_jsons
     from supplements import DEFAULT_SUPPLEMENTS, read_supplements, apply_supplements, validate_supplement_sources
 
@@ -164,7 +164,15 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
     validate_alias_readings(mountains)
     validate_graphics(mountains)
     logging.info("%s 件を JSON に変換しています", format(len(mountains), ","))
-    raw = point_document_json(document(mountains, tag_metadata, sources=source_entries("osm-peaks",source_url,"ODbL-1.0","© OpenStreetMap contributors",supplement_sources,latestTimestamp=latest_mountain_timestamp))).encode("utf-8")
+    sources = source_entries(SOURCE_NAMES["japan"], source_url, "ODbL-1.0", "© OpenStreetMap contributors",
+                             supplement_sources, latestTimestamp=latest_mountain_timestamp)
+    for info in source_pbfs or []:
+        if info["url"] == source_url:
+            continue
+        region = next(region for region, prefix in SOURCES.items() if info["url"].startswith(prefix + "-"))
+        sources = source_entries(SOURCE_NAMES[region], info["url"], "ODbL-1.0",
+                                 "© OpenStreetMap contributors", sources)
+    raw = point_document_json(document(mountains, tag_metadata, sources=sources)).encode("utf-8")
     # ファイル名と生成時刻をヘッダーに含めず、同じ内容の圧縮結果をそろえる。
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -191,7 +199,7 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
             "uncompressedSizeBytes": len(raw),
             "pointCount": len(mountains),
             "dataTimestamp": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
-            "sources": source_entries("osm-peaks",source_url,"ODbL-1.0","© OpenStreetMap contributors",supplement_sources,latestTimestamp=latest_mountain_timestamp),
+            "sources": sources,
         }
         if source_pbfs is not None:
             manifest["sourcePbfs"] = source_pbfs

@@ -11,7 +11,7 @@ import re
 
 from scripts.point_document import rows as document_rows, metadata_of
 from scripts.build_data import FILE_NAME, MAX_SIZE_BYTES
-from scripts.source_regions import REGIONS, region_for
+from scripts.source_regions import REGIONS, SOURCE_NAMES, region_for
 from scripts.graphics import validate_graphics
 from scripts.point_tags import validate_tags, validate_alias_readings, validate_tag_metadata
 from scripts.supplements import validate_supplement_sources
@@ -22,6 +22,11 @@ from scripts.release_channels import download_url, release_tag
 MIN_COUNT = 10_000
 MIN_CELL_COUNT = 20
 MAX_UNCOMPRESSED_BYTES = 100_000_000
+
+
+def osm_source(sources):
+    # 公開済みデータの旧出典名も読めるようにする。
+    return sources.get(SOURCE_NAMES["japan"], sources.get("osm-peaks", {}))
 
 
 def source_time(value):
@@ -88,7 +93,7 @@ def validate(directory, *, tag=None, channel="stable"):
     timestamp_key = "dataTimestamp" if manifest["schemaVersion"] >= 6 else "sourceTimestamp"
     source_time(manifest[timestamp_key])
     if manifest["schemaVersion"] >= 3:
-        value = manifest["sources"].get("osm-peaks", {}).get("latestTimestamp") if manifest["schemaVersion"] >= 6 else manifest.get("latestPointTimestamp" if manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
+        value = osm_source(manifest["sources"]).get("latestTimestamp") if manifest["schemaVersion"] >= 6 else manifest.get("latestPointTimestamp" if manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
         latest = source_time(value)
         if latest > source_time(manifest[timestamp_key]):
             raise ValueError("山頂の最終編集日時が元データの基準日時より新しくなっています")
@@ -117,7 +122,7 @@ def validate(directory, *, tag=None, channel="stable"):
                 or (manifest["schemaVersion"] >= 6 and latest > max(timestamps))):
             raise ValueError("元データ全体の基準日時が PBF の記録と一致しません")
         japan_url = next(source["url"] for source in sources if source_region(source["url"]) == "japan")
-        recorded_url = manifest["sources"].get("osm-peaks", {}).get("source") if manifest["schemaVersion"] >= 6 else manifest.get("sourceUrl")
+        recorded_url = osm_source(manifest["sources"]).get("source") if manifest["schemaVersion"] >= 6 else manifest.get("sourceUrl")
         if recorded_url != japan_url:
             raise ValueError("全国 PBF の URL が取得元記録と一致しません")
     archive_path = directory / FILE_NAME
@@ -237,8 +242,8 @@ def assess(current, previous=None):
     old_timestamp_key = "dataTimestamp" if old_manifest["schemaVersion"] >= 6 else "sourceTimestamp"
     if timestamp_key == old_timestamp_key and source_time(manifest[timestamp_key]) < source_time(old_manifest[old_timestamp_key]):
         warnings.append("データの基準日時が前回公開版より古くなっています")
-    latest = manifest_metadata(manifest).get("sources", {}).get("osm-peaks", {}).get("latestTimestamp") if manifest["schemaVersion"] >= 6 else manifest.get("latestPointTimestamp" if manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
-    old_latest = manifest_metadata(old_manifest).get("sources", {}).get("osm-peaks", {}).get("latestTimestamp") if old_manifest["schemaVersion"] >= 6 else old_manifest.get("latestPointTimestamp" if old_manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
+    latest = osm_source(manifest_metadata(manifest).get("sources", {})).get("latestTimestamp") if manifest["schemaVersion"] >= 6 else manifest.get("latestPointTimestamp" if manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
+    old_latest = osm_source(manifest_metadata(old_manifest).get("sources", {})).get("latestTimestamp") if old_manifest["schemaVersion"] >= 6 else old_manifest.get("latestPointTimestamp" if old_manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
     if latest is not None and old_latest is not None and source_time(latest) == source_time(old_latest):
         warnings.append(f"収録山頂の最新編集日時が前回公開版と同じです: {latest}。自動公開せず下書きに残します")
     if manifest["schemaVersion"] != old_manifest["schemaVersion"]:
@@ -256,7 +261,7 @@ def report(current, previous, warnings):
              f"- 今回: {manifest['version']}、{len(rows):,} 件",
              f"- 前回: {previous[0]['version']}、{len(previous[1]):,} 件" if previous else "- 前回: 比較できず",
              f"- データの日時: {manifest.get('dataTimestamp', manifest.get('sourceTimestamp'))}",
-             f"- 収録する山頂の最新編集日時: {manifest.get('sources', {}).get('osm-peaks', {}).get('latestTimestamp', '記録なし') if manifest['schemaVersion'] >= 6 else manifest.get('latestPointTimestamp', manifest.get('latestMountainTimestamp', '旧形式のため記録なし'))}",
+             f"- 収録する山頂の最新編集日時: {osm_source(manifest.get('sources', {})).get('latestTimestamp', '記録なし') if manifest['schemaVersion'] >= 6 else manifest.get('latestPointTimestamp', manifest.get('latestMountainTimestamp', '旧形式のため記録なし'))}",
              f"- gzip: {manifest['sizeBytes']:,} バイト",
              f"- SHA-256: `{manifest['sha256']}`", "",
              "### 確認事項", "", *([f"- {warning}" for warning in warnings] or ["- 件数と元データの日時に異常はありません"]), "",

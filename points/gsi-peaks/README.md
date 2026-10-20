@@ -28,7 +28,7 @@
 
 ベクトルタイルにない山を追加するときも、同名・別名の近接地点があれば二重登録を避ける。100 m 以内に一つだけ対応する地点があれば既存の地点を使い、複数候補や 100～1000 m の同名地点は確認候補に回す。自然地名だけから追加した地点は `gsi-natural:` の ID を使う。ID の継続利用は、次の維持方針に従う。
 
-元データと補足資料の出典は地点 JSON の `metadata.sources` と manifest の `metadata.sources` に保持する。`gsi-peaks` は主資料、`gsi-mountain-list` は山岳一覧、`gsi-natural` は自然地名、`gsi-dem` は標高タイルを表す。取得ファイルごとの記録は生成時 manifest の `sourceFiles` に分けて保存する。
+元データと補足資料の出典は地点 JSON の `metadata.sources` と manifest の `metadata.sources` に保持する。出典名は `国土地理院（最適化ベクトルタイル）`、`国土地理院（日本の主な山岳標高）`、`国土地理院（自然地名）`、`国土地理院（標高タイル）` とし、利用した資料が分かるようにする。取得ファイルごとの記録は生成時 manifest の `sourceFiles` に分けて保存する。
 
 ### 変換の規則
 
