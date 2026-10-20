@@ -162,7 +162,7 @@ def publish(version, directory, source=DATA):
                      + "".join(f"- {key}: {value.get('attribution','')} / {value.get('license','')}\n" for key,value in metadata_maps(manifest["metadata"])["sources"].items()), encoding="utf-8", newline="\n")
     from scripts.distribution_parts import filenames
     names = (FILE, FILE + ".gz", "manifest.json", INFO, *filenames("gsi-peaks"))
-    release_data.create_verified_release(tag, directory, names, notes, "gsi-peaks-" + version, channel)
+    release_data.create_verified_release(tag, directory, names, notes, tag, channel)
     release_data.append_summary(f"\n## 国土地理院の山頂\n\n{manifest['metadata']['pointCount']:,} 地点を Release `{tag}` に公開しました。\n")
 
 
