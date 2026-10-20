@@ -19,6 +19,28 @@ enum Encoding {
 struct Args {
     #[arg(long)]
     input: PathBuf,
+    /// 共有境界を先に固定して生成する。
+    #[arg(long)]
+    seamless: bool,
+    /// 固定シードの共有辺に、それ以外の頂点を追加しない。
+    #[arg(long)]
+    lock_seed_boundary: bool,
+    /// 各画素の許容最大標高誤差を表すグレースケールPNG。
+    #[arg(long)]
+    error_limits: Option<PathBuf>,
+    /// 頂点からの被覆半径を画素単位で示す数値PNG。許容誤差PNGと併用する。
+    #[arg(long)]
+    mesh_sizes: Option<PathBuf>,
+    /// 隣接面の最長辺の比がこの値を超えた場所だけを追加頂点で補う。
+    #[arg(long)]
+    neighbor_ratio: Option<f64>,
+    #[arg(long, default_value_t = 0.01)]
+    mesh_size_scale: f64,
+    /// 元の標高格子のXYで、山頂として残す頂点のJSON配列。
+    #[arg(long)]
+    seed_points: Option<PathBuf>,
+    #[arg(long, default_value_t = 0.01)]
+    error_limit_scale: f64,
     /// 比較用の挿入履歴を生成する頂点上限の列。
     #[arg(long, value_delimiter = ',')]
     progressive_vertices: Vec<usize>,
@@ -111,6 +133,29 @@ fn main() -> Result<()> {
     }
     let start = Instant::now();
     let (width, height, values) = read_png(&args.input, args.encoding, args.scale, args.offset)?;
+    ensure!(
+        args.error_limits.is_none() || (!args.seamless && args.progressive_vertices.is_empty()),
+        "場所ごとの誤差は独立TINの通常生成で指定してください"
+    );
+    ensure!(
+        args.seed_points.is_none() || args.progressive_vertices.is_empty(),
+        "山頂の固定と挿入履歴の併用は未対応です"
+    );
+    ensure!(
+        args.mesh_sizes.is_none()
+            || (args.error_limits.is_some()
+                && !args.seamless
+                && args.progressive_vertices.is_empty()),
+        "メッシュ寸法は独立TINの許容誤差PNGと併用してください"
+    );
+    ensure!(
+        args.neighbor_ratio.is_none()
+            || (args.error_limits.is_some()
+                && args.mesh_sizes.is_none()
+                && !args.seamless
+                && args.progressive_vertices.is_empty()),
+        "隣接面調整は許容誤差PNGのみと併用してください"
+    );
     if !args.progressive_vertices.is_empty() {
         let mut mesh = adaptive_tin::Builder::new(&values, width, height)?
             .generate_progressive(&args.progressive_vertices, args.boundary_error)?;
@@ -131,11 +176,70 @@ fn main() -> Result<()> {
         );
         return Ok(());
     }
-    let mut mesh = adaptive_tin::Builder::new(&values, width, height)?.generate_with_minimum(
-        args.max_vertices,
-        args.max_error,
-        args.min_vertices,
-    )?;
+    ensure!(
+        args.seed_points.is_none() || (!args.seamless && args.progressive_vertices.is_empty()),
+        "山頂の固定は通常の独立TINで指定してください"
+    );
+    let builder = adaptive_tin::Builder::new(&values, width, height)?;
+    let builder = if let Some(path) = &args.seed_points {
+        let seeds: Vec<[usize; 2]> = serde_json::from_reader(BufReader::new(File::open(path)?))?;
+        builder.with_seed_points(&seeds, args.max_vertices)?
+    } else {
+        builder
+    };
+    ensure!(
+        !args.lock_seed_boundary
+            || (args.seed_points.is_some()
+                && !args.seamless
+                && args.progressive_vertices.is_empty()
+                && args.neighbor_ratio.is_none()
+                && args.mesh_sizes.is_none()),
+        "共有辺の固定は通常生成の固定シードと併用してください"
+    );
+    let builder = if args.lock_seed_boundary {
+        builder.with_locked_boundary()?
+    } else {
+        builder
+    };
+    let builder = if let Some(path) = &args.mesh_sizes {
+        ensure!(
+            args.mesh_size_scale.is_finite() && args.mesh_size_scale > 0.,
+            "メッシュ寸法の倍率は正の有限値が必要です"
+        );
+        let (w, h, sizes) = read_png(path, Encoding::Gray, args.mesh_size_scale, 0.)?;
+        ensure!(
+            w == width && h == height,
+            "メッシュ寸法PNGの大きさが一致しません"
+        );
+        builder.with_mesh_sizes(&sizes)?
+    } else {
+        builder
+    };
+    let mut mesh = if let Some(path) = &args.error_limits {
+        ensure!(
+            args.error_limit_scale.is_finite() && args.error_limit_scale > 0.,
+            "許容誤差の倍率は正の有限値が必要です"
+        );
+        let (w, h, limits) = read_png(path, Encoding::Gray, args.error_limit_scale, 0.)?;
+        ensure!(
+            w == width && h == height,
+            "許容誤差PNGの大きさが標高PNGと一致しません"
+        );
+        let builder = builder.with_error_limits(&limits)?;
+        if let Some(ratio) = args.neighbor_ratio {
+            builder.generate_neighbor_balanced(args.max_vertices, 1., ratio)?
+        } else {
+            builder.generate_with_minimum(args.max_vertices, 1., args.min_vertices)?
+        }
+    } else if args.seamless {
+        builder.generate_seamless_with_minimum(
+            args.max_vertices,
+            args.max_error,
+            args.min_vertices,
+        )?
+    } else {
+        builder.generate_with_minimum(args.max_vertices, args.max_error, args.min_vertices)?
+    };
     for p in &mut mesh.vertices {
         p[0] *= args.spacing;
         p[1] *= args.spacing;
@@ -144,7 +248,7 @@ fn main() -> Result<()> {
             "出力座標が有限値の範囲を超えます"
         );
     }
-    let report = serde_json::json!({"width":width,"height":height,"vertices":mesh.vertices.len(),"triangles":mesh.triangles.len(),"maxError":mesh.max_error,"toleranceReached":mesh.tolerance_reached,"seconds":start.elapsed().as_secs_f64(),"triangleEvaluations":mesh.triangle_evaluations,"sampleEvaluations":mesh.sample_evaluations});
+    let report = serde_json::json!({"width":width,"height":height,"vertices":mesh.vertices.len(),"triangles":mesh.triangles.len(),"maxError":mesh.max_error,"maxErrorRatio":mesh.max_error_ratio,"maxMeshSizeRatio":mesh.max_mesh_size_ratio,"balance":mesh.balance,"toleranceReached":mesh.tolerance_reached,"seconds":start.elapsed().as_secs_f64(),"triangleEvaluations":mesh.triangle_evaluations,"sampleEvaluations":mesh.sample_evaluations});
     let mut writer = BufWriter::new(File::create(&args.output)?);
     serde_json::to_writer(&mut writer, &mesh)?;
     writer.flush()?;

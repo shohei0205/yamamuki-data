@@ -1,0 +1,16 @@
+const assert=require('node:assert/strict');
+const {createPowellSabinPatch,surfacePsEdges,createPnPatch,createRbfSurface,surfaceComparison}=require('./surface-methods.js');
+const points=new Float32Array([0,0,2,1000,0,202,0,1000,-98,1000,1000,102,500,400,62]),indices=new Uint32Array([0,1,4,1,3,4,3,2,4,2,0,4]),slopes=new Float32Array(Array.from({length:5},()=>[.2,-.1]).flat()),source={points,indices},copy=points.slice();
+for(const method of ['loop','ps','pn','rbf']){const r=surfaceComparison(source,slopes,4,1,method,{width:1000});assert.equal(r.indices.length,indices.length*16);assert.ok([...r.points,...r.normals].every(Number.isFinite));for(let i=0;i<r.points.length;i+=3)assert.ok(Math.abs(r.points[i+2]-(2+.2*r.points[i]-.1*r.points[i+1]))<.001,method);console.log(method,r.stats);}
+assert.deepEqual(points,copy);
+const q=(x,y)=>3+.1*x+.2*y+.0002*x*x-.0001*x*y+.0003*y*y,qg=(x,y)=>[.1+.0004*x-.0001*y,.2-.0001*x+.0006*y],qp=[[0,0],[1000,0],[0,1000]].map(([x,y])=>[x,y,q(x,y)]),ps=createPowellSabinPatch(qp,qp.map(p=>qg(...p)));for(let i=0;i<=20;i++)for(let j=0;j<=20-i;j++){const u=i/20,v=j/20,r=ps(u,v);assert.ok(Math.abs(r.point[2]-q(1000*u,1000*v))<1e-7);}
+const sp={points:new Float32Array([0,0,30,1000,0,150,0,800,-40,800,-500,200]),indices:new Uint32Array([0,1,2,1,0,3])},sg=[[.2,.1],[-.1,.3],[.05,-.2],[.3,.1]],edges=surfacePsEdges(sp,[],1000),build=ids=>createPowellSabinPatch(ids.map(i=>Array.from(sp.points.subarray(i*3,i*3+3))),ids.map(i=>sg[i]),edges),a=build([0,1,2]),b=build([1,0,3]);let max=0;for(let i=0;i<=100;i++){const t=i/100,x=a(t,0),y=b(1-t,0);max=Math.max(max,Math.abs(x.point[2]-y.point[2]),...x.normal.map((v,k)=>Math.abs(v-y.normal[k])));}assert.ok(max<1e-7);
+const rbf=createRbfSurface(source,[],1000),x=341,y=527,h=.001,r=rbf.evaluate(x,y);assert.ok(Math.abs((rbf.evaluate(x+h,y).height-rbf.evaluate(x-h,y).height)/(2*h)-r.gradient[0])<1e-5);assert.ok(Math.abs((rbf.evaluate(x,y+h).height-rbf.evaluate(x,y-h).height)/(2*h)-r.gradient[1])<1e-5);
+console.log('4方式の平面保持・有限値・入力保持、PSの2次式再現・共有辺C1、RBFの解析微分を確認',max);
+
+// 元の三角形の辺だけを描く索引も別に保持する。
+for(const method of ['loop','ps','rbf','pn']){const r=surfaceComparison(source,slopes,8,.5,method,{width:1000});assert.ok(r.sourceLines.length>0);assert.ok(r.sourceLines.length<r.indices.length*2);for(const i of r.sourceLines)assert.ok(i<r.points.length/3);}
+const pn=createPnPatch(qp,qp.map(p=>qg(...p)));for(const [u,v] of [[.1,.2],[.6,.1],[.2,.6]]){const d=1e-6,r=pn(u,v),a=pn(u+d,v),b=pn(u-d,v),c=pn(u,v+d),e=pn(u,v-d);for(let k=0;k<3;k++){assert.ok(Math.abs((a.point[k]-b.point[k])/(2*d)-r.du[k])<1e-5);assert.ok(Math.abs((c.point[k]-e.point[k])/(2*d)-r.dv[k])<1e-5);}}
+const bumped=points.slice();bumped[4*3+2]+=100;const loop=surfaceComparison({points:bumped,indices},slopes,4,1,'loop',{width:1000});assert.ok(loop.points[4*3+2]<bumped[4*3+2]);for(const i of [0,1,2,3])for(let k=0;k<3;k++)assert.equal(loop.points[i*3+k],bumped[i*3+k]);
+const nonlinear=createRbfSurface({points:bumped,indices},[],1000);for(const [x,y] of [[250,370],[500,400],[749,621]]){const h=.001,r=nonlinear.evaluate(x,y);assert.ok(Math.abs((nonlinear.evaluate(x+h,y).height-nonlinear.evaluate(x-h,y).height)/(2*h)-r.gradient[0])<1e-4);assert.ok(Math.abs((nonlinear.evaluate(x,y+h).height-nonlinear.evaluate(x,y-h).height)/(2*h)-r.gradient[1])<1e-4);}
+console.log('元メッシュ辺の索引、PN微分、Loopの元頂点移動・外周固定、非平面RBF微分も確認');

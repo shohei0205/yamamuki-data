@@ -1,0 +1,10 @@
+const assert=require('node:assert/strict'),{createTerrainHct}=require('./hct-terrain.js'),{subdivideTerrain}=require('./pn-terrain.js'),{refineCurvePattern}=require('./adaptive-curve.js');
+const points=new Float32Array([0,0,0,1000,0,100,0,1000,50,1000,1000,300]),indices=new Uint32Array([0,1,2,1,3,2]),slopes=new Float32Array([.1,.1,-.1,.3,.3,-.1,.1,.1]);
+const source={points,indices,vertexNormals:new Float32Array(12),bounds:[0,1000,0,1000]},pack=subdivideTerrain(source,1,1,1000,{method:'fitted',slopes,curveBoundary:true,patchBuilder:createTerrainHct,analyticNormals:true}).patchData;
+const r=refineCurvePattern(pack,8,{width:1000});assert.ok(r.indices.length/3>128);assert.ok(r.indices.length/3<500000);
+const counts=new Map(),area=[0,0];for(let t=0;t<r.indices.length;t+=3){const ii=Array.from(r.indices.subarray(t,t+3)),p=ii.map(i=>[r.uv[i*2],r.uv[i*2+1]]),patch=r.ids[ii[0]];assert.ok(ii.every(i=>r.ids[i]===patch));const a=(p[1][0]-p[0][0])*(p[2][1]-p[0][1])-(p[1][1]-p[0][1])*(p[2][0]-p[0][0]);assert.ok(a>0);area[patch]+=a/2;for(let e=0;e<3;e++){const world=i=>{const b=r.ids[i]*112,u=r.uv[i*2],v=r.uv[i*2+1],w=1-u-v;return [pack[b+30]*w+pack[b+46]*u+pack[b+79]*v,pack[b+31]*w+pack[b+47]*u+pack[b+110]*v].map(x=>Math.round(x*1e4));},x=world(ii[e]),y=world(ii[(e+1)%3]),ks=[x.join('/'),y.join('/')].sort().join('|');if(!counts.has(ks))counts.set(ks,{n:0,x,y});counts.get(ks).n++;}}
+for(const a of area)assert.ok(Math.abs(a-.5)<1e-8);for(const {n,x,y} of counts.values()){const boundary=[0,10000000].some(v=>x[0]===v&&y[0]===v||x[1]===v&&y[1]===v);assert.equal(n,boundary?1:2);}
+const plane=pack.slice();for(let p=0;p<2;p++){const i=p*112;plane.set(createTerrainHct(Array.from({length:3},(_,k)=>[points[indices[p*3+k]*3],points[indices[p*3+k]*3+1],0]),[[0,0],[0,0],[0,0]]).coefficients,i);}const flat=refineCurvePattern(plane,8);assert.equal(flat.indices.length/3,128);
+console.log({base:r.baseTriangles,refined:r.indices.length/3,rounds:r.rounds,area});
+
+const limited=refineCurvePattern(pack,8,{width:1000,maxTriangles:128});assert.equal(limited.budgetLimited,true);assert.equal(limited.rounds,2);

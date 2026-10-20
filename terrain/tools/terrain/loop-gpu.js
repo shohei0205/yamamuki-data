@@ -1,0 +1,33 @@
+/* Loopの頂点更新と面からの法線計算をTransform Feedbackで行う。 */
+const loopGpuPrograms=new WeakMap();
+function createLoopGpu(gl,plan){
+ const options=plan.options;let shared=loopGpuPrograms.get(gl);if(!shared){shared=new Map();loopGpuPrograms.set(gl,shared);}
+ const max=gl.getParameter(gl.MAX_TEXTURE_SIZE),textures=new Set(),buffers=new Set(),programs=[];
+ const compile=(type,src)=>{const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s;};
+ const program=(src)=>{if(shared.has(src))return shared.get(src);const p=gl.createProgram(),v=compile(gl.VERTEX_SHADER,src),f=compile(gl.FRAGMENT_SHADER,'#version 300 es\nprecision highp float;out vec4 c;void main(){c=vec4(0.);}');gl.attachShader(p,v);gl.attachShader(p,f);gl.transformFeedbackVaryings(p,['positionOut','normalOut'],gl.INTERLEAVED_ATTRIBS);gl.linkProgram(p);gl.deleteShader(v);gl.deleteShader(f);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(p));shared.set(src,p);return p;};
+ const prefix=`#version 300 es
+precision highp float;precision highp int;
+out vec4 positionOut;out vec4 normalOut;
+vec4 fetchAt(sampler2D image,int i){int w=textureSize(image,0).x;return texelFetch(image,ivec2(i%w,i/w),0);}
+`;
+ const subdivide=program(prefix+`uniform highp sampler2D previous;uniform highp sampler2D metadata;uniform highp sampler2D weights;
+void main(){int id=gl_VertexID;vec4 m=fetchAt(metadata,id);vec4 p=vec4(0.);for(int i=0;i<int(m.y);i++){int k=int(m.x)+i;vec4 pair=fetchAt(weights,k/2);vec2 e=(k%2==0?pair.xy:pair.zw);p+=fetchAt(previous,int(e.x)*2)*e.y;}positionOut=p;normalOut=vec4((fetchAt(previous,int(m.z)*2+1).xyz+fetchAt(previous,int(m.w)*2+1).xyz)*.5,1.);gl_Position=vec4(0.);}
+`);
+ const normals=program(prefix+`uniform highp sampler2D previous;uniform highp sampler2D metadata;uniform highp sampler2D faces;uniform float strength;uniform float retention;uniform vec2 origin;uniform float quantum;
+vec3 position(int i){vec4 curved=fetchAt(previous,i*2);curved.z+=retention*curved.w;return mix(fetchAt(previous,i*2+1).xyz,curved.xyz,strength);}
+void main(){vec4 m=fetchAt(metadata,gl_VertexID);vec3 p=position(int(m.z)),n=vec3(0.);for(int i=0;i<int(m.y);i++){ivec3 f=ivec3(fetchAt(faces,int(m.x)+i).xyz);vec3 a=position(f.x),b=position(f.y),c=position(f.z);n+=cross(b-a,c-a);}positionOut=vec4(round(p.xy/quantum)*quantum+origin,p.z,1.);normalOut=vec4(length(n)>1e-20?normalize(n):vec3(0.,0.,1.),0.);gl_Position=vec4(0.);}
+`);
+ let bytes=0;const shape=(texels)=>{const w=Math.min(2048,max,Math.max(1,texels)),h=Math.max(1,Math.ceil(texels/w));if(h>max)throw Error('LoopのGPUデータがテクスチャ上限を超えます。分割数を下げてください');return [w,h];};
+ const tex=(data,fromBuffer=null,count=0)=>{const [w,h]=shape(fromBuffer?count*2:Math.ceil(data.length/4)),t=gl.createTexture();textures.add(t);gl.activeTexture(gl.TEXTURE3);gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.pixelStorei(gl.UNPACK_ALIGNMENT,4);if(fromBuffer){gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER,fromBuffer);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,w,h,0,gl.RGBA,gl.FLOAT,0);gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER,null);}else{const padded=new Float32Array(w*h*4);padded.set(data);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,w,h,0,gl.RGBA,gl.FLOAT,padded);}bytes+=w*h*16;return {texture:t,bytes:w*h*16};};
+ const drop=t=>{gl.deleteTexture(t.texture);textures.delete(t.texture);bytes-=t.bytes;};
+ const vao=gl.createVertexArray(),feedback=gl.createTransformFeedback();
+ const bind=(p,name,t,unit)=>{gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(gl.TEXTURE_2D,t.texture);gl.uniform1i(gl.getUniformLocation(p,name),unit);};
+ const run=(p,count,setup,padded=false,existing=null)=>{gl.useProgram(p);setup();const b=existing?.buffer||gl.createBuffer();buffers.add(b);const size=padded?shape(count*2).reduce((a,b)=>a*b)*16:count*32;gl.bindBuffer(gl.ARRAY_BUFFER,b);if(!existing)gl.bufferData(gl.ARRAY_BUFFER,size,gl.DYNAMIC_COPY);gl.bindBuffer(gl.ARRAY_BUFFER,null);gl.bindVertexArray(vao);gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK,feedback);gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER,0,b);gl.enable(gl.RASTERIZER_DISCARD);gl.beginTransformFeedback(gl.POINTS);gl.drawArrays(gl.POINTS,0,count);gl.endTransformFeedback();gl.disable(gl.RASTERIZER_DISCARD);gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER,0,null);gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK,null);return {buffer:b,bytes:size};};
+ // w成分に保持値1の高さ補正を入れる。Loopの線形性により、保持値だけなら再細分割は不要。
+ const initial=new Float32Array(plan.initial.length/3*8);for(let i=0;i<plan.initial.length/3;i++){initial.set([...(options.baked?plan.controls:plan.initial).subarray(i*3,i*3+3),options.baked?0:plan.controls[i*3+2]-plan.initial[i*3+2],...plan.initial.subarray(i*3,i*3+3),1],i*8);}let previous=tex(initial);
+ for(const step of plan.steps){const metadata=tex(step.meta),weights=tex(step.weights),result=run(subdivide,step.count,()=>{bind(subdivide,'previous',previous,3);bind(subdivide,'metadata',metadata,4);bind(subdivide,'weights',weights,5);},true),next=tex(null,result.buffer,step.count);gl.deleteBuffer(result.buffer);buffers.delete(result.buffer);drop(previous);drop(metadata);drop(weights);previous=next;}
+ const metadata=tex(plan.normalMeta),faces=tex(plan.normalFaces),count=plan.normalMeta.length/4;let output=null,lastStrength=null,lastRetention=null;
+ function update(strength,retention=options.retention){retention=options.baked?0:Math.max(0,Math.min(1,retention));if(strength===lastStrength&&retention===lastRetention)return;output=run(normals,count,()=>{bind(normals,'previous',previous,3);bind(normals,'metadata',metadata,4);bind(normals,'faces',faces,5);gl.uniform1f(gl.getUniformLocation(normals,'strength'),strength);gl.uniform1f(gl.getUniformLocation(normals,'retention'),retention);gl.uniform2f(gl.getUniformLocation(normals,'origin'),options.minX*options.width,options.minY*options.width);gl.uniform1f(gl.getUniformLocation(normals,'quantum'),2**Math.ceil(Math.log2(options.width)-22));},false,output);lastStrength=strength;lastRetention=retention;}
+ function dispose(){for(const t of textures)gl.deleteTexture(t);for(const b of buffers)gl.deleteBuffer(b);for(const p of programs)gl.deleteProgram(p);gl.deleteVertexArray(vao);gl.deleteTransformFeedback(feedback);}
+ plan=null;return {update,dispose,get buffer(){return output?.buffer;},get bytes(){return bytes+(output?.bytes||0);},count};
+}

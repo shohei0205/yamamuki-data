@@ -290,6 +290,9 @@ fn incircle(a: Point, b: Point, c: Point, p: Point) -> i128 {
 
 #[derive(Clone, Debug)]
 struct Triangle {
+    height_error: f64,
+    size_error: f64,
+    absolute_error: f64,
     face: Face,
     error: f64,
     sample: usize,
@@ -327,11 +330,18 @@ pub struct Mesh {
     pub vertices: Vec<[f64; 3]>,
     pub triangles: Vec<Face>,
     pub max_error: f64,
+    /// 場所ごとの許容誤差に対する最大比。固定誤差では省略する。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_error_ratio: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_mesh_size_ratio: Option<f64>,
     pub tolerance_reached: bool,
     pub minimum_vertices_reached: bool,
     pub stop_reason: &'static str,
     pub triangle_evaluations: usize,
     pub sample_evaluations: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub balance: Option<BalanceStats>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -362,8 +372,48 @@ pub struct ProgressiveTin {
     pub steps: Vec<Insertion>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BalanceStats {
+    pub initial_vertices: usize,
+    pub added_vertices: usize,
+    pub target_ratio: f64,
+    pub stop_reason: &'static str,
+    pub max_ratio: f64,
+    pub reached: bool,
+}
+#[derive(Clone, Copy, Debug)]
+struct NeighborEntry {
+    score: f64,
+    large: usize,
+    small: usize,
+    edge: (usize, usize),
+}
+impl PartialEq for NeighborEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+impl Eq for NeighborEntry {}
+impl PartialOrd for NeighborEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for NeighborEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.score
+            .total_cmp(&other.score)
+            .then_with(|| other.large.cmp(&self.large))
+            .then_with(|| other.small.cmp(&self.small))
+            .then_with(|| other.edge.cmp(&self.edge))
+    }
+}
+
 pub struct Builder<'a> {
     grid: &'a [f64],
+    inverse_limits: Option<Vec<f64>>,
+    inverse_mesh_sizes: Option<Vec<f64>>,
     width: usize,
     height: usize,
     points: Vec<Point>,
@@ -403,6 +453,8 @@ impl<'a> Builder<'a> {
         );
         let mut result = Self {
             grid,
+            inverse_limits: None,
+            inverse_mesh_sizes: None,
             width,
             height,
             points: vec![
@@ -429,6 +481,154 @@ impl<'a> Builder<'a> {
         Ok(result)
     }
 
+    /// 各標高格子点の許容誤差で優先度を正規化する。停止の許容値は1を指定する。
+    pub fn with_error_limits(mut self, limits: &[f64]) -> Result<Self> {
+        ensure!(
+            limits.len() == self.grid.len(),
+            "許容誤差配列の長さが一致しません"
+        );
+        ensure!(
+            limits
+                .iter()
+                .all(|v| v.is_finite() && *v > 0. && v.recip().is_finite()),
+            "許容誤差は正の有限値が必要です"
+        );
+        self.inverse_limits = Some(limits.iter().map(|v| v.recip()).collect());
+        self.heap.clear();
+        let faces: Vec<_> = self.triangles.iter().map(|(&id, t)| (id, t.face)).collect();
+        for (id, face) in faces {
+            let triangle = self.evaluate(face);
+            self.heap.push(Entry {
+                error: triangle.error,
+                triangle: id,
+                sample: triangle.sample,
+            });
+            self.triangles.insert(id, triangle);
+        }
+        Ok(self)
+    }
+
+    /// 残したい山頂を先に挿入する。標高は元の格子から取り、Delaunayを維持する。
+    pub fn with_seed_points(mut self, seeds: &[[usize; 2]], max_vertices: usize) -> Result<Self> {
+        let mut unique = HashSet::new();
+        for &[x, y] in seeds {
+            ensure!(
+                x < self.width && y < self.height,
+                "固定頂点が標高格子の範囲外です"
+            );
+            let sample = y * self.width + x;
+            if !self.selected[sample] {
+                unique.insert(sample);
+            }
+        }
+        ensure!(
+            self.points.len() + unique.len() <= max_vertices,
+            "固定頂点が最大頂点数を超えます"
+        );
+        for &[x, y] in seeds {
+            let sample = y * self.width + x;
+            if self.selected[sample] {
+                continue;
+            }
+            let p = [x as i64, y as i64];
+            let mut id = *self.triangles.keys().min().unwrap();
+            let mut count = 0;
+            loop {
+                let f = self.triangles[&id].face;
+                if let Some((a, b)) = [(f[0], f[1]), (f[1], f[2]), (f[2], f[0])]
+                    .into_iter()
+                    .find(|&(a, b)| orient(self.points[a], self.points[b], p) < 0)
+                {
+                    id = *self
+                        .edges
+                        .get(&(b, a))
+                        .ok_or_else(|| anyhow::anyhow!("固定頂点を含む面が見つかりません"))?;
+                    count += 1;
+                    ensure!(
+                        count <= self.triangles.len(),
+                        "固定頂点の探索が収束しません"
+                    );
+                } else {
+                    break;
+                }
+            }
+            self.insert(Entry {
+                triangle: id,
+                sample,
+                error: 0.,
+            })?;
+        }
+        Ok(self)
+    }
+
+    /// 共有辺に指定した頂点だけを残し、内部の追加で境界を変えない。
+    pub fn with_locked_boundary(mut self) -> Result<Self> {
+        let n = self.width;
+        let sides = [
+            (0..n).collect::<Vec<_>>(),
+            (0..self.height).map(|y| y * n + n - 1).collect(),
+            (0..n).map(|x| (self.height - 1) * n + x).collect(),
+            (0..self.height).map(|y| y * n).collect(),
+        ];
+        self.boundary_error = 0.;
+        for side in sides {
+            let chosen: Vec<_> = (0..side.len())
+                .filter(|&i| self.selected[side[i]])
+                .collect();
+            for pair in chosen.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                for i in a + 1..b {
+                    let predicted = self.grid[side[a]]
+                        + (self.grid[side[b]] - self.grid[side[a]]) * (i - a) as f64
+                            / (b - a) as f64;
+                    self.boundary_error = self
+                        .boundary_error
+                        .max((self.grid[side[i]] - predicted).abs());
+                }
+            }
+        }
+        self.lock_boundary = true;
+        self.heap.clear();
+        let faces: Vec<_> = self.triangles.iter().map(|(&id, t)| (id, t.face)).collect();
+        for (id, face) in faces {
+            let triangle = self.evaluate(face);
+            self.heap.push(Entry {
+                error: triangle.error,
+                triangle: id,
+                sample: triangle.sample,
+            });
+            self.triangles.insert(id, triangle);
+        }
+        Ok(self)
+    }
+
+    /// 近傍頂点までの距離を格子点ごとの半径以内に抑え、密度の急変を防ぐ。
+    pub fn with_mesh_sizes(mut self, sizes: &[f64]) -> Result<Self> {
+        ensure!(
+            sizes.len() == self.grid.len(),
+            "メッシュ寸法配列の長さが一致しません"
+        );
+        ensure!(
+            sizes
+                .iter()
+                .all(|v| v.is_finite() && *v >= 1. && v.recip().powi(2).is_finite()),
+            "メッシュ寸法は1画素以上の有限値が必要です"
+        );
+        self.inverse_mesh_sizes = Some(sizes.iter().map(|v| v.recip().powi(2)).collect());
+        self.heap.clear();
+        let faces: Vec<_> = self.triangles.iter().map(|(&id, t)| (id, t.face)).collect();
+        for (id, face) in faces {
+            let triangle = self.evaluate(face);
+            self.heap.push(Entry {
+                error: triangle.error,
+                triangle: id,
+                sample: triangle.sample,
+            });
+            self.triangles.insert(id, triangle);
+        }
+        Ok(self)
+    }
+
     fn height_at(&self, p: Point) -> f64 {
         self.grid[p[1] as usize * self.width + p[0] as usize]
     }
@@ -443,6 +643,9 @@ impl<'a> Builder<'a> {
         let low = a[1].min(b[1]).min(c[1]);
         let high = a[1].max(b[1]).max(c[1]).min(self.height as i64 - 1);
         let mut best = Triangle {
+            height_error: 0.,
+            size_error: 0.,
+            absolute_error: 0.,
             face,
             error: 0.,
             sample: 0,
@@ -480,19 +683,38 @@ impl<'a> Builder<'a> {
                     continue;
                 }
                 let sample = y as usize * self.width + x as usize;
-                if self.selected[sample]
-                    || (self.lock_boundary
-                        && (x == 0
-                            || y == 0
-                            || x == self.width as i64 - 1
-                            || y == self.height as i64 - 1))
-                {
+                if self.selected[sample] {
                     continue;
                 }
                 self.samples += 1;
                 let error = ((self.grid[sample] - za)
                     - (e2 as f64 / area * db + e0 as f64 / area * dc))
                     .abs();
+                best.absolute_error = best.absolute_error.max(error);
+                let error = error
+                    * self
+                        .inverse_limits
+                        .as_ref()
+                        .map_or(1., |limits| limits[sample]);
+                best.height_error = best.height_error.max(error);
+                // 境界も誤差の集計に含めるが、共有頂点以外は追加候補にしない。
+                if self.lock_boundary
+                    && (x == 0
+                        || y == 0
+                        || x == self.width as i64 - 1
+                        || y == self.height as i64 - 1)
+                {
+                    continue;
+                }
+                let size_error = self.inverse_mesh_sizes.as_ref().map_or(0., |sizes| {
+                    let distance = [a, b, c]
+                        .iter()
+                        .map(|v| ((x - v[0]) as f64).powi(2) + ((y - v[1]) as f64).powi(2))
+                        .fold(f64::INFINITY, f64::min);
+                    (distance * sizes[sample]).sqrt()
+                });
+                best.size_error = best.size_error.max(size_error);
+                let error = error.max(size_error);
                 if error > best.error || (error == best.error && sample < best.sample) {
                     best.error = error;
                     best.sample = sample;
@@ -654,6 +876,10 @@ impl<'a> Builder<'a> {
 
     fn prepare_boundary(&mut self, max_vertices: usize, tolerance: f64, lock: bool) -> Result<()> {
         ensure!(
+            self.inverse_limits.is_none() && self.inverse_mesh_sizes.is_none(),
+            "場所ごとの誤差・寸法と固定境界の併用は未対応です"
+        );
+        ensure!(
             tolerance.is_finite() && tolerance >= 0.,
             "許容誤差が不正です"
         );
@@ -805,6 +1031,187 @@ impl<'a> Builder<'a> {
         })
     }
 
+    fn longest_squared(&self, id: usize) -> f64 {
+        let f = self.triangles[&id].face;
+        [(f[0], f[1]), (f[1], f[2]), (f[2], f[0])]
+            .iter()
+            .map(|&(a, b)| {
+                let p = self.points[a];
+                let q = self.points[b];
+                ((p[0] - q[0]) as f64).powi(2) + ((p[1] - q[1]) as f64).powi(2)
+            })
+            .fold(0f64, f64::max)
+    }
+    fn neighbor_entry(&self, id: usize, other: usize, edge: (usize, usize)) -> NeighborEntry {
+        let a = self.longest_squared(id);
+        let b = self.longest_squared(other);
+        if a >= b {
+            NeighborEntry {
+                score: a / b,
+                large: id,
+                small: other,
+                edge,
+            }
+        } else {
+            NeighborEntry {
+                score: b / a,
+                large: other,
+                small: id,
+                edge,
+            }
+        }
+    }
+    fn queue_neighbors(&self, id: usize, threshold: f64, queue: &mut BinaryHeap<NeighborEntry>) {
+        let f = self.triangles[&id].face;
+        for (a, b) in [(f[0], f[1]), (f[1], f[2]), (f[2], f[0])] {
+            if let Some(&other) = self.edges.get(&(b, a)) {
+                let entry = self.neighbor_entry(id, other, (a.min(b), a.max(b)));
+                if entry.score > threshold {
+                    queue.push(entry);
+                }
+            }
+        }
+    }
+    fn neighbor_sample(&self, entry: NeighborEntry) -> Option<usize> {
+        let f = self.triangles[&entry.large].face;
+        let [a, b, c] = f.map(|i| self.points[i]);
+        let u = self.points[entry.edge.0];
+        let v = self.points[entry.edge.1];
+        let opposite = self.points[*f
+            .iter()
+            .find(|&&i| i != entry.edge.0 && i != entry.edge.1)
+            .unwrap()];
+        let midpoint = [(u[0] + v[0]) as f64 * 0.5, (u[1] + v[1]) as f64 * 0.5];
+        let distance = ((opposite[0] as f64 - midpoint[0]).powi(2)
+            + (opposite[1] as f64 - midpoint[1]).powi(2))
+        .sqrt();
+        let alpha = (self.longest_squared(entry.small).sqrt() / distance).min(1. / 3.);
+        let targets = [
+            [
+                midpoint[0] + alpha * (opposite[0] as f64 - midpoint[0]),
+                midpoint[1] + alpha * (opposite[1] as f64 - midpoint[1]),
+            ],
+            [
+                (a[0] + b[0] + c[0]) as f64 / 3.,
+                (a[1] + b[1] + c[1]) as f64 / 3.,
+            ],
+        ];
+        for target in targets {
+            let x = target[0].round() as i64;
+            let y = target[1].round() as i64;
+            let mut best: Option<(f64, usize)> = None;
+            for yy in (y - 4).max(0)..=(y + 4).min(self.height as i64 - 1) {
+                for xx in (x - 4).max(0)..=(x + 4).min(self.width as i64 - 1) {
+                    let p = [xx, yy];
+                    let sample = yy as usize * self.width + xx as usize;
+                    if self.selected[sample]
+                        || orient(a, b, p) < 0
+                        || orient(b, c, p) < 0
+                        || orient(c, a, p) < 0
+                    {
+                        continue;
+                    }
+                    let d = (xx as f64 - target[0]).powi(2) + (yy as f64 - target[1]).powi(2);
+                    if best.is_none_or(|(old, at)| d < old || (d == old && sample < at)) {
+                        best = Some((d, sample));
+                    }
+                }
+            }
+            if let Some((_, sample)) = best {
+                return Some(sample);
+            }
+        }
+        None
+    }
+    /// 共有辺を持つ面の最長辺の比だけを局所更新し、追加予算の範囲で段差を補う。
+    pub fn generate_neighbor_balanced(
+        mut self,
+        max_vertices: usize,
+        tolerance: f64,
+        ratio: f64,
+    ) -> Result<Mesh> {
+        ensure!(
+            ratio.is_finite() && ratio > 1.,
+            "隣接面の寸法比は1より大きい有限値が必要です"
+        );
+        ensure!(
+            max_vertices >= self.points.len(),
+            "頂点上限が初期頂点数を下回ります"
+        );
+        ensure!(
+            self.inverse_mesh_sizes.is_none() && !self.lock_boundary,
+            "被覆半径・固定境界と隣接面調整は併用できません"
+        );
+        let initial = self.points.len();
+        let threshold = ratio * ratio;
+        let mut queue = BinaryHeap::new();
+        for &id in self.triangles.keys() {
+            self.queue_neighbors(id, threshold, &mut queue);
+        }
+        while self.points.len() < max_vertices.min(self.grid.len()) {
+            let error = self.worst();
+            let next = if error.error > tolerance {
+                Some(error)
+            } else {
+                let mut selected = None;
+                while let Some(entry) = queue.pop() {
+                    if !self.triangles.contains_key(&entry.large)
+                        || !self.triangles.contains_key(&entry.small)
+                    {
+                        continue;
+                    }
+                    if let Some(sample) = self.neighbor_sample(entry) {
+                        selected = Some(Entry {
+                            triangle: entry.large,
+                            sample,
+                            error: 0.,
+                        });
+                        break;
+                    }
+                }
+                selected
+            };
+            let Some(next) = next else { break };
+            let change = self.insert_recorded(next, true)?.unwrap();
+            for face in change.added {
+                self.queue_neighbors(face.id, threshold, &mut queue);
+            }
+        }
+        let mut maximum = 1f64;
+        for (&id, t) in &self.triangles {
+            let f = t.face;
+            for (a, b) in [(f[0], f[1]), (f[1], f[2]), (f[2], f[0])] {
+                if let Some(&other) = self.edges.get(&(b, a)) {
+                    if id < other {
+                        maximum = maximum.max(
+                            self.neighbor_entry(id, other, (a.min(b), a.max(b)))
+                                .score
+                                .sqrt(),
+                        );
+                    }
+                }
+            }
+        }
+        let count = self.points.len();
+        let limit = max_vertices.min(self.grid.len());
+        let mut result = self.generate_with_minimum(max_vertices, tolerance, 4)?;
+        result.balance = Some(BalanceStats {
+            initial_vertices: initial,
+            added_vertices: count - initial,
+            target_ratio: ratio,
+            stop_reason: if maximum <= ratio * (1. + 1e-12) {
+                "ratio"
+            } else if count >= limit {
+                "maxVertices"
+            } else {
+                "noCandidate"
+            },
+            max_ratio: maximum,
+            reached: maximum <= ratio * (1. + 1e-12),
+        });
+        Ok(result)
+    }
+
     pub fn generate(self, max_vertices: usize, tolerance: f64) -> Result<Mesh> {
         self.generate_with_minimum(max_vertices, tolerance, 4)
     }
@@ -825,7 +1232,13 @@ impl<'a> Builder<'a> {
         );
         let limit = max_vertices.min(self.grid.len());
         let scale = self.grid.iter().fold(1f64, |a, &b| a.max(b.abs()));
-        let precision = scale * f64::EPSILON * 64.;
+        let precision = scale
+            * f64::EPSILON
+            * 64.
+            * self
+                .inverse_limits
+                .as_ref()
+                .map_or(1., |limits| limits.iter().copied().fold(0f64, f64::max));
         loop {
             let top = self.worst();
             if (top.error <= tolerance
@@ -838,7 +1251,34 @@ impl<'a> Builder<'a> {
             self.insert(top)?;
         }
         let max_error = self.worst().error.max(self.boundary_error);
-        let reached = max_error <= tolerance;
+        let mut reached = if self.inverse_limits.is_some() {
+            self.worst().error <= tolerance
+        } else {
+            max_error <= tolerance
+        };
+        let max_error_ratio = self.inverse_limits.as_ref().map(|_| {
+            self.triangles
+                .values()
+                .map(|t| t.height_error)
+                .fold(0f64, f64::max)
+        });
+        if let Some(ratio) = max_error_ratio {
+            reached &= ratio <= tolerance;
+        }
+        let max_mesh_size_ratio = self.inverse_mesh_sizes.as_ref().map(|_| {
+            self.triangles
+                .values()
+                .map(|t| t.size_error)
+                .fold(0f64, f64::max)
+        });
+        let max_error = if max_error_ratio.is_some() {
+            self.triangles
+                .values()
+                .map(|t| t.absolute_error)
+                .fold(self.boundary_error, f64::max)
+        } else {
+            max_error
+        };
         let vertices = self
             .points
             .iter()
@@ -850,6 +1290,8 @@ impl<'a> Builder<'a> {
             vertices,
             triangles: faces.into_iter().map(|(_, t)| t.face).collect(),
             max_error,
+            max_error_ratio,
+            max_mesh_size_ratio,
             tolerance_reached: reached,
             minimum_vertices_reached: self.points.len() >= min_vertices,
             stop_reason: if reached && self.points.len() < min_vertices {
@@ -861,6 +1303,7 @@ impl<'a> Builder<'a> {
             },
             triangle_evaluations: self.evaluations,
             sample_evaluations: self.samples,
+            balance: None,
         })
     }
 }
@@ -946,5 +1389,299 @@ mod progressive_tests {
                 .generate_progressive(&[64, 32], 1.)
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod relative_error_tests {
+    use super::*;
+    #[test]
+    fn relative_priority_preserves_a_lower_hill_first() {
+        let mut grid = vec![0.; 81];
+        grid[4 * 9 + 2] = 100.;
+        grid[4 * 9 + 6] = 20.;
+        let limits: Vec<_> = (0..81).map(|i| if i % 9 < 5 { 50. } else { 2. }).collect();
+        let fixed = Builder::new(&grid, 9, 9).unwrap().generate(5, 1.).unwrap();
+        let relative = Builder::new(&grid, 9, 9)
+            .unwrap()
+            .with_error_limits(&limits)
+            .unwrap()
+            .generate(5, 1.)
+            .unwrap();
+        assert_eq!(fixed.vertices[4], [2., 4., 100.]);
+        assert_eq!(relative.vertices[4], [6., 4., 20.]);
+        assert!(relative.max_error > 80.);
+        assert!(relative.max_error_ratio.unwrap() > 1.);
+    }
+    #[test]
+    fn constant_limits_match_fixed_error_and_report_meters() {
+        let grid: Vec<_> = (0..33 * 33)
+            .map(|i| ((i % 33) as f64 * 0.2).sin() * ((i / 33) as f64 * 0.3).cos() * 100.)
+            .collect();
+        let limits = vec![8.; grid.len()];
+        let fixed = Builder::new(&grid, 33, 33)
+            .unwrap()
+            .generate(2000, 8.)
+            .unwrap();
+        let relative = Builder::new(&grid, 33, 33)
+            .unwrap()
+            .with_error_limits(&limits)
+            .unwrap()
+            .generate(2000, 1.)
+            .unwrap();
+        assert_eq!(fixed.vertices, relative.vertices);
+        assert_eq!(fixed.triangles, relative.triangles);
+        assert!((fixed.max_error - relative.max_error).abs() < 1e-9);
+        assert!(relative.max_error_ratio.unwrap() <= 1.);
+    }
+    #[test]
+    fn invalid_limits_are_rejected() {
+        let grid = vec![0.; 9];
+        for limits in [
+            vec![1.; 8],
+            vec![0.; 9],
+            vec![f64::NAN; 9],
+            vec![f64::INFINITY; 9],
+        ] {
+            assert!(
+                Builder::new(&grid, 3, 3)
+                    .unwrap()
+                    .with_error_limits(&limits)
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            Builder::new(&grid, 3, 3)
+                .unwrap()
+                .with_error_limits(&[2.; 9])
+                .unwrap()
+                .generate(9, 1.)
+                .unwrap()
+                .vertices
+                .len(),
+            4
+        );
+    }
+}
+
+#[cfg(test)]
+mod peak_seed_tests {
+    use super::*;
+    #[test]
+    fn summit_stays_even_when_flanks_can_be_inaccurate() {
+        let mut grid = vec![0.; 17 * 17];
+        grid[8 * 17 + 8] = 30.;
+        let mesh = Builder::new(&grid, 17, 17)
+            .unwrap()
+            .with_seed_points(&[[8, 8], [8, 8]], 128)
+            .unwrap()
+            .generate(128, 100.)
+            .unwrap();
+        assert!(mesh.vertices.contains(&[8., 8., 30.]));
+        assert_eq!(mesh.vertices.len(), 5);
+        let area: i128 = mesh
+            .triangles
+            .iter()
+            .map(|t| {
+                orient(
+                    [mesh.vertices[t[0]][0] as i64, mesh.vertices[t[0]][1] as i64],
+                    [mesh.vertices[t[1]][0] as i64, mesh.vertices[t[1]][1] as i64],
+                    [mesh.vertices[t[2]][0] as i64, mesh.vertices[t[2]][1] as i64],
+                )
+            })
+            .sum();
+        assert_eq!(area, 2 * 16 * 16);
+    }
+    #[test]
+    fn seed_budget_and_coordinates_are_checked() {
+        let grid = vec![0.; 25];
+        assert!(
+            Builder::new(&grid, 5, 5)
+                .unwrap()
+                .with_seed_points(&[[5, 2]], 10)
+                .is_err()
+        );
+        assert!(
+            Builder::new(&grid, 5, 5)
+                .unwrap()
+                .with_seed_points(&[[2, 2]], 4)
+                .is_err()
+        );
+        assert!(
+            Builder::new(&grid, 5, 5)
+                .unwrap()
+                .with_seed_points(&[[0, 0], [0, 0]], 4)
+                .is_ok()
+        );
+    }
+}
+
+#[cfg(test)]
+mod seed_topology_tests {
+    use super::*;
+    #[test]
+    fn edge_and_interior_seeds_keep_delaunay_and_cover_the_grid() {
+        let grid = vec![0.; 81];
+        let b = Builder::new(&grid, 9, 9)
+            .unwrap()
+            .with_seed_points(&[[4, 0], [8, 4], [4, 4], [2, 2], [6, 6], [0, 4]], 32)
+            .unwrap();
+        let mut area = 0;
+        for t in b.triangles.values() {
+            let [a, c, d] = t.face.map(|i| b.points[i]);
+            let signed = orient(a, c, d);
+            assert!(signed > 0);
+            area += signed;
+            for &p in &b.points {
+                assert!(incircle(a, c, d, p) <= 0);
+            }
+        }
+        assert_eq!(area, 2 * 8 * 8);
+    }
+}
+
+#[cfg(test)]
+mod mesh_grading_tests {
+    use super::*;
+    #[test]
+    fn even_a_plane_is_refined_to_the_prescribed_spacing() {
+        let grid = vec![0.; 17 * 17];
+        let limits = vec![1.; grid.len()];
+        let sizes = vec![3.; grid.len()];
+        let result = Builder::new(&grid, 17, 17)
+            .unwrap()
+            .with_error_limits(&limits)
+            .unwrap()
+            .with_mesh_sizes(&sizes)
+            .unwrap()
+            .generate(289, 1.)
+            .unwrap();
+        assert!(result.vertices.len() > 4);
+        assert_eq!(result.max_error, 0.);
+        assert_eq!(result.max_error_ratio, Some(0.));
+        assert!(result.max_mesh_size_ratio.unwrap() <= 1.);
+        assert!(result.tolerance_reached);
+    }
+    #[test]
+    fn spacing_failure_is_separate_from_height_failure() {
+        let grid = vec![0.; 81];
+        let limits = vec![5.; 81];
+        let sizes = vec![1.; 81];
+        let result = Builder::new(&grid, 9, 9)
+            .unwrap()
+            .with_error_limits(&limits)
+            .unwrap()
+            .with_mesh_sizes(&sizes)
+            .unwrap()
+            .generate(5, 1.)
+            .unwrap();
+        assert_eq!(result.max_error, 0.);
+        assert_eq!(result.max_error_ratio, Some(0.));
+        assert!(result.max_mesh_size_ratio.unwrap() > 1.);
+        assert!(!result.tolerance_reached);
+        assert!(
+            Builder::new(&grid, 9, 9)
+                .unwrap()
+                .with_mesh_sizes(&[0.; 81])
+                .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod neighbor_balance_tests {
+    use super::*;
+    #[test]
+    fn additional_budget_preserves_initial_vertices_and_delaunay() {
+        let grid = vec![0.; 65 * 65];
+        let limits = vec![1.; grid.len()];
+        let seeds = [[1, 0], [0, 1], [1, 1], [2, 1], [1, 2]];
+        let create = || {
+            Builder::new(&grid, 65, 65)
+                .unwrap()
+                .with_seed_points(&seeds, 100)
+                .unwrap()
+                .with_error_limits(&limits)
+                .unwrap()
+        };
+        let before = create().generate_neighbor_balanced(9, 1., 3.).unwrap();
+        let after = create().generate_neighbor_balanced(15, 1., 3.).unwrap();
+        assert!(after.vertices.len() <= 15);
+        assert!(after.vertices.len() > 9);
+        for point in &before.vertices {
+            assert!(after.vertices.contains(point));
+        }
+        assert_eq!(after.max_error, 0.);
+        assert!(
+            after.balance.as_ref().unwrap().max_ratio < before.balance.as_ref().unwrap().max_ratio
+        );
+        for t in &after.triangles {
+            let [a, b, c] = t.map(|i| [after.vertices[i][0] as i64, after.vertices[i][1] as i64]);
+            assert!(orient(a, b, c) > 0);
+            for p in &after.vertices {
+                assert!(incircle(a, b, c, [p[0] as i64, p[1] as i64]) <= 0);
+            }
+        }
+        let repeated = create().generate_neighbor_balanced(15, 1., 3.).unwrap();
+        assert_eq!(after.vertices, repeated.vertices);
+        assert_eq!(after.triangles, repeated.triangles);
+    }
+}
+
+#[cfg(test)]
+mod locked_shared_edge_tests {
+    use super::*;
+    #[test]
+    fn weighted_boundary_uses_ratio_instead_of_meters_for_reached_flag() {
+        let n = 5;
+        let grid: Vec<_> = (0..n * n)
+            .map(|i| if i % n % 2 == 0 { 0. } else { 5. })
+            .collect();
+        let limits = vec![100.; n * n];
+        let mesh = Builder::new(&grid, n, n)
+            .unwrap()
+            .with_locked_boundary()
+            .unwrap()
+            .with_error_limits(&limits)
+            .unwrap()
+            .generate_with_minimum(64, 1., 4)
+            .unwrap();
+        assert!(mesh.tolerance_reached);
+        assert_eq!(mesh.vertices.len(), 4);
+        assert!((mesh.max_error - 5.).abs() < 1e-12);
+        assert!((mesh.max_error_ratio.unwrap() - 0.05).abs() < 1e-12);
+    }
+
+    #[test]
+    fn weighted_refinement_keeps_shared_boundary_and_reports_its_error() {
+        let n = 17;
+        let grid: Vec<_> = (0..n * n)
+            .map(|i| {
+                let x = (i % n) as f64;
+                let y = (i / n) as f64;
+                (x * 0.3).sin() * 10. + (y * 0.2).cos() * 3.
+            })
+            .collect();
+        let seeds = [[8, 0], [16, 8], [8, 16], [0, 8]];
+        let limits = vec![0.1; n * n];
+        let mesh = Builder::new(&grid, n, n)
+            .unwrap()
+            .with_seed_points(&seeds, 64)
+            .unwrap()
+            .with_locked_boundary()
+            .unwrap()
+            .with_error_limits(&limits)
+            .unwrap()
+            .generate_with_minimum(64, 1., 4)
+            .unwrap();
+        let boundary: Vec<_> = mesh
+            .vertices
+            .iter()
+            .filter(|v| v[0] == 0. || v[1] == 0. || v[0] == 16. || v[1] == 16.)
+            .collect();
+        assert_eq!(boundary.len(), 8);
+        assert!(!mesh.tolerance_reached);
+        assert!(mesh.max_error_ratio.unwrap() > 1.);
+        assert!(mesh.max_error > 0.1);
     }
 }
