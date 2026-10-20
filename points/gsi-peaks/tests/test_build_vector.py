@@ -46,6 +46,7 @@ class PrimaryTests(unittest.TestCase):
     def test_mountain_list_summit_elevation_reading_and_index_win(self):
         vector = point("gsi-vector:1", "槙寄山", None, 35.0001, 139)
         mountain = point("gsi-mountain-list:14-1", "槇寄山", "まきよせやま", 35, 139, 1188)
+        mountain["tags"] = ["日本の主な山岳標高"]
         points, _ = primary_points([record(vector)], [mountain], [], [])
         self.assertEqual(points, [{**mountain, "name": "槙寄山", "aliases": ["槇寄山"]}])
 

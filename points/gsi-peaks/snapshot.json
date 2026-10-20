@@ -3,7 +3,7 @@
   "experimental": true,
   "coordinatePolicy": "山名・座標は最適化ベクトルタイルを優先し、一意に照合できた山岳一覧の最高地点を優先する。未収録の山は山岳一覧・取得済み自然地名から追加する。注記・代表点は最高地点とは限らない。",
   "elevationPolicy": "山岳一覧の公称標高、25 m 以内で双方に一意な三角点・標高点、DEM1A・DEM5A・DEM5B・DEM5C・DEM10B の順に採用。DEM は指定座標の地表標高であり、最高地点の標高とは限らない。",
-  "inputSha256": "8c5521082b427e44ba70c10744fcb9b3fd63e9796ae19a17e29f80a674cffa29",
+  "inputSha256": "57b2947840e79b714e0cd5072670705d785ca0fae65cdddda4b7c320d0f47009",
   "pointCount": 17248,
   "sourceSnapshot": {
     "dem1a_png": {

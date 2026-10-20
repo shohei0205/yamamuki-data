@@ -47,3 +47,15 @@ class GsiSupplementTests(unittest.TestCase):
     def test_missing_id_stops_generation(self):
         with self.assertRaises(ValueError):
             supplement_points([])
+
+    def test_major_mountain_tags_belong_to_original(self):
+        original = json.loads((GSI / "gsi-peaks-source.json").read_bytes())
+        supplements = json.loads((GSI / "supplements.json").read_bytes())
+        tag = "日本の主な山岳標高"
+        expected = {p["id"] for p in original["points"] if p["id"].startswith("gsi-mountain-list:")}
+        self.assertEqual(len(expected), 1059)
+        self.assertEqual({p["id"] for p in original["points"] if tag in p.get("tags", [])}, expected)
+        self.assertNotIn(tag, metadata_maps(supplements["metadata"])["tags"])
+        self.assertFalse(any(tag in p.get("tags", []) for p in supplements["points"]))
+        self.assertEqual(metadata_maps(original["metadata"])["tags"][tag]["nameReading"],
+                         "にほんのおもなさんがくひょうこう")
