@@ -242,16 +242,16 @@ def write(points, report, output, version, tags=None, metadata=None):
     source_url = legacy.pop("sourceUrl",CSV_URL)
     license = legacy.pop("license",LICENSE)
     attribution = legacy.pop("attribution",ATTRIBUTION)
-    sources = source_entries("gsi-peaks",source_url,license,attribution,legacy.pop("supplementSources",None))
+    sources = source_entries("国土地理院（日本の主な山岳標高）" if source_url == CSV_URL else "国土地理院（最適化ベクトルタイル）",source_url,license,attribution,legacy.pop("supplementSources",None))
     # 実際に使った国土地理院の資料を、取得記録の種別ごとに一覧へ残す。
     for item in report.get("sources",[]):
         url=item["url"]
         if "/experimental_nnfpt/" in url:
-            sources=source_entries("gsi-natural","https://cyberjapandata.gsi.go.jp/xyz/experimental_nnfpt/{z}/{x}/{y}.geojson",license,attribution,sources)
+            sources=source_entries("国土地理院（自然地名）","https://cyberjapandata.gsi.go.jp/xyz/experimental_nnfpt/{z}/{x}/{y}.geojson",license,attribution,sources)
         elif "/xyz/dem" in url:
-            sources=source_entries("gsi-dem","https://maps.gsi.go.jp/development/ichiran.html",license,attribution,sources)
+            sources=source_entries("国土地理院（標高タイル）","https://maps.gsi.go.jp/development/ichiran.html",license,attribution,sources)
         elif url==CSV_URL and source_url!=CSV_URL:
-            sources=source_entries("gsi-mountain-list",CSV_URL,license,attribution,sources)
+            sources=source_entries("国土地理院（日本の主な山岳標高）",CSV_URL,license,attribution,sources)
     info = {"schemaVersion":6,"pointCount":len(points),"sources":sources,**legacy,"tags":{} if tags is None else tags}
     validate_metadata(info, len(points))
     raw = point_document_json({"schemaFormat":"yamamuki-points","schemaVersion":6,"metadata":metadata_arrays({k:v for k,v in info.items() if k != "schemaVersion"}),"points":[distributed_point(point) for point in points]}).encode()

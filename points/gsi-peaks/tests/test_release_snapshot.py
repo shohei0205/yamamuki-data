@@ -22,8 +22,16 @@ class GsiReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             _, manifest = target.prepare('test-supplements', root / 'release', 'dev')
+            names = set(metadata_maps(manifest['metadata'])['sources'])
+            self.assertTrue({
+                '国土地理院（最適化ベクトルタイル）',
+                '国土地理院（日本の主な山岳標高）',
+                '国土地理院（自然地名）',
+                '国土地理院（標高タイル）',
+            } <= names)
+            self.assertFalse(any(name.startswith('gsi-') for name in names))
             expected = metadata_maps(json.loads((target.DATA / 'supplements.json').read_bytes())['metadata'])['sources']
-            self.assertEqual({k:v for k,v in metadata_maps(manifest['metadata'])["sources"].items() if not k.startswith('gsi-')}, expected)
+            self.assertEqual({k:v for k,v in metadata_maps(manifest['metadata'])["sources"].items() if not k.startswith('国土地理院（')}, expected)
             self.assertEqual(metadata_maps(json.loads((root / 'release' / target.FILE).read_bytes())['metadata'])['tags']['日本百名山']['nameReading'],'にほんひゃくめいざん')
             tag = '日本の主な山岳標高'
             released = json.loads((root / 'release' / target.FILE).read_bytes())
@@ -105,7 +113,7 @@ class GsiReleaseTests(unittest.TestCase):
             self.assertEqual(manifest['inputSha256'], hashlib.sha256((target.DATA / target.SOURCE_FILE).read_bytes()).hexdigest())
             self.assertEqual(tag, 'gsi-peaks-dev-test-1')
             self.assertIn('/gsi-peaks-dev-test-1/', manifest['downloadUrl'])
-            self.assertIn('国土地理院', metadata_maps(manifest['metadata'])["sources"]['gsi-peaks']['attribution'])
+            self.assertIn('国土地理院', metadata_maps(manifest['metadata'])["sources"]['国土地理院（最適化ベクトルタイル）']['attribution'])
             again=target.prepare('test-1', root, 'dev')[1]
             self.assertRegex(again.pop('dataTimestamp'), r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
             self.assertEqual({k:v for k,v in manifest.items() if k != 'dataTimestamp'}, again)
@@ -118,7 +126,7 @@ class GsiReleaseTests(unittest.TestCase):
             root = Path(folder)
             source, staged = root / 'generated', root / 'staged'
             _, manifest = target.prepare('test-1', source, 'dev')
-            manifest['sourceFiles'] = [{'url': metadata_maps(manifest['metadata'])["sources"]['gsi-peaks']['source'], 'fetchedAt': '2026-10-12T04:00:00Z'}]
+            manifest['sourceFiles'] = [{'url': metadata_maps(manifest['metadata'])["sources"]['国土地理院（最適化ベクトルタイル）']['source'], 'fetchedAt': '2026-10-12T04:00:00Z'}]
             (source / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
             target.snapshot(source, staged)
             target.prepare('test-2', root / 'release', 'dev', staged)
@@ -184,7 +192,7 @@ class GsiReleaseTests(unittest.TestCase):
                             target.publish('test-1', root)
                         notes = (root / 'notes.md').read_text(encoding='utf-8')
                         self.assertTrue(notes.startswith('コミット済みの国土地理院の地点 JSON を配布します。'))
-                        self.assertIn('\n\n## 出典\n\n- gsi-peaks:', notes)
+                        self.assertIn('\n\n## 出典\n\n- 国土地理院（最適化ベクトルタイル）:', notes)
                         self.assertIn('- 日本百名山:', notes)
                         create = calls.call_args_list[0].args
                         self.assertEqual(create[2], 'gsi-peaks-' + ('dev-' if branch == 'dev' else '') + 'test-1')

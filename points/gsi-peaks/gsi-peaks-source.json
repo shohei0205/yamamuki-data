@@ -7,25 +7,25 @@
         "source": "https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/optimal_bvmap-v1.pmtiles",
         "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
         "attribution": "出典：国土地理院（最適化ベクトルタイル・日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成",
-        "name": "gsi-peaks"
+        "name": "国土地理院（最適化ベクトルタイル）"
       },
       {
         "source": "https://www.gsi.go.jp/KOKUJYOHO/MOUNTAIN/1003zan20260331.csv",
         "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
         "attribution": "出典：国土地理院（最適化ベクトルタイル・日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成",
-        "name": "gsi-mountain-list"
+        "name": "国土地理院（日本の主な山岳標高）"
       },
       {
         "source": "https://cyberjapandata.gsi.go.jp/xyz/experimental_nnfpt/{z}/{x}/{y}.geojson",
         "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
         "attribution": "出典：国土地理院（最適化ベクトルタイル・日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成",
-        "name": "gsi-natural"
+        "name": "国土地理院（自然地名）"
       },
       {
         "source": "https://maps.gsi.go.jp/development/ichiran.html",
         "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
         "attribution": "出典：国土地理院（最適化ベクトルタイル・日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成",
-        "name": "gsi-dem"
+        "name": "国土地理院（標高タイル）"
       }
     ],
     "pointCount": 17248,
