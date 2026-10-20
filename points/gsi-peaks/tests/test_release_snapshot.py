@@ -182,6 +182,10 @@ class GsiReleaseTests(unittest.TestCase):
                                 target.publish('test-1', root)
                         else:
                             target.publish('test-1', root)
+                        notes = (root / 'notes.md').read_text(encoding='utf-8')
+                        self.assertTrue(notes.startswith('コミット済みの国土地理院の地点 JSON を配布します。'))
+                        self.assertIn('\n\n## 出典\n\n- gsi-peaks:', notes)
+                        self.assertIn('- 日本百名山:', notes)
                         create = calls.call_args_list[0].args
                         self.assertEqual(create[2], 'gsi-peaks-' + ('dev-' if branch == 'dev' else '') + 'test-1')
                         self.assertEqual(create[create.index('--title') + 1], 'gsi-peaks-test-1')

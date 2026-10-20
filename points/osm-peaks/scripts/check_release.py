@@ -260,9 +260,16 @@ def report(current, previous, warnings):
              f"- gzip: {manifest['sizeBytes']:,} バイト",
              f"- SHA-256: `{manifest['sha256']}`", "",
              "### 確認事項", "", *([f"- {warning}" for warning in warnings] or ["- 件数と元データの日時に異常はありません"]), "",
-             "© OpenStreetMap contributors — [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/)", "",
-             "元データ: [Geofabrik](https://download.geofabrik.de/asia/japan.html)", ""]
-    lines.extend(["### 追加範囲の山頂", ""])
+             "## 出典", ""]
+    sources = manifest.get("sources", {})
+    if sources:
+        for name, source in sources.items():
+            lines.append(f"- {name}: {source.get('attribution', '')} / {source.get('license', '')}")
+    else:
+        # 出典一覧がない旧版も、従来の著作権・ライセンス表示を保つ。
+        lines.append("© OpenStreetMap contributors — [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/)")
+    lines.append("")
+    lines.extend(["## 追加範囲の山頂", ""])
     for region in REGIONS:
         count = sum(region_for(row["latitude"], row["longitude"]) == region for row in rows)
         lines.append(f"- {region['name']}: {count:,} 件")
