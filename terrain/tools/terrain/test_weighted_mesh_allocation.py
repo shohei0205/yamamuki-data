@@ -1,10 +1,65 @@
 import unittest
 import numpy as np
 from scipy.spatial import Delaunay
-from weighted_mesh_allocation import mixed_limits, allocation_score, split_mesh
+from weighted_mesh_allocation import mixed_limits, allocation_score, split_mesh, broad_shape_limits, landform_limits, movable_priority
 
 
 class AllocationTests(unittest.TestCase):
+    def test_movable_maximum_does_not_hide_one_peak_or_select_fixed_edges(self):
+        limits=np.full((20,20),10.);valid=np.ones((20,20),dtype=bool)
+        one_peak=np.zeros((20,20));one_peak[10,10]=100.;one_peak[0,:]=10000.
+        widespread=np.full((20,20),20.)
+        self.assertGreater(movable_priority(one_peak,limits,valid),movable_priority(widespread,limits,valid))
+        valid[10,10]=False
+        self.assertEqual(movable_priority(one_peak,limits,valid),0.)
+        self.assertEqual(movable_priority(one_peak,limits,np.zeros_like(valid)),0.)
+
+    def test_landform_region_score_is_capped_and_does_not_dilute_one_mountain(self):
+        valid=np.ones((100,100),dtype=bool);error=np.zeros((100,100));error[40:60,40:60]=50
+        weight=np.zeros_like(error);weight[40:60,40:60]=1;limits=np.full_like(error,20.)
+        base=allocation_score(error,limits,valid,shape_limits=limits)
+        old=allocation_score(error,limits,valid,weight,shape_limits=limits)
+        new=allocation_score(error,limits,valid,weight,shape_limits=limits,feature_balance=True)
+        self.assertGreaterEqual(new,old);self.assertLessEqual(new,3*old+1e-12)
+        self.assertEqual(allocation_score(np.zeros_like(error),limits,valid,weight,shape_limits=limits,feature_balance=True),0)
+
+    def test_landform_gain_is_bounded_and_spreads_over_mountain(self):
+        axis=np.arange(-32000,32001,250.);xx,yy=np.meshgrid(axis,axis)
+        hill=1000*np.exp(-(xx*xx+yy*yy)/(2*4000**2));valid=np.ones_like(hill,dtype=bool)
+        relative=np.full_like(hill,50.);limits,weight=landform_limits(hill,valid,250.,relative)
+        gain=mixed_limits(relative)/limits
+        self.assertGreaterEqual(float(gain.min()),1.-1e-6);self.assertLessEqual(float(gain.max()),3.5+1e-6)
+        annulus=(xx*xx+yy*yy>2000**2)&(xx*xx+yy*yy<5000**2)
+        self.assertGreater(float(gain[annulus].mean()),2.)
+        self.assertLess(float(np.abs(np.diff(weight,axis=0)).max()),.2)
+        plain,w=landform_limits(xx*.03+yy*.02,valid,250.,relative)
+        center=(np.abs(xx)<4000)&(np.abs(yy)<4000)
+        self.assertLess(float(w[center].max()),1e-4)
+        np.testing.assert_allclose(plain[center],50.,atol=.01)
+        noise,w=landform_limits(np.sin(xx/100)*.5,valid,250.,relative)
+        np.testing.assert_allclose(noise,50.,atol=.01)
+
+    def test_shape_weight_is_broad_and_ignores_flat_noise(self):
+        axis=np.arange(-6400,6401,100.);xx,yy=np.meshgrid(axis,axis)
+        hill=300*np.exp(-(xx*xx+yy*yy)/(2*1800**2));valid=np.ones_like(hill,dtype=bool)
+        limits,weight=broad_shape_limits(hill,valid,100.)
+        annulus=(xx*xx+yy*yy>1200**2)&(xx*xx+yy*yy<2400**2)
+        self.assertLess(float(limits[annulus].mean()),30.)
+        self.assertGreater(float(weight[annulus].mean()),.5)
+        self.assertLess(float(np.abs(np.diff(weight,axis=0)).max()),.12)
+        plain,presence=broad_shape_limits(np.sin(xx/100)*.5,valid,100.)
+        np.testing.assert_allclose(plain,50.,atol=1e-4)
+        self.assertEqual(float(presence.max()),0.)
+        self.assertEqual(allocation_score(np.full_like(hill,1.5),limits,valid,weight,shape_limits=limits),0.)
+
+    def test_shape_weight_is_height_offset_invariant_and_masks_missing(self):
+        axis=np.arange(-3200,3201,100.);xx,yy=np.meshgrid(axis,axis)
+        hill=500*np.exp(-(xx*xx+yy*yy)/(2*1500**2));valid=np.ones_like(hill,dtype=bool);valid[:,:10]=False
+        first,w=broad_shape_limits(hill,valid,100.);second,v=broad_shape_limits(hill+3000,valid,100.)
+        np.testing.assert_allclose(first,second,atol=.001)
+        np.testing.assert_allclose(w,v,atol=.0001)
+        self.assertTrue(np.isfinite(first).all());self.assertTrue((first[~valid]==50).all())
+
     def test_absolute_error_keeps_large_relief_competitive(self):
         valid = np.ones((8, 8), dtype=bool)
         high = allocation_score(np.full((8, 8), 100.), np.full((8, 8), 100.), valid)

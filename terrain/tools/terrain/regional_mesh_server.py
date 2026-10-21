@@ -19,7 +19,7 @@ def available_budgets():
 
 def available_allocations():
  result=[]
- for mode in ['relative','balanced','terrain','terrain128','terrain128-b48000','terrain128-b96000','terrain128-b384000','terrain128-b768000']:
+ for mode in ['relative','balanced','terrain','terrain128','shape128','landform','landform128','landform-quality128','terrain128-b48000','terrain128-b96000','terrain128-b384000','terrain128-b768000']:
   path=ROOT/f'build/terrain-shared-allocation-{mode}.sqlite3'
   if not path.exists():continue
   try:
@@ -37,7 +37,7 @@ class Handler(SimpleHTTPRequestHandler):
   path=self.path.split('?')[0]
   dataset=parse_qs(urlsplit(self.path).query).get('dataset',[''])[0]
   budget=int(dataset[6:]) if re.fullmatch(r'budget(1000|2000|4000|8000|16000|32000|64000)',dataset) else None
-  allocation=dataset[11:] if re.fullmatch(r'allocation-(relative|balanced|terrain|terrain128(?:-b(?:48000|96000|384000|768000))?)',dataset) else None
+  allocation=dataset[11:] if re.fullmatch(r'allocation-(relative|balanced|terrain|shape128|landform|landform128|landform-quality128|terrain128(?:-b(?:48000|96000|384000|768000))?)',dataset) else None
   control=dataset=='control';priority=dataset in ['staged','unified'] or budget is not None or allocation is not None
   input_path=ROOT/f'build/terrain-shared-allocation-{allocation}.sqlite3' if allocation else ROOT/f'build/{BUDGET_PREFIX}-{budget}.sqlite3' if budget else ROOT/f'build/terrain-priority-{dataset}-compare.sqlite3' if priority else ROOT/'build/terrain-loop-control.sqlite3' if control else OUTPUT
   if path=='/':self.path='/national_mesh.html';return super().do_GET()
