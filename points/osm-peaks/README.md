@@ -101,7 +101,7 @@ Pages に掲載した履歴は、正式版の [history.json](https://shohei0205.
 
 | 項目 | 内容 |
 |---|---|
-| 最新版の manifest | `https://shohei0205.github.io/yamamuki-data/peaks/manifest.json`（正式版）、`https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json`（開発版） |
+| 最新版の manifest | `https://shohei0205.github.io/yamamuki-data/peaks/manifest.json`（正式版。2026-10-21 からは `{"schemaVersion": 999}`）。開発版の `peaks-dev/` は新しく作らない |
 | Release のタグ | `peaks-<version>`（正式版）、`peaks-dev-<version>`（開発版） |
 | データ本体のファイル名 | `japan-mountains.json.gz` |
 | 最後に作った正式版の Release | `peaks-20261007T084736Z-37595744056-1` |
@@ -111,11 +111,11 @@ Pages に掲載した履歴は、正式版の [history.json](https://shohei0205.
 
 版4 は新しく生成しない。公開済みの Release は残す。最新版の manifest（`peaks/manifest.json`）は、2026-10-21 に `{"schemaVersion": 999}` に置き換えて公開を終えた（Issue #48）。
 
-0.5.0 は形式の版を見て「アプリを更新してください」と表示する。ファイルを消すと通信の失敗と区別できないため、消さずに置き換えた。このあとの公開でもカタログからサイトを作り直すので、置き換えた `peaks/manifest.json` は残る。置き換えに使ったワークフローは、1 回だけ使うものなので消した。
+版4 だけを読むアプリは、形式の版を見て読めないデータと判断できる。ファイルを消すと通信の失敗と区別できないため、消さずに置き換えた。このあとの公開でもカタログからサイトを作り直すので、置き換えた `peaks/manifest.json` は残る。置き換えに使ったワークフローは、1 回だけ使うものなので消した。
 
 収録するのは OSM の `natural=peak` または `natural=volcano` の名前付きノード。way・relation と名前のないノードは含めない。名前・標高・読み・別名・解説リンクの取り方は「配るもの」の OSM タグの説明を参照する。JSON 本体の制約は [地点データの変更履歴の版4](../formats/data.md#版42026-10-0326) にある。
 
-復元用ブランチから公開する `peaks/` と、存在する場合の `peaks-dev/` の manifest・履歴は、旧形式に対応する読み手のテスト用に保持する。main / dev からの公開、地点カタログからの削除、テストデータの公開でも、既存の互換データを引き継いで同じ内容を配置する。osm-peaks の更新で互換データを上書きしない。互換データは地点カタログには含めない。存在しない互換データを新たに作成することはない。
+Pages の `peaks/` の manifest・履歴は、版4 だけを読むアプリに更新を促すために残す。main / dev からの公開、地点カタログからの削除、テストデータの公開でも、既存の互換データを引き継いで同じ内容を配置する。osm-peaks の更新で互換データを上書きしない。互換データは地点カタログには含めない。存在しない互換データを新たに作成することはない。
 
 ## 作り方
 
