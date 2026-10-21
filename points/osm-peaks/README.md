@@ -109,9 +109,9 @@ Pages に掲載した履歴は、正式版の [history.json](https://shohei0205.
 | 元データ | Geofabrik の日本全国 PBF（2026-10-06 版） |
 | ライセンス | ODbL-1.0、© OpenStreetMap contributors |
 
-版4 は新しく生成しない。公開済みの Release は残すが、最新版の manifest（`peaks/manifest.json`）は `{"schemaVersion": 999}` に置き換えて公開を終える予定（Issue #48）。
+版4 は新しく生成しない。公開済みの Release は残す。最新版の manifest（`peaks/manifest.json`）は、2026-10-21 に `{"schemaVersion": 999}` に置き換えて公開を終えた（Issue #48）。
 
-置き換えは Actions の「山頂：0.5.0 向けの公開を終える」→「Run workflow」で `main` を選んで実行する（入力なし、1 回だけ）。今の Pages のカタログを引き継ぎ、`peaks/manifest.json` だけを置き換える。0.5.0 は形式の版を見て「アプリを更新してください」と表示する。ファイルを消すと通信の失敗と区別できないため、消さずに置き換える。配置の前後に今の Pages とファイルごとに比べ、`peaks/manifest.json` と `catalog.json` 以外が変わるときや、置き換え済みのときは配置しない。比べた結果はジョブのログと Summary に出る。置き換えたあとの公開でも、カタログから作り直すので `peaks/manifest.json` は置き換えたまま残る。
+0.5.0 は形式の版を見て「アプリを更新してください」と表示する。ファイルを消すと通信の失敗と区別できないため、消さずに置き換えた。このあとの公開でもカタログからサイトを作り直すので、置き換えた `peaks/manifest.json` は残る。置き換えに使ったワークフローは、1 回だけ使うものなので消した。
 
 収録するのは OSM の `natural=peak` または `natural=volcano` の名前付きノード。way・relation と名前のないノードは含めない。名前・標高・読み・別名・解説リンクの取り方は「配るもの」の OSM タグの説明を参照する。JSON 本体の制約は [地点データの変更履歴の版4](../formats/data.md#版42026-10-0326) にある。
 

@@ -290,61 +290,6 @@ def remove_dataset(dataset, channel):
                    "- Release とデータ本体は保持します。Pages の配置後に削除が反映されます。\n")
 
 
-LEGACY_MANIFEST = "peaks/manifest.json"
-# 0.5.0 は形式の版を最初に確かめ、読めない版なら「アプリを更新してください」と表示する。
-RETIRED_MANIFEST = {"schemaVersion": 999}
-
-
-def retire_legacy_manifest():
-    """0.5.0 が読む旧形式の manifest だけを、読めない版の印に置き換える。"""
-    check_branch("stable")
-    catalog = read_catalog()
-    if catalog is None:
-        raise ValueError("既存のカタログを取得できないため置き換えを中止します")
-    if LEGACY_MANIFEST not in catalog:
-        raise ValueError(f"{LEGACY_MANIFEST} がカタログにありません")
-    if catalog[LEGACY_MANIFEST] == RETIRED_MANIFEST:
-        raise ValueError(f"{LEGACY_MANIFEST} は既に置き換え済みです")
-    manifests = dict(catalog)
-    manifests[LEGACY_MANIFEST] = dict(RETIRED_MANIFEST)
-    write_site(manifests, dict(getattr(catalog, "histories", {})))
-    output(pages_ready="true")
-    append_summary(f"\n## 0.5.0 向けの公開を終える\n\n`{LEGACY_MANIFEST}` を "
-                   f"`{json.dumps(RETIRED_MANIFEST)}` に置き換えます。ほかのファイルは今の Pages から引き継ぎます。\n")
-
-
-def read_pages_file(path):
-    request = Request(f"{pages_url()}/{path}?update={uuid.uuid4().hex}",
-                      headers={"Cache-Control": "no-cache", "User-Agent": "yamamuki-data"})
-    try:
-        with urlopen(request, timeout=60) as response:
-            return json.load(response)
-    except HTTPError as exc:
-        if exc.code == 404:
-            return None
-        raise
-
-
-def compare_pages(directory, allowed=(), *, attempts=1):
-    """配置するファイルと今の Pages を JSON として比べ、一覧をログに出す。"""
-    files = sorted(path.relative_to(directory).as_posix() for path in directory.rglob("*.json"))
-    for attempt in range(attempts):
-        rows = []
-        for path in files:
-            actual = read_pages_file(path)
-            expected = json.loads((directory / path).read_text(encoding="utf-8"))
-            rows.append((path, "新規" if actual is None else "変更なし" if actual == expected else "変更"))
-        unexpected = [path for path, state in rows if state != "変更なし" and path not in allowed]
-        if not unexpected or attempt == attempts - 1:
-            break
-        time.sleep(5)
-    table = "\n".join(f"| `{path}` | {state} |" for path, state in rows)
-    print("\n".join(f"{state}\t{path}" for path, state in rows))
-    append_summary(f"\n## 今の Pages との比較\n\n| ファイル | 状態 |\n|---|---|\n{table}\n")
-    if unexpected:
-        raise ValueError("想定外のファイルが変わります: " + ", ".join(unexpected))
-
-
 def verify_pages(directory):
     expected = json.loads((directory / "catalog.json").read_text(encoding="utf-8"))
     expected_points = {}
@@ -394,18 +339,9 @@ def main():
     removal = commands.add_parser("remove-dataset")
     removal.add_argument("--dataset", required=True)
     removal.add_argument("--channel", choices=("stable", "dev"), required=True)
-    commands.add_parser("retire-legacy")
-    comparison = commands.add_parser("compare-pages")
-    comparison.add_argument("--directory", type=Path, required=True)
-    comparison.add_argument("--allow", action="append", default=[])
-    comparison.add_argument("--attempts", type=int, default=1)
     args = parser.parse_args()
     if args.command == "remove-dataset":
         remove_dataset(args.dataset, args.channel)
-    elif args.command == "retire-legacy":
-        retire_legacy_manifest()
-    elif args.command == "compare-pages":
-        compare_pages(args.directory, args.allow, attempts=args.attempts)
     else:
         verify_pages(args.directory)
 
