@@ -1221,6 +1221,17 @@ impl<'a> Builder<'a> {
         tolerance: f64,
         min_vertices: usize,
     ) -> Result<Mesh> {
+        self.advance_with_minimum(max_vertices, tolerance, min_vertices)
+    }
+
+    /// ヒープと分割済み領域を保持したまま、次の頂点予算まで追加する。
+    pub fn advance_with_minimum(
+        &mut self,
+        max_vertices: usize,
+        tolerance: f64,
+        min_vertices: usize,
+    ) -> Result<Mesh> {
+        ensure!(max_vertices >= self.points.len(), "頂点予算を現在の頂点数より小さくできません");
         ensure!(max_vertices >= 4, "最大頂点数は4以上が必要です");
         ensure!(
             min_vertices >= 4 && min_vertices <= max_vertices && min_vertices <= self.grid.len(),
@@ -1284,11 +1295,11 @@ impl<'a> Builder<'a> {
             .iter()
             .map(|&p| [p[0] as f64, p[1] as f64, self.height_at(p)])
             .collect();
-        let mut faces: Vec<_> = self.triangles.into_iter().collect();
+        let mut faces: Vec<_> = self.triangles.iter().map(|(&id, t)| (id, t.face)).collect();
         faces.sort_unstable_by_key(|(id, _)| *id);
         Ok(Mesh {
             vertices,
-            triangles: faces.into_iter().map(|(_, t)| t.face).collect(),
+            triangles: faces.into_iter().map(|(_, face)| face).collect(),
             max_error,
             max_error_ratio,
             max_mesh_size_ratio,
@@ -1683,5 +1694,23 @@ mod locked_shared_edge_tests {
         assert!(!mesh.tolerance_reached);
         assert!(mesh.max_error_ratio.unwrap() > 1.);
         assert!(mesh.max_error > 0.1);
+    }
+}
+
+#[cfg(test)]
+mod incremental_tests {
+    use super::*;
+    #[test]
+    fn weighted_incremental_matches_one_shot() {
+        let grid: Vec<f64> = (0..65*65).map(|i| ((i%65) as f64*0.17).sin()*((i/65) as f64*0.23).cos()*300.).collect();
+        let limits: Vec<f64> = (0..grid.len()).map(|i| 10.+(i%19) as f64).collect();
+        let mut builder=Builder::new(&grid,65,65).unwrap().with_error_limits(&limits).unwrap();
+        let first=builder.advance_with_minimum(128,1.,128).unwrap();
+        let next=builder.advance_with_minimum(512,1.,512).unwrap();
+        let direct=Builder::new(&grid,65,65).unwrap().with_error_limits(&limits).unwrap().generate_with_minimum(512,1.,512).unwrap();
+        assert_eq!(next.vertices,direct.vertices);
+        assert_eq!(next.triangles,direct.triangles);
+        assert_eq!(first.vertices,&next.vertices[..first.vertices.len()]);
+        assert!(builder.advance_with_minimum(4,1.,4).is_err());
     }
 }

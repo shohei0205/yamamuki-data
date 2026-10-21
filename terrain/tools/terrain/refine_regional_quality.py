@@ -78,10 +78,10 @@ def refine_group(tiles,minimum=10,rounds=32):
  for t in tiles.values():t['faces']=triangulate(t['points'])
  return iteration+1
 
-def source_fields(level,x,y,n):
- width=1000*2**level;spacing=width/(n-1);axis=np.arange(n)*spacing;xx,yy=np.meshgrid(x*width+axis,y*width+axis);grid,_=national.source_samples(xx,yy);grid=np.rint(grid*4)/4
+def source_fields(level,x,y,n,*,width_meters=None,error_meters=None):
+ width=1000*2**level if width_meters is None else width_meters;error=ERRORS[level] if error_meters is None else error_meters;spacing=width/(n-1);axis=np.arange(n)*spacing;xx,yy=np.meshgrid(x*width+axis,y*width+axis);grid,_=national.source_samples(xx,yy);grid=np.rint(grid*4)/4
  field_spacing=max(62.5,spacing);pad=math.ceil(6000/field_spacing);core=round(width/field_spacing)+1;axis=(np.arange(core+2*pad)-pad)*field_spacing;xx,yy=np.meshgrid(x*width+axis,(y+1)*width-axis);halo,valid=national.source_samples(xx,yy)
- reference=error_limits(halo,valid,field_spacing,minimum=max(.25,ERRORS[level]*.1),maximum=ERRORS[level]);weight=np.clip(1-ridge_limits(halo,valid,field_spacing,np.zeros_like(halo))/50,0,1);field=ERRORS[level]*(1-weight)+weight*reference/(1+weight)
+ reference=error_limits(halo,valid,field_spacing,minimum=max(.25,error*.1),maximum=error);weight=np.clip(1-ridge_limits(halo,valid,field_spacing,np.zeros_like(halo))/50,0,1);field=error*(1-weight)+weight*reference/(1+weight)
  fy,fx=np.meshgrid((n-1-np.arange(n))*spacing/field_spacing+pad,np.arange(n)*spacing/field_spacing+pad,indexing='ij');limits=np.maximum(.01,np.rint(map_coordinates(field,[fy,fx],order=1)*100)/100)
  gx=map_coordinates(np.gradient(halo,field_spacing,axis=1),[fy,fx],order=1);gy=-map_coordinates(np.gradient(halo,field_spacing,axis=0),[fy,fx],order=1)
  return grid,limits,gx,gy

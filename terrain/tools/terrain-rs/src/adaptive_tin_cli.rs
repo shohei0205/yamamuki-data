@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, ValueEnum};
 use std::{
     fs::File,
-    io::{BufReader, BufWriter, Write},
+    io::{BufRead, BufReader, BufWriter, Write},
     path::PathBuf,
     time::Instant,
 };
@@ -19,6 +19,12 @@ enum Encoding {
 struct Args {
     #[arg(long)]
     input: PathBuf,
+    /// 標準入力の各行で頂点上限を受け取り、局所更新状態を再利用する。
+    #[arg(long)]
+    incremental: bool,
+    /// 継続生成で誤差条件を満たした後も指定頂点数まで追加する。
+    #[arg(long, requires = "incremental")]
+    fill_budget: bool,
     /// 共有境界を先に固定して生成する。
     #[arg(long)]
     seamless: bool,
@@ -131,6 +137,7 @@ fn main() -> Result<()> {
             "入力と出力は別のファイルにしてください"
         );
     }
+    ensure!(!args.incremental || (args.error_limits.is_some() && args.neighbor_ratio.is_none() && args.mesh_sizes.is_none()), "継続生成は許容誤差PNGのみと併用してください");
     let start = Instant::now();
     let (width, height, values) = read_png(&args.input, args.encoding, args.scale, args.offset)?;
     ensure!(
@@ -225,7 +232,21 @@ fn main() -> Result<()> {
             w == width && h == height,
             "許容誤差PNGの大きさが標高PNGと一致しません"
         );
-        let builder = builder.with_error_limits(&limits)?;
+        let mut builder = builder.with_error_limits(&limits)?;
+        if args.incremental {
+            let mut stdout = std::io::stdout().lock();
+            for line in std::io::stdin().lock().lines() {
+                let target: usize = line?.trim().parse().context("頂点上限は整数で指定してください")?;
+                ensure!(target <= args.max_vertices, "起動時の頂点上限を超えています");
+                let mut snapshot = builder.advance_with_minimum(target, 1., if args.fill_budget { target } else { args.min_vertices })?;
+                for point in &mut snapshot.vertices { point[0] *= args.spacing; point[1] *= args.spacing; }
+                let mut writer = BufWriter::new(File::create(&args.output)?);
+                serde_json::to_writer(&mut writer, &snapshot)?; writer.flush()?;
+                writeln!(stdout, "{}", serde_json::json!({"vertices":snapshot.vertices.len(),"seconds":start.elapsed().as_secs_f64()}))?;
+                stdout.flush()?;
+            }
+            return Ok(());
+        }
         if let Some(ratio) = args.neighbor_ratio {
             builder.generate_neighbor_balanced(args.max_vertices, 1., ratio)?
         } else {
