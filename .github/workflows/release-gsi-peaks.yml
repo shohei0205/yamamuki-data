@@ -36,7 +36,7 @@ jobs:
           python points/gsi-peaks/scripts/release_snapshot.py prepare --version "$version" --channel dev
       - name: 作業ブランチの生成物を保存
         if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gsi-peaks-test-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/gsi-release/
