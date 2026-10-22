@@ -414,6 +414,8 @@ pub struct Builder<'a> {
     grid: &'a [f64],
     inverse_limits: Option<Vec<f64>>,
     inverse_mesh_sizes: Option<Vec<f64>>,
+    tile_budget: Option<TileBudgetState>,
+    detail: Option<DetailState>,
     width: usize,
     height: usize,
     points: Vec<Point>,
@@ -455,6 +457,8 @@ impl<'a> Builder<'a> {
             grid,
             inverse_limits: None,
             inverse_mesh_sizes: None,
+            tile_budget: None,
+            detail: None,
             width,
             height,
             points: vec![
@@ -531,7 +535,8 @@ impl<'a> Builder<'a> {
                 continue;
             }
             let p = [x as i64, y as i64];
-            let mut id = *self.triangles.keys().min().unwrap();
+            // 直前に作った面は必ず残る。面ID全体の走査を避け、隣接面を歩いて探す。
+            let mut id = self.next_id - 1;
             let mut count = 0;
             loop {
                 let f = self.triangles[&id].face;
@@ -640,6 +645,9 @@ impl<'a> Builder<'a> {
         let za = self.height_at(a);
         let db = self.height_at(b) - za;
         let dc = self.height_at(c) - za;
+        let normal_plane=self.detail.as_ref().and_then(|s|s.normal_spacing).map(|spacing|[
+            (db*(c[1]-a[1]) as f64-dc*(b[1]-a[1]) as f64)/area/spacing,
+            (dc*(b[0]-a[0]) as f64-db*(c[0]-a[0]) as f64)/area/spacing]);
         let low = a[1].min(b[1]).min(c[1]);
         let high = a[1].max(b[1]).max(c[1]).min(self.height as i64 - 1);
         let mut best = Triangle {
@@ -687,16 +695,19 @@ impl<'a> Builder<'a> {
                     continue;
                 }
                 self.samples += 1;
-                let error = ((self.grid[sample] - za)
+                let absolute_error = ((self.grid[sample] - za)
                     - (e2 as f64 / area * db + e0 as f64 / area * dc))
                     .abs();
-                best.absolute_error = best.absolute_error.max(error);
-                let error = error
+                best.absolute_error = best.absolute_error.max(absolute_error);
+                let error = absolute_error
                     * self
                         .inverse_limits
                         .as_ref()
                         .map_or(1., |limits| limits[sample]);
                 best.height_error = best.height_error.max(error);
+                // 生の標高差で候補を除外してから、優先度の最大点を選ぶ。
+                if self.detail.as_ref().is_some_and(|s|s.minimum_height_error>0.&&absolute_error<=s.minimum_height_error) {continue;}
+
                 // 境界も誤差の集計に含めるが、共有頂点以外は追加候補にしない。
                 if self.lock_boundary
                     && (x == 0
@@ -705,6 +716,11 @@ impl<'a> Builder<'a> {
                         || y == self.height as i64 - 1)
                 {
                     continue;
+                }
+                if let Some(state) = &mut self.tile_budget {
+                    let cell=state.cell(x as usize,y as usize);
+                    state.errors[cell]=state.errors[cell].max(error);
+                    if !state.can_insert(cell) { continue; }
                 }
                 let size_error = self.inverse_mesh_sizes.as_ref().map_or(0., |sizes| {
                     let distance = [a, b, c]
@@ -715,6 +731,19 @@ impl<'a> Builder<'a> {
                 });
                 best.size_error = best.size_error.max(size_error);
                 let error = error.max(size_error);
+                let error=if let Some(s)=&self.detail {
+                    if s.blocked.contains(&sample){continue;}
+                    let normal_score=if let Some(plane)=normal_plane {
+                        let (xx,yy)=(x as usize,y as usize);let spacing=s.normal_spacing.unwrap();
+                        let (xl,xr)=(xx.saturating_sub(2),(xx+2).min(self.width-1));
+                        let (yl,yr)=(yy.saturating_sub(2),(yy+2).min(self.height-1));
+                        let source=[(self.grid[yy*self.width+xr]-self.grid[yy*self.width+xl])/((xr-xl) as f64*spacing),
+                            (self.grid[yr*self.width+xx]-self.grid[yl*self.width+xx])/((yr-yl) as f64*spacing)];
+                        // 10度相当の法線差を高さ誤差1相当とする。高さが一致する面への無意味な挿入は避ける。
+                        normal_distance(plane,source)/0.1743114855*s.max_error*self.inverse_limits.as_ref().map_or(1.,|v|v[sample])*(absolute_error/2.).min(1.)
+                    } else {0.};
+                    (error+normal_score)/(1.+s.count(x as usize,y as usize)/s.threshold)
+                } else {error};
                 if error > best.error || (error == best.error && sample < best.sample) {
                     best.error = error;
                     best.sample = sample;
@@ -752,13 +781,20 @@ impl<'a> Builder<'a> {
     }
 
     fn worst(&mut self) -> Entry {
-        while !self
-            .triangles
-            .contains_key(&self.heap.peek().expect("三角形のヒープ").triangle)
-        {
-            self.heap.pop();
+        loop {
+            let top=*self.heap.peek().expect("三角形のヒープ");
+            let Some(t)=self.triangles.get(&top.triangle) else { self.heap.pop();continue; };
+            if top.sample!=t.sample || top.error!=t.error {self.heap.pop();continue;}
+            if top.error>0. && self.tile_budget.as_ref().is_some_and(|state| {
+                let cell=state.cell(top.sample%self.width,top.sample/self.width);
+                !state.can_insert(cell)
+            }) {
+                let face=t.face;self.heap.pop();let triangle=self.evaluate(face);
+                self.heap.push(Entry{error:triangle.error,triangle:top.triangle,sample:triangle.sample});
+                self.triangles.insert(top.triangle,triangle);continue;
+            }
+            return top;
         }
-        *self.heap.peek().unwrap()
     }
 
     fn insert(&mut self, entry: Entry) -> Result<()> {
@@ -926,7 +962,8 @@ impl<'a> Builder<'a> {
         );
         for sample in seeds {
             let p = [(sample % n) as i64, (sample / n) as i64];
-            let mut id = *self.triangles.keys().min().unwrap();
+            // 直前に作った面は必ず残る。面ID全体の走査を避け、隣接面を歩いて探す。
+            let mut id = self.next_id - 1;
             let mut count = 0;
             loop {
                 let f = self.triangles[&id].face;
@@ -1714,3 +1751,40 @@ mod incremental_tests {
         assert!(builder.advance_with_minimum(4,1.,4).is_err());
     }
 }
+
+
+#[cfg(test)]
+mod seed_location_tests {
+    use super::*;
+
+    #[test]
+    fn recent_face_walk_matches_full_search() {
+        let n = 33;
+        let grid = (0..n*n).map(|i| ((i*17+i/7)%101) as f64).collect::<Vec<_>>();
+        let seeds = (0..700).map(|i| [(i*17)%n, (i*13+i/n)%n]).collect::<Vec<_>>();
+        let fast = Builder::new(&grid,n,n).unwrap().with_seed_points(&seeds,n*n).unwrap();
+        let mut slow = Builder::new(&grid,n,n).unwrap();
+        for &[x,y] in &seeds {
+            let sample = y*n+x;
+            if slow.selected[sample] {continue;}
+            let p = [x as i64,y as i64];
+            let triangle = slow.triangles.iter().filter(|(_,t)| {
+                let f=t.face;
+                orient(slow.points[f[0]],slow.points[f[1]],p)>=0 &&
+                orient(slow.points[f[1]],slow.points[f[2]],p)>=0 &&
+                orient(slow.points[f[2]],slow.points[f[0]],p)>=0
+            }).map(|(&id,_)|id).min().unwrap();
+            slow.insert(Entry{triangle,sample,error:0.}).unwrap();
+        }
+        assert_eq!(fast.points,slow.points);
+        fn faces(b:&Builder<'_>)->Vec<[usize;3]> {
+            let mut out=b.triangles.values().map(|t|{let mut f=t.face;f.sort_unstable();f}).collect::<Vec<_>>();
+            out.sort_unstable();out
+        }
+        assert_eq!(faces(&fast),faces(&slow));
+    }
+}
+
+include!("tile_budget.rs");
+
+include!("detail_budget.rs");

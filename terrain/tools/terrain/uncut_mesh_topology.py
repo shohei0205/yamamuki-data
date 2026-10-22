@@ -2,6 +2,7 @@
 import json, sqlite3, struct, zlib
 from collections import defaultdict, deque
 from pathlib import Path
+from contextlib import closing
 import numpy as np
 from national_independent_mesh import ROOT
 
@@ -54,7 +55,7 @@ def vertex_normals(p,f):
     length=np.linalg.norm(sums,axis=1);return sums/np.maximum(length[:,None],1e-20)
 
 
-def tile_topology(p,f,width=8000.,rings=5,ranks=None):
+def tile_topology(p,f,width=8000.,rings=5,ranks=None,sample_count=257):
     incident=[[] for _ in p]
     for i,tri in enumerate(f):
         for v in tri:incident[v].append(i)
@@ -73,7 +74,7 @@ def tile_topology(p,f,width=8000.,rings=5,ranks=None):
             front={int(v) for v in f[list(added)].ravel()}-seen if added else set();seen|=front
         ids=core+sorted(selected-set(core));tri=f[ids];used,idx=np.unique(tri,return_inverse=True)
         points=p[used].copy();points[:,:2]-=[x*width,y*width]
-        body=struct.pack('<4sIIII',b'YNU2',257,len(used),len(tri)*3,len(core)*3)+points.astype('<f4').tobytes()+idx.astype('<u4').tobytes()+normals[used].astype('<f4').tobytes()+(np.asarray(ranks)[used] if ranks is not None else np.full(len(used),-1)).astype('<f4').tobytes()
+        body=struct.pack('<4sIIII',b'YNU2',sample_count,len(used),len(tri)*3,len(core)*3)+points.astype('<f4').tobytes()+idx.astype('<u4').tobytes()+normals[used].astype('<f4').tobytes()+(np.asarray(ranks)[used] if ranks is not None else np.full(len(used),-1)).astype('<f4').tobytes()
         yield (x,y),zlib.compress(body,9),len(core)
 
 
@@ -89,7 +90,7 @@ def update_metrics(db,manifest):
 
 
 def rebuild(path):
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         manifest=json.loads(db.execute('SELECT value FROM metadata WHERE key="manifest"').fetchone()[0])
         if manifest['sharedAllocation'].get('topology')=='uncut-halo-v3':
             update_metrics(db,manifest);return

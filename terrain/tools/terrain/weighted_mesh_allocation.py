@@ -81,7 +81,35 @@ def allocation_score(error, relative, valid, terrain_weight=None, shape_limits=N
     return base+min(feature,2.*previous)
 
 
-def split_mesh(points, faces, width=32000., tile_width=8000.):
+
+def triangulate_clipped_polygon(ids, points):
+    """丸めでわずかに凹んだ多角形も、面を裏返さずに三角形へ分ける。"""
+    ids = list(ids)
+    if len(ids) < 3: return []
+    xy = {i: np.asarray(points[i])[:2] for i in ids}
+    def cross(a, b, c):
+        u, v = xy[b] - xy[a], xy[c] - xy[a]
+        return float(u[0] * v[1] - u[1] * v[0])
+    signed = sum(xy[a][0]*xy[b][1]-xy[a][1]*xy[b][0] for a,b in zip(ids,ids[1:]+ids[:1]))
+    if signed < 0: ids.reverse()
+    output = []
+    while len(ids) > 3:
+        for i, b in enumerate(ids):
+            a, c = ids[i-1], ids[(i+1)%len(ids)]
+            if cross(a,b,c) <= 0: continue
+            if any(cross(a,b,d)>=0 and cross(b,c,d)>=0 and cross(c,a,d)>=0 for d in ids if d not in (a,b,c)): continue
+            output.append([a,b,c]);ids.pop(i);break
+        else:
+            # 面積ゼロの辺上点は取り除ける。負の面を反転すると重なりになる。
+            for i,b in enumerate(ids):
+                if cross(ids[i-1],b,ids[(i+1)%len(ids)]) == 0:
+                    ids.pop(i);break
+            else: raise ValueError('クリップした多角形を三角形分割できません')
+    if len(ids)==3 and cross(*ids)>0: output.append(ids)
+    return output
+
+
+def _split_crossing_mesh(points, faces, width=32000., tile_width=8000.):
     """三角形を長方形でクリップし、共有交点の高さを一度だけ確定する。"""
     points = np.asarray(points, dtype=float)
     result = {}
@@ -127,10 +155,27 @@ def split_mesh(points, faces, width=32000., tile_width=8000.):
                         ids.append(index)
                 if len(ids) > 1 and ids[0] == ids[-1]:
                     ids.pop()
-                for i in range(1, len(ids) - 1):
-                    f = [ids[0], ids[i], ids[i + 1]]
-                    a, b, c = np.asarray([tile['points'][v][:2] for v in f])
-                    cross = float(np.linalg.det(np.column_stack([b - a, c - a])))
-                    if abs(cross) > 1e-8:
-                        tile['faces'].append(f if cross > 0 else f[::-1])
+                tile['faces'].extend(triangulate_clipped_polygon(ids, tile['points']))
     return {k: dict(points=np.asarray(t['points']), faces=np.asarray(t['faces'], dtype=np.uint32)) for k, t in result.items() if t['faces']}
+
+
+
+def split_mesh(points,faces,width=32000.,tile_width=8000.):
+    """保存境界をまたがない面をまとめ、交差面だけ従来のクリップで処理する。"""
+    points=np.asarray(points,float);faces=np.asarray(faces,np.uint32)
+    if np.any(np.abs(points[:,:2]*256-np.rint(points[:,:2]*256))>1e-7) or np.any(np.abs(points[:,2]*1024-np.rint(points[:,2]*1024))>1e-7):return _split_crossing_mesh(points,faces,width,tile_width)
+    divisions=round(width/tile_width);q=points[faces,:2];lo=np.maximum(0,np.floor(q.min(axis=1)/tile_width).astype(int));hi=np.minimum(divisions-1,np.floor(q.max(axis=1)/tile_width).astype(int));inside=np.all(lo==hi,axis=1)
+    crossing=_split_crossing_mesh(points,faces[~inside],width,tile_width);result={};owners=lo[:,1]*divisions+lo[:,0]
+    for owner in np.unique(owners[inside]):
+        x=int(owner%divisions);y=int(owner//divisions);selected=faces[inside&(owners==owner)];used,indices=np.unique(selected,return_inverse=True);p=points[used].copy();p[:,:2]-=[x*tile_width,y*tile_width];f=indices.reshape(-1,3)
+        part=crossing.pop((x,y),None)
+        if part is not None:
+            lookup={tuple(v[:2]):i for i,v in enumerate(p)};extra=[];remap=[]
+            for v in part['points']:
+                key=tuple(v[:2]);index=lookup.get(key)
+                if index is None:index=len(p)+len(extra);lookup[key]=index;extra.append(v)
+                remap.append(index)
+            if extra:p=np.vstack([p,extra])
+            f=np.vstack([f,np.asarray(remap)[part['faces']]])
+        result[x,y]=dict(points=p,faces=np.asarray(f,np.uint32))
+    result.update(crossing);return result

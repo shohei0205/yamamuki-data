@@ -40,11 +40,42 @@ struct Args {
     /// 隣接面の最長辺の比がこの値を超えた場所だけを追加頂点で補う。
     #[arg(long)]
     neighbor_ratio: Option<f64>,
+    /// 配分セルの一辺を標高格子の画素数で指定する。
+    #[arg(long)]
+    tile_pixels: Option<usize>,
+    #[arg(long, default_value_t=64)]
+    tile_base: usize,
+    #[arg(long, default_value_t=2)]
+    tile_radius: usize,
+    #[arg(long)]
+    tile_no_sharing: bool,
+    #[arg(long,default_value_t=0)]
+    tile_offset: usize,
+    #[arg(long,requires="tile_pixels")]
+    tile_global_pool: bool,
+    #[arg(long)]
+    detail_client: bool,
+    #[arg(long,default_value_t=128.)]
+    detail_radius: f64,
+    #[arg(long,default_value_t=256.)]
+    detail_density: f64,
+    #[arg(long,default_value_t=25.)]
+    detail_error: f64,
+    /// 共通追加枠で元DEMと三角形の法線差も評価する。指定値は格子間隔m。
+    #[arg(long,requires="detail_client")]
+    detail_normal_spacing: Option<f64>,
+    /// この値以下の生の標高誤差は共通追加枠の候補にしない。
+    #[arg(long,requires="detail_client")]
+    detail_min_error: Option<f64>,
+    #[arg(long,default_value_t=864)]
+    tile_window_limit: usize,
     #[arg(long, default_value_t = 0.01)]
     mesh_size_scale: f64,
     /// 元の標高格子のXYで、山頂として残す頂点のJSON配列。
     #[arg(long)]
     seed_points: Option<PathBuf>,
+    #[arg(long)]
+    seed_mesh: Option<PathBuf>,
     #[arg(long, default_value_t = 0.01)]
     error_limit_scale: f64,
     /// 比較用の挿入履歴を生成する頂点上限の列。
@@ -188,6 +219,11 @@ fn main() -> Result<()> {
         "山頂の固定は通常の独立TINで指定してください"
     );
     let builder = adaptive_tin::Builder::new(&values, width, height)?;
+    let builder=if let Some(path)=&args.seed_mesh {
+        #[derive(serde::Deserialize)]struct SeedMesh {vertices:Vec<[usize;2]>,triangles:Vec<[usize;3]>}
+        let mesh:SeedMesh=serde_json::from_reader(BufReader::new(File::open(path)?))?;
+        builder.with_seed_mesh(&mesh.vertices,&mesh.triangles)?
+    } else {builder};
     let builder = if let Some(path) = &args.seed_points {
         let seeds: Vec<[usize; 2]> = serde_json::from_reader(BufReader::new(File::open(path)?))?;
         builder.with_seed_points(&seeds, args.max_vertices)?
@@ -222,6 +258,8 @@ fn main() -> Result<()> {
     } else {
         builder
     };
+    let mut tile_report=None;
+    ensure!(args.tile_pixels.is_none() || (!args.incremental && args.neighbor_ratio.is_none() && args.mesh_sizes.is_none() && args.error_limits.is_some()), "セル配分は許容誤差PNGと単独で使ってください");
     let mut mesh = if let Some(path) = &args.error_limits {
         ensure!(
             args.error_limit_scale.is_finite() && args.error_limit_scale > 0.,
@@ -233,6 +271,19 @@ fn main() -> Result<()> {
             "許容誤差PNGの大きさが標高PNGと一致しません"
         );
         let mut builder = builder.with_error_limits(&limits)?;
+        if args.detail_client {
+            let mut client=builder.start_detail(args.detail_radius,args.detail_density,10.,args.detail_error)?;
+            if let Some(error)=args.detail_min_error {client=client.with_detail_minimum_error(error)?;}
+            if let Some(spacing)=args.detail_normal_spacing {client=client.with_detail_normals(spacing)?;}
+            let mut stdout=std::io::stdout().lock();let (priority,sample)=client.detail_next();
+            writeln!(stdout,"{}",serde_json::json!({"ready":true,"priority":priority,"sample":sample}))?;stdout.flush()?;
+            for line in std::io::stdin().lock().lines(){match line?.trim(){
+                "step"=>{let height_error=client.detail_next_height_error();let inserted=client.detail_step()?;let (priority,sample)=client.detail_next();writeln!(stdout,"{}",serde_json::json!({"inserted":inserted,"heightError":height_error,"priority":priority,"sample":sample}))?;}
+                "save"=>{let mut mesh=client.detail_snapshot()?;for p in &mut mesh.vertices {p[0]*=args.spacing;p[1]*=args.spacing;}
+                    let mut writer=BufWriter::new(File::create(&args.output)?);serde_json::to_writer(&mut writer,&mesh)?;writer.flush()?;writeln!(stdout,"{}",serde_json::json!({"saved":true}))?;}
+                _=>bail!("追加枠の操作はstepまたはsaveを指定してください"),
+            }stdout.flush()?;}return Ok(());
+        }
         if args.incremental {
             let mut stdout = std::io::stdout().lock();
             for line in std::io::stdin().lock().lines() {
@@ -247,7 +298,27 @@ fn main() -> Result<()> {
             }
             return Ok(());
         }
-        if let Some(ratio) = args.neighbor_ratio {
+        if let Some(pixels)=args.tile_pixels {
+            ensure!(pixels>0 && args.max_vertices>=args.tile_base*((width-1)/pixels)*((height-1)/pixels),"全セルの基準予算が全体上限を超えています");
+            if args.tile_global_pool {
+                ensure!(args.tile_offset==0 && !args.tile_no_sharing,"全域プールは原点移動・譲渡なしと併用できません");
+                let mut client=builder.start_global_tile_pool(pixels,args.tile_base,args.tile_window_limit)?;
+                let mut stdout=std::io::stdout().lock();
+                let (priority,sample)=client.global_pool_next(args.max_vertices);
+                writeln!(stdout,"{}",serde_json::json!({"ready":true,"priority":priority,"sample":sample,"allocation":client.global_pool_state()}))?;stdout.flush()?;
+                for line in std::io::stdin().lock().lines() {
+                    match line?.trim() {
+                        "step"=>{let inserted=client.global_pool_step(args.max_vertices)?;let (priority,sample)=client.global_pool_next(args.max_vertices);writeln!(stdout,"{}",serde_json::json!({"inserted":inserted,"priority":priority,"sample":sample}))?;}
+                        "save"=>{let (mut mesh,state)=client.global_pool_snapshot()?;for p in &mut mesh.vertices {p[0]*=args.spacing;p[1]*=args.spacing;}
+                            let max_window=state.maximum_window_load();let mut value=serde_json::to_value(mesh)?;value["tileAllocation"]=serde_json::to_value(state)?;
+                            let mut writer=BufWriter::new(File::create(&args.output)?);serde_json::to_writer(&mut writer,&value)?;writer.flush()?;
+                            writeln!(stdout,"{}",serde_json::json!({"saved":true,"maximumWindowLoad":max_window}))?;}
+                        _=>bail!("全域プールの操作はstepまたはsaveを指定してください"),
+                    }stdout.flush()?;
+                }return Ok(());
+            }
+            let (mesh,report)=builder.generate_tile_budgets_offset(pixels,args.tile_base,args.tile_radius,!args.tile_no_sharing,args.tile_offset)?;tile_report=Some(report);mesh
+        } else if let Some(ratio) = args.neighbor_ratio {
             builder.generate_neighbor_balanced(args.max_vertices, 1., ratio)?
         } else {
             builder.generate_with_minimum(args.max_vertices, 1., args.min_vertices)?
@@ -271,7 +342,9 @@ fn main() -> Result<()> {
     }
     let report = serde_json::json!({"width":width,"height":height,"vertices":mesh.vertices.len(),"triangles":mesh.triangles.len(),"maxError":mesh.max_error,"maxErrorRatio":mesh.max_error_ratio,"maxMeshSizeRatio":mesh.max_mesh_size_ratio,"balance":mesh.balance,"toleranceReached":mesh.tolerance_reached,"seconds":start.elapsed().as_secs_f64(),"triangleEvaluations":mesh.triangle_evaluations,"sampleEvaluations":mesh.sample_evaluations});
     let mut writer = BufWriter::new(File::create(&args.output)?);
-    serde_json::to_writer(&mut writer, &mesh)?;
+    let mut output=serde_json::to_value(&mesh)?;
+    if let Some(report)=tile_report {output["tileAllocation"]=serde_json::to_value(report)?;}
+    serde_json::to_writer(&mut writer, &output)?;
     writer.flush()?;
     println!("{}", report);
     Ok(())

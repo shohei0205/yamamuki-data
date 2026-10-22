@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ja"><meta charset="utf-8"><title>土地被覆の保存方式を比較</title>
+<style>body{font:15px system-ui;background:#f5f6f3;color:#223025;margin:20px}select,input{font:inherit}header{position:sticky;top:0;background:#f5f6f3;padding:8px;z-index:1}table{border-collapse:collapse;margin:16px 0}td,th{padding:7px 15px;border-bottom:1px solid #ccd1c8;text-align:right}td:nth-child(1),th:nth-child(1){text-align:left}.views{display:flex;gap:15px}.panel{width:50%;min-width:0}.frame{height:65vh;overflow:auto;background:#fff;border:1px solid #ccc}img{display:block;max-width:none;transform:scaleY(-1)}small{display:block;margin:8px 0}button{font:inherit}h1{font-size:22px}</style>
+<header><h1>土地被覆テクスチャの保存方式比較</h1>
+地域 <select id="region"><option value="tsukuba">筑波山・関東平野</option><option value="fuji">富士山</option><option value="yari">槍ヶ岳</option></select>
+解像度 <select id="size"><option>512</option><option selected>1024</option><option>2048</option></select>
+拡大 <select id="zoom"><option value="1">1倍</option><option value="2">2倍</option><option value="4">4倍</option></select>
+比較 <select id="mode"></select><small>追加の平滑化なし。128 km 四方を分類ごとの面積比で縮小。左は RGB 面積平均、右は保存・復元後。スクロールは同期します。</small>
+<small id="note"></small><a href="/?dataset=allocation-error-detail20-direct-e800-mixed&amp;region=tsukuba&amp;level=3&amp;curve=loop&amp;divisions=2&amp;smooth=1&amp;texture=surface&amp;meshShade=1&amp;landColorSize=1024&amp;landColorCodec=astc8&amp;priorityVertices=0&amp;poolVertices=0" target="_blank" rel="noopener">3D地形でASTC 8×8を比較</a></header>
+<div class="views"><div class="panel"><b>基準：RGB 面積平均</b><div class="frame" id="left"><img id="reference"></div></div><div class="panel"><b id="caption"></b><div class="frame" id="right"><img id="preview"></div></div></div>
+<table><thead><tr><th>方式</th><th>保存容量</th><th>基準比</th><th>RGB RMSE</th><th>GPU ベース容量※</th></tr></thead><tbody id="rows"></tbody></table>
+<p>※ RGB は RGB8、分類は R8、2分類は RG8、パレットは R8＋色表を独自シェーダーで参照する場合の目安。通常の PNG 読み込みでは RGB/RGBA に展開されます。ミップマップ・作業メモリー・実装用ヘッダーは含みません。ASTC は実圧縮サイズ、表示画像は復号した PNG です。KTX2/Basis は今回未測定です。</p>
+<p>分類方式は配色を変更できます。パレット PNG は混色済みの色番号なので、元の分類比率は復元できません。2分類方式も第3位以下の分類（水域を含む）を落とす場合があります。</p>
+<p>© ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium. 独自配色・縮小・再投影。<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a></p>
+<script>
+const $=id=>document.getElementById(id),format=n=>(n/1024).toFixed(1)+' KiB';let data;
+function update(){if(!data)return;const selected=data.rows.filter(r=>r.region===$('region').value&&r.size===+$('size').value),old=$('mode').value;$('mode').replaceChildren(...selected.map(r=>new Option(r.label,r.mode)));$('mode').value=selected.some(r=>r.mode===old)?old:'two';show();const baseline=selected.find(r=>r.mode==='rgb').bytes;$('rows').replaceChildren(...selected.map(r=>{const tr=document.createElement('tr');for(const value of [r.label,format(r.bytes),(100*r.bytes/baseline).toFixed(1)+'%',r.rmse.toFixed(2),format(r.gpuBytes)]){const td=document.createElement('td');td.textContent=value;tr.append(td)}tr.onclick=()=>{$('mode').value=r.mode;show()};return tr}));$('note').textContent=data.complete?'全3地域・3解像度の比較が完了':'生成中：完了した組み合わせから表示';}
+function show(){const item=data.rows.find(r=>r.region===$('region').value&&r.size===+$('size').value&&r.mode===$('mode').value);if(!item)return;$('reference').src='/landcover-compare/'+item.region+'-'+item.size+'-reference.png';$('preview').src='/landcover-compare/'+item.preview;$('caption').textContent=item.label+'／'+format(item.bytes)+'／RGB RMSE '+item.rmse.toFixed(2);for(const image of document.querySelectorAll('img'))image.style.width=item.size*+$('zoom').value+'px';}
+for(const id of ['region','size'])$(id).onchange=update;for(const id of ['mode','zoom'])$(id).onchange=show;
+let lock=false;for(const [a,b] of [['left','right'],['right','left']])$(a).onscroll=()=>{if(lock)return;lock=true;$(b).scrollTop=$(a).scrollTop;$(b).scrollLeft=$(a).scrollLeft;requestAnimationFrame(()=>lock=false)};
+fetch('/landcover-compare/report.json').then(r=>{if(!r.ok)throw Error('比較データは生成中です');return r.json()}).then(r=>{data=r;update()}).catch(e=>$('note').textContent=e.message);
+</script></html>

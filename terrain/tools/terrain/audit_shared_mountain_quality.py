@@ -5,7 +5,7 @@ from compare_priority_from_start import national, raster, ROOT
 
 
 def local_errors(mode):
-    national.initialize(ROOT/'build/terrain-lod.sqlite3','')
+    national.initialize(ROOT/'build/terrain-lod.sqlite3',getattr(national,'BINARY',''))
     output={}
     with sqlite3.connect(ROOT/f'build/terrain-shared-allocation-{mode}.sqlite3') as db:
         manifest=json.loads(db.execute('SELECT value FROM metadata WHERE key="manifest"').fetchone()[0])

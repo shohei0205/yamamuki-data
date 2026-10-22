@@ -1,10 +1,17 @@
 import unittest
 import numpy as np
 from scipy.spatial import Delaunay
-from weighted_mesh_allocation import mixed_limits, allocation_score, split_mesh, broad_shape_limits, landform_limits, movable_priority
+from weighted_mesh_allocation import mixed_limits, allocation_score, split_mesh, broad_shape_limits, landform_limits, movable_priority, triangulate_clipped_polygon
 
 
 class AllocationTests(unittest.TestCase):
+    def test_clipped_rounding_does_not_reverse_small_concave_ear(self):
+        p=np.array([[0,0],[4,0],[4,4],[2,3.999],[0,4]],dtype=float)
+        f=np.asarray(triangulate_clipped_polygon(list(range(5)),p))
+        t=p[f];area=np.linalg.det(np.stack([t[:,1]-t[:,0],t[:,2]-t[:,0]],axis=2))/2
+        self.assertTrue((area>0).all())
+        self.assertAlmostEqual(float(area.sum()),15.998)
+
     def test_movable_maximum_does_not_hide_one_peak_or_select_fixed_edges(self):
         limits=np.full((20,20),10.);valid=np.ones((20,20),dtype=bool)
         one_peak=np.zeros((20,20));one_peak[10,10]=100.;one_peak[0,:]=10000.

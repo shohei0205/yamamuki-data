@@ -1,0 +1,30 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>地形の頂点予算・近傍配分比較</title>
+<style>body{font:15px system-ui;margin:20px;color:#243342;background:#f4f7f9}button,select,a{margin:4px;padding:7px}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}section{background:white;padding:16px;border-radius:8px}svg{width:100%;display:block}p{line-height:1.7}#error{color:#a22}table{border-collapse:collapse}td,th{padding:7px 14px;border-bottom:1px solid #ccc;text-align:right}h1{font-size:22px}small{display:block;line-height:1.6}</style>
+<h1>地形の頂点予算・近傍配分比較</h1>
+<label>地域 <select id="region"><option value="tsukuba">筑波山</option><option value="fuji">富士山</option><option value="yari">槍ヶ岳</option></select></label>
+<label>再配分 <select id="policy"><option value="unlimited">共通プール・3×3上限なし</option><option value="global">共通プール＋3×3上限</option><option value="neighbor">近傍へ譲渡（従来）</option></select></label>
+<label><input type="checkbox" id="shift">配分の区切りを東西・南北とも4 kmずらす</label>
+<a id="before" target="_blank">譲渡なしを3D表示</a><a id="after" target="_blank">再配分後を3D表示</a>
+<p id="description">試作：各地域128×128 km。8×8 kmあたり基準64頂点、受け取り後は最大128頂点。近傍2タイルへ、残存誤差と距離に応じて未使用枠を譲ります。区切りをずらした端の部分タイルは面積に比例した予算です。頂点は所属セルで一度だけ数え、表示用の重複は含めません。</p>
+<div id="error"></div><div id="summary"></div><main id="maps"></main>
+<p>使用数：白～濃い緑（各比較の最大点数で色付け）。予算増減：青が提供、橙が受け取り、白が変化なし。セルにマウスを置くと詳細を表示します。TINは周辺と一体で生成し、保存境界で面を切りません。共通プールでは3つの128 km地域を通じて再配分します。全国全域の生成は未実施です。最終的な三角形の角度条件達成も保証していません。配分原点をずらすと山の近傍誤差が変わる問題も残っており、全国用の確定方式ではありません。</p>
+<script>
+const $=id=>document.getElementById(id),NS='http://www.w3.org/2000/svg';let generation=0;
+function element(tag,props){const e=document.createElementNS(NS,tag);for(const [k,v] of Object.entries(props))e.setAttribute(k,v);return e;}
+function panel(title,a,values,kind,scale){const section=document.createElement('section'),h=document.createElement('h2');h.textContent=title;section.append(h);const svg=element('svg',{viewBox:'-2 -2 132 132',role:'img','aria-label':title});section.append(svg);
+ for(let i=0;i<values.length;i++){const col=i%a.columns,row=Math.floor(i/a.columns),x=Math.max(0,(col*a.pixels-(a.offset||0))*31.25/1000),y=Math.max(0,(row*a.pixels-(a.offset||0))*31.25/1000),right=Math.min(128,((col+1)*a.pixels-(a.offset||0))*31.25/1000),top=Math.min(128,((row+1)*a.pixels-(a.offset||0))*31.25/1000),v=values[i];
+ const t=Math.min(1,Math.abs(v)/scale),color=kind==='change'?(v>0?`rgb(255,${255-Math.round(130*t)},${255-Math.round(220*t)})`:`rgb(${255-Math.round(190*t)},${255-Math.round(100*t)},255)`):`rgb(${250-Math.round(220*Math.min(1,v/scale))},${250-Math.round(140*Math.min(1,v/scale))},${250-Math.round(170*Math.min(1,v/scale))})`;
+ const rect=element('rect',{x,y:128-top,width:right-x,height:top-y,fill:color,stroke:'#8798a8','stroke-width':.10});const tip=element('title',{});tip.textContent=`セル ${col},${row}／使用 ${a.counts[i]}点／基準 ${(a.baseline||a.counts.map(()=>a.base))[i]}点／現在上限 ${a.quotas[i]}点／受取 ${a.received[i]}・提供 ${a.donated[i]}点／残存誤差比 ${a.errors[i].toFixed(2)}／評価最小角 ${a.angles[i].toFixed(1)}度`;rect.append(tip);svg.append(rect);
+ const text=element('text',{x:(x+right)/2,y:128-(y+top)/2,'font-size':1.9,'text-anchor':'middle','dominant-baseline':'middle','pointer-events':'none',fill:'#142b30'});text.textContent=kind==='change'&&v>0?'+'+v:v;svg.append(text);
+ }$('maps').append(section);
+}
+async function render(){const version=++generation,id=$('region').value,global=$('policy').value!=='neighbor',unlimited=$('policy').value==='unlimited',suffix=!global&&$('shift').checked?'-shift':'',modes=['local-fixed128'+suffix,global?'global-pool128'+(unlimited?'-unlimited':''):'local-share128'+suffix];$('shift').disabled=global;$('error').textContent='読み込み中…';try{
+ const m=await Promise.all(modes.map(async mode=>{const r=await fetch('/manifest?dataset=allocation-'+mode);if(!r.ok)throw Error('比較データを取得できません');return r.json()}));if(version!==generation)return;
+ const q=m.map(v=>v.sharedAllocation.meshQuality.regions[id]),a=q.map(v=>v.allocation);$('maps').replaceChildren();const usedScale=Math.max(128,...a.flatMap(v=>v.counts)),delta=a[1].quotas.map((v,i)=>v-(a[1].baseline?.[i]??a[1].base));panel('再配分前の使用頂点数',a[0],a[0].counts,'used',usedScale);panel('再配分後の使用頂点数',a[1],a[1].counts,'used',usedScale);panel('基準からの予算増減',a[1],delta,'change',Math.max(64,...delta.map(Math.abs)));
+ $('description').textContent=global?`各保存タイルへ基準64点。未使用枠を共通プールに戻し、距離によらず3地域全体の最新誤差順に1点ずつ追加します。${unlimited?'3×3上限は無効です。':'重なるすべての3×3は864点以下。範囲外は64点／タイルを予約します。'}表示用の余白・重複・曲面分割後の点数はこの上限に含みません。`:'従来方式：基準64点。未使用枠を近傍2タイルへ距離と残存誤差で譲渡。受取後上限128点。';
+ const audit=m.map(v=>v.sharedAllocation.localQualityAudit?.[id]?.['5']?.rmse);
+ $('summary').textContent=`地域の使用頂点：${q[0].sourceVertices.toLocaleString()} → ${q[1].sourceVertices.toLocaleString()}／地域全体RMSE ${q[0].rmse.toFixed(2)} → ${q[1].rmse.toFixed(2)} m`+(audit.every(v=>Number.isFinite(v))?`／山の中心5 kmのRMSE ${audit[0].toFixed(2)} → ${audit[1].toFixed(2)} m`:'')+(global?`／全体予算 ${m[1].sharedAllocation.globalPool.totalBudget.toLocaleString()}点・未使用 ${m[1].sharedAllocation.globalPool.unusedPool.toLocaleString()}点／地域の3×3最大 ${q[1].maximumWindowLoad}点`:`／地域の総上限16,384点／譲渡 ${a[1].transfers.toLocaleString()}点`);
+ for(const [i,key] of ['before','after'].entries())$(key).href=`/?dataset=allocation-${modes[i]}&region=${id}&level=3&curve=loop&divisions=1&smooth=0&priorityVertices=0&overview=1&wire=off&budget=shade`;$('error').textContent='';
+ }catch(error){$('error').textContent=error.message}}
+$('policy').onchange=render;$('region').onchange=render;$('shift').onchange=render;render();
+</script></html>
