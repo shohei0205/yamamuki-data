@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 import numpy as np
 from q_mesh_settings import definitions,nearby_density_ratio
-from national_q_mesh import catalog_keys,generate
+from national_q_mesh import catalog_keys,generate,estimated_job_bytes,admission_allowed
 
 class NationalQTest(unittest.TestCase):
     def test_level_and_density_definitions(self):
@@ -13,6 +13,13 @@ class NationalQTest(unittest.TestCase):
             self.assertEqual(l['densityRadiusMeters'],l['widthMeters']/2)
             self.assertAlmostEqual(nearby_density_ratio(4096,l),1)
             self.assertAlmostEqual(nearby_density_ratio(2048,l),.5)
+
+    def test_parallel_admission_counts_all_active_jobs(self):
+        small=estimated_job_bytes(definitions()[0]);large=estimated_job_bytes(definitions()[-1])
+        self.assertTrue(admission_allowed([small]*3,small,small*4))
+        self.assertFalse(admission_allowed([small]*4,small,small*4))
+        self.assertFalse(admission_allowed([large],small,small*4))
+        self.assertTrue(admission_allowed([],large,small*4))
 
     def test_catalog_is_aligned_across_negative_coordinates(self):
         self.assertEqual(len(catalog_keys([(-1,-1)],2000)),16)

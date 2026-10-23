@@ -6,6 +6,17 @@ use std::{
     collections::{BinaryHeap, HashMap, HashSet},
 };
 
+// 内部の整数IDと辺の組だけに使う軽量ハッシュ。面の出力順はIDで固定する。
+#[derive(Default)]
+struct MeshHasher(u64);
+impl std::hash::Hasher for MeshHasher {
+    fn finish(&self)->u64 {self.0}
+    fn write(&mut self,bytes:&[u8]) {for chunk in bytes.chunks(8) {let mut word=[0u8;8];word[..chunk.len()].copy_from_slice(chunk);self.write_u64(u64::from_le_bytes(word));}}
+    fn write_u64(&mut self,value:u64) {self.0=(self.0.rotate_left(5)^value).wrapping_mul(0x517cc1b727220a95);}
+    fn write_usize(&mut self,value:usize) {self.write_u64(value as u64);}
+}
+type MeshMap<K,V> = std::collections::HashMap<K,V,std::hash::BuildHasherDefault<MeshHasher>>;
+
 type Point = [i64; 2];
 type Face = [usize; 3];
 
@@ -411,7 +422,8 @@ impl Ord for NeighborEntry {
 }
 
 pub struct Builder<'a> {
-    grid: &'a [f64],
+    grid: std::borrow::Cow<'a,[f64]>,
+    defer_evaluation: bool,
     inverse_limits: Option<Vec<f64>>,
     inverse_mesh_sizes: Option<Vec<f64>>,
     tile_budget: Option<TileBudgetState>,
@@ -422,8 +434,8 @@ pub struct Builder<'a> {
     selected: Vec<bool>,
     lock_boundary: bool,
     boundary_error: f64,
-    triangles: HashMap<usize, Triangle>,
-    edges: HashMap<(usize, usize), usize>,
+    triangles: MeshMap<usize, Triangle>,
+    edges: MeshMap<(usize, usize), usize>,
     heap: BinaryHeap<Entry>,
     next_id: usize,
     evaluations: usize,
@@ -431,7 +443,9 @@ pub struct Builder<'a> {
 }
 
 impl<'a> Builder<'a> {
-    pub fn new(grid: &'a [f64], width: usize, height: usize) -> Result<Self> {
+    pub fn new(grid: &'a [f64], width: usize, height: usize) -> Result<Self> { Self::new_cow(std::borrow::Cow::Borrowed(grid),width,height,false) }
+    pub fn owned(grid: Vec<f64>, width: usize, height: usize) -> Result<Builder<'static>> { Builder::new_cow(std::borrow::Cow::Owned(grid),width,height,false) }
+    fn new_cow(grid: std::borrow::Cow<'a,[f64]>, width: usize, height: usize,defer_evaluation:bool) -> Result<Self> {
         ensure!(
             width >= 2 && height >= 2 && width <= 1_048_576 && height <= 1_048_576,
             "幅と高さは2以上1048576以下が必要です"
@@ -453,8 +467,10 @@ impl<'a> Builder<'a> {
             (range.1 - range.0).is_finite(),
             "標高の差が浮動小数点の範囲を超えます"
         );
+        let grid_len=grid.len();
         let mut result = Self {
             grid,
+            defer_evaluation,
             inverse_limits: None,
             inverse_mesh_sizes: None,
             tile_budget: None,
@@ -467,11 +483,11 @@ impl<'a> Builder<'a> {
                 [(width - 1) as i64, (height - 1) as i64],
                 [0, (height - 1) as i64],
             ],
-            selected: vec![false; grid.len()],
+            selected: vec![false; grid_len],
             lock_boundary: false,
             boundary_error: 0.,
-            triangles: HashMap::new(),
-            edges: HashMap::new(),
+            triangles: MeshMap::default(),
+            edges: MeshMap::default(),
             heap: BinaryHeap::new(),
             next_id: 0,
             evaluations: 0,
@@ -639,6 +655,7 @@ impl<'a> Builder<'a> {
     }
 
     fn evaluate(&mut self, face: Face) -> Triangle {
+        if self.defer_evaluation {return Triangle{height_error:0.,size_error:0.,absolute_error:0.,face,error:0.,sample:0};}
         self.evaluations += 1;
         let [a, b, c] = face.map(|i| self.points[i]);
         let area = orient(a, b, c) as f64;
@@ -742,7 +759,7 @@ impl<'a> Builder<'a> {
                         // 10度相当の法線差を高さ誤差1相当とする。高さが一致する面への無意味な挿入は避ける。
                         normal_distance(plane,source)/0.1743114855*s.max_error*self.inverse_limits.as_ref().map_or(1.,|v|v[sample])*(absolute_error/2.).min(1.)
                     } else {0.};
-                    (error+normal_score)/(1.+s.count(x as usize,y as usize)/s.threshold)
+                    (error+normal_score)/(1.+(s.count(x as usize,y as usize)-s.free_density).max(0.)/s.threshold)
                 } else {error};
                 if error > best.error || (error == best.error && sample < best.sample) {
                     best.error = error;
@@ -1788,3 +1805,6 @@ mod seed_location_tests {
 include!("tile_budget.rs");
 
 include!("detail_budget.rs");
+
+#[path = "quality_tin.rs"]
+pub mod quality_tin;

@@ -1,0 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url),root=path.resolve(import.meta.dirname,'../..');
+const wabt=await require(path.join(root,'build/terrain-codec-tools/web/wabt/index.js'))();
+const source=path.join(import.meta.dirname,'triangle_frontier_decoder.wat');
+const module=wabt.parseWat(source,fs.readFileSync(source,'utf8'),{bulk_memory:true});
+module.resolveNames();module.validate();
+const {buffer}=module.toBinary({write_debug_names:false});
+const output=path.join(root,'build/hierarchical-lod-20261023/triangle_frontier_decoder.wasm');
+fs.writeFileSync(output,buffer);console.log(output,buffer.length+' bytes');module.destroy();

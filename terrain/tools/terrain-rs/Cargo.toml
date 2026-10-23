@@ -35,3 +35,11 @@ path = "src/adaptive_national.rs"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[[bin]]
+name = "terrain-q-national"
+path = "src/q_national.rs"
+
+[[bin]]
+name = "terrain-q-pack"
+path = "src/q_pack.rs"

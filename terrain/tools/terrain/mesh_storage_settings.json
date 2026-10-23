@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "triangleCodec": "TFC1",
+  "triangleOrder": "tfc1-shared-edge-greedy",
+  "preserveVertexIds": true,
+  "indexBits": 16,
+  "outerCompression": "none",
+  "codecVersion": 1,
+  "previewDecoder": "wasm",
+  "comparisonCodecKey": "frontierWasm",
+  "status": "selected-for-final-pack"
+}

@@ -29,15 +29,25 @@ def sample_grid(x,y,width,spacing=31.25):
         grid[start:start+16],valid[start:start+16]=national.source_samples(xx,yy)
     return grid,valid
 
+def available_memory_bytes():
+    import ctypes
+    memory=ctypes.create_string_buffer(64);struct.pack_into('<I',memory,0,64)
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(memory):raise OSError('空きメモリーを取得できません')
+    return struct.unpack_from('<Q',memory,16)[0]
+
+def estimated_job_bytes(level):
+    n=round(level['widthMeters']/level['sampleSpacingMeters'])+1
+    return n*n*80+256*2**20
+
+def admission_allowed(reservations,estimate,budget):
+    # 最大サイズの1枚は既存のワーカー側検査へ渡す。同時には他の仕事を入れない。
+    return not reservations or sum(reservations)+estimate<=budget
+
 def generate(job):
     level,x,y=job;width=level['widthMeters'];spacing=level['sampleSpacingMeters']
     n=round(width/spacing)+1
-    # 最大タイルの全格子を評価する前に、推定作業メモリーを確認する。
-    import ctypes
-    memory=ctypes.create_string_buffer(64);struct.pack_into('<I',memory,0,64)
-    if ctypes.windll.kernel32.GlobalMemoryStatusEx(memory):
-        available=struct.unpack_from('<Q',memory,16)[0]
-        if n*n*80>available*.7:raise MemoryError(f'Q{level["level"]}の格子評価には空きメモリーが不足しています。条件を変えず停止します')
+    if n*n*80>available_memory_bytes()*.7:
+        raise MemoryError(f'Q{level["level"]}の格子評価には空きメモリーが不足しています。条件を変えず停止します')
     grid,valid=sample_grid(x,y,width,spacing)
     if not valid.any():return None
     grid=np.rint(grid*4)/4;offset=min(0,float(grid.min()))
@@ -65,6 +75,8 @@ def run(args):
         pruningEnabled=False,additionalScope='national-global-pool',additionalFraction=.2,
         distributable=False,boundaryConnectionComplete=False,additionalComplete=False)
     fingerprint=hashlib.sha256(json.dumps(config,sort_keys=True).encode()).hexdigest();started=time.time()
+    if args.workers<1:raise ValueError('並列数は1以上を指定してください')
+    memory_budget=int(available_memory_bytes()*.55);pending={}
     with sqlite3.connect(output) as db:
         db.execute('PRAGMA journal_mode=WAL');db.execute('PRAGMA synchronous=NORMAL')
         db.executescript('CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT);CREATE TABLE IF NOT EXISTS jobs(q INTEGER,x INTEGER,y INTEGER,state INTEGER DEFAULT 0,failure TEXT,PRIMARY KEY(q,x,y));CREATE TABLE IF NOT EXISTS basic(q INTEGER,x INTEGER,y INTEGER,vertices INTEGER,triangles INTEGER,mesh BLOB,source_validity BLOB,PRIMARY KEY(q,x,y));')
@@ -82,7 +94,7 @@ def run(args):
         db.commit()
         def status(stage):
             info=dict(stage=stage,pid=os.getpid(),updated=time.time(),elapsedSeconds=time.time()-started,
-                levels=levels,jobs=db.execute('SELECT q,state,count(*) FROM jobs GROUP BY q,state ORDER BY q,state').fetchall(),
+                levels=levels,workerLimit=args.workers,activeWorkers=len(pending),reservedWorkerBytes=sum(v[1] for v in pending.values()),workerMemoryBudgetBytes=memory_budget,jobs=db.execute('SELECT q,state,count(*) FROM jobs GROUP BY q,state ORDER BY q,state').fetchall(),
                 sizes=db.execute('SELECT q,count(*),sum(vertices),sum(triangles),sum(length(mesh)),sum(length(source_validity)) FROM basic GROUP BY q ORDER BY q').fetchall(),
                 databaseBytes=output.stat().st_size,freeBytes=shutil.disk_usage(output.parent).free,
                 complete=False,distributable=False,pendingStages=['national-global-pool-20-percent','cross-tile-and-cross-level-boundary-connection','final-verification'])
@@ -92,17 +104,19 @@ def run(args):
         status('basic-generating')
         keys=db.execute('SELECT q,x,y FROM jobs WHERE state=0 ORDER BY q,y,x').fetchall()
         if args.limit:keys=keys[:args.limit]
-        iterator=iter(keys);spec={l['level']:l for l in levels}
+        cursor=0;spec={l['level']:l for l in levels}
         with ProcessPoolExecutor(max_workers=args.workers,initializer=initialize,initargs=(str(source),str(pinned))) as pool:
-            pending={}
             def enqueue():
-                key=next(iterator,None)
-                if key is not None:pending[pool.submit(generate,(spec[key[0]],key[1],key[2]))]=key
-            for _ in range(args.workers):enqueue()
+                nonlocal cursor
+                while cursor<len(keys) and len(pending)<args.workers:
+                    key=keys[cursor];estimate=estimated_job_bytes(spec[key[0]])
+                    if not admission_allowed([v[1] for v in pending.values()],estimate,memory_budget):break
+                    pending[pool.submit(generate,(spec[key[0]],key[1],key[2]))]=(key,estimate);cursor+=1
+            enqueue()
             while pending:
                 done,_=wait(pending,timeout=10,return_when=FIRST_COMPLETED)
                 for future in done:
-                    key=pending.pop(future)
+                    key,_=pending.pop(future)
                     try:
                         result=future.result()
                         if result:db.execute('INSERT INTO basic VALUES(?,?,?,?,?,?,?)',(*key,*result))
@@ -111,8 +125,7 @@ def run(args):
                     except Exception as exc:
                         db.execute('UPDATE jobs SET state=3,failure=? WHERE q=? AND x=? AND y=?',(str(exc),*key));db.commit()
                         status('basic-failed');raise
-                    enqueue()
-                status('basic-generating')
+                enqueue();status('basic-generating')
         remaining=db.execute('SELECT count(*) FROM jobs WHERE state IN (0,3)').fetchone()[0]
         status('basic-partial' if remaining else 'basic-ready-for-national-pool')
 
@@ -122,7 +135,7 @@ def main():
     parser.add_argument('--catalog',default=str(ROOT/'build/terrain-error-national-base.sqlite3'))
     parser.add_argument('--output',default=str(ROOT/'build/terrain-q4-q12-basic.sqlite3'))
     parser.add_argument('--binary',default=str(ROOT/'build/terrain-q-rust-target/release/terrain-adaptive-tin.exe'))
-    parser.add_argument('--workers',type=int,default=1);parser.add_argument('--min-free-gib',type=float,default=8)
+    parser.add_argument('--workers',type=int,default=4);parser.add_argument('--min-free-gib',type=float,default=8)
     parser.add_argument('--limit',type=int);args=parser.parse_args()
     # 同じ出力への二重起動を、プロセス終了時に解放されるOSロックで防ぐ。
     lock=Path(args.output).with_suffix('.lock');lock.parent.mkdir(parents=True,exist_ok=True)
