@@ -1,5 +1,6 @@
 param(
-    [string]$OutputDirectory = 'build/terrain-national-xyz-20261024'
+    [string]$OutputDirectory = 'build/terrain-national-xyz-20261024',
+    [ValidateRange(1, 64)][int]$ChunkWorkers = 4
 )
 $ErrorActionPreference = 'Stop'
 $terrainRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
@@ -24,7 +25,7 @@ $binaryPath = Join-Path $binaryDirectory "terrain-xyz-region-test-$tag.exe"
 Copy-Item -LiteralPath (Join-Path $terrainRoot 'build/terrain-q-cache-target/release/terrain-xyz-region-test.exe') -Destination $binaryPath
 $stdoutPath = Join-Path $targetRoot "generate-$tag.stdout.log"
 $stderrPath = Join-Path $targetRoot "generate-$tag.stderr.log"
-$arguments = @('--national', '--national-chunk-cells', '4096', '--source', $sourcePath, '--source-sha256', $sourceHash, '--output', $targetRoot)
+$arguments = @('--national', '--national-chunk-cells', '4096', '--national-workers', "$ChunkWorkers", '--source', $sourcePath, '--source-sha256', $sourceHash, '--output', $targetRoot)
 $quotedArguments = $arguments | ForEach-Object { '"' + $_ + '"' }
 $job = Start-Process -FilePath $binaryPath -ArgumentList $quotedArguments -WorkingDirectory $terrainRoot -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
 $launch = [ordered]@{

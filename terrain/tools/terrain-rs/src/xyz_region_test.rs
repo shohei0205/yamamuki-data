@@ -48,6 +48,8 @@ struct Args {
     national: bool,
     #[arg(long, default_value_t = 4096)]
     national_chunk_cells: usize,
+    #[arg(long, default_value_t = 4)]
+    national_workers: usize,
     #[arg(long, value_delimiter = ',', num_args = 4)]
     national_window: Vec<i64>,
 }
@@ -248,7 +250,10 @@ fn prepare(args: &Args, r: &Region, dir: &Path) -> Result<()> {
     Ok(())
 }
 pub(crate) fn read_level(path: &Path) -> Result<(Vec<[i64; 2]>, Vec<[usize; 3]>, Vec<f64>)> {
-    let mut f = std::io::BufReader::new(File::open(path)?);
+    let mut f = std::io::BufReader::new(
+        retry_shared_io(|| File::open(path), std::time::Duration::from_millis(25))
+            .with_context(|| format!("中間形状を開く: {}", path.display()))?,
+    );
     let mut h = [0u8; 12];
     f.read_exact(&mut h)?;
     ensure!(&h[..4] == b"XRG1", "地域中間形状の形式が不正です");
@@ -290,7 +295,10 @@ fn save_level(
     let (p, f, _) = surface.compact();
     let path = dir.join(format!("z{z}.mesh"));
     let tmp = dir.join(format!("z{z}.partial.mesh"));
-    let mut out = BufWriter::new(File::create(&tmp)?);
+    let mut out = BufWriter::new(
+        retry_shared_io(|| File::create(&tmp), std::time::Duration::from_millis(25))
+            .with_context(|| format!("基本形状の一時保存: {}", tmp.display()))?,
+    );
     out.write_all(b"XRG1")?;
     out.write_all(&(p.len() as u32).to_le_bytes())?;
     out.write_all(&(f.len() as u32).to_le_bytes())?;
@@ -306,11 +314,18 @@ fn save_level(
     }
     out.flush()?;
     drop(out);
-    fs::rename(tmp, path)?;
-    fs::write(
-        dir.join(format!("z{z}.report.json")),
-        serde_json::to_vec_pretty(&report)?,
-    )?;
+    retry_shared_io(
+        || fs::rename(&tmp, &path),
+        std::time::Duration::from_millis(25),
+    )
+    .with_context(|| format!("基本形状を確定: {}", path.display()))?;
+    let report_path = dir.join(format!("z{z}.report.json"));
+    let report_bytes = serde_json::to_vec_pretty(&report)?;
+    retry_shared_io(
+        || fs::write(&report_path, &report_bytes),
+        std::time::Duration::from_millis(25),
+    )
+    .with_context(|| format!("基本形状の検証結果を保存: {}", report_path.display()))?;
     Ok(())
 }
 fn generate_levels(r: &Region, dir: &Path) -> Result<()> {
@@ -500,6 +515,7 @@ mod tests {
             source_sha256: "0".repeat(64),
             national: false,
             national_chunk_cells: 4096,
+            national_workers: 4,
             national_window: vec![],
         };
         for name in ["tsukuba", "yari", "fuji"] {

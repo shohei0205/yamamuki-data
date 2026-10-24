@@ -270,32 +270,8 @@ fn run_locked(args: &Args) -> Result<()> {
             json!({"stage":"catalog-ready","chunks":config.chunks.len(),"complete":false,"generationStarted":false}),
         );
     }
+    generate_base_parallel(args, &config, &db)?;
     let mut source = Source::open(&args.source)?;
-    for (index, &xy) in config.chunks.iter().enumerate() {
-        let r = chunk_region(&config, xy);
-        let dir = chunk_dir(args, &r);
-        fs::create_dir_all(&dir)?;
-        if db
-            .query_row(
-                "SELECT 1 FROM base_done WHERE x=?1 AND y=?2",
-                params![xy[0], xy[1]],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some()
-        {
-            continue;
-        }
-        check_space(&args.output)?;
-        status(
-            args,
-            json!({"stage":"generate-base","chunk":r.name,"chunkIndex":index,"totalChunks":config.chunks.len(),"childProgress":dir.join("progress.json"),"generationStarted":true,"complete":false}),
-        )?;
-        let (grid, weights, scales, peaks, valid) = load_fields(&mut source, &r, &dir, true)?;
-        generate_fields(&r, &dir, grid, weights, scales, peaks)?;
-        register_valid(&db, &valid)?;
-        db.execute("INSERT INTO base_done VALUES(?1,?2)", params![xy[0], xy[1]])?;
-    }
     for z in 6..=14u32 {
         if db
             .query_row("SELECT 1 FROM synchronized WHERE z=?1", [z], |_| Ok(()))
@@ -355,6 +331,144 @@ fn run_locked(args: &Args) -> Result<()> {
         args,
         json!({"stage":"generated","complete":true,"generationStarted":true,"distributable":false,"note":"生成と各タイルの復元照合済み。独立した全国検証・表示確認は別途必要です。"}),
     )
+}
+
+enum BaseEvent {
+    Started(usize, [i64; 2]),
+    Finished(usize, [i64; 2], HashSet<(i64, i64)>),
+    Failed(anyhow::Error),
+}
+fn generate_base_parallel(args: &Args, config: &Config, db: &Connection) -> Result<()> {
+    use std::collections::BTreeMap;
+    use std::sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc,
+    };
+    ensure!(
+        args.national_workers > 0,
+        "作業領域の並列数は1以上を指定してください"
+    );
+    let completed = db
+        .prepare("SELECT x,y FROM base_done")?
+        .query_map([], |r| Ok([r.get::<_, i64>(0)?, r.get::<_, i64>(1)?]))?
+        .collect::<std::result::Result<HashSet<_>, _>>()?;
+    let jobs = config
+        .chunks
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, xy)| !completed.contains(xy))
+        .collect::<Vec<_>>();
+    if jobs.is_empty() {
+        return Ok(());
+    }
+    // Windowsで親ディレクトリの同時作成が競合しないよう、作業先を先に用意する。
+    for &(_, xy) in &jobs {
+        let dir = chunk_dir(args, &chunk_region(config, xy));
+        retry_shared_io(
+            || fs::create_dir_all(&dir),
+            std::time::Duration::from_millis(25),
+        )
+        .with_context(|| format!("作業領域の作成: {}", dir.display()))?;
+    }
+    let cpus = std::thread::available_parallelism()
+        .map(|v| (v.get() / 2).max(1))
+        .unwrap_or(1);
+    let workers = args.national_workers.min(cpus).min(jobs.len());
+    let next = AtomicUsize::new(0);
+    let cancelled = AtomicBool::new(false);
+    let (sender, receiver) = mpsc::sync_channel(workers * 2);
+    std::thread::scope(|scope| -> Result<()> {
+        let mut handles = Vec::new();
+        for _ in 0..workers {
+            let sender = sender.clone();
+            let jobs = &jobs;
+            let next = &next;
+            let cancelled = &cancelled;
+            handles.push(scope.spawn(move || {
+                let result = (|| -> Result<()> {
+                    // 接続と元標高キャッシュは各作業スレッド専用。出力DBへの書込は管理側だけ。
+                    let mut source =
+                        Source::open(&args.source).context("並列作業用の元標高を開く")?;
+                    loop {
+                        if cancelled.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let job = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(&(index, xy)) = jobs.get(job) else {
+                            break;
+                        };
+                        let r = chunk_region(config, xy);
+                        let dir = chunk_dir(args, &r);
+                        check_space(&args.output)?;
+                        sender
+                            .send(BaseEvent::Started(index, xy))
+                            .context("進捗管理との接続が切れました")?;
+                        let (grid, weights, scales, peaks, valid) =
+                            load_fields(&mut source, &r, &dir, true)
+                                .with_context(|| format!("元標高と地形指標: {}", r.name))?;
+                        generate_fields(&r, &dir, grid, weights, scales, peaks)
+                            .with_context(|| format!("基本形状の生成と保存: {}", r.name))?;
+                        sender
+                            .send(BaseEvent::Finished(index, xy, valid))
+                            .context("保存管理との接続が切れました")?;
+                    }
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    cancelled.store(true, Ordering::Relaxed);
+                    let _ = sender.send(BaseEvent::Failed(error));
+                }
+            }));
+        }
+        drop(sender);
+        let mut active = BTreeMap::<usize, [i64; 2]>::new();
+        let mut count = completed.len();
+        let mut error = None;
+        for event in receiver {
+            let event_result = (|| -> Result<()> {
+                match event {
+                    BaseEvent::Started(index, xy) => {
+                        active.insert(index, xy);
+                    }
+                    BaseEvent::Finished(index, xy, valid) => {
+                        register_valid(db, &valid)?;
+                        db.execute("INSERT INTO base_done VALUES(?1,?2)", params![xy[0], xy[1]])?;
+                        active.remove(&index);
+                        count += 1;
+                    }
+                    BaseEvent::Failed(e) => {
+                        return Err(e);
+                    }
+                }
+                let active=active.iter().map(|(&index,&xy)|{let r=chunk_region(config,xy);json!({"index":index,"chunk":r.name,"childProgress":chunk_dir(args,&r).join("progress.json")})}).collect::<Vec<_>>();
+                status(
+                    args,
+                    json!({"stage":"generate-base","parallelWorkers":workers,"activeChunks":active,"chunkIndex":count,"completedChunks":count,"totalChunks":config.chunks.len(),"generationStarted":true,"complete":false}),
+                )
+            })();
+            if let Err(e) = event_result {
+                cancelled.store(true, Ordering::Relaxed);
+                if error.is_none() {
+                    error = Some(e);
+                }
+            }
+        }
+        // 失敗時も通知を受け取り続け、保存中の別領域を途中で打ち切らない。
+        for handle in handles {
+            if handle.join().is_err() && error.is_none() {
+                error = Some(anyhow::anyhow!("作業領域の生成スレッドが異常終了しました"));
+            }
+        }
+        if let Some(error) = error {
+            return Err(error);
+        }
+        ensure!(
+            count == config.chunks.len(),
+            "基本メッシュの完了数が一致しません"
+        );
+        Ok(())
+    })
 }
 
 fn synchronize(

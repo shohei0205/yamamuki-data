@@ -14,6 +14,7 @@ def snapshot():
     if data['run']:
         data['progressAgeSeconds'] = max(0, time.time() - (RUN / 'progress.json').stat().st_mtime)
     data['saved'] = []
+    data['children'] = []
     if data['run']:
         data['generationStarted'] = data['run'].get('generationStarted', False)
         child = data['run'].get('childProgress')
@@ -21,6 +22,12 @@ def snapshot():
             path = Path(child).resolve()
             if path.is_relative_to(RUN.resolve()) and path.exists():
                 data['child'] = read_json(path)
+                data['progressAgeSeconds'] = min(data['progressAgeSeconds'], max(0, time.time() - path.stat().st_mtime))
+        for active in data['run'].get('activeChunks', []):
+            path = Path(active['childProgress']).resolve()
+            if path.is_relative_to(RUN.resolve()) and path.exists():
+                data['children'].append(dict(chunk=active['chunk'], **read_json(path)))
+                data['progressAgeSeconds'] = min(data['progressAgeSeconds'], max(0, time.time() - path.stat().st_mtime))
     db_path = RUN / 'terrain.sqlite3'
     if db_path.exists():
         with sqlite3.connect(db_path.as_uri() + '?mode=ro', uri=True, timeout=1) as db:
