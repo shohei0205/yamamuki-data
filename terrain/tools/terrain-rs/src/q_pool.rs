@@ -38,9 +38,9 @@ fn load_mesh(input:&Connection,output:&Connection,q:i64,key:Key,n:usize)->Result
     let raw=unpack_working(&blob)?;let (p,f)=q_pool_bench::decode(&raw,n)?;Ok((p,f,base))
 }
 // 約125 mの平滑化と250 m周囲の勾配を評価。海の欠損を追加対象にしない。
-fn gain(source:&mut Source,job:Job)->Result<(Vec<f64>,Vec<f64>)> {
+fn gain_weights(job:Job,mut at:impl FnMut(f64,f64)->Result<(f64,bool)>)->Result<(Vec<f64>,Vec<f64>)> {
     let halo=32;let n=job.n();let w=n+halo*2;let mut z=vec![0.;w*w];let mut valid=vec![false;w*w];
-    for y in 0..w {for x in 0..w {let (v,b)=source.at(job.x as f64*job.width()+(x as f64-halo as f64)*SPACING,job.y as f64*job.width()+(y as f64-halo as f64)*SPACING)?;z[y*w+x]=v;valid[y*w+x]=b;}}
+    for y in 0..w {for x in 0..w {let (v,b)=at(job.x as f64*job.width()+(x as f64-halo as f64)*SPACING,job.y as f64*job.width()+(y as f64-halo as f64)*SPACING)?;z[y*w+x]=v;valid[y*w+x]=b;}}
     let kernel=(-16i32..=16).map(|x|(-(x*x) as f64/32.).exp()).collect::<Vec<_>>();let sum=kernel.iter().sum::<f64>();
     let mut temp=vec![0.;w*w];let mut smooth=vec![0.;w*w];
     for y in 0..w {for x in 0..w {temp[y*w+x]=kernel.iter().enumerate().map(|(k,&v)|z[y*w+(x as isize+k as isize-16).clamp(0,w as isize-1) as usize]*v).sum::<f64>()/sum;}}
@@ -53,8 +53,34 @@ fn gain(source:&mut Source,job:Job)->Result<(Vec<f64>,Vec<f64>)> {
     }slope=filtered;}
     let (low,high)=(1f64.to_radians().tan(),8f64.to_radians().tan());let mut grid=Vec::with_capacity(n*n);let mut limits=Vec::with_capacity(n*n);
     for y in halo..halo+n {for x in halo..halo+n {let i=y*w+x;let t=((slope[i]-low)/(high-low)).clamp(0.,1.);let convex=((4.*smooth[i]-smooth[i-8]-smooth[i+8]-smooth[i-8*w]-smooth[i+8*w])/50.).clamp(0.,1.);
-        let weight=if valid[i] {(0.02+0.98*t*t*(3.-2.*t))*(1.+0.5*convex)}else{0.02};grid.push(z[i]);limits.push(job.error()/weight);
+        let weight=if valid[i] {(0.02+0.98*t*t*(3.-2.*t))*(1.+0.5*convex)}else{0.02};grid.push(z[i]);limits.push(weight);
     }}Ok((grid,limits))
+}
+// レベルに依存しない標高と重みを8 kmブロックで共有する。
+// f64のビット列をZstdで可逆圧縮し、同一プロセス内で最大8 GiB保持する。
+type FieldKey=(String,i64,i64);
+struct SharedFields {entries:HashMap<FieldKey,(std::sync::Arc<Vec<u8>>,u64)>,bytes:usize,clock:u64,hits:u64,builds:u64}
+impl SharedFields {
+ fn get(&mut self,key:&FieldKey)->Option<std::sync::Arc<Vec<u8>>> {self.clock+=1;let clock=self.clock;self.entries.get_mut(key).map(|(v,t)|{*t=clock;self.hits+=1;v.clone()})}
+ fn put(&mut self,key:FieldKey,data:Vec<u8>,limit:usize)->std::sync::Arc<Vec<u8>> {if let Some(v)=self.get(&key){return v;}let data=std::sync::Arc::new(data);if data.len()>limit{return data;}
+  while self.bytes+data.len()>limit {let old=self.entries.iter().min_by_key(|(_,(_,t))|*t).map(|(k,_)|k.clone());if let Some(k)=old {self.bytes-=self.entries.remove(&k).unwrap().0.len();}else{break;}}
+  self.clock+=1;self.builds+=1;if self.builds%64==0 {println!("標高・勾配共有キャッシュ {}ブロック・再利用{}回・{:.1} MiB",self.builds,self.hits,self.bytes as f64/1048576.);}self.bytes+=data.len();self.entries.insert(key,(data.clone(),self.clock));data
+ }
+}
+static SHARED_FIELDS:std::sync::OnceLock<std::sync::Mutex<SharedFields>>=std::sync::OnceLock::new();
+fn gain_blocks(job:Job,mut block:impl FnMut(i64,i64)->Result<(Vec<f64>,Vec<f64>)>)->Result<(Vec<f64>,Vec<f64>)> {
+ let n=job.n();let stride=256i64;let x0=job.x*(n as i64-1);let y0=job.y*(n as i64-1);let mut grid=vec![0.;n*n];let mut limits=vec![0.;n*n];
+ for by in y0.div_euclid(stride)..=(y0+n as i64-1).div_euclid(stride) {for bx in x0.div_euclid(stride)..=(x0+n as i64-1).div_euclid(stride) {
+  let (z,w)=block(bx,by)?;let left=x0.max(bx*stride);let right=(x0+n as i64).min((bx+1)*stride);let bottom=y0.max(by*stride);let top=(y0+n as i64).min((by+1)*stride);
+  for y in bottom..top {for x in left..right {let dst=(y-y0) as usize*n+(x-x0) as usize;let src=(y-by*stride) as usize*257+(x-bx*stride) as usize;grid[dst]=z[src];limits[dst]=job.error()/w[src];}}
+ }}Ok((grid,limits))
+}
+fn gain(source:&mut Source,job:Job)->Result<(Vec<f64>,Vec<f64>)> {
+ let identity=source.db.path().unwrap_or("").to_owned();let cache=SHARED_FIELDS.get_or_init(||std::sync::Mutex::new(SharedFields{entries:HashMap::new(),bytes:0,clock:0,hits:0,builds:0}));
+ gain_blocks(job,|x,y|{let key=(identity.clone(),x,y);let cached={cache.lock().unwrap().get(&key)};
+  let blob=if let Some(v)=cached {v}else{let (z,w)=gain_weights(Job{q:6,x,y},|a,b|source.at(a,b))?;let mut raw=Vec::with_capacity(z.len()*16);for v in z.iter().chain(&w){raw.extend(v.to_le_bytes());}let compressed=zstd::stream::encode_all(&raw[..],1)?;cache.lock().unwrap().put(key,compressed,8usize*1024*1024*1024)};
+  decode_fields(&zstd::stream::decode_all(&blob[..])?,257)
+ })
 }
 fn decode_fields(raw:&[u8],n:usize)->Result<(Vec<f64>,Vec<f64>)> {
     let count=n*n;ensure!(raw.len()==count*16,"標高キャッシュの長さが不正です");let read=|b:&[u8]|b.chunks_exact(8).map(|v|f64::from_le_bytes(v.try_into().unwrap())).collect::<Vec<_>>();Ok((read(&raw[..count*8]),read(&raw[count*8..])))
@@ -276,3 +302,21 @@ pub fn run(args:&Args)->Result<()> {
 }
 
 #[cfg(test)] mod time_limit_tests {use super::*;#[test] fn zero_disables_elapsed_and_estimated_limits(){assert!(!time_exceeded(0.,f64::MAX));assert!(!time_exceeded(7200.,7199.));assert!(time_exceeded(7200.,7201.));}}
+
+#[cfg(test)] mod shared_field_tests {
+ use super::*;
+ fn terrain(x:f64,y:f64)->Result<(f64,bool)>{Ok((((x/230.).sin()*(y/310.).cos())*120.+x/700.,x+y>100.))}
+ #[test] fn blocks_match_original_weights_and_reuse_across_levels(){
+  let mut saved=HashMap::new();let mut builds=0;
+  for job in [Job{q:5,x:1,y:-1},Job{q:4,x:3,y:-2}] {
+   let (actual,limits)=gain_blocks(job,|x,y|{if !saved.contains_key(&(x,y)){builds+=1;saved.insert((x,y),gain_weights(Job{q:6,x,y},terrain)?);}Ok(saved[&(x,y)].clone())}).unwrap();
+   let (expected,weights)=gain_weights(job,terrain).unwrap();assert_eq!(actual,expected);assert_eq!(limits,weights.iter().map(|w|job.error()/w).collect::<Vec<_>>());
+  }
+  assert_eq!(builds,4);
+ }
+ #[test] fn shared_cache_obeys_limit_and_keeps_recent_blocks(){
+  let mut cache=SharedFields{entries:HashMap::new(),bytes:0,clock:0,hits:0,builds:0};let key=|x|(String::from("source"),x,0);
+  cache.put(key(0),vec![1;4],8);cache.put(key(1),vec![2;4],8);cache.get(&key(0));cache.put(key(2),vec![3;4],8);
+  assert_eq!(cache.bytes,8);assert!(cache.get(&key(0)).is_some());assert!(cache.get(&key(1)).is_none());assert!(cache.get(&(String::from("other"),0,0)).is_none());
+ }
+}

@@ -1,0 +1,7 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>新形式メッシュ・地域テスト</title>
+<style>body{margin:0;font:14px system-ui;background:#e7f1fa;color:#223}canvas{display:block;width:100vw;height:100vh}#panel{position:absolute;top:10px;left:10px;right:10px;background:#fffffff0;padding:12px;border-radius:8px}label{display:inline-block;margin:4px 10px 4px 0}select,button{font:inherit}#status{margin-top:8px;font-variant-numeric:tabular-nums}</style>
+<canvas id="canvas"></canvas><div id="panel"><b>生成済み地域メッシュ ／ YMV4・TFC2</b>
+<label>地域 <select id="region"><option value="fuji">富士山</option><option value="yari">槍ヶ岳</option><option value="tsukuba">筑波山</option></select></label>
+<label>レベル <select id="level"></select></label><label>表示範囲 <select id="span"><option value="8000">8 km</option><option value="16000">16 km</option><option value="32000" selected>32 km</option><option value="64000">64 km</option><option value="200000">200 km 全域</option></select></label>
+<label><input type="checkbox" id="smooth" checked>滑らかな陰影</label><label><input type="checkbox" id="wire">ワイヤーフレーム</label><label>復元 <select id="decoder"><option value="wasm" selected>WASM</option><option value="js">JavaScript（比較用）</option></select></label><label>陰影 <input id="strength" type="range" min="0" max="3" step="0.1" value="1"></label><button id="reset">視点を戻す</button>
+<div id="status">読み込み中…</div><small>ドラッグ：回転 ／ Shift＋ドラッグ：移動 ／ ホイール：拡大縮小。表示用の間引きなし。曲面分割・混在 LOD 接合・海岸処理は未実装。</small></div><script src="/xyz_viewer.js"></script></html>

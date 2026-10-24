@@ -1,0 +1,6 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const {decodeYMV,decodeTFC}=require('./xyz_viewer.js');
+(async()=>{let count=0;for(const fixture of JSON.parse(fs.readFileSync(process.argv[2],'utf8'))){const cache=new Map();async function resolve(z,x,y){const key=[z,x,y].join(',');if(cache.has(key))return cache.get(key);const promise=(async()=>{const row=fixture.rows[key];if(!row)throw Error('fixture missing '+key);const data=new Uint8Array(Buffer.from(row.vertices,'base64'));return {points:await decodeYMV(data,z,x,y,resolve)}})();cache.set(key,promise);return promise}
+for(const target of fixture.targets){const p=(await resolve(...target.key)).points;assert.deepEqual(Array.from(p),target.points.flat());const row=fixture.rows[target.key.join(',')],data=new Uint8Array(Buffer.from(row.triangles,'base64')),v=new DataView(data.buffer,data.byteOffset,data.byteLength),body=v.getUint32(12,true),length=v.getUint32(16,true);assert.deepEqual(Array.from(decodeTFC(data.subarray(24,24+length),body,p.length/3)),target.faces.flat());count++}}
+console.log(count+' regional level fixtures matched independent Python decoder');})().catch(e=>{console.error(e);process.exitCode=1});

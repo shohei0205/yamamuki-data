@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>200 km メッシュ生成の進捗</title>
+<style>body{font:16px system-ui;background:#f2f5f9;color:#203046;max-width:1200px;margin:30px auto;padding:0 20px}h1{font-size:25px}section{background:white;border:1px solid #dbe2ec;border-radius:12px;padding:20px;margin:18px 0}table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}td,th{text-align:right;padding:8px;border-bottom:1px solid #e8edf3}td:first-child,th:first-child{text-align:left}.muted{color:#65748a}.ok{color:#147746}progress{width:100%;height:18px}</style>
+<h1>200 km 四方・全国形式メッシュの生成試験</h1>
+<p>高速化版 ／ 筑波山 → 槍ヶ岳 → 富士山 ／ z14～z6</p>
+<p id="status">接続中…</p><section id="current"></section><p class="muted">3 秒ごとに更新。形状生成の完了後に量子化・圧縮・独立検証を実行します。全体の完了率や残り時間は未算出です。</p><main id="regions"></main>
+<script>
+const names={tsukuba:'筑波山',yari:'槍ヶ岳',fuji:'富士山'};
+const parts={'seed-topology':'初期頂点を配置','greedy-insertion':'誤差の大きい点から頂点を追加','quality-repair':'角度・誤差を補修','quantization-repair':'量子化後の形状補修','quantized-audit':'量子化した形状の全点照合','tile-partition-and-encode':'タイル分割・圧縮保存','boundary-plan':'境界の保護点を準備','prepare-candidates':'削減候補を評価','remove-vertices':'頂点を削減','reduction-finished':'削減終了','audit':'誤差・角度を検証'};
+const stages={'terrain-importance':'地形の重要度を準備','finest-tin':'最詳細メッシュを生成','quantize-and-pack':'量子化・圧縮保存','reduce-mesh':'粗いメッシュを生成','geometry-saved':'形状を保存','test-complete':'生成完了','failed':'エラー'};
+const fmt=x=>Number.isFinite(x)?x.toLocaleString('ja-JP',{maximumFractionDigits:1}):'—';
+function el(tag,text){const e=document.createElement(tag);e.textContent=text;return e}
+async function update(){try{const d=await(await fetch('/api/progress',{cache:'no-store'})).json();
+const run=d.run||{};
+const active=d.regions.find(r=>r.name===run.region);const p=active?.progress||{};
+const state=run.stage==='tests-finished'?(run.passed?'全地域の試験完了':'試験終了・結果を確認'):run.stage==='generating'?(stages[p.stage]||'生成中'):run.stage||'準備中';
+document.querySelector('#status').textContent=`更新 ${new Date(d.time*1000).toLocaleTimeString('ja-JP')} ／ ${names[run.region]||''} ${state} ／ 開始 ${run.started?new Date(run.started).toLocaleTimeString('ja-JP'):'—'}`;
+const current=document.querySelector('#current');current.replaceChildren(el('h2',`${names[run.region]||'全地域'}：${state}${p.z!=null?' ／ z'+p.z:''}`));
+const shapeCount=d.regions.reduce((sum,r)=>sum+r.levels.filter(l=>l.report).length,0);
+const packCount=d.regions.reduce((sum,r)=>sum+(r.packing||[]).length,0);
+const verified=(run.results||[]).filter(r=>r.generationExit===0&&r.verificationExit===0).length;
+current.append(el('p',`形状保存 ${shapeCount} / 27 レベル ／ 圧縮保存 ${packCount} / 27 レベル ／ 独立検証 ${verified} / 3 地域`));
+let detail=parts[p.part]||p.part||'';
+if(p.part==='prepare-candidates')detail+=`：${fmt(p.processed)} / ${fmt(p.total)} 頂点（${fmt(p.processed/p.total*100)}%）`;
+if(p.part==='remove-vertices'||p.part==='reduction-finished')detail+=`：削減済み ${fmt(p.processed)} ／ 残存 ${fmt(p.total-p.processed)} 頂点 ／ キュー ${fmt(p.queued)} 件`;
+if(p.round!=null)detail+=` ／ 補修 ${fmt(p.round)} 回目`;
+if(p.vertices!=null)detail+=` ／ ${fmt(p.vertices)} 頂点`;
+if(p.elapsedSeconds!=null)detail+=` ／ 工程経過 ${fmt(p.elapsedSeconds)} 秒`;
+current.append(el('p',detail));
+if(p.part==='prepare-candidates'){const bar=el('progress','');bar.max=p.total||1;bar.value=p.processed||0;current.append(bar)}
+current.append(el('p',`工程の最終更新から ${fmt(active?.stateAgeSeconds)} 秒 ／ 全体の経過 ${fmt((d.time*1000-new Date(run.started).getTime())/60000)} 分`));
+const main=document.querySelector('#regions');main.replaceChildren();
+for(const r of d.regions){const section=el('section','');section.append(el('h2',names[r.name]));const p=r.progress||{};
+section.append(el('p',`${stages[p.stage]||p.stage||'待機中'}${p.z!=null?' ／ z'+p.z:''}${p.part?' ／ '+(parts[p.part]||p.part):''}${p.round!=null?' ／ 補修 '+p.round+' 回目':''}${p.vertices!=null?' ／ '+fmt(p.vertices)+' 頂点':''}`));
+if(p.stage==='reduce-mesh'){
+let detail='';if(p.part==='prepare-candidates')detail=`候補評価 ${fmt(p.processed)} / ${fmt(p.total)} 頂点（${fmt(100*p.processed/p.total)}%）`;
+else if(p.part==='remove-vertices'||p.part==='reduction-finished')detail=`削減済み ${fmt(p.processed)} ／ 残存 ${fmt(p.total-p.processed)} 頂点`;
+else if(p.removed!=null)detail=`削減済み ${fmt(p.removed)} 頂点`;
+section.append(el('p',detail+`${p.queued!=null?' ／ キュー '+fmt(p.queued)+' 件':''}${p.elapsedSeconds!=null?' ／ 工程経過 '+fmt(p.elapsedSeconds)+' 秒':''}`));
+if(p.part==='prepare-candidates'){const b=el('progress','');b.max=p.total||1;b.value=p.processed||0;section.append(b)}
+section.append(el('p','削減は誤差・角度の条件で終了するため、削減工程の完了率は表示しません。'));
+}
+const packing=r.packing||[];const saved=r.saved||{};
+section.append(el('h3','量子化・圧縮保存'));
+const packed=el('progress','');packed.max=9;packed.value=packing.length;
+section.append(packed,el('p',`保存・復元照合完了 ${packing.length} / 9 レベル`));
+if(p.stage==='quantize-and-pack'){
+const current=saved[p.z]||{};
+section.append(el('p',`z${p.z} ／ ${parts[p.part]||p.part||'処理中'} ／ この工程の開始・更新から ${fmt(r.stateAgeSeconds)} 秒 ／ SQLite 保存済み ${fmt(current.tiles||0)} タイル`));
+const t=p.timings||{};if(Object.keys(t).length)section.append(el('p',`直前までの工程：補修 ${fmt(t.repairSeconds)} 秒 ／ 全点照合 ${fmt(t.auditSeconds)} 秒`));
+section.append(el('p','補修は収束するまで反復します。補修・全点照合の途中の完了率と残り時間は未算出です。'));
+}
+const pt=el('table','');const ph=el('tr','');for(const h of ['レベル','状態','保存タイル','BLOB（MiB）','補修（秒）','照合（秒）','分割・保存（秒）','合計（秒）'])ph.append(el('th',h));pt.append(ph);
+for(let z=6;z<=14;z++){
+const report=packing.find(a=>a.z===z);const a=saved[z]||{};const t=report?.timings||{};const row=el('tr','');
+for(const value of ['z'+z,report?'完了':p.stage==='quantize-and-pack'&&p.z===z?'処理中':'待機',fmt(a.tiles??report?.tiles),a.vertexBytes!=null?fmt((a.vertexBytes+a.triangleBytes)/1048576):'—',fmt(t.repairSeconds),fmt(t.auditSeconds),fmt(t.partitionEncodeSaveSeconds),fmt(t.totalSeconds)])row.append(el('td',value));
+pt.append(row)}section.append(pt,el('h3','形状生成'));
+const done=r.levels.filter(l=>l.report).length;const bar=el('progress','');bar.max=9;bar.value=done;section.append(bar,el('p',`形状保存 ${done} / 9 レベル ／ SQLite ${fmt(r.sqliteBytes/1048576)} MiB ／ 独立検証 ${r.verification?(r.verification.passed?'成功':'結果を確認'):'未完了'}`));
+const table=el('table','');const head=el('tr','');for(const label of ['レベル','頂点数','削減数','工程時間（秒）','旧版（秒）','速度比'])head.append(el('th',label));table.append(head);
+for(const l of r.levels){const a=l.report||{},b=l.previous||{};const row=el('tr','');const ratio=l.z<14&&a.seconds>0&&b.seconds>0?fmt(b.seconds/a.seconds)+' 倍':'—';for(const v of ['z'+l.z,fmt(a.vertices),fmt(a.removed),fmt(a.seconds),fmt(b.seconds),ratio])row.append(el('td',v));table.append(row)}
+section.append(table,el('p','z14 の工程時間は初期生成を含まないため、速度比を表示していません。'));main.append(section)}
+}catch(e){document.querySelector('#status').textContent='更新できません: '+e.message}finally{setTimeout(update,3000)}}update();
+</script></html>

@@ -43,3 +43,23 @@ path = "src/q_national.rs"
 [[bin]]
 name = "terrain-q-pack"
 path = "src/q_pack.rs"
+
+[[bin]]
+name = "terrain-decimation-compare"
+path = "src/decimation_compare.rs"
+
+[[bin]]
+name = "terrain-seam-compare"
+path = "src/seam_compare.rs"
+
+[[bin]]
+name = "terrain-overlap-compare"
+path = "src/overlap_compare.rs"
+
+[[bin]]
+name = "terrain-national-summit-prepare"
+path = "src/national_summit_prepare.rs"
+
+[[bin]]
+name = "terrain-xyz-region-test"
+path = "src/xyz_region_test.rs"
