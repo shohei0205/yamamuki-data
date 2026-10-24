@@ -1944,3 +1944,10 @@ SQLiteの頂点差分とTFC1はブラウザーで復元する。サーバーは�
 
 
 地域テストの復元は WASM が既定。「復元」から JavaScript と比較できる。WASM は `node tools/terrain/build_xyz_wasm.mjs` で生成する。詳細と検証は [地域試験の説明](tools/terrain/XYZ_REGION_TEST.md) を参照する。
+
+
+### 全国 XYZ メッシュの生成と進捗
+
+`tools/terrain-rs/build.ps1 -XyzRegion -TargetDirectory <terrain の絶対パス>/build/terrain-q-cache-target` でビルドし、`tools/terrain/start_national_xyz.ps1` で非表示の全国生成を起動する。元標高は読み取り専用、出力は `build/terrain-national-xyz-20261024/terrain.sqlite3`。PID・実行ファイル・ログは出力先の `launch.json` に保存する。同じ出力へ二重起動しない。保存済みの工程から再開できる。
+
+`tools/terrain/national_progress_server.py` を起動すると [全国生成の進捗](http://127.0.0.1:61462/) で工程とレベル別の保存量を確認できる。全 z6～z14 の生成設定、作業領域・共有境界・差分参照の仕組みと検証上の制限は [生成設定](MESH_SETTINGS.md) を参照する。生成完了と、公開・配布用の確認完了は区別する。

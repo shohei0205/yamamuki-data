@@ -16,6 +16,7 @@ mod summit_policy;
 mod triangle_frontier32;
 #[allow(dead_code)]
 mod web_mercator;
+mod xyz_national;
 mod xyz_region_pack;
 use anyhow::{Context, Result, ensure};
 use clap::Parser;
@@ -43,6 +44,12 @@ struct Args {
     prepare_only: bool,
     #[arg(long)]
     source_sha256: String,
+    #[arg(long)]
+    national: bool,
+    #[arg(long, default_value_t = 4096)]
+    national_chunk_cells: usize,
+    #[arg(long, value_delimiter = ',', num_args = 4)]
+    national_window: Vec<i64>,
 }
 #[derive(Serialize, Deserialize, Clone)]
 struct Region {
@@ -336,11 +343,23 @@ fn generate_levels(r: &Region, dir: &Path) -> Result<()> {
         json!({"stage":"terrain-importance","region":r.name,"samples":n*n,"complete":false}),
     )?;
     let weights = decimation_surface::importance(&grid, n, r.spacing);
+    let (scales, peak_count) = summit_policy::summit_scales(&grid, n, r.spacing);
+    generate_fields(r, dir, grid, weights, scales, peak_count)
+}
+// 全国側は作業領域の外も参照して求めた地形指標を渡す。
+fn generate_fields(
+    r: &Region,
+    dir: &Path,
+    grid: Vec<f64>,
+    weights: Vec<f64>,
+    scales: Vec<f64>,
+    peak_count: usize,
+) -> Result<()> {
+    let n = r.n;
     progress(
         dir,
         json!({"stage":"summit-constraints","region":r.name,"complete":false}),
     )?;
-    let (scales, peak_count) = summit_policy::summit_scales(&grid, n, r.spacing);
     let mut scales = Some(scales);
     let resume = (6..=14).find(|z| dir.join(format!("z{z}.mesh")).exists());
     let (p, f, last) = if let Some(z) = resume {
@@ -447,6 +466,9 @@ fn main() -> Result<()> {
         "元標高のSHA256が必要です"
     );
     fs::create_dir_all(&args.output)?;
+    if args.national {
+        return xyz_national::run(&args);
+    }
     for name in &args.regions {
         let r = region(&args, name)?;
         let dir = args.output.join(name);
@@ -476,6 +498,9 @@ mod tests {
             extent: 200000.,
             prepare_only: true,
             source_sha256: "0".repeat(64),
+            national: false,
+            national_chunk_cells: 4096,
+            national_window: vec![],
         };
         for name in ["tsukuba", "yari", "fuji"] {
             let r = region(&a, name).unwrap();

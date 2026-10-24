@@ -3,10 +3,10 @@ use super::*;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct V {
-    x: i64,
-    y: i64,
-    z: u16,
+pub(super) struct V {
+    pub(super) x: i64,
+    pub(super) y: i64,
+    pub(super) z: u16,
 }
 type Key = (i64, i64);
 #[derive(Clone, Copy)]
@@ -15,11 +15,11 @@ struct Ref {
     index: u32,
     body: bool,
 }
-fn height(u: u16) -> f64 {
+pub(super) fn height(u: u16) -> f64 {
     let v = u as i32 - 24000;
     v as f64 * if v < 0 { 0.5 } else { 0.25 }
 }
-fn intersects(f: [usize; 3], p: &[V], b: [i64; 4]) -> bool {
+pub(super) fn intersects(f: [usize; 3], p: &[V], b: [i64; 4]) -> bool {
     let a = f.map(|i| p[i]);
     for axis in 0..2 {
         let c = a.map(|v| if axis == 0 { v.x } else { v.y });
@@ -46,7 +46,7 @@ fn intersects(f: [usize; 3], p: &[V], b: [i64; 4]) -> bool {
 fn u32_at(b: &[u8], o: usize) -> u32 {
     u32::from_le_bytes(b[o..o + 4].try_into().unwrap())
 }
-fn pack_vertices(
+pub(super) fn pack_vertices(
     z: u32,
     tile: Key,
     vertices: &[V],
@@ -96,7 +96,12 @@ fn pack_vertices(
     }
     Ok(b)
 }
-fn unpack_vertices(b: &[u8], z: u32, tile: Key, parents: &HashMap<Key, Vec<V>>) -> Result<Vec<V>> {
+pub(super) fn unpack_vertices(
+    b: &[u8],
+    z: u32,
+    tile: Key,
+    parents: &HashMap<Key, Vec<V>>,
+) -> Result<Vec<V>> {
     ensure!(
         b.len() >= 32 && &b[..4] == b"YMV4" && u16::from_le_bytes(b[4..6].try_into().unwrap()) == 4,
         "YMV4ヘッダー不正"
@@ -147,7 +152,7 @@ fn unpack_vertices(b: &[u8], z: u32, tile: Key, parents: &HashMap<Key, Vec<V>>) 
     }
     Ok(out)
 }
-fn pack_faces(body: &[[usize; 3]], halo: &[[usize; 3]]) -> Result<Vec<u8>> {
+pub(super) fn pack_faces(body: &[[usize; 3]], halo: &[[usize; 3]]) -> Result<Vec<u8>> {
     let a = triangle_frontier32::encode(body)?;
     let h = triangle_frontier32::encode(halo)?;
     let mut out = Vec::new();
@@ -166,7 +171,12 @@ fn canonical(mut f: [usize; 3]) -> [usize; 3] {
     f.rotate_left(i);
     f
 }
-fn check_faces(b: &[u8], body: &[[usize; 3]], halo: &[[usize; 3]], nv: usize) -> Result<()> {
+pub(super) fn check_faces(
+    b: &[u8],
+    body: &[[usize; 3]],
+    halo: &[[usize; 3]],
+    nv: usize,
+) -> Result<()> {
     ensure!(
         b.len() >= 24 && &b[..4] == b"YMT3" && b[4..8] == [3, 0, 0, 0],
         "YMT3ヘッダー不正"
@@ -193,7 +203,7 @@ fn check_faces(b: &[u8], body: &[[usize; 3]], halo: &[[usize; 3]], nv: usize) ->
     }
     Ok(())
 }
-fn quantized_audit(
+pub(super) fn quantized_audit(
     r: &Region,
     points: &[V],
     faces: &[[usize; 3]],
