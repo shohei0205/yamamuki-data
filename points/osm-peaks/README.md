@@ -279,7 +279,7 @@ python scripts/build_data.py build/japan-latest.osm.pbf \
 
 ### 出典の管理
 
-補足の出典・ライセンス・帰属表示・加工内容は補足 JSON の `metadata.sources` に記録する。マージ済み地点 JSON には原本と補足の出典をまとめ、その `metadata` を配布 manifest にコピーする。出典は `note` に記載しない。項目と制約は [metadata フォーマット](../../formats/metadata.md) を参照する。
+補足の出典・ライセンス・帰属表示・加工内容は補足 JSON の `metadata.sources` に記録する。マージ済み地点 JSON には原本と補足の出典をまとめ、その `metadata` を配布 manifest にコピーする。出典は OpenStreetMap（日本、ロシア極東連邦管区）を先に並べ、そのあとに `supplements.json` の `metadata.sources` を入力順で並べる。出典は `note` に記載しない。項目と制約は [metadata フォーマット](../../formats/metadata.md) を参照する。
 
 ### タグごとの記録
 

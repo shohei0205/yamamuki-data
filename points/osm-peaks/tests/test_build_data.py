@@ -53,6 +53,35 @@ TIMESTAMP = "2026-09-30T20:21:22Z"
 from document_metadata import metadata_maps
 
 class BuildDataTests(unittest.TestCase):
+    def test_distribution_source_order(self):
+        from scripts.build_data import SOURCE_NAMES
+        supplements = {"日本百名山": {"source": "山名一覧"},
+                       "追加資料": {"source": "補足資料"},
+                       "国土地理院": {"source": "標高一覧"}}
+        for additional in (False, True):
+            with self.subTest(additional=additional):
+                pbfs = [{"url": "https://download.geofabrik.de/russia/far-eastern-fed-district-260929.osm.pbf"}] if additional else None
+                manifest = write_distribution(
+                    read_mountains(self.xml)[0], self.root, "test", TIMESTAMP,
+                    "2026-09-29T12:00:00Z", supplement_sources=supplements, source_pbfs=pbfs)
+                expected = [SOURCE_NAMES["japan"]]
+                if additional:
+                    expected.append(SOURCE_NAMES["far-eastern-fed-district"])
+                expected += list(supplements)
+                self.assertEqual(expected, [entry["name"] for entry in manifest["metadata"]["sources"]])
+                data = json.loads(gzip.decompress((self.root / FILE_NAME).read_bytes()))
+                self.assertEqual(manifest["metadata"]["sources"], data["metadata"]["sources"])
+        self.assertEqual(["日本百名山", "追加資料", "国土地理院"], list(supplements))
+
+    def test_supplement_source_conflict_is_rejected(self):
+        from scripts.build_data import SOURCE_NAMES
+        with self.assertRaisesRegex(ValueError, "出典 ID が競合"):
+            write_distribution(
+                read_mountains(self.xml)[0], self.root, "test", TIMESTAMP,
+                "2026-09-29T12:00:00Z",
+                supplement_sources={SOURCE_NAMES["japan"]: {"source": "異なる出典"}})
+        self.assertFalse((self.root / FILE_NAME).exists())
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
