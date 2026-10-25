@@ -1,0 +1,22 @@
+[package]
+name = "terrain-viewer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+eframe = { version = "0.31", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
+wgpu = "24"
+glam = { version = "0.30", features = ["bytemuck"] }
+bytemuck = { version = "1", features = ["derive"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+png = "0.18"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[dev-dependencies]
+naga = { version = "24", features = ["wgsl-in"] }
+
+pollster = "0.4"

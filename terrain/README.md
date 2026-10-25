@@ -1951,3 +1951,5 @@ SQLiteの頂点差分とTFC1はブラウザーで復元する。サーバーは�
 `tools/terrain-rs/build.ps1 -XyzRegion -TargetDirectory <terrain の絶対パス>/build/terrain-q-cache-target` でビルドし、`tools/terrain/start_national_xyz.ps1` で非表示の全国生成を起動する。元標高は読み取り専用、出力は `build/terrain-national-xyz-20261024/terrain.sqlite3`。PID・実行ファイル・ログは出力先の `launch.json` に保存する。同じ出力へ二重起動しない。保存済みの工程から再開できる。基本メッシュは既定で 4 作業領域を同時に処理し、`-ChunkWorkers` で領域数を指定できる。領域内の並列計算は共通スレッドプールを使う。
 
 `tools/terrain/national_progress_server.py` を起動すると [全国生成の進捗](http://127.0.0.1:61462/) で工程・同時に処理中の各領域・レベル別の保存量を確認できる。全 z6～z14 の生成設定、作業領域・共有境界・差分参照の仕組みと検証上の制限は [生成設定](MESH_SETTINGS.md) を参照する。生成完了と、公開・配布用の確認完了は区別する。
+
+Rust ネイティブ版の Windows / macOS ビューワーは [tools/terrain-viewer/README.md](tools/terrain-viewer/README.md) を参照。全国 SQLite を直接読み取り、z6 全国常駐・自動 LOD・混在接合・Loop 曲面・GPU 法線計算を検証できます。Web 版も残しています。
