@@ -165,13 +165,17 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
     validate_graphics(mountains)
     logging.info("%s 件を JSON に変換しています", format(len(mountains), ","))
     sources = source_entries(SOURCE_NAMES["japan"], source_url, "ODbL-1.0", "© OpenStreetMap contributors",
-                             supplement_sources, latestTimestamp=latest_mountain_timestamp)
+                             latestTimestamp=latest_mountain_timestamp)
     for info in source_pbfs or []:
         if info["url"] == source_url:
             continue
         region = next(region for region, prefix in SOURCES.items() if info["url"].startswith(prefix + "-"))
         sources = source_entries(SOURCE_NAMES[region], info["url"], "ODbL-1.0",
                                  "© OpenStreetMap contributors", sources)
+    for name, entry in (supplement_sources or {}).items():
+        if name in sources and sources[name] != entry:
+            raise ValueError("元データと補足の出典 ID が競合しています: " + name)
+        sources[name] = dict(entry)
     raw = point_document_json(document(mountains, tag_metadata, sources=sources)).encode("utf-8")
     # ファイル名と生成時刻をヘッダーに含めず、同じ内容の圧縮結果をそろえる。
     output_dir = Path(output_dir)
