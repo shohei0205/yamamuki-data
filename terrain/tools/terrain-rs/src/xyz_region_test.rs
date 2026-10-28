@@ -50,6 +50,10 @@ struct Args {
     national_chunk_cells: usize,
     #[arg(long, default_value_t = 4)]
     national_workers: usize,
+    #[arg(long, default_value_t = 4)]
+    national_boundary_workers: usize,
+    #[arg(long, default_value_t = 4)]
+    national_pack_workers: usize,
     #[arg(long, value_delimiter = ',', num_args = 4)]
     national_window: Vec<i64>,
 }
@@ -516,6 +520,8 @@ mod tests {
             national: false,
             national_chunk_cells: 4096,
             national_workers: 4,
+            national_boundary_workers: 4,
+            national_pack_workers: 4,
             national_window: vec![],
         };
         for name in ["tsukuba", "yari", "fuji"] {

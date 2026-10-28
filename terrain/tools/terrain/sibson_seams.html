@@ -1,0 +1,16 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><title>自然近傍・タイル接合試験</title>
+<style>body{margin:0;background:#e6f1fa;font:14px system-ui;color:#243128}canvas{width:100vw;height:100vh;display:block}header{position:absolute;top:8px;left:8px;right:8px;background:#fffffff2;border-radius:8px;padding:12px;z-index:2}h1{font-size:18px;margin:0 0 7px}p{font-size:12px;margin:5px 0}button,select{font-size:14px;margin:3px}strong{color:#174a36}#status{white-space:pre-wrap}details{margin:4px 0}</style>
+<canvas id="view"></canvas><header><h1>自然近傍・同品質／混合品質／境界の一部分の接合</h1>
+<label>地域 <select id="region"><option value="fuji">富士山</option><option value="yari" selected>槍ヶ岳</option><option value="tsukuba">筑波山</option></select></label>
+<label>配置 <select id="layout"><option value="quad">8 km 四方×4</option><option value="partial">16 km＋8 km（T字・一部境界）</option></select></label>
+<label>接合 <select id="join"><option value="1">境界帯で共通化</option><option value="0">接合なし</option></select></label>
+<label>接合帯・片側 <select id="width"><option>250</option><option selected>500</option><option>1000</option><option>2000</option></select>m</label>
+<label><input id="borders" type="checkbox" checked>境界線</label><label><input id="colors" type="checkbox">タイル色</label><br>
+<a href="../dem-natural-independent-seams/?region=yari">独立生成タイルの試験</a> <a href="../dem-natural-no-overlap-seams-v2/?region=yari">余白なし試験</a> <span id="selectors"></span><button id="same">同品質50 m</button><button id="mixed">異なる品質</button><button id="tee">T字</button><button id="half">境界の半分だけ接合</button><button id="reset">山頂周辺</button><button id="overview">全タイル</button>
+<p><strong id="summary">準備中</strong></p><p id="status">読み込み中</p>
+<details><summary>試験条件・操作</summary><p id="supportStatus"></p><p>左ドラッグ：移動、右ドラッグ：回転・傾き、ホイール：拡大縮小。各タイルは「未読込」も選べます。DはT字配置では使いません。</p>
+<p>同品質は同じ地域モデルを分割し、補間の影響範囲を余白に保存。独立に生成した隣接地域の接合は別検証です。余白にも親XY包含を保ち、800・400・50 mを独立保存しています。</p>
+<p>混合品質は読込済みタイルの曲面をC2の重みで共通化します。境界帯では粗い隣接品質の影響が入るため、細かい側だけの最大誤差保証は維持されません。採用前の比較試験です。</p>
+<p>描画用場は31.25 m間隔の派生データ。保存形状は自由XYZです。このページは保存タイルを事前評価した場を描画し、描画用.bin自体は配布形式に含めません。全タイルの描画間隔をそろえて境界の曲面差を確認しており、描画分割数が異なる場合のT頂点対策は別検証です。</p></details>
+<a href="../dem-natural/?region=yari&variant=natural-error12.5&xy=nested&reference=dem">元の曲面比較</a></header>
+<script src="seams.js"></script></html>

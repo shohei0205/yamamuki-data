@@ -1,0 +1,31 @@
+<!doctype html><html lang="ja"><meta charset="utf-8">
+<title>自然近傍・差分圧縮比較</title>
+<style>body{font:15px system-ui;margin:24px;color:#243128;background:#f5f8f5}table{border-collapse:collapse;background:white;margin:15px 0}th,td{border:1px solid #ccd6cc;padding:7px 10px;text-align:right}th:first-child,td:first-child{text-align:left}h1{font-size:23px}p{max-width:1100px;line-height:1.7}select{font-size:16px}a{color:#195839}</style>
+<h1>自然近傍・差分圧縮比較</h1>
+<p>子の XY はそのまま保存し、高さは親の自然近傍曲面からの差分で保存します。親の予測を 0.125 m 刻みの整数に丸めてから差を取る可逆方式です。全21モデルで保存点と復元曲面が一致し、追加誤差は 0 でした。</p>
+<p>全段差分は800 mを独立保存し、400→200→100→50→25→12.5 mを順に参照します。アンカー併用は800・200・50・12.5 mを独立保存し、中間だけを差分化します。容量は全レベルを保存する場合と、あるレベルを単独で開く場合で区別します。</p>
+<div id="totals"></div>
+<label>地域 <select id="region"><option value="fuji">富士山</option><option value="yari" selected>槍ヶ岳</option><option value="tsukuba">筑波山</option></select></label>
+<div id="details"></div>
+<p>復元時間はこの Windows 上の Python＋ネイティブ C による3回の中央値です。BLOB展開、親曲面の構築・評価、最後の子曲面の構築を含みます。モデルのキャッシュなしで開始しますが、OSのファイルキャッシュは排除していません。ブラウザ・スマホでの速度ではありません。</p>
+<p>比較ビューワーの描画は従来の事前計算データを使っています。このページは差分デコーダーのブラウザ実装ではなく、実際に生成・復元した圧縮試験の結果です。XYZ完全一致により従来の元DEMに対する誤差を維持します。</p>
+<a id="viewer" href="../dem-natural/?region=yari&variant=natural-error12.5&reference=dem">地形を表示</a>
+<script>
+const labels={independent:'独立保存',chain:'全段差分',anchors:'独立アンカー併用'},ki=b=>(b/1024).toFixed(2),ms=s=>(s*1000).toFixed(2);let report;
+function draw(){
+ const region=document.getElementById('region').value;
+ document.getElementById('viewer').href='../dem-natural/?region='+region+'&variant=natural-error12.5&reference=dem';
+ let html='<table><tr><th>許容誤差 m</th><th>点数</th><th>独立 KiB</th><th>差分単体 KiB</th><th>削減率</th><th>親込み KiB</th><th>独立・準備 ms</th><th>全段差分・準備 ms</th><th>親読込済み・差分準備 ms</th><th>アンカー併用・親込み KiB</th></tr>';
+ for(const r of report.rows.filter(r=>r.region===region)){
+  html+='<tr><td><a href="../dem-natural/?region='+region+'&variant=natural-error'+r.error+'&reference=dem">'+r.error+'</a></td><td>'+r.controls.toLocaleString()+'</td><td>'+ki(r.independentBytes)+'</td><td>'+ki(r.deltaBytes)+'</td><td>'+((1-r.deltaBytes/r.independentBytes)*100).toFixed(1)+'%</td><td>'+ki(r.timings.chain.requiredBytes)+'</td><td>'+ms(r.timings.independent.coldSeconds)+'</td><td>'+ms(r.timings.chain.coldSeconds)+'</td><td>'+ms(r.warmParentSeconds)+'</td><td>'+ki(r.timings.anchors.requiredBytes)+'</td></tr>';
+ }
+ document.getElementById('details').innerHTML=html+'</table>';window.reportReady=true;window.activeRegion=region;
+}
+fetch('report.json').then(r=>{if(!r.ok)throw Error('測定結果を取得できません');return r.json();}).then(r=>{
+ report=r;let h='<table><tr><th>全3地域・7品質の保存</th><th>BLOB合計 KiB</th><th>SQLite実サイズ KiB</th><th>BLOB削減率</th></tr>';
+ for(const [mode,v]of Object.entries(r.totals))h+='<tr><td>'+labels[mode]+'</td><td>'+ki(v.blobBytes)+'</td><td>'+ki(v.sqliteBytes)+'</td><td>'+((1-v.blobBytes/r.totals.independent.blobBytes)*100).toFixed(2)+'%</td></tr>';
+ document.getElementById('totals').innerHTML=h+'</table>';
+ const region=new URLSearchParams(location.search).get('region');if(['fuji','yari','tsukuba'].includes(region))document.getElementById('region').value=region;draw();
+}).catch(e=>document.getElementById('totals').textContent=e.message);
+document.getElementById('region').onchange=draw;
+</script></html>

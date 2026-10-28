@@ -1,0 +1,10 @@
+// 生成済みの実地形で自動LODを確認する。未生成地域は未確認として記録する。
+const{chromium}=require('playwright');const assert=require('node:assert/strict');const fs=require('node:fs');
+(async()=>{const b=await chromium.launch({channel:'chrome',headless:true,args:['--ignore-gpu-blocklist']});try{const p=await b.newPage({viewport:{width:1440,height:1000}}),errors=[],results=[],skipped=[];p.on('pageerror',e=>errors.push(e.message));
+for(const region of['fuji','yari','tsukuba']){const response=await p.request.get('http://127.0.0.1:61485/manifest?region='+region),manifest=await response.json();if(!manifest.tiles.length){skipped.push({region,reason:'未生成'});continue;}
+await p.goto('http://127.0.0.1:61485/?region='+region+'&level=auto');async function settled(){await p.waitForFunction(()=>window.previewReady&&!building&&!dirty&&inflight===0&&resident.size===targets.length,{},{timeout:180000});assert.equal(await p.evaluate(()=>previewError),0);}await settled();const result={region,overview:await p.evaluate(()=>viewerStats)};
+await p.click('#peak');await settled();result.peak=await p.evaluate(()=>viewerStats);assert.ok(result.peak.tiles>0);assert.ok(Math.min(...Object.keys(result.peak.counts).map(Number))<=Math.max(...Object.keys(result.overview.counts).map(Number)));
+await p.evaluate(()=>{span=25000;tilt=1.25;plan()});await settled();result.tilt=await p.evaluate(()=>viewerStats);assert.ok(Object.keys(result.tilt.counts).length>1);assert.ok(result.tilt.mixed>0);await p.screenshot({path:'build/sibson-region128-v1/'+region+'-real-auto-tilted.png'});
+await p.selectOption('#level','50');await settled();result.fixed50=await p.evaluate(()=>viewerStats);assert.equal(result.fixed50.mixed,0);assert.equal(Object.keys(result.fixed50.counts).length,1);
+await p.selectOption('#level','auto');await settled();results.push(result);}
+assert.deepEqual(errors,[]);fs.writeFileSync('build/sibson-region128-v1/browser-real.json',JSON.stringify({results,skipped,errors},null,2));console.log(JSON.stringify({passed:true,regions:results.map(r=>r.region),skipped,errors}));}finally{await b.close()}})().catch(e=>{console.error(e);process.exitCode=1});

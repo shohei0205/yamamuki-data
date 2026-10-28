@@ -1948,8 +1948,159 @@ SQLiteの頂点差分とTFC1はブラウザーで復元する。サーバーは�
 
 ### 全国 XYZ メッシュの生成と進捗
 
-`tools/terrain-rs/build.ps1 -XyzRegion -TargetDirectory <terrain の絶対パス>/build/terrain-q-cache-target` でビルドし、`tools/terrain/start_national_xyz.ps1` で非表示の全国生成を起動する。元標高は読み取り専用、出力は `build/terrain-national-xyz-20261024/terrain.sqlite3`。PID・実行ファイル・ログは出力先の `launch.json` に保存する。同じ出力へ二重起動しない。保存済みの工程から再開できる。基本メッシュは既定で 4 作業領域を同時に処理し、`-ChunkWorkers` で領域数を指定できる。領域内の並列計算は共通スレッドプールを使う。
+`tools/terrain-rs/build.ps1 -XyzRegion -TargetDirectory <terrain の絶対パス>/build/terrain-q-cache-target` でビルドし、`tools/terrain/start_national_xyz.ps1` で非表示の全国生成を起動する。元標高は読み取り専用、出力は `build/terrain-national-xyz-20261024/terrain.sqlite3`。PID・実行ファイル・ログは出力先の `launch.json` に保存する。同じ出力へ二重起動しない。保存済みの工程から再開できる。基本メッシュは既定で 4 作業領域を同時に処理し、`-ChunkWorkers` で領域数を指定できる。境界同期も既定で最大 4 領域を同時に処理し、`-BoundaryWorkers` で指定する。隣接する北・西側からの依存を守って進める。領域内の並列計算は共通スレッドプールを使う。 タイルの抽出・圧縮・復元検証も既定で最大 4 並列とし、`-PackWorkers` で指定する。保存順を固定し、SQLite への書き込みは管理側に集約する。レベル別の `pack-zN.report.json` に並列数と処理時間を残す。
+
+完成した全国データの独立検証は `node --max-old-space-size=6144 tools/terrain/verify_xyz_national.cjs build/terrain-national-xyz-20261024/terrain.sqlite3`。結果と途中経過を出力先に保存する。表示確認は `build/terrain-venv/Scripts/python.exe tools/terrain/xyz_viewer_server.py --national --output build/terrain-national-xyz-20261024 --port 61463` で起動し、`http://127.0.0.1:61463/?region=national&z=6&span=4000000` を開く。地域とレベルを選んで確認できる。ドラッグは移動、ホイールは拡大縮小、右ドラッグは回転・傾き。移動はカメラの向きに合わせる。全国ビューアーには自動 LOD・混在 LOD 接合・GPU Loop の 2／4／8 分割がある。「自動」のレベルは上限を指定し、固定レベルでは取得量に合わせて表示範囲を絞る。曲面の強さと Loop 形状保持は GPU に即時反映し、再取得やカメラの初期化を行わない。 組立済みのシーンも GPU に保持し、ズームアウトで戻ると再通信・再構築せず再表示する。未訪問の縮尺では保持済みの広域シーンを先に表示し、選択完了後に切り替える。保持は最大 8 シーンと容量上限の範囲で行う。 z6 は全国 22 タイルのデータと GPU メッシュを最初に読み込んで常駐させ、通常のキャッシュ整理や地域切り替えでは解放しない。海岸処理と配布判定は別途。
 
 `tools/terrain/national_progress_server.py` を起動すると [全国生成の進捗](http://127.0.0.1:61462/) で工程・同時に処理中の各領域・レベル別の保存量を確認できる。全 z6～z14 の生成設定、作業領域・共有境界・差分参照の仕組みと検証上の制限は [生成設定](MESH_SETTINGS.md) を参照する。生成完了と、公開・配布用の確認完了は区別する。
 
 Rust ネイティブ版の Windows / macOS ビューワーは [tools/terrain-viewer/README.md](tools/terrain-viewer/README.md) を参照。全国 SQLite を直接読み取り、z6 全国常駐・自動 LOD・混在接合・Loop 曲面・GPU 法線計算を検証できます。Web 版も残しています。
+
+LPFでレベル別の地形を作り、共通XY・高さ差分・3次曲面を試す[地域比較](tools/terrain/LPF_CURVE_COMPARISON.md)も用意しています。全国生成データを置き換えるものではありません。
+
+### 三角形を保存しない曲面の比較
+
+`tools/terrain/bspline_surface.py` は、富士山・槍ヶ岳・筑波山で階層Bスプラインを生成する試作。比較画面は61467。BスプラインはGPUでポリゴン化して描画し、分割数と陰影を変更できる。元メッシュの比較データは既存の61465から取得する。起動・保存形式・検証結果は [曲面比較の技術メモ](tools/terrain/BSPLINE_SURFACE_COMPARISON.md) を参照。全国データと既存ビューアーは変更しない。
+
+### 自由配置の少数曲面で地形を表す比較
+
+`tools/terrain/feature_surface.py` は、3地域の山の形を自由な中心・幅・向きのGaussian曲面で近似する試作。比較画面は61468で、8～512曲面と既存Bスプラインを切り替えられる。表示にはGPUで生成してキャッシュしたポリゴンを使う。起動方法と保存形式、誤差は [自由配置曲面の技術メモ](tools/terrain/FEATURE_SURFACE_COMPARISON.md) を参照。
+
+## 山頂・尾根・谷を保持する曲面の比較
+
+61469 に骨格を保持する四角形主体の曲面比較を追加した。3 地域・3 品質で元 TIN と比較し、骨格線を表示できる。山腹には粗さが残る試作で、全国データは変更しない。[仕様・容量・検証](tools/terrain/RIDGE_SURFACE_COMPARISON.md) を参照。
+
+骨格保持曲面には、比較元 z14 三角形メッシュの約半分の圧縮容量まで制御点を増やす比較も追加した。画面は http://127.0.0.1:61470/?region=yari&quality=half 。以前の品質も選べ、制御点数と比較元に対する保存量の比率を表示する。同じ JSON＋zlib 条件での比較で、配布形式の容量比較ではない。
+
+B スプラインの保存量は [係数圧縮比較](tools/terrain/BSPLINE_CODEC_COMPARISON.md) で検証した。比較表は http://127.0.0.1:61471/ 。階層残差・親予測差分・独立保存を、可逆と 25 cm 係数量子化に分けて確認できる。既存の曲面表示は変更しない。
+
+骨格制御点の三角形模様を避けるため、一続きの B スプラインへ近似する [比較](tools/terrain/RIDGE_SPLINE_COMPARISON.md) を追加した。画面は http://127.0.0.1:61472/?region=yari&fitN=256 。面や元 DEM を使わず、保存した制御点から 250・125・62.5 m 間隔の曲面を作る。既存方式も選べる。
+
+61472 の B スプライン比較には水色の係数制御点と橙色の近似入力点を重ねて表示できる。表示と地形越しの点表示はそれぞれ切り替えられる。係数制御点は曲面上にあるとは限らない。
+
+必要な場所へ基底の中心を集める [自由配置曲面の比較](tools/terrain/ADAPTIVE_FREE_SURFACE_COMPARISON.md) を追加した。画面は http://127.0.0.1:61473/?region=yari&points=32768 。不規則な入力点から誤差の大きい位置を選び、C2 の局所曲面を合成する。水色の中心点を表示し、格子 B スプライン版とも切り替えられる。
+
+
+自由配置版は C1 連続の三次曲面へ変更した（2026-10-26）。保存するのは不規則に配置した XYZ で、曲面係数と描画ポリゴンは読み込み時に復元する。画面は http://127.0.0.1:61473/?region=yari&renderer=adaptive&points=8192 。旧 RBF 版のコードとデータ、格子 B スプライン版は残した。点数ごとの容量・誤差、GPU 描画と接続の検証、少数点での制約は [技術メモ](tools/terrain/ADAPTIVE_FREE_SURFACE_COMPARISON.md) を参照。
+
+
+## 自由配置曲面の細かな襞への対処（2026-10-26）
+
+細長い区画に曲率が集中し、細い折り目として見える箇所を槍ヶ岳で確認した。C1 連続の確認だけでは見た目の品質を保証できなかった。画素ごとに元の曲面の法線を計算する方法も、描画ポリゴンで再現できない細かさの陰影を出していた。
+
+表示側に「曲面のならし」を追加。なし・40・80・120・160 m から選べ、標準は 40 m。中心の重み 0.2、上下左右の距離 r の 4 点を各 0.1、斜めの距離 (r,r) の 4 点を各 0.05、上下左右の距離 2r の 4 点を各 0.05 とする 13 点平均で、高さと勾配を一緒にならす。領域外は境界位置の高さを延長し、延長した方向の微分はゼロにする。連続な面積積分や誤差上限付きの平滑化ではなく、離散的なフィルターである。
+
+GPU で表示ポリゴンを作る際に計算し、法線も同じ表示頂点に保持する。画素ではその法線を補間し、表示形状より細かな陰影を独立に作らない。ならしや分割数の変更では表示用バッファだけを再計算し、データの再取得やシーンの初期化はしない。カメラ操作時は再計算しない。曲面の法線 OFF は、ならした表示ポリゴンの面法線を使う。
+
+保存 XYZ と SQLite は変更しない。表示上の高さと山頂の高さは変わり、水色の点もならし後の曲面に沿って表示する。ならし前の保護点誤差と、ならし後の表示精度を混同しない。細い尾根も丸まるため、なしとの比較を残す。URL の `fairing=0` または `fairing=40` でも指定できる。
+
+ブラウザー検証に、13 点平均と GPU の高さ・勾配の一致、法線の隣接差の 99 パーセンタイルの低下、法線 ON/OFF を追加した。32,768 点の 3 地域で、99 パーセンタイルは槍ヶ岳 1.004→0.634、富士山 0.379→0.255、筑波山 0.484→0.294。これは勾配差の指標であり、襞が全域で解消したという保証ではない。槍ヶ岳 8,192 点の前後画像は v6 の `yari-fold-before.png` と `yari-fold-fair40.png` に保存した。
+
+
+自由配置版の 512・2,048 点には、三角形区画の線状模様を避けるため全点を使う薄板スプラインを追加した。画面の「少数点の曲面」で従来の三次曲面とも比較できる。保存する XYZ と容量は変えず、倍精度で生成した描画用キャッシュを一時保持する。8,192 点以上は従来方式。詳細は自由配置曲面の技術メモを参照。
+
+
+三角形状の造形と、少数点で一部だけ詳細になる偏りへの対処として、[全域で解像度をそろえる自由配置曲面](tools/terrain/SCALE_FREE_SURFACE_COMPARISON.md) を追加した。生成時に元標高へ点数に応じた LPF を掛け、面積を基準に配置した局所二次曲面を滑らかに合成する。3 地域・4 点数を生成済み。保存量には局所曲面の係数も含むため旧 XYZ 方式より増える。画面の「点の配分と曲面」で従来方式とも比較できる。
+
+
+共通 LPF と点数を維持したまま、[再現誤差に応じて中心を再配分する比較](tools/terrain/ADAPTIVE_ALLOCATION_SURFACE_COMPARISON.md) を追加した。平坦部では半径を広げ、複雑な場所へ中心を回す。別の評価点で改善した候補だけ採用し、改善しない場合は均等配置を保持する。3 地域・4 点数を生成し、均等配置版も選べる。512 点の採択用近似 RMSE は筑波山 8.18→4.09 m、富士山 7.06→4.96 m。元標高への誤差とは異なる。
+
+
+## B スプラインの細部係数削減の試作
+
+元の一続きの曲面から、高さと傾きへの影響が小さい細部係数を削除する比較を追加した。3 地域、5 残存率、LPF ON/OFF を比較できる。保存形式・実測容量・品質上の制約は [比較記録](tools/terrain/PRUNED_SPLINE_COMPARISON.md) を参照。
+
+
+## 等間隔を使わない B スプラインの比較
+
+曲率と再現誤差から不等間隔のノット列を配置する比較を追加。直交配列は残るため、完全な自由配置とは異なる。保存形式と GPU 用再構成の誤差は [比較記録](tools/terrain/NONUNIFORM_SPLINE_COMPARISON.md) を参照。
+
+
+## T スプラインを使わない局所階層曲面
+
+誤差の大きい局所範囲だけに細かい基底を追加する B スプライン比較を追加した。軸全体へ分割を延ばさず、曲面をつなぐ。[仕様と制約](tools/terrain/LOCAL_SPLINE_COMPARISON.md) に生成・保存・検証方法を記録。
+
+
+## 自由配置の MLS 曲面
+
+格子を保存せず、任意の XY と高さから移動最小二乗法で曲面を復元する比較を追加。3 地域・5 点数で確認できる。[保存形式と実測](tools/terrain/FREE_MLS_COMPARISON.md) に、少数点での丸まりと表示用格子の制約も記録した。
+
+
+富士山の MLS 比較では、点数固定に加えて許容誤差による品質指定を試せる。点数の決定方法・条件達成の測定範囲・保存形式は [誤差指定 MLS の記録](tools/terrain/MLS_ERROR_QUALITY.md) を参照。
+
+
+### 元 PNG DEM 基準の自由配置 MLS 比較
+
+槍ヶ岳の元 PNG DEM を基準に、25 m 独立・12.5 m 独立・12.5 m 残差曲面を比較する試作は [MLS_DEM_LEVELS.md](tools/terrain/MLS_DEM_LEVELS.md) に生成・検証・表示手順を記載している。目標誤差と全元画素で測定した誤差を分け、残差版は追加分と親込みの容量を表示する。旧 B スプライン基準の試作は別の比較として保持する。
+
+
+3地域・50～3,200 mの追加段階と詳細段階の生成・検証は [MLS_DEM_REGIONS.md](tools/terrain/MLS_DEM_REGIONS.md) を参照。富士山・槍ヶ岳・筑波山の元 PNG DEM を基準にし、同じ比較画面で地域と品質を選択できる。
+
+
+粗い段階の人工的な模様を抑えるLPF目標・曲率抑制の比較は [MLS_LPF_DEM.md](tools/terrain/MLS_LPF_DEM.md) を参照。元DEMとの差とLPF後の目標との差を分け、従来方式も残して比較する。
+
+
+MLSの補間半径を滑らかにする方式は [MLS_SMOOTH_RADIUS.md](tools/terrain/MLS_SMOOTH_RADIUS.md) を参照。同じ制御点の圧縮データを使い、新旧の半径計算と再評価した誤差を比較できる。
+
+
+生成時と復元時に同じ滑らかなMLS半径を使う再適合版は [MLS_SMOOTH_REFIT.md](tools/terrain/MLS_SMOOTH_REFIT.md) を参照。表示時に別の平滑化を追加せず、生成段階から同じ曲面定義で標高に適合する。
+
+
+最低6点の狭い二次MLSと生成時の傾き適合の比較試験は [MLS_SIX_POINT.md](tools/terrain/MLS_SIX_POINT.md) を参照。現在は広い半径版より荒れが残るため比較用として保持する。
+
+自由配置曲面の試験: [狭い MLS の XY 配置・点数の比較](tools/terrain/MLS_XY_PLACEMENT.md)。
+
+自由配置曲面の比較: [自然近傍補間](tools/terrain/SIBSON_SURFACE.md)。
+
+自然近傍の品質指定（最大誤差12.5～800 m）: [誤差連動LPFと点数自動生成](tools/terrain/SIBSON_ERROR_DRIVEN.md)。
+
+自然近傍の容量・復元比較: [親曲面のZ差分圧縮](tools/terrain/SIBSON_DELTA_COMPRESSION.md)。
+
+自然近傍の共有保存: [親XY保持・共通点と追加点の比較](tools/terrain/SIBSON_SHARED_XY.md)。
+
+自然近傍の読込み依存: [独立アンカー配置の比較](tools/terrain/SIBSON_ANCHORS.md)。
+
+
+自然近傍地形の現在の採用仕様: [決定事項](tools/terrain/SIBSON_DECISIONS.md)。共通XY・追加点保存、独立アンカー800・400・50 m、最大参照3段。
+
+自然近傍のタイル境界: [同品質・混合品質・一部境界の接合試験](tools/terrain/SIBSON_TILE_SEAMS.md)。
+
+
+### 制御点重みの比較テスト
+
+ローカル配信の `/weighted` で、3地域の25 m/50 mと重み付き曲面・同容量の点追加を比較する。`tools/terrain/test_weighted_sibson.py` で補間と保存を、`tools/terrain/test_sibson_weighted_browser.cjs` で切替と描画を確認する。生成・制約・測定値は [調査メモ](tools/terrain/RESEARCH.md) の「2026-10-28：制御点XYZ＋重みの比較」を参照。
+
+`/weighted` では自由配置の有理Bスプライン基底も比較できる。格子やTスプラインを使わず、誤差の大きい場所へ点を追加する。`tools/terrain/test_free_rational_bspline.py` と `tools/terrain/test_free_rational_bspline_browser.cjs` で確認する。標準NURBSの制御点網とは異なる試作で、現在の採用方式は変更しない。
+
+標準NURBSの比較も `/weighted` に追加した。`tools/terrain/test_standard_nurbs.py` で曲面・微分・逆写像・保存を、`tools/terrain/test_standard_nurbs_browser.cjs` で3地域の切替と制御網表示を確認する。地形適応したXY制御網と等間隔制御網を比較できる。詳細は調査メモの「標準NURBSによる比較」を参照。
+
+標準NURBSの点数約2倍・4倍版は `tools/terrain/generate_standard_nurbs_larger.py` で生成する。`tools/terrain/test_standard_nurbs_larger_browser.cjs` で地域・品質・倍率の切替と制御網表示を確認する。
+
+自然近傍を基準にしたC¹試作と精密表示は `/weighted` で比較する。`tools/terrain/test_sibson_c1.py` と `tools/terrain/test_sibson_c1_browser.cjs` で確認する。C¹版は現時点で非採用、元曲面を保つ512/1024表示を対照とする。
+
+自然近傍の制御点の尖りを局所的に丸める比較は `tools/terrain/generate_sibson_node_rounding.py` で生成する。`tools/terrain/test_sibson_node_rounding.py` と `tools/terrain/test_sibson_node_rounding_browser.cjs` で、制御点と範囲外の曲面を保つことと表示を確認する。
+
+円形補正を使わない全域C¹勾配適合の比較は `tools/terrain/generate_sibson_global_c1.py` で生成する。C評価器は `tools/terrain/build_sibson_global_c1.ps1`、検証は `tools/terrain/test_sibson_global_c1.py` と `tools/terrain/test_sibson_global_c1_browser.cjs`。元の自然近傍は基準として保持する。
+
+制御点から GPU で自然近傍曲面を生成する比較は `/control-gpu`。実装・検証・制限は [GPU 制御点補間](tools/terrain/SIBSON_GPU_CONTROLS.md) を参照。
+
+128 km・全7レベル・可変タイル・自動LODのGPU補間比較は `/control-gpu128`。3地域を切り替え、品質固定・LOD色分け・境界表示・GPU時間計測もできる。仕様は [GPU 制御点補間](tools/terrain/SIBSON_GPU_CONTROLS.md) を参照。
+
+全国自然近傍地形の設計候補は [全国仕様案](tools/terrain/NATIONAL_NATURAL_SPEC.md)。DBのSQL、XYZ座標・整数復元の参照コード、全7品質とRice併用の設定を含む。全国生成は移行試験・容量確認前のため未開始。
+
+## 2026-10-28：全国自然近傍データの入力準備
+
+`tools/terrain/prepare_national_natural.ps1`（同名の `.bat` も可）を追加した。これは全国曲面生成器ではなく、その前段の入力棚卸しである。元DEM索引 `build/terrain-lod.sqlite3` のz14一覧を読み取り専用で開き、`build/terrain-cache/14/x/y.png` のサイズ・SHA-256・PNG署名を別の作業SQLiteへ固定する。PNG復号と有効画素検査はまだ行わず、未取得は海と判定しない。対象はz8～z14 / 800～12.5 m。7.25 mは含まない。
+
+```powershell
+# terrain ディレクトリーで実行。起動するまでは生成・取得を開始しない。
+./tools/terrain/prepare_national_natural.ps1 -OutputDirectory build/terrain-national-natural-v1 -Background
+# 中断後の再開。入力の追加・削除・同サイズの内容変更も検出する。
+./tools/terrain/prepare_national_natural.ps1 -OutputDirectory build/terrain-national-natural-v1 -Resume -Background
+```
+
+`-Source` はz14一覧を持つSQLite、`-Cache` は標高PNGの保存先、`-OutputDirectory` は作業先。別ドライブを絶対パスで指定できる。入力取得・旧データ削除・サーバー停止・公開は行わない。Pythonは準備の入出力だけを担当し、自然近傍の全国曲面生成をPythonの地域反復で代用しない。
+
+出力は `job.json`（世代ID・設定ハッシュ・入力一覧ハッシュ・品質別候補数）、`settings.json`、`inputs.sqlite3`、`progress.json`。バックグラウンド時は日時付き `launch-*.json` にPIDとログを残す。SQLite排他ロックで同じ出力への二重実行を拒否する。品質別候補数は索引上の枚数で、有効画素に基づく確定coverage・全国最終タイル数とは区別する。
+
+準備終了は `prepared-awaiting-rust-engine` とし、`complete` / `distributable` はfalseのまま。Rustによる全国Sibson適合・LPF全域監査・支持集合の閉包・Riceでの全国DB出力は未実装であり、このスクリプトからはまだ実行できない。設定の `production_ready` もfalseを維持する。検証は `python -m unittest discover -s tools/terrain -p test_prepare_national_natural.py`（6件）。

@@ -1,0 +1,134 @@
+{
+  "format": "YNN",
+  "schema_version": 1,
+  "status": "national-design-candidate",
+  "production_ready": false,
+  "crs": {
+    "epsg": 3857,
+    "tile_scheme": "XYZ",
+    "radius_m": 6378137,
+    "world_width_m": 40075016.68557849,
+    "axis": [
+      "east",
+      "south"
+    ],
+    "reference_latitude_deg": 35
+  },
+  "levels": [
+    {
+      "z": 8,
+      "error_m": 800,
+      "parent_z": null,
+      "storage": "full",
+      "max_parent_depth": 0
+    },
+    {
+      "z": 9,
+      "error_m": 400,
+      "parent_z": null,
+      "storage": "full",
+      "max_parent_depth": 0
+    },
+    {
+      "z": 10,
+      "error_m": 200,
+      "parent_z": 9,
+      "storage": "delta_preferred",
+      "max_parent_depth": 1
+    },
+    {
+      "z": 11,
+      "error_m": 100,
+      "parent_z": 10,
+      "storage": "delta_preferred",
+      "max_parent_depth": 2
+    },
+    {
+      "z": 12,
+      "error_m": 50,
+      "parent_z": null,
+      "storage": "full",
+      "max_parent_depth": 0
+    },
+    {
+      "z": 13,
+      "error_m": 25,
+      "parent_z": 12,
+      "storage": "delta_preferred",
+      "max_parent_depth": 1
+    },
+    {
+      "z": 14,
+      "error_m": 12.5,
+      "parent_z": 13,
+      "storage": "delta_preferred",
+      "max_parent_depth": 2
+    }
+  ],
+  "quantization": {
+    "xy_step_m": 0.0625,
+    "z_step_m": 0.125,
+    "rounding": "floor(value+0.5)",
+    "payload_xy": "tile_local_i32",
+    "cpu_coordinates": "global_integer_i32",
+    "gpu_coordinates": "tile_center_relative_float32",
+    "integer_bits": 32,
+    "signed": true,
+    "approval": "user-confirmed-2026-10-28"
+  },
+  "codec": {
+    "full": "NQC1",
+    "delta": "NDC1",
+    "integer_profile": "rice-hybrid-v1",
+    "outer_compression": "none",
+    "block_values": 128,
+    "max_parents_per_tile": 4,
+    "max_dependency_tiles": 16,
+    "max_parent_depth": 2,
+    "max_points_per_tile": 262144,
+    "max_payload_bytes": 16777216,
+    "independent_escape": true
+  },
+  "surface": {
+    "algorithm": "sibson-voronoi-area-v1",
+    "control_set": "nested-global-xy",
+    "lpf_sigma_initial": "error_m/2",
+    "lpf_max_error": "error_m/2",
+    "lpf_sigma_scope": "dataset-level",
+    "final_audit": "all-valid-source-pixel-centres-after-quantization",
+    "triangles_stored": false,
+    "gradients_stored": false
+  },
+  "support": {
+    "minimum_halo_m": 250,
+    "method": "global-delaunay-support-closure",
+    "gradient_stencil_m": 1,
+    "same_level_source": "canonical-global-control-set",
+    "fixed_distance_cap": false
+  },
+  "source": {
+    "kind": "gsi-dem-png",
+    "source_z": 14,
+    "no_data_means_sea": false,
+    "heightmap_distributed": false
+  },
+  "coverage": {
+    "root_z": 8,
+    "leaf_z": 14,
+    "encoding": "NCV1",
+    "values": {
+      "0": "verified-no-data",
+      "1": "has-valid-source",
+      "2": "unavailable-input",
+      "3": "reserved"
+    }
+  },
+  "generation": {
+    "language": "Rust",
+    "workers": "max(1,logical_processors//2)",
+    "cache_limit_gib": 8,
+    "minimum_free_disk_gib": 8,
+    "partial_output_separate": true,
+    "start_national_automatically": false
+  }
+}

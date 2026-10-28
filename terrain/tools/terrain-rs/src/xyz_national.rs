@@ -166,7 +166,10 @@ fn write_shape(
     n: usize,
 ) -> Result<()> {
     let tmp = path.with_extension("partial.mesh");
-    let mut out = BufWriter::new(File::create(&tmp)?);
+    let mut out = BufWriter::new(
+        retry_shared_io(|| File::create(&tmp), std::time::Duration::from_millis(25))
+            .with_context(|| format!("確定形状の一時保存: {}", tmp.display()))?,
+    );
     out.write_all(b"XRG1")?;
     out.write_all(&(p.len() as u32).to_le_bytes())?;
     out.write_all(&(f.len() as u32).to_le_bytes())?;
@@ -182,7 +185,11 @@ fn write_shape(
     }
     out.flush()?;
     drop(out);
-    fs::rename(tmp, path)?;
+    retry_shared_io(
+        || fs::rename(&tmp, path),
+        std::time::Duration::from_millis(25),
+    )
+    .with_context(|| format!("確定形状の置換: {}", path.display()))?;
     Ok(())
 }
 fn status(args: &Args, value: serde_json::Value) -> Result<()> {
@@ -271,14 +278,13 @@ fn run_locked(args: &Args) -> Result<()> {
         );
     }
     generate_base_parallel(args, &config, &db)?;
-    let mut source = Source::open(&args.source)?;
     for z in 6..=14u32 {
         if db
             .query_row("SELECT 1 FROM synchronized WHERE z=?1", [z], |_| Ok(()))
             .optional()?
             .is_none()
         {
-            synchronize(args, &config, &db, &mut source, z)?;
+            synchronize(args, &config, &db, z)?;
         }
         if db
             .query_row("SELECT 1 FROM packed WHERE z=?1", [z], |_| Ok(()))
@@ -471,13 +477,7 @@ fn generate_base_parallel(args: &Args, config: &Config, db: &Connection) -> Resu
     })
 }
 
-fn synchronize(
-    args: &Args,
-    config: &Config,
-    db: &Connection,
-    source: &mut Source,
-    z: u32,
-) -> Result<()> {
+fn synchronize(args: &Args, config: &Config, db: &Connection, z: u32) -> Result<()> {
     let k = 1i64 << (14 - z);
     let step = (k / 64).max(1);
     // 全領域の基本境界を先に登録する。後続の補修で増えた境界も収束まで共有する。
@@ -486,6 +486,18 @@ fn synchronize(
         let r = chunk_region(config, xy);
         let dir = chunk_dir(args, &r);
         let (p, _, _) = read_level(&dir.join(format!("z{z}.mesh")))?;
+        for corner in [
+            [0, 0],
+            [config.cells as i64, 0],
+            [0, config.cells as i64],
+            [config.cells as i64, config.cells as i64],
+        ] {
+            ensure!(
+                p.contains(&corner),
+                "並列境界同期に必要な固定隅点がありません: {}",
+                r.name
+            );
+        }
         for p in p {
             if boundary(p, config.cells as i64) {
                 tx.execute(
@@ -496,148 +508,81 @@ fn synchronize(
         }
     }
     tx.commit()?;
+    ensure!(
+        args.national_boundary_workers > 0,
+        "境界同期の並列数は1以上を指定してください"
+    );
+    let cpus = std::thread::available_parallelism()
+        .map(|v| (v.get() / 2).max(1))
+        .unwrap_or(1);
+    let workers = args
+        .national_boundary_workers
+        .min(cpus)
+        .min(config.chunks.len());
+    let batches = sync_batches(&config.chunks, workers);
     let mut pass = 0;
     loop {
         pass += 1;
         let mut added = 0;
-        for (index, &xy) in config.chunks.iter().enumerate() {
+        let mut processed = 0;
+        for batch in &batches {
             check_space(&args.output)?;
-            let r = chunk_region(config, xy);
-            let dir = chunk_dir(args, &r);
-            let target = dir.join(format!("final-z{z}.mesh"));
+            let mut tasks = Vec::new();
+            for &(index, xy) in batch {
+                let r = chunk_region(config, xy);
+                let mut query=db.prepare("SELECT x,y FROM boundary WHERE z=?1 AND x>=?2 AND y>=?3 AND x<=?4 AND y<=?5 ORDER BY y,x")?;
+                let shared = query
+                    .query_map(
+                        params![
+                            z,
+                            r.px,
+                            r.py,
+                            r.px + config.cells as i64,
+                            r.py + config.cells as i64
+                        ],
+                        |row| Ok([row.get::<_, i64>(0)?, row.get::<_, i64>(1)?]),
+                    )?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                tasks.push((index, xy, shared));
+            }
+            let active=tasks.iter().map(|&(index,xy,_)|{let r=chunk_region(config,xy);json!({"index":index,"chunk":r.name,"childProgress":chunk_dir(args,&r).join("progress.json")})}).collect::<Vec<_>>();
             status(
                 args,
-                json!({"stage":"synchronize-boundaries","childProgress":dir.join("progress.json"),"z":z,"pass":pass,"chunk":r.name,"chunkIndex":index,"totalChunks":config.chunks.len(),"generationStarted":true,"complete":false}),
+                json!({"stage":"synchronize-boundaries","parallelWorkers":workers,"activeChunks":active,"z":z,"pass":pass,"chunkIndex":processed,"totalChunks":config.chunks.len(),"generationStarted":true,"complete":false}),
             )?;
-            let (grid, _, scales, _, _) = load_fields(source, &r, &dir, false)?;
-            let (base, _, _) = read_level(&dir.join(format!("z{z}.mesh")))?;
-            let mut seeds = base
-                .into_iter()
-                .map(|p| [snapped(p[0], step) / step, snapped(p[1], step) / step])
-                .collect::<BTreeSet<_>>();
-            for file in [
-                if z > 6 {
-                    Some(dir.join(format!("final-z{}.mesh", z - 1)))
-                } else {
-                    None
-                },
-                if target.exists() {
-                    Some(target.clone())
-                } else {
-                    None
-                },
-            ]
-            .into_iter()
-            .flatten()
-            {
-                for p in read_level(&file)?.0 {
-                    ensure!(
-                        p[0] % step == 0 && p[1] % step == 0,
-                        "継承頂点の量子化格子が不一致"
-                    );
-                    seeds.insert([p[0] / step, p[1] / step]);
-                }
-            }
-            let mut query=db.prepare("SELECT x,y FROM boundary WHERE z=?1 AND x>=?2 AND y>=?3 AND x<=?4 AND y<=?5 ORDER BY y,x")?;
-            for row in query.query_map(
-                params![
-                    z,
-                    r.px,
-                    r.py,
-                    r.px + config.cells as i64,
-                    r.py + config.cells as i64
-                ],
-                |row| Ok([row.get::<_, i64>(0)?, row.get::<_, i64>(1)?]),
-            )? {
-                let p = row?;
-                seeds.insert([(p[0] - r.px) / step, (p[1] - r.py) / step]);
-            }
-            let n = (r.n - 1) / step as usize + 1;
-            let down = |v: &[f64]| {
-                (0..n)
-                    .flat_map(|y| {
-                        (0..n).map(move |x| v[y * step as usize * r.n + x * step as usize])
+            // 同じ波面では共有辺がなく、隅点は最初から全領域に固定されている。
+            // 境界登録はバッチ全体の計算後に管理側で行う。
+            let results = std::thread::scope(|scope| {
+                let handles = tasks
+                    .into_iter()
+                    .map(|(_, xy, shared)| {
+                        scope.spawn(move || {
+                            synchronize_chunk(args, config, z, step, xy, shared)
+                                .with_context(|| format!("境界同期 z{z}: {xy:?}"))
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                handles
+                    .into_iter()
+                    .map(|h| {
+                        h.join().unwrap_or_else(|_| {
+                            Err(anyhow::anyhow!("境界同期スレッドが異常終了しました"))
+                        })
                     })
                     .collect::<Vec<_>>()
-            };
-            let low = down(&grid);
-            let low_scales = down(&scales);
-            let tolerance = 12.5 * k as f64;
-            let mut rounds = 0;
-            let (points, faces) = loop {
-                rounds += 1;
-                ensure!(rounds <= 100, "面の幅補修が収束しません");
-                let fixed = adaptive_tin::quality_tin::refine_seeded_with_limits(
-                    &low,
-                    n,
-                    seeds.iter().copied().collect(),
-                    tolerance - 0.125,
-                    10.,
-                    || false,
-                    if z == 14 { None } else { Some(&low_scales) },
-                )?;
-                let mut extra = BTreeSet::new();
-                for face in &fixed.faces {
-                    for j in 0..3 {
-                        let a = fixed.points[face[j]];
-                        let b = fixed.points[face[(j + 1) % 3]];
-                        if (a[0] - b[0]).abs().max((a[1] - b[1]).abs()) * step
-                            > (256. * k as f64 * 0.49).floor() as i64
-                        {
-                            extra.insert([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
-                        }
-                    }
-                }
-                if extra.is_empty() {
-                    break (
-                        fixed
-                            .points
-                            .into_iter()
-                            .map(|p| [p[0] * step, p[1] * step])
-                            .collect::<Vec<_>>(),
-                        fixed.faces,
-                    );
-                }
-                seeds.extend(fixed.points);
-                let old = seeds.len();
-                seeds.extend(extra);
-                ensure!(seeds.len() > old, "面の幅補修に必要な格子点がありません");
-            };
-            let vertices = points
-                .iter()
-                .map(|p| {
-                    let h = grid[p[1] as usize * r.n + p[0] as usize];
-                    ensure!((-12000. ..=10383.75).contains(&h), "標高範囲外");
-                    Ok(V {
-                        x: (r.px + p[0]) * 64,
-                        y: (r.py + p[1]) * 64,
-                        z: (24000. + h / if h < 0. { 0.5 } else { 0.25 }).round() as u16,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let audit = xyz_region_pack::quantized_audit(&r, &vertices, &faces, &grid, &scales, z);
-            ensure!(
-                audit["passed"] == true,
-                "全国量子化検証失敗 {} z{}: {}",
-                r.name,
-                z,
-                audit
-            );
-            write_shape(&target, &points, &faces, &grid, r.n)?;
-            fs::write(
-                dir.join(format!("final-z{z}.audit.json")),
-                serde_json::to_vec_pretty(&audit)?,
-            )?;
-            let tx = db.unchecked_transaction()?;
-            for &p in &points {
-                if boundary(p, config.cells as i64) {
+            });
+            for result in results {
+                let points = result?;
+                let tx = db.unchecked_transaction()?;
+                for p in points {
                     added += tx.execute(
                         "INSERT OR IGNORE INTO boundary VALUES(?1,?2,?3)",
-                        params![z, r.px + p[0], r.py + p[1]],
+                        params![z, p[0], p[1]],
                     )?;
                 }
+                tx.commit()?;
+                processed += 1;
             }
-            tx.commit()?;
         }
         if added == 0 {
             break;
@@ -646,8 +591,208 @@ fn synchronize(
     db.execute("INSERT INTO synchronized VALUES(?1)", [z])?;
     Ok(())
 }
+// 1並列は比較用に従来の行順を維持する。複数並列は北・西からの依存を波面で守る。
+fn sync_batches(chunks: &[[i64; 2]], workers: usize) -> Vec<Vec<(usize, [i64; 2])>> {
+    if workers == 1 {
+        return chunks
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|p| vec![p])
+            .collect();
+    }
+    let mut waves = std::collections::BTreeMap::<i64, Vec<(usize, [i64; 2])>>::new();
+    for (i, &xy) in chunks.iter().enumerate() {
+        waves.entry(xy[0] + xy[1]).or_default().push((i, xy));
+    }
+    waves
+        .values()
+        .flat_map(|wave| wave.chunks(workers).map(|part| part.to_vec()))
+        .collect()
+}
+fn synchronize_chunk(
+    args: &Args,
+    config: &Config,
+    z: u32,
+    step: i64,
+    xy: [i64; 2],
+    shared: Vec<[i64; 2]>,
+) -> Result<Vec<[i64; 2]>> {
+    let k = 1i64 << (14 - z);
+    let r = chunk_region(config, xy);
+    let dir = chunk_dir(args, &r);
+    let target = dir.join(format!("final-z{z}.mesh"));
+    let mut source = Source::open(&args.source)?;
+    let (grid, _, scales, _, _) = load_fields(&mut source, &r, &dir, false)?;
+    progress(
+        &dir,
+        json!({"stage":"quantization-repair","z":z,"complete":false}),
+    )?;
+    let (base, _, _) = read_level(&dir.join(format!("z{z}.mesh")))?;
+    let mut seeds = base
+        .into_iter()
+        .map(|p| [snapped(p[0], step) / step, snapped(p[1], step) / step])
+        .collect::<BTreeSet<_>>();
+    for file in [
+        if z > 6 {
+            Some(dir.join(format!("final-z{}.mesh", z - 1)))
+        } else {
+            None
+        },
+        if target.exists() {
+            Some(target.clone())
+        } else {
+            None
+        },
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for p in read_level(&file)?.0 {
+            ensure!(
+                p[0] % step == 0 && p[1] % step == 0,
+                "継承頂点の量子化格子が不一致"
+            );
+            seeds.insert([p[0] / step, p[1] / step]);
+        }
+    }
+    for p in shared {
+        seeds.insert([(p[0] - r.px) / step, (p[1] - r.py) / step]);
+    }
+    let n = (r.n - 1) / step as usize + 1;
+    let down = |v: &[f64]| {
+        (0..n)
+            .flat_map(|y| (0..n).map(move |x| v[y * step as usize * r.n + x * step as usize]))
+            .collect::<Vec<_>>()
+    };
+    let low = down(&grid);
+    let low_scales = down(&scales);
+    let tolerance = 12.5 * k as f64;
+    let mut rounds = 0;
+    let (points, faces) = loop {
+        rounds += 1;
+        ensure!(rounds <= 100, "面の幅補修が収束しません");
+        let fixed = adaptive_tin::quality_tin::refine_seeded_with_limits(
+            &low,
+            n,
+            seeds.iter().copied().collect(),
+            tolerance - 0.125,
+            10.,
+            || false,
+            if z == 14 { None } else { Some(&low_scales) },
+        )?;
+        let mut extra = BTreeSet::new();
+        for face in &fixed.faces {
+            for j in 0..3 {
+                let a = fixed.points[face[j]];
+                let b = fixed.points[face[(j + 1) % 3]];
+                if (a[0] - b[0]).abs().max((a[1] - b[1]).abs()) * step
+                    > (256. * k as f64 * 0.49).floor() as i64
+                {
+                    extra.insert([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
+                }
+            }
+        }
+        if extra.is_empty() {
+            break (
+                fixed
+                    .points
+                    .into_iter()
+                    .map(|p| [p[0] * step, p[1] * step])
+                    .collect::<Vec<_>>(),
+                fixed.faces,
+            );
+        }
+        seeds.extend(fixed.points);
+        let old = seeds.len();
+        seeds.extend(extra);
+        ensure!(seeds.len() > old, "面の幅補修に必要な格子点がありません");
+    };
+    let vertices = points
+        .iter()
+        .map(|p| {
+            let h = grid[p[1] as usize * r.n + p[0] as usize];
+            ensure!((-12000. ..=10383.75).contains(&h), "標高範囲外");
+            Ok(V {
+                x: (r.px + p[0]) * 64,
+                y: (r.py + p[1]) * 64,
+                z: (24000. + h / if h < 0. { 0.5 } else { 0.25 }).round() as u16,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    progress(
+        &dir,
+        json!({"stage":"quantized-audit","z":z,"complete":false}),
+    )?;
+    let audit = xyz_region_pack::quantized_audit(&r, &vertices, &faces, &grid, &scales, z);
+    ensure!(
+        audit["passed"] == true,
+        "全国量子化検証失敗 {} z{}: {}",
+        r.name,
+        z,
+        audit
+    );
+    write_shape(&target, &points, &faces, &grid, r.n)?;
+    let audit_path = dir.join(format!("final-z{z}.audit.json"));
+    let audit_bytes = serde_json::to_vec_pretty(&audit)?;
+    retry_shared_io(
+        || fs::write(&audit_path, &audit_bytes),
+        std::time::Duration::from_millis(25),
+    )
+    .with_context(|| format!("量子化検証結果の保存: {}", audit_path.display()))?;
+
+    Ok(points
+        .into_iter()
+        .filter(|&p| boundary(p, config.cells as i64))
+        .map(|p| [r.px + p[0], r.py + p[1]])
+        .collect())
+}
 
 // 最終保存の索引はSQLiteに置き、全国の面や親頂点を一括でメモリーへ載せない。
 fn pack_level(args: &Args, config: &Config, work: &Connection, z: u32) -> Result<()> {
     packing::pack_level(args, config, work, z)
+}
+
+#[cfg(test)]
+mod parallel_sync_tests {
+    use super::*;
+    #[test]
+    fn waves_keep_north_west_dependencies_and_do_not_share_edges() {
+        let chunks = (0..5)
+            .flat_map(|y| {
+                (0..6).filter_map(move |x| if (x + y) % 4 == 0 { None } else { Some([x, y]) })
+            })
+            .collect::<Vec<_>>();
+        let batches = sync_batches(&chunks, 4);
+        let mut where_at = HashMap::new();
+        for (batch, jobs) in batches.iter().enumerate() {
+            assert!(jobs.len() <= 4);
+            for &(index, xy) in jobs {
+                assert_eq!(chunks[index], xy);
+                assert!(where_at.insert(xy, batch).is_none());
+                for &(_, other) in jobs {
+                    assert_ne!((xy[0] - other[0]).abs() + (xy[1] - other[1]).abs(), 1);
+                }
+            }
+        }
+        assert_eq!(where_at.len(), chunks.len());
+        for &xy in &chunks {
+            for previous in [[xy[0] - 1, xy[1]], [xy[0], xy[1] - 1]] {
+                if let Some(p) = where_at.get(&previous) {
+                    assert!(*p < where_at[&xy]);
+                }
+            }
+        }
+    }
+    #[test]
+    fn one_worker_keeps_the_original_row_order() {
+        let chunks = vec![[3, 1], [4, 1], [1, 2], [2, 2], [4, 2]];
+        assert_eq!(
+            sync_batches(&chunks, 1)
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>(),
+            chunks.into_iter().enumerate().collect::<Vec<_>>()
+        );
+    }
 }

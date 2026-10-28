@@ -1,0 +1,18 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><title>自然近傍・共通XYと追加点の保存</title>
+<style>body{font:15px system-ui;margin:24px;color:#243128;background:#f5f8f5}table{border-collapse:collapse;background:white;margin:15px 0}th,td{border:1px solid #ccd6cc;padding:7px 10px;text-align:right}th:first-child,td:first-child{text-align:left}h1{font-size:23px}p{max-width:1150px;line-height:1.7}select{font-size:16px}a{color:#195839}</style>
+<h1>自然近傍・共通XYと追加点の保存</h1>
+<p>粗い品質のXYを細かい品質へ必ず引き継ぐように再生成しました。共有形式では親のXYを再保存せず、共通点のZ補正と新しいXYZ点だけを保存します。復元時に親曲面の評価は行いません。生成点数の変化も含めて従来の独立生成と比べます。</p>
+<p>「従来の独立生成」と「親XY保持」は配置の異なる曲面です。どちらも元DEM全画素中心に対する指定最大誤差以下です。圧縮後の復元は親XY保持の点列と完全一致し、圧縮による追加誤差は0です。</p>
+<div id="totals"></div><p id="pointTotals"></p>
+<label>地域 <select id="region"><option value="fuji">富士山</option><option value="yari" selected>槍ヶ岳</option><option value="tsukuba">筑波山</option></select></label><div id="details"></div>
+<p>準備時間はこのWindows上のPython＋ネイティブCによる3回の中央値です。BLOB展開、共有点の結合・並べ替え、検査値確認、最後の曲面構築を含みます。モデル未読込から開始し、OSのファイルキャッシュは制御していません。共有形式では親の点列だけ復元し、親の曲面は構築しません。</p>
+<p>ブラウザ内の共有デコーダーを測った値ではありません。ビューワーは同じ復元結果の事前計算データで表示します。全段の品質を保存する容量と、単独の品質を開くときの親込み容量を区別しています。</p>
+<a id="viewer" href="../dem-natural/?region=yari&variant=natural-error12.5&xy=nested&reference=dem">親XY保持の地形を表示</a> ／ <a href="../dem-natural-compression/">以前の親曲面Z予測との比較</a> ／ <a href="../dem-natural-anchors/">独立アンカー配置の比較</a>
+<script>
+const labels={original:'従来の独立生成・独立保存',nested:'親XY保持・独立保存',shared:'親XY保持・共通点＋追加点保存'},ki=x=>(x/1024).toFixed(2),ms=x=>(x*1000).toFixed(2);let report;
+function draw(){const region=document.getElementById('region').value;document.getElementById('viewer').href='../dem-natural/?region='+region+'&variant=natural-error12.5&xy=nested&reference=dem';let h='<table><tr><th>誤差 m</th><th>従来点数</th><th>親XY保持点数</th><th>追加点</th><th>従来 KiB</th><th>親XY保持・独立 KiB</th><th>共有形式単体 KiB</th><th>親込み KiB</th><th>従来準備 ms</th><th>共有形式準備 ms</th></tr>';
+ for(const r of report.rows.filter(r=>r.region===region))h+='<tr><td><a href="../dem-natural/?region='+region+'&variant=natural-error'+r.error+'&xy=nested&reference=dem">'+r.error+'</a></td><td>'+r.originalControls.toLocaleString()+'</td><td>'+r.nestedControls.toLocaleString()+'</td><td>'+r.addedControls.toLocaleString()+'</td><td>'+ki(r.originalBytes)+'</td><td>'+ki(r.nestedIndependentBytes)+'</td><td>'+ki(r.sharedBytes)+'</td><td>'+ki(r.timings.shared.requiredBytes)+'</td><td>'+ms(r.timings.original.coldSeconds)+'</td><td>'+ms(r.timings.shared.coldSeconds)+'</td></tr>';
+ document.getElementById('details').innerHTML=h+'</table>';window.reportReady=true;window.activeRegion=region;
+}
+fetch('report.json').then(r=>{if(!r.ok)throw Error('結果を取得できません');return r.json();}).then(r=>{report=r;let h='<table><tr><th>全3地域・7品質</th><th>BLOB合計 KiB</th><th>SQLite実サイズ KiB</th><th>従来からの容量削減</th></tr>';for(const [mode,v]of Object.entries(r.totals))h+='<tr><td>'+labels[mode]+'</td><td>'+ki(v.blobBytes)+'</td><td>'+ki(v.sqliteBytes)+'</td><td>'+((1-v.blobBytes/r.totals.original.blobBytes)*100).toFixed(2)+'%</td></tr>';document.getElementById('totals').innerHTML=h+'</table>';document.getElementById('pointTotals').textContent='全品質の点数合計：従来 '+r.originalPointSum.toLocaleString()+' ／ 親XY保持 '+r.nestedPointSum.toLocaleString()+'。共有形式でXYZを保存する点数合計：'+r.rows.reduce((sum,row)=>sum+row.addedControls,0).toLocaleString()+'（共通点はZ補正のみ）。';const region=new URLSearchParams(location.search).get('region');if(['fuji','yari','tsukuba'].includes(region))document.getElementById('region').value=region;draw();}).catch(e=>document.getElementById('totals').textContent=e.message);document.getElementById('region').onchange=draw;
+</script></html>

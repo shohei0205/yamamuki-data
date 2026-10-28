@@ -1,0 +1,23 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><title>自然近傍・独立アンカー配置</title>
+<style>body{font:15px system-ui;margin:24px;color:#243128;background:#f5f8f5}table{border-collapse:collapse;background:white;margin:15px 0}th,td{border:1px solid #ccd6cc;padding:7px 10px;text-align:right}th:first-child,td:first-child{text-align:left}h1{font-size:23px}p{max-width:1200px;line-height:1.7}select{font-size:16px}a{color:#195839}</style>
+<h1>自然近傍・独立アンカー配置</h1>
+<p>生成済みの親XY保持モデルは変えず、途中の品質を独立保存する配置だけを比較します。最粗800 mを必ず独立にする全64配置を集計し、最大参照2・3・4段それぞれの容量最小案と、全段共有・全段独立を実測しました。参照段数には表示する品質自身も含みます。</p>
+<p>容量削減の基準は、同じ親XY保持の点列を各品質で独立保存した場合です。前の表で使った「従来の独立生成」とは基準が異なります。全方式で復元XYZが完全一致し、圧縮による追加誤差は0です。</p>
+<div id="summary"></div>
+<label>地域 <select id="region"><option value="fuji">富士山</option><option value="yari" selected>槍ヶ岳</option><option value="tsukuba">筑波山</option></select></label>　<label>保存配置 <select id="strategy"></select></label>
+<div id="details"></div>
+<p>読込み量はモデル未読込から1品質を開く場合のBLOB合計です。時間は現WindowsのPython＋Cによる3回の中央値で、復号・結合・並べ替え・検査・最後の曲面構築を含みます。OSのファイルキャッシュは制御していません。ネットワーク転送時間やブラウザ・スマホの速度ではありません。</p>
+<details><summary>全64配置の容量・段数を見る（時間は上の5方式だけ実測）</summary><div id="all"></div></details>
+<a href="../dem-natural-shared/">共通XYの比較へ戻る</a> ／ <a href="../dem-natural/?region=yari&variant=natural-error12.5&xy=nested&reference=dem">同じ地形を表示</a>
+<script>
+const names={independent:'全段独立',chain:'全段共有',depth4:'最大4段・容量最小',depth3:'最大3段・容量最小',depth2:'最大2段・容量最小'},ki=x=>(x/1024).toFixed(2),ms=x=>(x*1000).toFixed(2);let report;
+function draw(){const region=document.getElementById('region').value,id=document.getElementById('strategy').value,plan=report.strategies.find(s=>s.id===id),baseline=report.strategies.find(s=>s.id==='independent');let h='<p>独立保存：'+plan.anchors.join('・')+' m。その他は直近の粗い品質を参照します。</p><table><tr><th>誤差 m</th><th>参照品質（m）</th><th>段数</th><th>単体 KiB</th><th>親込み KiB</th><th>独立 KiB</th><th>準備 ms</th><th>独立準備 ms</th></tr>';
+ for(const r of plan.rows.filter(r=>r.region===region)){const b=baseline.rows.find(b=>b.region===region&&b.error===r.error);h+='<tr><td>'+r.error+'</td><td>'+r.requiredLevels.join(' ← ')+'</td><td>'+r.requiredLevels.length+'</td><td>'+ki(r.blobBytes)+'</td><td>'+ki(r.requiredBytes)+'</td><td>'+ki(b.requiredBytes)+'</td><td>'+ms(r.coldSeconds)+'</td><td>'+ms(b.coldSeconds)+'</td></tr>';}
+ document.getElementById('details').innerHTML=h+'</table>';window.activeStrategy=id;window.activeRegion=region;window.reportReady=true;
+}
+fetch('report.json').then(r=>{if(!r.ok)throw Error('測定結果を取得できません');return r.json();}).then(r=>{report=r;const baseline=r.strategies.find(s=>s.id==='independent');let h='<table><tr><th>配置</th><th>独立にする誤差 m</th><th>BLOB合計 KiB</th><th>SQLite KiB</th><th>容量削減</th><th>最大段数</th><th>12.5 m親込み・3地域合計 KiB</th><th>12.5 m準備・3地域合計 ms</th></tr>';
+ for(const s of r.strategies){h+='<tr><td>'+names[s.id]+'</td><td>'+s.anchors.join('・')+'</td><td>'+ki(s.blobBytes)+'</td><td>'+ki(s.sqliteBytes)+'</td><td>'+((1-s.blobBytes/baseline.blobBytes)*100).toFixed(2)+'%</td><td>'+s.maxReferences+'</td><td>'+ki(s.fineRequiredBytes)+'</td><td>'+ms(s.fineSecondsSum)+'</td></tr>';document.getElementById('strategy').add(new Option(names[s.id],s.id));}
+ document.getElementById('summary').innerHTML=h+'</table>';let all='<table><tr><th>独立にする誤差 m</th><th>BLOB合計 KiB</th><th>最大段数</th><th>単独読込み・全21モデル平均 KiB</th></tr>';for(const p of r.placements)all+='<tr><td>'+p.anchors.join('・')+'</td><td>'+ki(p.blobBytes)+'</td><td>'+p.maxReferences+'</td><td>'+ki(p.meanRequiredBytes)+'</td></tr>';document.getElementById('all').innerHTML=all+'</table>';
+ const params=new URLSearchParams(location.search),region=params.get('region'),strategy=params.get('strategy');if(['fuji','yari','tsukuba'].includes(region))document.getElementById('region').value=region;document.getElementById('strategy').value=r.strategies.some(s=>s.id===strategy)?strategy:'depth3';draw();
+}).catch(e=>document.getElementById('summary').textContent=e.message);document.getElementById('region').onchange=draw;document.getElementById('strategy').onchange=draw;
+</script><p><a href="../dem-natural-seams/?region=yari&layout=partial&a=200&b=25&c=none&d=none">自然近傍のタイル接合試験へ</a></p></html>

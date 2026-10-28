@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ja"><meta charset="utf-8"><title>LPF・レベル別高さ・曲面の比較</title>
+<style>
+html,body{margin:0;height:100%;font:14px system-ui;background:#e6f1fa}canvas#terrain{display:block;width:100%;height:100%}#panel{position:absolute;top:8px;left:8px;right:8px;background:#fffffff0;border-radius:8px;padding:10px;max-height:44vh;overflow:auto}label,button,select{margin-right:10px}select,button{padding:4px}#status,#note{margin-top:6px;line-height:1.5}#profile{width:100%;height:150px;background:#fff}#leftLabel,#rightLabel{position:absolute;bottom:12px;background:#ffffffe0;padding:5px;border-radius:4px;pointer-events:none}#leftLabel{left:20%}#rightLabel{right:16%}summary{cursor:pointer}#note{font-size:12px;color:#444}
+</style>
+<canvas id="terrain"></canvas><div id="panel">
+<strong>LPF＋曲面／共通XY・レベル別高さの試作</strong>
+<label>地域 <select id="region"><option value="fuji">富士山</option><option value="yari">槍ヶ岳</option><option value="tsukuba">筑波山</option></select></label>
+<label>レベル <select id="level"></select></label>
+<label>方式 <select id="method"><option value="curve">LPF＋3次近似曲面</option><option value="filtered">LPF＋平面</option><option value="original">元標高＋平面（共通XY）</option></select></label>
+<label><input type="checkbox" id="split" checked>左右比較</label>
+<label>曲面の描画 <select id="renderer"><option value="ray" selected>直接交差（レイキャスト）</option><option value="triangles">三角形で近似（従来）</option></select></label>
+<label>近似描画の小パッチ分割 <select id="divisions"><option>1</option><option>2</option><option selected>4</option><option>8</option><option>16</option></select></label>
+<label><input type="checkbox" id="normals" checked>曲面の法線（近似用）</label>
+<label><input type="checkbox" id="wire">ワイヤー／パッチ境界</label>
+<button id="reset">視点を戻す</button>
+<div id="status">比較データを読み込み中</div>
+<details><summary>東西断面とデータの内訳</summary><canvas id="profile"></canvas><div id="sizes"></div></details>
+<div id="note">左ドラッグ: 移動 ／ 右ドラッグ: 回転・傾き ／ ホイール: 拡大縮小。各地域の投影上32 km四方。既存点に曲面適合点を加え、粗いXYを詳細側へ継承。各方式で共通の点を使い、高さを親からの差分で保存。LPF用DEMは表示時に使いません。曲面はClough–Tocherの3次BézierパッチをGPUで評価します。全国データと既存ビューアーは変更しません。</div>
+</div><div id="leftLabel">元標高＋平面（共通XY）</div><div id="rightLabel">LPF＋3次近似曲面</div>
+<script src="/lpf_curve_raycast.js"></script>
+<script src="/lpf_curve_compare.js"></script></html>
