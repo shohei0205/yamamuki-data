@@ -2104,3 +2104,30 @@ MLSの補間半径を滑らかにする方式は [MLS_SMOOTH_RADIUS.md](tools/te
 出力は `job.json`（世代ID・設定ハッシュ・入力一覧ハッシュ・品質別候補数）、`settings.json`、`inputs.sqlite3`、`progress.json`。バックグラウンド時は日時付き `launch-*.json` にPIDとログを残す。SQLite排他ロックで同じ出力への二重実行を拒否する。品質別候補数は索引上の枚数で、有効画素に基づく確定coverage・全国最終タイル数とは区別する。
 
 準備終了は `prepared-awaiting-rust-engine` とし、`complete` / `distributable` はfalseのまま。Rustによる全国Sibson適合・LPF全域監査・支持集合の閉包・Riceでの全国DB出力は未実装であり、このスクリプトからはまだ実行できない。設定の `production_ready` もfalseを維持する。検証は `python -m unittest discover -s tools/terrain -p test_prepare_national_natural.py`（6件）。
+
+
+## 2026-10-30：LPFなし全画素誤差適合と128 km比較
+
+`tools/terrain/natural_c1_128_server.py` は61488、`tools/terrain/errorfit_20_server.py` は61489で地域試験を表示する。富士山・槍ヶ岳・筑波山それぞれ投影上128×128 kmを対象とし、61488は12.5～800 m、61489は20～1280 mの7品質を比較する。保存タイルの一辺は2～128 km。全国用の標準XYZタイル境界とは別の比較試験である。
+
+- `tools/terrain/start_errorfit_full_128.ps1`：従来7品質の全域誤差適合を非表示で生成・再開する。PIDとログを保存する。
+- `tools/terrain/errorfit_20_series.py`：20～1280 mを別の出力先へ生成・再開する。各サーバーの `/progress` で進捗を確認する。
+- `tools/terrain/measure_errorfit_full_sizes.py`、`tools/terrain/measure_errorfit20_sizes.py`：完成分の独立XYZ Rice圧縮とGPU用パケットの容量を実測する。XYZの整数復元一致も検査する。後者は生成途中なら完成分のスナップショットを報告する。
+
+LPFなしの元DEMの有効画素中心と接合帯を監査し、誤差超過点を追加する。C¹適用・画素間・描画近似・境界混合後の誤差上限を保証するものではない。未取得PNGと取得済み欠損を区別し、標高なしを自動的に海と断定しない。配布データと全国設定はこの地域比較で上書きしない。保存先・実測容量・変更履歴は [採用判断と試験記録](tools/terrain/SIBSON_DECISIONS.md) に記載する。
+
+ビューワーは北上の投影、画面内の近接部分に基づく自動LOD、ターゲット取得中の詳細キャッシュ維持、操作後3秒のLOD収束、GPUでの曲面・パッチ境界接続を実装する。曲面描画の分割数はパッチの画面サイズと局所制御点密度から決め、同じ分割数をインスタンス描画でまとめる。制御点TIN表示は別モードである。
+
+以下は `terrain` ディレクトリーから実行する。PythonはNumPy・SciPy・Pillowを利用できる環境を使う。
+
+```powershell
+./tools/terrain-rs/build.ps1 -NaturalNational -Test -TargetDirectory build/natural-fixed-lpf-target
+python -m unittest discover -s tools/terrain -p test_sibson_aux_build.py
+python -m unittest discover -s tools/terrain -p test_sibson_global_c1.py
+node tools/terrain/test_sibson_gpu_variable_selection.mjs
+node tools/terrain/test_natural_c1_128_lod.mjs
+node tools/terrain/test_natural_c1_128_orientation.mjs
+node tools/terrain/test_natural_c1_128_patches.mjs
+```
+
+生成器の結合試験は `test_natural_fixed_lpf.py`、`test_natural_raw_shape.py`、`test_natural_scale_placement.py`。これらは `build/natural-fixed-lpf-target/release/terrain-natural-national.exe` を使用するため、同じターゲットディレクトリーへ `-NaturalNational` のreleaseビルドを準備してから実行する。

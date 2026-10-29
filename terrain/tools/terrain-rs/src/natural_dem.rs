@@ -79,10 +79,15 @@ pub fn run(output:&Path,workers:usize)->Result<()> {
  let sha=Arc::new(query.query_map([],|r|Ok(((r.get::<_,u32>(0)?,r.get::<_,u32>(1)?),r.get::<_,String>(2)?)))?.collect::<rusqlite::Result<HashMap<_,_>>>()?);
  let blocks=sha.keys().map(|&(x,y)|(x/4,y/4)).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>();
  let sources=(0..workers).map(|_|Mutex::new(Source::new(cache.clone(),sha.clone()))).collect::<Vec<_>>();let pool=rayon::ThreadPoolBuilder::new().num_threads(workers).build()?;
+ let settings:serde_json::Value=serde_json::from_slice(&fs::read(output.join("settings.json"))?)?;
+ let raw_policy=settings["lpf_policy"].as_str()==Some("none");
+ let fixed=raw_policy || settings["lpf_policy"].as_str()==Some("fixed-error-half");
+ ensure!(!fixed || settings["fit_reference"].as_str()==Some("lpf"),"固定LPFにはLPF基準の誤差判定が必要です");
  for (z,error) in [(8,800.),(9,400.),(10,200.),(11,100.),(12,50.),(13,25.),(14,12.5)] {
+  if settings["placement_only_z"].as_u64().is_some_and(|v|v!=z as u64){continue;}
   let key=format!("lpf-sigma-z{z}");let saved:Option<String>=db.query_row("SELECT value FROM metadata WHERE key=?1",[&key],|r|r.get(0)).optional()?;
   if saved.is_some(){continue;}
-  let started=Instant::now();let mut sigma=error/2.;let mut passed=false;
+  let started=Instant::now();let mut sigma=if raw_policy{0.}else{error/2.};let mut passed=false;
   for attempt in 0..12 {
    let weights=weights(sigma);let r=weights.len()/2;let mut maximum=0f64;let mut count=0u64;let mut done=0;
    for batch in blocks.chunks(workers) {
@@ -99,10 +104,10 @@ pub fn run(output:&Path,workers:usize)->Result<()> {
      tx.execute("INSERT OR REPLACE INTO artifacts VALUES('lpf',?1,?2,?3,?4,?5)",params![z,x,y,path.to_string_lossy(),sha])?;
      tx.execute("INSERT OR REPLACE INTO tasks VALUES('lpf',?1,?2,?3,'audited',?4)",params![z,x,y,json!({"sigma":sigma,"max_error":max,"valid_pixels":valid}).to_string()])?;
     }tx.commit()?;
-    progress(output,json!({"stage":"lpf-audit","z":z,"error_m":error,"sigma_m":sigma,"attempt":attempt,"done":done,"total":blocks.len(),"max_error":maximum,"limit":error/2.,"valid_pixels":count,"elapsed_seconds":started.elapsed().as_secs_f64(),"complete":false}))?;
-    if maximum>error/2. {break;}
+    progress(output,json!({"stage":"lpf-audit","z":z,"error_m":error,"sigma_m":sigma,"attempt":attempt,"done":done,"total":blocks.len(),"max_error":maximum,"limit":if fixed{serde_json::Value::Null}else{json!(error/2.)},"reference":if fixed{"lpf"}else{"original-dem"},"valid_pixels":count,"elapsed_seconds":started.elapsed().as_secs_f64(),"complete":false}))?;
+    if !fixed && maximum>error/2. {break;}
    }
-   if done==blocks.len() && maximum<=error/2. {
+   if done==blocks.len() && (fixed || maximum<=error/2.) {
     db.execute("INSERT INTO metadata VALUES(?1,?2)",params![key,sigma.to_string()])?;passed=true;break;
    }sigma*=0.5;
   }

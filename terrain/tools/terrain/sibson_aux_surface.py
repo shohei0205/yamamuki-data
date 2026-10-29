@@ -4,10 +4,28 @@ from pathlib import Path
 import numpy as np
 from sibson_surface import SibsonSurface
 HEADER=struct.Struct('<4sII32s32s')
+def build_rings_vectorized(surface):
+ """従来と同じ角度順・凸性判定を点ごとのPythonループなしで計算。"""
+ xy=surface.xy;tri=surface.tri;circles=surface.circles;n=len(xy)
+ owners=tri.ravel();faces=np.repeat(np.arange(len(tri),dtype=np.int32),3);delta=circles[faces,:2]-xy[owners];angles=np.arctan2(delta[:,1],delta[:,0]);order=np.lexsort((faces,angles,owners));sorted_faces=faces[order];sorted_delta=delta[order];counts=np.bincount(owners,minlength=n);offsets=np.r_[0,np.cumsum(counts)];degree=np.diff(surface.off);sizes=np.maximum(counts,degree);accepted=np.zeros(n,bool);hull=np.zeros(n,bool);hull[np.unique(surface.triangulation.convex_hull)]=True
+ previous=0
+ for width in [4,8,16,32,64,128]:
+  selected=np.flatnonzero((sizes>previous)&(sizes<=width)&~hull&(counts>=3));previous=width
+  for first in range(0,len(selected),512):
+   ids=selected[first:first+512];j=np.arange(width);valid_delta=j[None,:]<counts[ids,None];valid_plane=j[None,:]<degree[ids,None]
+   di=offsets[ids,None]+np.minimum(j[None,:],counts[ids,None]-1);delta=sorted_delta[di];pi=surface.off[ids,None]+np.minimum(j[None,:],degree[ids,None]-1);planes=xy[surface.links[pi]]-xy[ids,None,:];squared=np.sum(planes*planes,axis=2)
+   violation=np.einsum('nik,njk->nij',delta,planes)-squared[:,None,:]*.5;violation=np.where(valid_delta[:,:,None]&valid_plane[:,None,:],violation,-np.inf);maximum=violation.max(axis=(1,2));scale=np.maximum(1.,np.where(valid_plane,squared,0).max(axis=1));accepted[ids]=maximum<=1e-9*scale
+ # 非常に高次数の内点は従来の式で処理し、任意の次数で打ち切らない。
+ for v in np.flatnonzero((sizes>128)&~hull&(counts>=3)):
+  delta=sorted_delta[offsets[v]:offsets[v+1]];near=surface.links[surface.off[v]:surface.off[v+1]];planes=xy[near]-xy[v];sq=np.sum(planes*planes,axis=1);accepted[v]=np.max(delta@planes.T-sq*.5)<=1e-9*max(1.,float(sq.max()))
+ kept=counts*accepted;cell_off=np.ascontiguousarray(np.r_[0,np.cumsum(kept)],dtype=np.int32);ring=np.ascontiguousarray(sorted_faces[np.repeat(accepted,counts)],dtype=np.int32);return cell_off,ring
+
 class AuxiliarySibsonSurface(SibsonSurface):
- def __init__(self,points,blob=None):
+ def __init__(self,points,blob=None,fast_build=True):
   started=time.perf_counter();super().__init__(points)
-  if blob is None:
+  if blob is None and fast_build:
+   self.cell_off,self.ring=build_rings_vectorized(self)
+  elif blob is None:
    incident=[[] for _ in self.xy]
    for t,face in enumerate(self.tri):
     for v in face:incident[v].append(t)

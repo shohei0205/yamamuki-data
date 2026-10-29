@@ -7,8 +7,9 @@ from scipy.sparse.linalg import lsmr
 from sibson_surface import SibsonSurface
 
 class WeightedSibson:
- def __init__(self,points,weights=None):
-  self.model=SibsonSurface(points);self.points=np.asarray(points,dtype=float).copy()
+ def __init__(self,points,weights=None,surface=None):
+  self.model=SibsonSurface(points) if surface is None else surface;self.points=np.asarray(points,dtype=float).copy()
+  if surface is not None and (not np.array_equal(surface.xy,self.points[:,:2]) or not np.array_equal(surface.z,self.points[:,2])):raise ValueError('再利用する曲面と制御点が一致しません')
   self.weights=np.ones(len(points)) if weights is None else np.asarray(weights,dtype=float).copy()
   if self.weights.shape!=(len(points),) or not np.isfinite(self.weights).all() or np.any(self.weights<=0):raise ValueError('重みは点ごとの正の有限値が必要です')
   self.lib=ctypes.CDLL(str(Path('build/sibson_weight_basis.dll').resolve()))

@@ -15,3 +15,23 @@ const auto=selectCoverage({levels,map,desired:[root],resident,visible:()=>true,g
 const fixed=selectCoverage({levels,map,desired:[root],resident,visible:()=>true,gridN:()=>128});assert.equal(fixed.length,1);assert.equal(fixed[0].tile.error,800);
 resident.delete('child3');const partialAuto=selectCoverage({levels,map,desired:[root],resident,visible:()=>true,gridN:()=>128,preferCachedChild:true});assert.equal(partialAuto.filter(v=>v.tile.error===400).length,3);assert.equal(partialAuto.filter(v=>v.tile.error===800).length,1);assert.ok(!partialAuto.some(v=>v.tile.error===200));
 console.log('自動だけ既読の1段細レベルを優先・部分保持・2段先は使わないことを確認');
+
+// 視錐台で兄弟が除外され、深い階層の1枚だけが可視でも祖先へ拡張しない。
+const deepLevels=[800,400,200,100,50,25,12.5].map((error,i)=>({error,side:128000/2**i})),deepMap=new Map();
+for(let level=0;level<deepLevels.length;level++){const {error,side}=deepLevels[level];for(let y=0;y<2**level;y++)for(let x=0;x<2**level;x++)deepMap.set([error,x,y].join('/'),{error,side,x,y,n:128,level,bounds:[x*side,y*side,(x+1)*side,(y+1)*side]});}
+const leaf=deepMap.get('25/16/16'),deepRoot=deepMap.get('800/0/0'),atPoint=t=>t.bounds[0]<=64001&&t.bounds[2]>64001&&t.bounds[1]<=64001&&t.bounds[3]>64001;
+const oneVisible=selectCoverage({levels:deepLevels,map:deepMap,desired:[leaf],resident:new Map([['root',{offset:0,tile:deepRoot}],['leaf',{offset:1024,tile:leaf}]]),visible:atPoint,gridN:()=>128});
+assert.equal(oneVisible.length,1);assert.deepEqual(oneVisible[0].drawBounds,leaf.bounds);assert.equal(oneVisible[0].drawN,128);
+for(const v of oneVisible){const a=v.tile.bounds,b=v.drawBounds;assert.ok(a[0]<=b[0]&&a[1]<=b[1]&&a[2]>=b[2]&&a[3]>=b[3]);}
+console.log('可視の4kmタイル1枚を64km/128kmの祖先領域へ引き伸ばさないことを確認');
+
+// ターゲット未取得中は、中間レベルがあっても最詳細キャッシュまでたどる。
+const missingRootCache=new Map([['middle',{offset:1024,tile:map.get('400/0/0')}],['fine',{offset:2048,tile:map.get('200/0/0')}] ]);
+let pendingDraw=selectCoverage({levels,map,desired:[root],resident:missingRootCache,visible:()=>true,gridN:()=>128});
+assert(pendingDraw.some(v=>v.tile.error===200));assert(pendingDraw.some(v=>v.tile.error===400));
+missingRootCache.set('target',{offset:4096,tile:root});
+let settledDraw=selectCoverage({levels,map,desired:[root],resident:missingRootCache,visible:()=>true,gridN:()=>128});assert.equal(settledDraw.length,1);assert.equal(settledDraw[0].tile.error,800);
+// 同品質でも必要な曲面キャッシュ解像度が未取得なら詳細キャッシュを維持。
+missingRootCache.set('target',{offset:4096,tile:{...root,n:32}});
+pendingDraw=selectCoverage({levels,map,desired:[root],resident:missingRootCache,visible:()=>true,gridN:()=>128});assert(pendingDraw.some(v=>v.tile.error===200));
+console.log('目標未取得・解像度不足中は全階層の最詳細キャッシュを優先し、取得後は目標へ収束');

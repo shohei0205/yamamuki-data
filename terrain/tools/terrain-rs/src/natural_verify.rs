@@ -44,7 +44,7 @@ pub fn contents(c:&Catalog,db:&Connection,output:&Path)->Result<Value> {
   if done%32==0 || done==keys.len() {progress(output,json!({"stage":"verify-packed-integers","done":done,"total":keys.len(),"complete":false}))?;}
  }
  for z in 8..=14 {
-  let mut count=0u64;for row in c.db.prepare("SELECT state,info FROM tasks WHERE stage='fit' AND z=?1")?.query_map([z],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))? {let (state,info)=row?;let info:Value=serde_json::from_str(&info)?;ensure!(state=="passed","最終誤差監査が未完了です");ensure!(info.get("reused_cells").and_then(|v|v.as_u64()).unwrap_or(0)==0,"最終監査がキャッシュを再利用しています");count+=info["valid"].as_u64().context("有効画素数がありません")?;let error=rows.iter().find(|r|r.0==z).unwrap().1;ensure!(info["maximum_error_bound"].as_f64().context("誤差の記録がありません")?<=error,"元DEM誤差の条件が未達です");}
+  let mut count=0u64;for row in c.db.prepare("SELECT state,info FROM tasks WHERE stage='fit' AND z=?1")?.query_map([z],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))? {let (state,info)=row?;let info:Value=serde_json::from_str(&info)?;ensure!(state=="passed","最終誤差監査が未完了です");ensure!(info.get("reused_cells").and_then(|v|v.as_u64()).unwrap_or(0)==0,"最終監査がキャッシュを再利用しています");count+=info["valid"].as_u64().context("有効画素数がありません")?;let ratio=config["fit_error_ratio"].as_f64().unwrap_or(1.);ensure!(ratio.is_finite() && ratio>0. && ratio<=1.,"近似誤差率が不正です");let error=rows.iter().find(|r|r.0==z).unwrap().1*ratio;ensure!(info["maximum_error_bound"].as_f64().context("誤差の記録がありません")?<=error,"設定された誤差基準の条件が未達です");}
   ensure!(count==valid_total,"最終監査の有効画素数が一致しません: z{z}");
  }
  let roots=source.keys().map(|&(x,y)|(x>>6,y>>6)).collect::<BTreeSet<_>>();let mut checked_roots=BTreeSet::new();let mut unresolved=0u64;
@@ -54,7 +54,7 @@ pub fn contents(c:&Catalog,db:&Connection,output:&Path)->Result<Value> {
   for dy in 0..64 {for dx in 0..64 {let value=cells[(dy*64+dx) as usize];if let Some(&valid)=source.get(&(x*64+dx,y*64+dy)){ensure!(value==i64::from(valid>0),"coverageと元DEMの収録状況が不一致です");}unresolved+=u64::from(value==2);}}
  }
  ensure!(roots==checked_roots,"coverageのルート範囲が不足・過剰です");
- Ok(json!({"verified_tiles":keys.len(),"geometry_bytes":bytes,"level_geometry_bytes":level_sizes,"max_dependency_tiles":max_dep,"max_parent_depth":max_depth,"max_points_per_tile":maximum_points,"coverage_unresolved":unresolved,"valid_source_pixels_per_quality":valid_total,"complete":false,"distributable":false}))
+ Ok(json!({"error_reference":config["fit_reference"].as_str().unwrap_or("original-dem"),"lpf_policy":config["lpf_policy"].as_str().unwrap_or("global-max-adaptive"),"verified_tiles":keys.len(),"geometry_bytes":bytes,"level_geometry_bytes":level_sizes,"max_dependency_tiles":max_dep,"max_parent_depth":max_depth,"max_points_per_tile":maximum_points,"coverage_unresolved":unresolved,"valid_source_pixels_per_quality":valid_total,"complete":false,"distributable":false}))
 }
 pub fn run(output:&Path,finalize:bool)->Result<()> {
  let lock=Connection::open(output.join("run-lock.sqlite3"))?;lock.execute_batch("BEGIN EXCLUSIVE")?;let c=Catalog::open(output)?;let file=output.join("distribution.partial.sqlite3");

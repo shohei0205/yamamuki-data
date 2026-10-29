@@ -3,6 +3,20 @@ use anyhow::{Result, ensure, bail};
 use delaunator::{Point, Triangulation, EMPTY};
 use std::collections::HashSet;
 
+/// 画素間で再利用する作業領域。補間の式・走査順は変えない。
+#[derive(Default)]
+pub struct Workspace {
+ stack:Vec<usize>,seen:Vec<u32>,vertex_seen:Vec<u32>,vertices:Vec<usize>,epoch:u32,
+ cell:Vec<[f64;2]>,poly:Vec<[f64;2]>,temporary:Vec<[f64;2]>,
+}
+fn clip_buffer(poly:&mut Vec<[f64;2]>,a:f64,b:f64,c:f64,tmp:&mut Vec<[f64;2]>) {
+ tmp.clear();if poly.is_empty(){return;}
+ let mut s=poly[poly.len()-1];let mut ds=a*s[0]+b*s[1]-c;
+ for &e in poly.iter(){let de=a*e[0]+b*e[1]-c;
+  if (ds<=0.)!=(de<=0.){let t=ds/(ds-de);tmp.push([s[0]+t*(e[0]-s[0]),s[1]+t*(e[1]-s[1])]);}
+  if de<=0.{tmp.push(e);}s=e;ds=de;
+ }std::mem::swap(poly,tmp);
+}
 #[derive(Debug)]
 pub struct Surface {
     pub points: Vec<[f64; 3]>,
@@ -13,6 +27,7 @@ pub struct Surface {
     pub circle_index: rstar::RTree<CircleEntry>,
 }
 fn cross(a: [f64; 2], b: [f64; 2]) -> f64 { a[0]*b[1]-a[1]*b[0] }
+#[cfg(test)]
 fn clip(poly: &[[f64; 2]], a: f64, b: f64, c: f64) -> Vec<[f64; 2]> {
     let mut out=Vec::with_capacity(poly.len()+1);
     if poly.is_empty() { return out; }
@@ -84,7 +99,8 @@ impl Surface {
         }
         bail!("面探索が収束しません")
     }
-    pub fn evaluate(&self,q:[f64;2], start:&mut usize) -> Result<f64> {
+    pub fn evaluate(&self,q:[f64;2], start:&mut usize) -> Result<f64> {self.evaluate_reusing(q,start,&mut Workspace::default())}
+    pub fn evaluate_reusing(&self,q:[f64;2],start:&mut usize,work:&mut Workspace)->Result<f64> {
         let (st,w)=self.locate(q,*start)?;*start=st;
         let ids=&self.topology.triangles[3*st..3*st+3];
         // 凸包辺上ではSibson座標は辺の線形座標になる。
@@ -94,37 +110,40 @@ impl Surface {
                 return Ok((0..3).map(|j|w[j]*self.points[ids[j]][2]).sum());
             }
         }
-        let mut stack=vec![st];let mut seen=HashSet::new();let mut vertices=Vec::new();let mut vertex_set=HashSet::new();
+        work.seen.resize(self.circles.len(),0);work.vertex_seen.resize(self.points.len(),0);
+        if work.epoch==u32::MAX{work.seen.fill(0);work.vertex_seen.fill(0);work.epoch=0;}work.epoch+=1;
+        let Workspace{stack,seen,vertex_seen,vertices,epoch,cell,poly,temporary}=work;let stamp=*epoch;let mut visited=0;
+        stack.clear();stack.push(st);vertices.clear();
         while let Some(t)=stack.pop() {
-            if !seen.insert(t) { continue; }
-            ensure!(seen.len()<=65536,"自然近傍の探索領域が上限を超えました");
+            if seen[t]==stamp {continue;}seen[t]=stamp;visited+=1;
+            ensure!(visited<=65536,"自然近傍の探索領域が上限を超えました");
             let c=self.circles[t];let d=(c[0]-q[0]).powi(2)+(c[1]-q[1]).powi(2);
             if t!=st && d>c[2]*(1.+1e-12) { continue; }
             for e in 3*t..3*t+3 {
-                let v=self.topology.triangles[e];if vertex_set.insert(v) { vertices.push(v); }
+                let v=self.topology.triangles[e];if vertex_seen[v]!=stamp {vertex_seen[v]=stamp;vertices.push(v);}
                 let h=self.topology.halfedges[e];if h!=EMPTY { stack.push(h/3); }
             }
         }
-        for &v in &vertices { let p=self.points[v];if (p[0]-q[0]).powi(2)+(p[1]-q[1]).powi(2)<1e-18 { return Ok(p[2]); } }
-        let mut bound=128000.;let mut cell=Vec::new();let mut closed=false;
+        for &v in vertices.iter() { let p=self.points[v];if (p[0]-q[0]).powi(2)+(p[1]-q[1]).powi(2)<1e-18 { return Ok(p[2]); } }
+        let mut bound=128000.;let mut closed=false;
         for _ in 0..40 {
-            cell=vec![[-bound,-bound],[bound,-bound],[bound,bound],[-bound,bound]];
-            for &v in &vertices {
-                let p=self.points[v];let dx=p[0]-q[0];let dy=p[1]-q[1];cell=clip(&cell,dx,dy,(dx*dx+dy*dy)*0.5);
+            cell.clear();cell.extend([[-bound,-bound],[bound,-bound],[bound,bound],[-bound,bound]]);
+            for &v in vertices.iter() {
+                let p=self.points[v];let dx=p[0]-q[0];let dy=p[1]-q[1];clip_buffer(cell,dx,dy,(dx*dx+dy*dy)*0.5,temporary);
             }
             if cell.iter().all(|p|p[0].abs()<bound*0.999999 && p[1].abs()<bound*0.999999) { closed=true;break; }
             bound*=2.;
         }
         ensure!(closed && !cell.is_empty(),"Voronoiセルが閉じません");
         let mut total=0.;let mut value=0.;
-        for &v in &vertices {
-            let p=self.points[v];let vx=p[0]-q[0];let vy=p[1]-q[1];let mut poly=cell.clone();
+        for &v in vertices.iter() {
+            let p=self.points[v];let vx=p[0]-q[0];let vy=p[1]-q[1];poly.clear();poly.extend_from_slice(cell);
             for &u in &self.neighbors[v] {
                 let p=self.points[u];let ux=p[0]-q[0];let uy=p[1]-q[1];
-                poly=clip(&poly,ux-vx,uy-vy,(ux*ux+uy*uy-vx*vx-vy*vy)*0.5);
+                clip_buffer(poly,ux-vx,uy-vy,(ux*ux+uy*uy-vx*vx-vy*vy)*0.5,temporary);
                 if poly.is_empty() { break; }
             }
-            let weight=area(&poly);total+=weight;value+=weight*self.points[v][2];
+            let weight=area(poly);total+=weight;value+=weight*self.points[v][2];
         }
         ensure!(total>1e-15 && value.is_finite(),"自然近傍の面積計算に失敗しました");
         Ok(value/total)
@@ -133,6 +152,8 @@ impl Surface {
 #[cfg(test)] mod tests {
     use super::*;
     fn points()->Vec<[f64;3]> {vec![[0.,0.,1.],[10.,0.,21.],[10.,10.,51.],[0.,10.,31.],[3.,4.,19.],[8.,6.,35.]]}
+    #[test]fn clipping_buffers_match_reference(){let p=vec![[-3.,-3.],[3.,-3.],[3.,3.],[-3.,3.]];for (a,b,c) in [(1.,2.,0.),(-2.,0.5,1.),(0.,1.,10.),(1.,0.,-10.)]{let expected=clip(&p,a,b,c);let mut actual=p.clone();clip_buffer(&mut actual,a,b,c,&mut Vec::new());assert_eq!(expected,actual);}}
+    #[test]fn workspace_epoch_wrap(){let s=Surface::new(points()).unwrap();let mut w=Workspace::default();w.epoch=u32::MAX;let a=s.evaluate_reusing([4.,5.],&mut 0,&mut w).unwrap();assert!((a-24.).abs()<1e-8);assert_eq!(w.epoch,1);}
     #[test] fn plane_and_walk() {let s=Surface::new(points()).unwrap();let mut start=0;for y in 0..=20 {for x in 0..=20 {let q=[x as f64*0.5,y as f64*0.5];let h=s.evaluate(q,&mut start).unwrap();assert!((h-(1.+2.*q[0]+3.*q[1])).abs()<1e-8,"{q:?}: {h}");}}}
     #[test] fn exact_points() {let s=Surface::new(points()).unwrap();let mut start=0;for p in &s.points {assert!((s.evaluate([p[0],p[1]],&mut start).unwrap()-p[2]).abs()<1e-10);}}
     #[test] fn global_offset_keeps_precision() {let mut p=points();for v in &mut p {v[0]+=35000000.;v[1]+=15000000.;}let s=Surface::new(p).unwrap();let mut t=0;assert!((s.evaluate([35000004.25,15000005.5],&mut t).unwrap()-26.).abs()<1e-7);}

@@ -11,14 +11,14 @@ const MARGIN:f64=0.02;
 #[derive(Clone)] struct Candidate {q:[i32;2],score:f64,bounds:[f64;4]}
 struct Scan {bx:u32,by:u32,maximum:f64,valid:u64,evaluated:u64,certified:u64,reused:u64,candidates:Vec<Candidate>,cache_path:PathBuf,cache_sha:String}
 #[derive(Clone,Default,Serialize,Deserialize)]struct Cell {maximum:f64,valid:u64,evaluated:u64,certified:u64,q:[i32;2],score:f64}
-pub struct LpfSampler {db:Connection,z:u32,blocks:HashMap<(i32,i32),Arc<Vec<f32>>>,order:VecDeque<(i32,i32)>}
+pub struct LpfSampler {db:Connection,z:u32,capacity:usize,blocks:HashMap<(i32,i32),Arc<Vec<f32>>>,order:VecDeque<(i32,i32)>}
 impl LpfSampler {
- pub fn new(output:&Path,z:u32)->Result<Self>{Ok(Self{db:Connection::open_with_flags(output.join("work.sqlite3"),OpenFlags::SQLITE_OPEN_READ_ONLY)?,z,blocks:HashMap::new(),order:VecDeque::new()})}
+ pub fn new(output:&Path,z:u32)->Result<Self>{let cfg:serde_json::Value=serde_json::from_slice(&fs::read(output.join("settings.json"))?)?;let capacity=cfg["lpf_cache_blocks"].as_u64().unwrap_or(32) as usize;ensure!((1..=512).contains(&capacity),"標高キャッシュは1～512ブロックです");Ok(Self{capacity,db:Connection::open_with_flags(output.join("work.sqlite3"),OpenFlags::SQLITE_OPEN_READ_ONLY)?,z,blocks:HashMap::new(),order:VecDeque::new()})}
  fn block(&mut self,x:i32,y:i32)->Result<Arc<Vec<f32>>> {
   if let Some(b)=self.blocks.get(&(x,y)){return Ok(b.clone());}
   let row:Option<(String,String)>=self.db.query_row("SELECT path,sha FROM artifacts WHERE stage='lpf' AND z=?1 AND x=?2 AND y=?3",params![self.z,x,y],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
   let v=if let Some((path,sha))=row {ensure!(hash(&fs::read(&path)?)==sha,"LPFキャッシュのハッシュ不一致です");let (n,_,data)=load_lpf(Path::new(&path))?;ensure!(n==N,"LPFの区画寸法が不一致です");data}else{vec![f32::NAN;N*N]};
-  if self.blocks.len()>=32 {if let Some(k)=self.order.pop_front(){self.blocks.remove(&k);}}
+  if self.blocks.len()>=self.capacity {if let Some(k)=self.order.pop_front(){self.blocks.remove(&k);}}
   let v=Arc::new(v);self.order.push_back((x,y));self.blocks.insert((x,y),v.clone());Ok(v)
  }
  pub fn sample(&mut self,q:[i32;2])->Result<Option<f64>> {
@@ -34,7 +34,12 @@ fn influence(local:&Local,q:[f64;2])->[f64;4] {
  for v in &mut b {*v=v.clamp(0.,WORLD);}b
 }
 fn scan(c:&Catalog,source:&mut Source,z:u32,error:f64,bx:u32,by:u32,output:&Path,epoch:u64,force:bool)->Result<Scan> {
- let raw=source.raster(bx as i32*N as i32,by as i32*N as i32,N,N)?;
+ let settings:serde_json::Value=serde_json::from_slice(&fs::read(output.join("settings.json"))?)?;
+ let raw=if settings["fit_reference"].as_str()==Some("lpf") {
+  let row:(String,String)=c.db.query_row("SELECT path,sha FROM artifacts WHERE stage='lpf' AND z=?1 AND x=?2 AND y=?3",params![z,bx,by],|r|Ok((r.get(0)?,r.get(1)?)))?;
+  ensure!(hash(&fs::read(&row.0)?)==row.1,"LPF参照のSHA-256が不一致です");
+  let (n,_,values)=load_lpf(Path::new(&row.0))?;ensure!(n==N,"LPF参照寸法が不正です");values
+ }else{source.raster(bx as i32*N as i32,by as i32*N as i32,N,N)?};
  let info:String=c.db.query_row("SELECT info FROM tasks WHERE stage='fit' AND z=?1 AND x=?2 AND y=?3",params![z,bx,by],|r|r.get(0))?;let info:serde_json::Value=serde_json::from_str(&info)?;
  let dirty:Option<Vec<[f64;3]>>=info.get("dirty_circles").map(|v|serde_json::from_value(v.clone())).transpose()?;
  let mut old=None;
@@ -43,7 +48,7 @@ fn scan(c:&Catalog,source:&mut Source,z:u32,error:f64,bx:u32,by:u32,output:&Path
   if let Some((path,sha))=saved {let blob=fs::read(path)?;ensure!(hash(&blob)==sha,"監査セルキャッシュのSHA-256が不一致です");let values:Vec<Cell>=serde_json::from_slice(&zstd::stream::decode_all(blob.as_slice())?)?;ensure!(values.len()==4096,"監査セル数が不正です");old=Some(values);}
  }
  let local=if raw.iter().any(|v|v.is_finite()){Some(c.local(z,block_rect(bx,by),250.)?)}else{None};
- let mut cells=vec![Cell::default();4096];let mut reused=0;let mut start=0;
+ let mut cells=vec![Cell::default();4096];let mut reused=0;let mut start=0;let mut workspace=crate::natural_surface::Workspace::default();
  for cy in (0..N).step_by(16) {for cx in (0..N).step_by(16) {
   let index=cy/16*64+cx/16;let q0=[(bx as f64*N as f64+cx as f64+0.5)*STEP,(by as f64*N as f64+cy as f64+0.5)*STEP];let rect=[q0[0],q0[1],q0[0]+15.*STEP,q0[1]+15.*STEP];
   if let (Some(previous),Some(circles))=(&old,&dirty) {
@@ -62,7 +67,7 @@ fn scan(c:&Catalog,source:&mut Source,z:u32,error:f64,bx:u32,by:u32,output:&Path
   for y in cy..cy+16 {for x in cx..cx+16 {let v=raw[y*N+x];if v.is_finite(){let e=v as f64-plane(q0[0]+(x-cx) as f64*STEP,q0[1]+(y-cy) as f64*STEP);raw_lo=raw_lo.min(e);raw_hi=raw_hi.max(e);}}}
   let bound=(raw_lo-hi).abs().max((raw_hi-lo).abs())+MARGIN;
   if bound<=error {cell.certified=cell.valid;cell.maximum=bound;cells[index]=cell;continue;}
-  for y in cy..cy+16 {for x in cx..cx+16 {let v=raw[y*N+x];if !v.is_finite(){continue;}let q=[(bx as f64*N as f64+x as f64+0.5)*STEP,(by as f64*N as f64+y as f64+0.5)*STEP];let e=(surface.evaluate(q,&mut start)?-v as f64).abs()+MARGIN;cell.evaluated+=1;cell.maximum=cell.maximum.max(e);if e>error && e>cell.score {cell.score=e;cell.q=[quantize(q[0],XY)?,quantize(q[1],XY)?];}}}
+  for y in cy..cy+16 {for x in cx..cx+16 {let v=raw[y*N+x];if !v.is_finite(){continue;}let q=[(bx as f64*N as f64+x as f64+0.5)*STEP,(by as f64*N as f64+y as f64+0.5)*STEP];let e=(surface.evaluate_reusing(q,&mut start,&mut workspace)?-v as f64).abs()+MARGIN;cell.evaluated+=1;cell.maximum=cell.maximum.max(e);if e>error && e>cell.score {cell.score=e;cell.q=[quantize(q[0],XY)?,quantize(q[1],XY)?];}}}
   cells[index]=cell;
  }}
  let mut result=Scan{bx,by,maximum:cells.iter().map(|v|v.maximum).fold(0.,f64::max),valid:cells.iter().map(|v|v.valid).sum(),evaluated:cells.iter().map(|v|v.evaluated).sum(),certified:cells.iter().map(|v|v.certified).sum(),reused,candidates:vec![],cache_path:output.join("scans").join(format!("z{z}")).join(format!("{bx}-{by}-e{epoch}-{}.nsc",if force{"full"}else{"local"})),cache_sha:String::new()};
@@ -92,14 +97,18 @@ fn seed(c:&Catalog,output:&Path,z:u32,sha:&Arc<HashMap<(u32,u32),String>>)->Resu
 impl rstar::RTreeObject for Bounds {type Envelope=rstar::AABB<[f64;2]>;fn envelope(&self)->Self::Envelope{self.0}}
 pub fn run(output:&Path,workers:usize)->Result<()> {
  ensure!(workers>0 && workers<=256,"並列数が不正です");let guard=Connection::open(output.join("run-lock.sqlite3"))?;guard.execute_batch("BEGIN EXCLUSIVE")?;
- let c=Catalog::open(output)?;for z in 8..=14 {ensure!(meta(&c.db,&format!("lpf-sigma-z{z}"))?.is_some(),"全国LPF監査が未完了です: z{z}");}
+ let c=Catalog::open(output)?;let selected_config:serde_json::Value=serde_json::from_slice(&fs::read(output.join("settings.json"))?)?;for z in 8..=14 {if selected_config["placement_only_z"].as_u64().is_some_and(|v|v!=z as u64){continue;}ensure!(meta(&c.db,&format!("lpf-sigma-z{z}"))?.is_some(),"全国LPF監査が未完了です: z{z}");}
  c.db.execute_batch("CREATE TABLE IF NOT EXISTS natural_candidates(z INTEGER,bx INTEGER,by INTEGER,id INTEGER,qx INTEGER,qy INTEGER,score REAL,b0 REAL,b1 REAL,b2 REAL,b3 REAL,PRIMARY KEY(z,bx,by,id)) WITHOUT ROWID;
  CREATE INDEX IF NOT EXISTS candidate_priority ON natural_candidates(z,score DESC,id);")?;
  let identity:serde_json::Value=serde_json::from_str(&meta(&c.db,"identity")?.context("入力ID不明")?)?;let cache=PathBuf::from(identity["cache"].as_str().context("元PNGパス不明")?);
  let mut s=c.db.prepare("SELECT x,y,sha FROM inputs ORDER BY y,x")?;let sha=Arc::new(s.query_map([],|r|Ok(((r.get::<_,u32>(0)?,r.get::<_,u32>(1)?),r.get::<_,String>(2)?)))?.collect::<rusqlite::Result<HashMap<_,_>>>()?);
  let blocks=sha.keys().map(|&(x,y)|(x/4,y/4)).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>();
  let threads=(0..workers).map(|_|Ok(Mutex::new((Catalog::readonly(output)?,Source::new(cache.clone(),sha.clone()))))).collect::<Result<Vec<_>>>()?;let pool=rayon::ThreadPoolBuilder::new().num_threads(workers).build()?;
- for (z,error) in [(8,800.),(9,400.),(10,200.),(11,100.),(12,50.),(13,25.),(14,12.5)] {
+ let config:serde_json::Value=serde_json::from_slice(&fs::read(output.join("settings.json"))?)?;
+ let fit_ratio=config["fit_error_ratio"].as_f64().unwrap_or(1.);ensure!(fit_ratio.is_finite() && fit_ratio>0. && fit_ratio<=1.,"近似誤差率は0より大きく1以下です");
+ for (z,quality_error) in [(8,800.),(9,400.),(10,200.),(11,100.),(12,50.),(13,25.),(14,12.5)] {
+  if config["placement_only_z"].as_u64().is_some_and(|v|v!=z as u64){continue;}
+  let error=quality_error*fit_ratio;
   let phase_key=format!("fit-phase-z{z}");if meta(&c.db,&phase_key)?.as_deref()==Some("complete"){continue;}
   seed(&c,output,z,&sha)?;let started=Instant::now();let mut epoch=meta(&c.db,&format!("fit-epoch-z{z}"))?.unwrap_or("0".into()).parse::<u64>()?;
   {let tx=c.db.unchecked_transaction()?;for &(x,y) in &blocks {c.db.execute("INSERT OR IGNORE INTO tasks VALUES('fit',?1,?2,?3,'pending','{}')",params![z,x,y])?;}tx.commit()?;}
