@@ -41,7 +41,7 @@ impl Bits<'_> {
     }
 }
 fn signed(value: u64) -> i64 { ((value >> 1) as i64) ^ -((value & 1) as i64) }
-fn stream(bytes: &[u8]) -> R<Vec<i64>> {
+pub(crate) fn stream(bytes: &[u8]) -> R<Vec<i64>> {
     let mut r = Reader::new(bytes); let count = usize::try_from(r.var()?).map_err(|_| ())?;
     if count > MAX { return Err(()); } let mut out = Vec::with_capacity(count);
     while out.len() < count {
@@ -111,13 +111,13 @@ fn decode(bytes: &[u8], parents: &[f32], offsets: &[u32], out: &mut [f32]) -> R<
     } else { return Err(()); }
     if out[..n * 3].iter().any(|v| !v.is_finite()) { return Err(()); } Ok(n)
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn codec_alloc(size: usize) -> *mut u8 { Box::into_raw(vec![0_u8; size].into_boxed_slice()) as *mut u8 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn codec_free(ptr: *mut u8, size: usize) {
     if !ptr.is_null() { unsafe { drop(Box::from_raw(slice::from_raw_parts_mut(ptr, size))); } }
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn codec_decode(input: *const u8, len: usize, parent: *const f32, parent_floats: usize, offsets: *const u32, parent_count: usize, output: *mut f32, capacity: usize) -> i32 {
     if input.is_null() || output.is_null() || parent_count > 256 || capacity > MAX || len > 256 * 1024 * 1024 { return -1; }
     let data = unsafe { slice::from_raw_parts(input, len) };
@@ -127,6 +127,40 @@ pub unsafe extern "C" fn codec_decode(input: *const u8, len: usize, parent: *con
     decode(data, p, o, target).map(|n| n as i32).unwrap_or(-1)
 }
 
+
+/// 全国仕様の正規整数を復元する。float32の全球座標を経由しない。
+pub(crate) fn decode_global(bytes:&[u8],origin:[i32;2],parents:&[Vec<[i32;3]>])->R<Vec<[i32;3]>> {
+    if bytes.len()>16777216 || parents.len()>4 {return Err(());}
+    let mut r=Reader::new(bytes);let magic=r.take(4)?;let n=r.u32()? as usize;let pc=r.u32()? as usize;let nf=r.u32()? as usize;
+    if r.u32()?!=0.0625f32.to_bits() || r.u32()?!=0.125f32.to_bits() || n==0 || n>262144 || nf>n || pc!=parents.len(){return Err(());}
+    let mut columns=Vec::new();
+    while !r.end(){if columns.len()==7{return Err(());}let len=r.u32()? as usize;let b=r.take(len)?;if Reader::new(b).var()?>n as u64{return Err(());}columns.push(stream(b)?);}
+    let mut out=vec![[0;3];n];
+    if magic==b"NQC1" {
+        if pc!=0 || nf!=n || columns.len()!=3 || columns.iter().any(|c|c.len()!=n){return Err(());}
+        let mut sum=[0i64;3];for i in 0..n {for k in 0..3 {sum[k]=sum[k].checked_add(columns[k][i]).ok_or(())?;let v=sum[k].checked_add(if k<2 {origin[k] as i64}else{0}).ok_or(())?;out[i][k]=i32::try_from(v).map_err(|_|())?;}}
+    }else if magic==b"NDC1" {
+        if columns.len()!=7 || columns[0].len()!=n || columns[1..4].iter().any(|c|c.len()!=n-nf) || columns[4..].iter().any(|c|c.len()!=nf){return Err(());}
+        let mut last=vec![0i64;pc];let mut sum=[0i64;3];let mut fresh=0;let mut inherited=0;
+        for i in 0..n {match columns[0][i] {
+            1=>{if fresh>=nf{return Err(());}for k in 0..3 {sum[k]=sum[k].checked_add(columns[k+4][fresh]).ok_or(())?;out[i][k]=i32::try_from(sum[k].checked_add(if k<2 {origin[k] as i64}else{0}).ok_or(())?).map_err(|_|())?;}fresh+=1;},
+            0=>{if inherited>=n-nf{return Err(());}let slot=usize::try_from(columns[1][inherited]).map_err(|_|())?;if slot>=pc{return Err(());}last[slot]=last[slot].checked_add(columns[2][inherited]).ok_or(())?;let index=usize::try_from(last[slot]).map_err(|_|())?;if index>=parents[slot].len() || index>=1<<24{return Err(());}out[i]=parents[slot][index];out[i][2]=i32::try_from((out[i][2] as i64).checked_add(columns[3][inherited]).ok_or(())?).map_err(|_|())?;inherited+=1;},
+            _=>return Err(())
+        }}if fresh!=nf || inherited!=n-nf{return Err(());}
+    }else{return Err(());}
+    if out.iter().any(|p|p[0]<0 || p[1]<0 || p[0]>641200267 || p[1]>641200267){return Err(());}Ok(out)
+}
+/// WASMとネイティブで共通の整数API。offsetsは親ごとの点数の累積。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn codec_decode_global_i32(input:*const u8,len:usize,origin_x:i32,origin_y:i32,parent:*const i32,parent_ints:usize,offsets:*const u32,parent_count:usize,output:*mut i32,capacity:usize)->i32 {
+    if input.is_null() || output.is_null() || len>16777216 || parent_count>4 || parent_ints>4*262144*3 || parent_ints%3!=0 || capacity>262144{return -1;}
+    let bytes=unsafe{slice::from_raw_parts(input,len)};
+    let flat=if parent_ints==0 {&[][..]}else{if parent.is_null(){return -1;}unsafe{slice::from_raw_parts(parent,parent_ints)}};
+    let off=if parent_count==0 {&[0u32][..]}else{if offsets.is_null(){return -1;}unsafe{slice::from_raw_parts(offsets,parent_count+1)}};
+    if off[0]!=0 || off.windows(2).any(|w|w[0]>w[1]) || *off.last().unwrap() as usize!=parent_ints/3{return -1;}
+    let p=(0..parent_count).map(|i|flat[off[i] as usize*3..off[i+1] as usize*3].chunks_exact(3).map(|p|[p[0],p[1],p[2]]).collect()).collect::<Vec<_>>();
+    match decode_global(bytes,[origin_x,origin_y],&p){Ok(points) if points.len()<=capacity=>{let out=unsafe{slice::from_raw_parts_mut(output,points.len()*3)};for (o,p) in out.chunks_exact_mut(3).zip(&points){o.copy_from_slice(p);}points.len() as i32},_=>-1}
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,3 +174,5 @@ mod tests {
     #[test] fn reject_overflow_and_bad_run() { assert!(stream(&[1, 3, 1, 0, 2]).is_err()); assert!(stream(&[1, 3, 0, 0, 64]).is_err()); assert!(stream(&[1, 5, 2, 0, 3, 0]).is_err()); }
     #[test] fn small_byte_fuzz_never_panics() { for n in 0..256 { for byte in [0, 1, 2, 127, 255] { let mut b = vec![byte; n]; if n >= 4 { b[..4].copy_from_slice(b"NDC1"); } let mut out = [0.; 30]; assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode(&b, &[], &[0], &mut out))).is_ok()); } } }
 }
+
+pub(crate) fn limited_stream(bytes:&[u8],limit:usize)->R<Vec<i64>> {if Reader::new(bytes).var()?>limit as u64{return Err(());}stream(bytes)}

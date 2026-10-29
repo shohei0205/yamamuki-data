@@ -19,6 +19,7 @@ earcutr = "0.5"
 meshopt = "0.7"
 png = "0.18"
 zstd = "0.13"
+sha2 = "0.11"
 
 [[bin]]
 name = "terrain-codec-bench"
@@ -63,3 +64,7 @@ path = "src/national_summit_prepare.rs"
 [[bin]]
 name = "terrain-xyz-region-test"
 path = "src/xyz_region_test.rs"
+
+[[bin]]
+name = "terrain-natural-national"
+path = "src/natural_national.rs"
