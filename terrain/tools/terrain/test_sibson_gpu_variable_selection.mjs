@@ -35,3 +35,10 @@ let settledDraw=selectCoverage({levels,map,desired:[root],resident:missingRootCa
 missingRootCache.set('target',{offset:4096,tile:{...root,n:32}});
 pendingDraw=selectCoverage({levels,map,desired:[root],resident:missingRootCache,visible:()=>true,gridN:()=>128});assert(pendingDraw.some(v=>v.tile.error===200));
 console.log('目標未取得・解像度不足中は全階層の最詳細キャッシュを優先し、取得後は目標へ収束');
+
+// 同じ128km範囲の5120→2560→1280と、その先の四分割を混在させる。
+const sameLevels=[{error:5120,side:128000},{error:2560,side:128000},{error:1280,side:128000},{error:640,side:64000}],sameMap=new Map();
+for(let level=0;level<sameLevels.length;level++){const {error,side}=sameLevels[level],n=128000/side;for(let y=0;y<n;y++)for(let x=0;x<n;x++)sameMap.set([error,x,y].join('/'),{error,side,x,y,n:128,level,bounds:[x*side,y*side,(x+1)*side,(y+1)*side]});}
+const sameCache=new Map([...sameMap].map(([key,tile],i)=>[key,{tile,offset:i*1024}]));
+for(const error of [5120,2560,1280,640]){const desired=[...sameMap.values()].filter(t=>t.error===error),result=selectCoverage({levels:sameLevels,map:sameMap,desired,resident:sameCache,visible:()=>true,gridN:()=>128});assert(result.every(v=>v.tile.error===error));assert.equal(result.length,error===640?4:1);}
+console.log('同範囲の粗い3品質と四分割品質の選択を確認');

@@ -2131,3 +2131,41 @@ node tools/terrain/test_natural_c1_128_patches.mjs
 ```
 
 生成器の結合試験は `test_natural_fixed_lpf.py`、`test_natural_raw_shape.py`、`test_natural_scale_placement.py`。これらは `build/natural-fixed-lpf-target/release/terrain-natural-national.exe` を使用するため、同じターゲットディレクトリーへ `-NaturalNational` のreleaseビルドを準備してから実行する。
+
+
+### 61489の粗品質追加（2026-10-30）
+
+1280 mより粗い2560 m・5120 mを追加した。いずれも試験範囲と同じ投影上128 km四方の一枚で、生成は `tools/terrain/errorfit_20_series.py` を再実行して未生成の6タイルだけ追加する。同じタイルサイズの品質階層も自動LODと固定選択で比較できる。全品質は20～5120 mの9段階。
+
+
+### LODのスムーズ切り替え（2026-10-30）
+
+61488/61489の曲面表示は、高さと傾きを約0.45秒で移行する。途中で目標が変わる場合も、その時点の混合曲面からつなぐ。移行用GPUキャッシュを別に必要量確保するが、保存データや転送する制御点は増やさない。補間なしの制御点TIN表示は対象外。詳細とメモリーの上限は [決定事項](tools/terrain/SIBSON_DECISIONS.md) を参照。
+
+`node tools/terrain/test_natural_c1_128_morph.mjs` で時間補間と再目標化を確認する。ブラウザー検証は、61489を起動し、PlaywrightとChromeを利用できる環境で `node tools/terrain/test_natural_c1_128_morph_browser.cjs` を実行する。`PLAYWRIGHT_MODULE` でPlaywrightモジュールのパス、`TERRAIN_MORPH_URL` で試験サーバーURLを指定できる。
+
+
+61489の粗品質は、1280 mから2560 mへの点数落差を緩和した版を使う。2560/5120 mの初期実点は1280 m用の約1/4・1/16（隣接段階で約1/4）とし、通常Sibsonで元DEM全有効画素の誤差を再監査する。出力は`build/natural-raw-c1-128-coarse-gradual-v2`、キューは従来の`natural-raw-c1-128-errorfit20-full-v1/queue.sqlite3`を共用。旧粗品質データは保持する。
+
+
+1280～5120 mの点数比による調整は撤回。61489の粗品質は`build/natural-raw-c1-128-coarse-error-only-v3`へ移行し、4隅付近の有効DEM支持点から、最大残差の点を1点ずつ追加して誤差を満たすまで適合する。他レベルの点数を参照しない。20～640 mの既存成果は今回の再生成対象外。詳細・制約・検証は`tools/terrain/SIBSON_DECISIONS.md`を参照。
+
+
+61489に誤差を守る点削減比較を追加。表示で「削減前・10 m適合」「点削減・20 m上限」を選ぶ。対象は各地域の中央4タイル（20 m品質・4×4 km）のみで、その他は元方式。生成器は`tools/terrain/prune_errorfit_tile.py`、成果は`build/natural-error-pruned-v1`。点数目標を使わず、削除ごとに元DEM全有効画素＋250 m帯を検査する。固定境界・余白支持点は削除しない。通常Sibsonの誤差検査であり、C1・描画・接合後の誤差上限ではない。スムーズ切り替えでは変更のないタイルの接合前の場を保存し、二重接合による境界帯の変形を防ぐ。
+
+
+初回のタイル取得中は、粗い仮表示からの高さアニメーションを行わず、取得した曲面を直接表示する。初回取得が完了した後のLOD変更には従来の滑らかな移行を適用する。表示元・地域変更による再取得も初回と同じ扱い。回帰試験は`tools/terrain/test_natural_c1_128_cold_start_browser.cjs`。
+
+
+61489では、未取得領域を埋める仮の粗地形が、取得済みの詳細地形を接合時に下げないようにした。新しい目標タイルは一式をGPUで準備してから表示へ反映し、それまでは表示へ採用済みのキャッシュを維持する。初回は一式を直接表示し、通常LOD変更では一式で滑らかに移行する。回帰試験は`test_natural_c1_128_provisional_browser.cjs`と`test_natural_c1_128_batch_browser.cjs`。詳細は`tools/terrain/SIBSON_DECISIONS.md`。
+
+
+連続ズーム時は現在の目標から外れた取得を中止し、最新の要求へ通信枠を譲る。一括反映は現在必要なタイルだけで準備完了を判定する。GPUアトラス128 MiBの中に更新用の空きを残すため、表示中・目標の保護対象以外の未使用履歴は64 MiBを目安にLRU整理する。回帰試験は`test_natural_c1_128_zoomout_browser.cjs`と`test_natural_c1_128_memory_zoomout_browser.cjs`。
+
+
+見直し誤差の3地域再生成は`tools/terrain/regional_xyz_tight.py`。標準XYZ z6～14、誤差640/500/400/320/240/160/80/40/20 m。各地点の投影128 km四方を覆うタイル全体を生成し、共有分を除いて11526枚。出力は`build/natural-xyz-tight-errors-v1`、進捗は`http://127.0.0.1:61490/`。各品質の半分の誤差へ適合後、目標誤差を守って点を削減する。旧61489は旧データ表示のまま保持。参照試験であり、全国Rust生成・共通点同期・差分配布の完成とは区別する。詳しくは`tools/terrain/SIBSON_DECISIONS.md`の2026-10-30再生成記録。
+
+
+### XYZ地域試験の削減処理の確認
+
+`tools/terrain/test_streamed_dem_prune.py` は局所的な削除順位計算、全配列版との結果一致、容量上限付きDEMキャッシュ、部分画素監査の採用・却下を確認する。`tools/terrain/test_errorfit_seed.py` は初期点と、削減前の中間GPU用データ生成を省く経路を確認する。いずれも地形用Python環境から実行する。2026-10-30の実タイル比較と再開記録は `tools/terrain/SIBSON_DECISIONS.md` を参照。

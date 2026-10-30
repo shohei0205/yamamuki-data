@@ -102,7 +102,7 @@ class Handler(BaseHTTPRequestHandler):
   try:
    url=urllib.parse.urlparse(self.path);args=urllib.parse.parse_qs(url.query);get=lambda k,d:args.get(k,[d])[0];region=get('region','fuji')
    if region not in [r for r,_,_ in REGIONS]:raise ValueError('不正な地域')
-   assets={'/':'natural_c1_128.html','/control-gpu128.js':'natural_c1_128.js','/control-gpu128-render.wgsl':'natural_c1_128_render.wgsl','/control-gpu.wgsl':'natural_c1_128_compute.wgsl','/control-gpu128-selection.mjs':'sibson_gpu_variable_selection.mjs','/control-gpu128-patches.mjs':'natural_c1_128_patches.mjs','/control-gpu128-lod.mjs':'natural_c1_128_lod.mjs'}
+   assets={'/':'natural_c1_128.html','/control-gpu128.js':'natural_c1_128.js','/control-gpu128-render.wgsl':'natural_c1_128_render.wgsl','/control-gpu.wgsl':'natural_c1_128_compute.wgsl','/control-gpu128-selection.mjs':'sibson_gpu_variable_selection.mjs','/control-gpu128-patches.mjs':'natural_c1_128_patches.mjs','/control-gpu128-lod.mjs':'natural_c1_128_lod.mjs','/control-gpu128-morph.mjs':'natural_c1_128_morph.mjs'}
    if url.path in assets:
     p=ASSETS/assets[url.path];body=p.read_bytes();mime='text/html; charset=utf-8' if p.suffix=='.html' else 'text/javascript; charset=utf-8' if p.suffix in ['.js','.mjs'] else 'text/plain; charset=utf-8'
    elif url.path=='/variable-manifest':body=json.dumps(manifest(region)).encode();mime='application/json'
