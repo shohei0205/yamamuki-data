@@ -1,5 +1,5 @@
 // 読み込み済みの兄弟を、未読の兄弟のために親へ巻き戻さない。
-export function selectCoverage({levels,map,desired,resident,visible,gridN,preferCachedChild=false}){
+export function selectCoverage({levels,roots=[[0,0]],map,desired,resident,visible,gridN,preferCachedChild=false}){
  const id=t=>[t.error,t.x,t.y].join('/'),wanted=new Map(desired.map(t=>[id(t),t])),split=new Set(),below=new Set(),cached=new Map();
  for(const t of desired)for(let level=0;level<t.level;level++){const ratio=levels[level].side/t.side;split.add([levels[level].error,Math.floor(t.x/ratio),Math.floor(t.y/ratio)].join('/'));}
  for(const v of resident.values()){const level=levels.findIndex(l=>l.error===v.tile.error);for(let l=0;l<level;l++){const ratio=levels[l].side/v.tile.side;below.add([levels[l].error,Math.floor(v.tile.x/ratio),Math.floor(v.tile.y/ratio)].join('/'));}const key=id(v.tile),old=cached.get(key);if(!old||v.tile.n>old.tile.n)cached.set(key,v);}
@@ -17,5 +17,5 @@ export function selectCoverage({levels,map,desired,resident,visible,gridN,prefer
   }
   return owner?[fragment(owner,t,density(target?.n||gridN(t)))]:[];
  }
- return visit(0,0,0,null);
+ return roots.flatMap(([x,y])=>visit(0,x,y,null));
 }

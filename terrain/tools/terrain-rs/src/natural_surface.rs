@@ -2,6 +2,7 @@
 use anyhow::{Result, ensure, bail};
 use delaunator::{Point, Triangulation, EMPTY};
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 /// 画素間で再利用する作業領域。補間の式・走査順は変えない。
 #[derive(Default)]
@@ -24,7 +25,7 @@ pub struct Surface {
     pub circles: Vec<[f64; 3]>,
     pub neighbors: Vec<Vec<usize>>,
     pub incident: Vec<Vec<usize>>,
-    pub circle_index: rstar::RTree<CircleEntry>,
+    pub circle_index: OnceLock<rstar::RTree<CircleEntry>>,
 }
 fn cross(a: [f64; 2], b: [f64; 2]) -> f64 { a[0]*b[1]-a[1]*b[0] }
 #[cfg(test)]
@@ -48,10 +49,15 @@ fn area(poly: &[[f64; 2]]) -> f64 {
 #[derive(Clone,Debug)] pub struct CircleEntry {pub id:usize,box_:rstar::AABB<[f64;2]>}
 impl rstar::RTreeObject for CircleEntry {type Envelope=rstar::AABB<[f64;2]>;fn envelope(&self)->Self::Envelope {self.box_}}
 impl Surface {
-    pub fn new(points: Vec<[f64; 3]>) -> Result<Self> {
+    pub fn new(points: Vec<[f64; 3]>) -> Result<Self> { Self::build(points, false) }
+    // 呼出元が既存の検証済み面から一点だけ除いた場合に限る。
+    pub(crate) fn verified_subset(points: Vec<[f64; 3]>) -> Result<Self> { Self::build(points, true) }
+    fn build(points: Vec<[f64; 3]>, unique_known: bool) -> Result<Self> {
         ensure!(points.len()>=3 && points.iter().flatten().all(|v|v.is_finite()), "制御点が不正です");
+        if !unique_known {
         let mut unique=HashSet::with_capacity(points.len());
         for p in &points { ensure!(unique.insert((if p[0]==0.{0}else{p[0].to_bits()},if p[1]==0.{0}else{p[1].to_bits()})), "XYが重複しています"); }
+        }
         let xy=points.iter().map(|v|Point{x:v[0],y:v[1]}).collect::<Vec<_>>();
         let topology=delaunator::triangulate(&xy);
         ensure!(!topology.triangles.is_empty(), "制御点が一直線です");
@@ -66,10 +72,16 @@ impl Surface {
             let u=a[0]*a[0]+a[1]*a[1];let v=b[0]*b[0]+b[1]*b[1];
             let dx=(u*b[1]-v*a[1])/det;let dy=(a[0]*v-b[0]*u)/det;
             circles.push([p[0]+dx,p[1]+dy,dx*dx+dy*dy]);
-            for i in 0..3 { for j in 0..3 { if i!=j { neighbors[t[i]].push(t[j]); } } }
+            // 各共有辺を一度だけ登録し、重複分の確保と整列を減らす。
+            for i in 0..3 {
+                let edge=face*3+i; let opposite=topology.halfedges[edge];
+                if opposite==EMPTY || edge<opposite {
+                    let a=t[i];let b=t[(i+1)%3];neighbors[a].push(b);neighbors[b].push(a);
+                }
+            }
         }
         for n in &mut neighbors { n.sort_unstable();n.dedup(); }
-        let circle_index=rstar::RTree::bulk_load(circles.iter().enumerate().map(|(id,c)|{let r=c[2].sqrt();CircleEntry{id,box_:rstar::AABB::from_corners([c[0]-r,c[1]-r],[c[0]+r,c[1]+r])}}).collect());
+        let circle_index=OnceLock::new();
         Ok(Self{points,topology,circles,neighbors,incident,circle_index})
     }
     pub fn weights(&self, t: usize, q: [f64; 2]) -> [f64; 3] {
@@ -78,9 +90,23 @@ impl Surface {
         let ab=[b[0]-a[0],b[1]-a[1]];let ac=[c[0]-a[0],c[1]-a[1]];let aq=[q[0]-a[0],q[1]-a[1]];
         let d=cross(ab,ac);let v=cross(aq,ac)/d;let w=cross(ab,aq)/d;[1.-v-w,v,w]
     }
+    // 点を挿入するときの外接円群はDelaunay上で連結する。
+    // 毎回全域のR-treeを作らず、包含面から同じ外接円判定でたどる。
+    pub fn faces_for_point(&self, q: [f64;2]) -> Result<Vec<usize>> {
+        let (face,_)=self.locate(q,0)?;
+        let mut stack=vec![face];let mut seen=HashSet::with_capacity(32);let mut out=Vec::new();
+        while let Some(t)=stack.pop() {
+            if !seen.insert(t) {continue;}
+            let c=self.circles[t];
+            if (c[0]-q[0]).powi(2)+(c[1]-q[1]).powi(2)>c[2]*(1.+1e-12)+1e-8 {continue;}
+            out.push(t);
+            for e in t*3..t*3+3 { let opposite=self.topology.halfedges[e];if opposite!=EMPTY {stack.push(opposite/3);} }
+        }
+        Ok(out)
+    }
     pub fn faces_for_rect(&self,rect:[f64;4])->Vec<usize> {
         let bounds=rstar::AABB::from_corners([rect[0],rect[1]],[rect[2],rect[3]]);
-        self.circle_index.locate_in_envelope_intersecting(&bounds).filter_map(|v|{let c=self.circles[v.id];let x=c[0].clamp(rect[0],rect[2]);let y=c[1].clamp(rect[1],rect[3]);(((c[0]-x).powi(2)+(c[1]-y).powi(2))<=c[2]*(1.+1e-12)+1e-8).then_some(v.id)}).collect()
+        self.circle_index.get_or_init(|| rstar::RTree::bulk_load(self.circles.iter().enumerate().map(|(id,c)|{let r=c[2].sqrt();CircleEntry{id,box_:rstar::AABB::from_corners([c[0]-r,c[1]-r],[c[0]+r,c[1]+r])}}).collect())).locate_in_envelope_intersecting(&bounds).filter_map(|v|{let c=self.circles[v.id];let x=c[0].clamp(rect[0],rect[2]);let y=c[1].clamp(rect[1],rect[3]);(((c[0]-x).powi(2)+(c[1]-y).powi(2))<=c[2]*(1.+1e-12)+1e-8).then_some(v.id)}).collect()
     }
     pub fn support_vertices(&self,rect:[f64;4])->Vec<usize> {
         let mut ids=std::collections::BTreeSet::new();

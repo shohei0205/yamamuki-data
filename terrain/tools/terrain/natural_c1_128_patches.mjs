@@ -28,13 +28,36 @@ export function makePatches(tiles, project, width, limit=2000000, visible=()=>tr
 
  // 同一直線上の反対向き辺を照合。部分接触と異なるタイルサイズにも対応。
  const lines=new Map();
- for(const p of out){p.edges=Array(4).fill(p.side/p.n);for(let e=0;e<4;e++){const vertical=e<2,b=p.bounds,key=(vertical?'x':'y')+b[e===0?0:e===1?2:e===2?1:3];if(!lines.has(key))lines.set(key,[]);lines.get(key).push({p,e,a:b[vertical?1:0],b:b[vertical?3:2]});}}
+ for(const p of out){p.edges=Array(4).fill(p.side/p.n);p.origins=[p.bounds[1],p.bounds[1],p.bounds[0],p.bounds[0]];for(let e=0;e<4;e++){const vertical=e<2,b=p.bounds,key=(vertical?'x':'y')+Math.round(b[e===0?0:e===1?2:e===2?1:3]*1000);if(!lines.has(key))lines.set(key,[]);lines.get(key).push({p,e,a:b[vertical?1:0],b:b[vertical?3:2]});}}
+ const groups=[];
  for(const edges of lines.values()){
- for(const e of edges){e.parent=e;e.step=e.p.side/e.p.n;}
+ for(const e of edges){e.parent=e;e.origin=e.a;}
  const root=e=>{while(e.parent!==e){e.parent=e.parent.parent;e=e.parent;}return e;};
- edges.sort((a,b)=>a.a-b.a);for(let i=0;i<edges.length;i++)for(let j=i+1;j<edges.length&&edges[j].a<edges[i].b-1e-6;j++){const a=edges[i],b=edges[j];if((a.e^1)!==b.e||Math.min(a.b,b.b)<=Math.max(a.a,b.a)+1e-6)continue;const ra=root(a),rb=root(b);if(ra!==rb){rb.parent=ra;ra.step=Math.max(ra.step,rb.step);}}
- for(const e of edges)e.p.edges[e.e]=root(e).step;
+ edges.sort((a,b)=>a.a-b.a);for(let i=0;i<edges.length;i++)for(let j=i+1;j<edges.length&&edges[j].a<edges[i].b-1e-6;j++){const a=edges[i],b=edges[j];if((a.e^1)!==b.e||Math.min(a.b,b.b)<=Math.max(a.a,b.a)+1e-6)continue;const ra=root(a),rb=root(b);if(ra!==rb){rb.parent=ra;ra.origin=Math.min(ra.origin,rb.origin);}}
+ const byRoot=new Map();for(const e of edges){const r=root(e);if(!byRoot.has(r))byRoot.set(r,[]);byRoot.get(r).push(e);}
+ for(const [r,members]of byRoot){
+  // 仮表示との接合で辺の丸めが接合帯の外へ飛び出すのを防ぐ。
+  // 保存LODと曲面キャッシュを維持し、この辺の描画だけを補う。
+  if(members.some(e=>tiles[e.p.tile].provisional)&&new Set(members.map(e=>e.p.tile)).size>1){
+   const band=Math.min(...members.map(e=>{const t=tiles[e.p.tile],b=t.bounds,f=t.field;if(t.sampleStep>0)return Math.max(1,Math.min(2*t.sampleStep,(b[2]-b[0])*.125));if(!f)return 250;return Math.max(1,Math.min(250,b[0]-f[0],b[1]-f[1],f[2]-b[2],f[3]-b[3],(b[2]-b[0])*.125));}));
+   for(const e of members){const required=2**Math.ceil(Math.log2(Math.max(1,e.p.side/(2*band))));if(required>e.p.n){e.p.n=required;e.p.transientRefinement=true;}}
+  }
+  groups.push([r,members]);
  }
+ }
+ // 一つのパッチの分割変更は他の辺にも効くため、全補正後に刻みを確定する。
+ for(const [r,members]of groups){const step=Math.max(...members.map(e=>e.p.side/e.p.n));for(const e of members){e.p.edges[e.e]=step;e.p.origins[e.e]=r.origin;}}
 
  return out;
+}
+
+// 1 kmの丸め格子を使わず、実際の接合帯が重なる描画領域を照合する。
+export function blendNeighbors(tiles){
+ const rows=tiles.map((t,i)=>{const b=t.bounds,f=t.field,step=(b[2]-b[0])/Math.max(t.n,1),padding=Math.min(b[0]-f[0],b[1]-f[1],f[2]-b[2],f[3]-b[3]),legacy=Math.min(Math.max(250,2*step),Math.max(1,Math.min(padding,(b[2]-b[0])*.125))),band=t.sampleStep>padding?Math.min(2*t.sampleStep,(b[2]-b[0])*.125):legacy;return {i,b:[b[0]-band,b[1]-band,b[2]+band,b[3]+band],empty:t.empty};}).sort((a,b)=>a.b[0]-b.b[0]);
+ const lists=tiles.map((_,i)=>new Set([i]));
+ for(let i=0;i<rows.length;i++)for(let j=i+1;j<rows.length&&rows[j].b[0]<=rows[i].b[2]+.01;j++){
+  const a=rows[i],b=rows[j];if(a.empty||b.empty||a.b[1]>b.b[3]+.01||b.b[1]>a.b[3]+.01)continue;
+  lists[a.i].add(b.i);lists[b.i].add(a.i);
+ }
+ return lists.map(v=>[...v].sort((a,b)=>a-b));
 }

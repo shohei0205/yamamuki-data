@@ -68,3 +68,19 @@ path = "src/xyz_region_test.rs"
 [[bin]]
 name = "terrain-natural-national"
 path = "src/natural_national.rs"
+
+[[bin]]
+name = "terrain-natural-regional"
+path = "src/natural_regional.rs"
+
+[[bin]]
+name = "terrain-natural-scale-bench"
+path = "src/natural_scale_bench.rs"
+
+[[bin]]
+name = "terrain-natural-shared-compare"
+path = "src/natural_shared_compare.rs"
+
+[[bin]]
+name = "terrain-natural-shared-pack"
+path = "src/natural_shared_pack.rs"

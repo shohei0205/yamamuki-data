@@ -1,7 +1,7 @@
 // 高さキャッシュも境界接合もGPU内で処理する。CPUの頂点配列は使わない。
 struct Sample { original:vec4<f32>, adjusted:vec4<f32> }
 struct Tile { core:vec4<f32>, field:vec4<f32>, data:vec4<u32>, misc:vec4<f32> }
-struct Patch { bounds:vec4<f32>, data:vec4<u32>, edges:vec4<f32> }
+struct Patch { bounds:vec4<f32>, data:vec4<u32>, edges:vec4<f32>, origins:vec4<f32> }
 @group(0) @binding(6) var<storage,read> patches:array<Patch>;
 struct Camera { pan:vec4<f32>, pose:vec4<f32>, viewport:vec4<f32>, flags:vec4<u32> }
 @group(0) @binding(0) var<storage,read> samples:array<Sample>;
@@ -27,9 +27,28 @@ fn ramp(x:f32)->vec2<f32>{let u=clamp(x,0.,1.);return vec2<f32>(u*u*(3.-2.*u),se
 fn tileBlendBand(t:Tile)->f32{
  let padding=min(min(t.core.x-t.field.x,t.core.y-t.field.y),min(t.field.z-t.core.z,t.field.w-t.core.w));
  let step=(t.core.z-t.core.x)/max(t.misc.y,1.);
- return min(max(250.,2.*step),max(1.,min(padding,(t.core.z-t.core.x)*.125)));
+ let legacy=min(max(250.,2.*step),max(1.,min(padding,(t.core.z-t.core.x)*.125)));
+ let cacheStep=max(t.field.z-t.field.x,t.field.w-t.field.y)/max(f32(t.data.y),1.);
+ return select(legacy,min(2.*cacheStep,(t.core.z-t.core.x)*.125),cacheStep>padding);
+
 }
-fn fieldAt(q:vec2<f32>,t:Tile,old:bool)->vec3<f32>{if(old){return oldSample(q,t);}return evaluate(q,t);}
+// 境界の内外で参照位置を急に固定せず、接線外挿への移行を連続にする。
+fn smoothPositive(x:f32,width:f32)->f32{
+ if(x<=-width){return 0.;}if(x>=width){return x;}
+ return (x+width)*(x+width)/(4.*width);
+}
+fn smoothInterior(q:vec2<f32>,lo:vec2<f32>,hi:vec2<f32>,width:f32)->vec2<f32>{
+ var a=lo+vec2<f32>(smoothPositive(q.x-lo.x,width),smoothPositive(q.y-lo.y,width));
+ return hi-vec2<f32>(smoothPositive(hi.x-a.x,width),smoothPositive(hi.y-a.y,width));
+}
+fn fieldAt(q:vec2<f32>,t:Tile,old:bool)->vec3<f32>{
+ let padding=min(min(t.core.x-t.field.x,t.core.y-t.field.y),min(t.field.z-t.core.z,t.field.w-t.core.w));
+ var anchor=q;
+ // 粗いキャッシュでは接合帯を広げ、実領域の外側を境界の傾きで連続に延ばす。
+ if(tileBlendBand(t)>padding+.01){anchor=smoothInterior(q,t.core.xy,t.core.zw,tileBlendBand(t));}
+ var value=vec3<f32>(0.);if(old){value=oldSample(anchor,t);}else{value=evaluate(anchor,t);}
+ return vec3<f32>(value.x+dot(value.yz,q-anchor),value.yz);
+}
 fn blendFields(q:vec2<f32>,owner:Tile,old:bool)->vec3<f32>{
  if(camera.flags.x==0u || owner.data.w<=1u){return fieldAt(q,owner,old);}
  // 仮表示は詳細地形の内側を引き下げない。詳細側の外縁でのみ
@@ -42,9 +61,9 @@ fn blendFields(q:vec2<f32>,owner:Tile,old:bool)->vec3<f32>{
   let a=ramp((q.x-t.core.x+band)/(2.*band));let b=ramp((t.core.z-q.x+band)/(2.*band));let c=ramp((q.y-t.core.y+band)/(2.*band));let d=ramp((t.core.w-q.y+band)/(2.*band));
   let w=a.x*b.x*c.x*d.x;let gradient=vec2<f32>((a.y*b.x-a.x*b.y)*c.x*d.x,(c.y*d.x-c.x*d.y)*a.x*b.x)/(2.*band);
   if(w<=0.){continue;}let v=fieldAt(q,t,old);
-  if(provisionalTile(t)){fallbackSum+=w;fallbackH+=w*v.x;fallbackG+=w*v.yz+gradient*v.x;fallbackDW+=gradient;}
+  if(provisionalTile(t)){fallbackSum+=w;fallbackH+=w*v.x;fallbackG+=w*v.yz;fallbackDW+=gradient;}
   else{
-   sum+=w;h+=w*v.x;g+=w*v.yz+gradient*v.x;dw+=gradient;
+   sum+=w;h+=w*v.x;g+=w*v.yz;dw+=gradient;
    if((u32(owner.misc.w)&8u)!=0u){
    let ca=ramp((q.x-t.core.x+band)/band);let cb=ramp((t.core.z-q.x+band)/band);let cc=ramp((q.y-t.core.y+band)/band);let cd=ramp((t.core.w-q.y+band)/band);
    let cover=ca.x*cb.x*cc.x*cd.x;let coverGradient=vec2<f32>((ca.y*cb.x-ca.x*cb.y)*cc.x*cd.x,(cc.y*cd.x-cc.x*cd.y)*ca.x*cb.x)/band;
@@ -52,8 +71,9 @@ fn blendFields(q:vec2<f32>,owner:Tile,old:bool)->vec3<f32>{
    }
   }
  }
- g+=remain*fallbackG+remainGradient*fallbackH;dw+=remain*fallbackDW+remainGradient*fallbackSum;h+=remain*fallbackH;sum+=remain*fallbackSum;
- if(sum<1e-10){return fieldAt(q,owner,old);}let height=h/sum;return vec3<f32>(height,(g-height*dw)/sum);
+ g+=remain*fallbackG;dw+=remain*fallbackDW+remainGradient*fallbackSum;h+=remain*fallbackH;sum+=remain*fallbackSum;
+ if(sum<1e-10){return fieldAt(q,owner,old);}let height=h/sum;// 陰影は各曲面の傾きを混ぜる。高さの接合差を人工的な稜線として強調しない。
+ return vec3<f32>(height,g/sum);
 }
 fn blended(q:vec2<f32>,owner:Tile)->vec3<f32>{return blendFields(q,owner,false);}
 fn movingSurface(q:vec2<f32>,owner:Tile)->vec3<f32>{let goal=blended(q,owner);if(camera.viewport.w>=1.){return goal;}return mix(blendFields(q,owner,true),goal,camera.viewport.w);}
@@ -69,13 +89,13 @@ fn stitched(q:vec2<f32>,owner:Tile)->vec3<f32>{
 }
 fn patchPosition(xy:vec2<f32>,part:Patch)->vec2<f32>{
  // 細かい側の辺を粗い側の辺の直線へ合わせ、T字接続の隙間を防ぐ。
- var edgeStep=0.;var vertical=false;
- if(abs(xy.x-part.bounds.x)<.02){edgeStep=part.edges.x;vertical=true;}
- if(abs(xy.x-part.bounds.z)<.02 && part.edges.y>edgeStep){edgeStep=part.edges.y;vertical=true;}
- if(abs(xy.y-part.bounds.y)<.02 && part.edges.z>edgeStep){edgeStep=part.edges.z;vertical=false;}
- if(abs(xy.y-part.bounds.w)<.02 && part.edges.w>edgeStep){edgeStep=part.edges.w;vertical=false;}
+ var edgeStep=0.;var edgeOrigin=0.;var vertical=false;
+ if(abs(xy.x-part.bounds.x)<.02){edgeStep=part.edges.x;edgeOrigin=part.origins.x;vertical=true;}
+ if(abs(xy.x-part.bounds.z)<.02 && part.edges.y>edgeStep){edgeStep=part.edges.y;edgeOrigin=part.origins.y;vertical=true;}
+ if(abs(xy.y-part.bounds.y)<.02 && part.edges.z>edgeStep){edgeStep=part.edges.z;edgeOrigin=part.origins.z;vertical=false;}
+ if(abs(xy.y-part.bounds.w)<.02 && part.edges.w>edgeStep){edgeStep=part.edges.w;edgeOrigin=part.origins.w;vertical=false;}
  if(edgeStep<=0.){return xy;}
- let coordinate=select(xy.x,xy.y,vertical);let snapped=round(coordinate/edgeStep)*edgeStep;
+ let coordinate=select(xy.x,xy.y,vertical);let snapped=edgeOrigin+round((coordinate-edgeOrigin)/edgeStep)*edgeStep;
  return select(vec2<f32>(snapped,xy.y),vec2<f32>(xy.x,snapped),vertical);
 }
 fn patchSurface(xy:vec2<f32>,part:Patch)->vec3<f32>{return movingSurface(patchPosition(xy,part),tiles[part.data.x]);}

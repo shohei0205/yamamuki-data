@@ -42,3 +42,13 @@ for(let level=0;level<sameLevels.length;level++){const {error,side}=sameLevels[l
 const sameCache=new Map([...sameMap].map(([key,tile],i)=>[key,{tile,offset:i*1024}]));
 for(const error of [5120,2560,1280,640]){const desired=[...sameMap.values()].filter(t=>t.error===error),result=selectCoverage({levels:sameLevels,map:sameMap,desired,resident:sameCache,visible:()=>true,gridN:()=>128});assert(result.every(v=>v.tile.error===error));assert.equal(result.length,error===640?4:1);}
 console.log('同範囲の粗い3品質と四分割品質の選択を確認');
+
+// 標準XYZの最粗タイルが複数ある場合も、各親から子へたどる。
+const xyzLevels=[{error:40,side:200},{error:20,side:100}],xyzMap=new Map();
+for(const [level,x,y] of [[0,56,25],[0,57,25],[1,112,50],[1,114,50]]){
+ const {error,side}=xyzLevels[level];xyzMap.set([error,x,y].join('/'),{error,side,x,y,n:128,level,bounds:[x*side,y*side,(x+1)*side,(y+1)*side]});
+}
+const xyzDesired=[xyzMap.get('20/112/50'),xyzMap.get('20/114/50')],xyzResident=new Map(xyzDesired.map((tile,i)=>[String(i),{tile,offset:i*1024}]));
+const xyzDraw=selectCoverage({levels:xyzLevels,roots:[[56,25],[57,25]],map:xyzMap,desired:xyzDesired,resident:xyzResident,visible:()=>true,gridN:()=>128});
+assert.equal(xyzDraw.length,2);assert(xyzDraw.every(v=>v.tile.error===20));
+console.log('複数のXYZ最粗タイルと、領域端で一部だけ存在する子を選択できることを確認');
