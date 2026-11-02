@@ -2453,3 +2453,9 @@ natural_c1_128_render.wgslの接合高さは同じ正規化重み付き平均の
 ### 2026-11-02 SQLiteビューワーに自動LODを追加
 
 61493で可視深度と画面誤差に応じた25～500 mの自動選択、異品質の境界接合を実装。同品質は共通曲面のまま評価。三地点の広域・近景・混合、連続ズーム、固定品質の回帰、150 ms通信遅延中の境界検査が成功。余白0を1 m帯と誤認した仮表示の過剰分割も修正。[仕様と検証記録](tools/terrain/NATURAL_SHARED_AUTO_LOD.md)。SQLite本体・元データ・旧61491/61492は保持。
+
+### 現行共通曲面の全国生成準備（2026-11-02）
+
+旧LPF設定と分離した[全国準備設定・手順](tools/terrain/NATIONAL_SHARED_PREPARATION.md)と `NATIONAL_SHARED_SETTINGS.json` を追加。全PNGのSHA256を照合済み。全国用Rustの接続管理・適合・削減・逐次保存・独立監査・停止再開も実装し、事前検証済み。全国本番は開始していない。
+
+全国用Rust生成経路・外部メモリー接続・保存後監査・再開も実装。[実行手順と検証範囲](tools/terrain/NATIONAL_SHARED_ENGINE.md)。`start_national_shared.ps1`の既定は初期化のみ。全国本番の開始は `-Mode Run` を指定する。

@@ -106,6 +106,7 @@ pub struct Fast {
     cells: Vec<OnceLock<Vec<[f64; 2]>>>,
 }
 impl Fast {
+    pub fn certified(points:Vec<[f64;3]>)->Result<Self>{let base=Surface::certified(points)?;let cells=(0..base.points.len()).map(|_|OnceLock::new()).collect();Ok(Self{base,cells})}
     pub fn new(points: Vec<[f64; 3]>) -> Result<Self> {
         let base = Surface::new(points)?;
         let cells = (0..base.points.len()).map(|_| OnceLock::new()).collect();

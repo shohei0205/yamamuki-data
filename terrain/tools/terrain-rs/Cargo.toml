@@ -15,6 +15,7 @@ libloading = "0.8"
 rayon = "1"
 rstar = "0.12"
 delaunator = "1"
+robust = "1.2"
 earcutr = "0.5"
 meshopt = "0.7"
 png = "0.18"
@@ -84,3 +85,11 @@ path = "src/natural_shared_compare.rs"
 [[bin]]
 name = "terrain-natural-shared-pack"
 path = "src/natural_shared_pack.rs"
+
+[[bin]]
+name = "terrain-natural-shared-national"
+path = "src/natural_shared_national.rs"
+
+[[bin]]
+name = "terrain-natural-shared-stress"
+path = "src/natural_shared_stress.rs"

@@ -1,0 +1,116 @@
+{
+  "format": "national-shared-plan-v1",
+  "profile": "sibson-shared-no-lpf-z6-z13",
+  "crs": "EPSG:3857",
+  "tile_scheme": "XYZ",
+  "world_width_m": 40075016.68557849,
+  "levels": [
+    {
+      "z": 6,
+      "error_down_m": 500,
+      "error_up_m": 125.0,
+      "anchor": true,
+      "parent_z": null
+    },
+    {
+      "z": 7,
+      "error_down_m": 400,
+      "error_up_m": 100.0,
+      "anchor": false,
+      "parent_z": 6
+    },
+    {
+      "z": 8,
+      "error_down_m": 300,
+      "error_up_m": 75.0,
+      "anchor": false,
+      "parent_z": 7
+    },
+    {
+      "z": 9,
+      "error_down_m": 250,
+      "error_up_m": 62.5,
+      "anchor": true,
+      "parent_z": null
+    },
+    {
+      "z": 10,
+      "error_down_m": 200,
+      "error_up_m": 50.0,
+      "anchor": false,
+      "parent_z": 9
+    },
+    {
+      "z": 11,
+      "error_down_m": 125,
+      "error_up_m": 31.25,
+      "anchor": false,
+      "parent_z": 10
+    },
+    {
+      "z": 12,
+      "error_down_m": 60,
+      "error_up_m": 15.0,
+      "anchor": true,
+      "parent_z": null
+    },
+    {
+      "z": 13,
+      "error_down_m": 25,
+      "error_up_m": 6.25,
+      "anchor": false,
+      "parent_z": 12
+    }
+  ],
+  "generation": {
+    "language": "Rust",
+    "order": "fine-to-coarse",
+    "lpf": false,
+    "additional_vertex_pool": false,
+    "source_zoom": 14,
+    "source_pixels": 256,
+    "support": "certified-delaunay-circumcircle-and-complete-voronoi-one-ring",
+    "gradient": "stable-voronoi-neighbor-ls-v1",
+    "global_c1_solve": false,
+    "minimum_angle_degrees": 10,
+    "fail_on_unresolved_quality": true
+  },
+  "codec": {
+    "independent": "NQC1",
+    "delta": "NDC1",
+    "integer_profile": "rice-hybrid-v1",
+    "outer_zlib": false,
+    "xy_step_m": 0.0625,
+    "z_step_m": 0.125,
+    "rounding": "floor(v/step+0.5)",
+    "point_storage": "global-i32-xyz",
+    "max_direct_parents": 4,
+    "max_dependency_tiles_including_self": 16,
+    "max_chain_levels": 3,
+    "max_points_per_tile": 262144,
+    "max_blob_bytes": 16777216,
+    "fallback": "independent-if-smaller-or-dependency-limit"
+  },
+  "resources": {
+    "workers": "half-os-logical-processors",
+    "dem_cache_gib": 8,
+    "process_tree_working_set_gib": 8,
+    "process_tree_commit_gib": 10,
+    "minimum_free_disk_gib": 100
+  },
+  "runtime": {
+    "sqlite_access": "browser",
+    "decode": "wasm",
+    "reuse_decoded_parent_xyz": true,
+    "gpu_auxiliary_in_distribution": false
+  },
+  "required_gates": [
+    "disk_topology",
+    "global_fit_and_decimation",
+    "support_closure",
+    "quantized_full_dem_audit",
+    "standard_xyz_pack",
+    "resume_and_fault_recovery",
+    "resource_stress"
+  ]
+}

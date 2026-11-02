@@ -695,6 +695,7 @@ dependencies = [
  "meshopt",
  "png",
  "rayon",
+ "robust",
  "rstar",
  "rusqlite",
  "serde",

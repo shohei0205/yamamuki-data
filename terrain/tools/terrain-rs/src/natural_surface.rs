@@ -48,18 +48,37 @@ fn area(poly: &[[f64; 2]]) -> f64 {
 }
 #[derive(Clone,Debug)] pub struct CircleEntry {pub id:usize,box_:rstar::AABB<[f64;2]>}
 impl rstar::RTreeObject for CircleEntry {type Envelope=rstar::AABB<[f64;2]>;fn envelope(&self)->Self::Envelope {self.box_}}
+fn certified_legalize(t:&mut Triangulation,p:&[[f64;3]])->Result<usize>{
+ let coord=|i:usize|robust::Coord{x:p[i][0],y:p[i][1]};
+ let next=|e:usize|e/3*3+(e+1)%3;let prev=|e:usize|e/3*3+(e+2)%3;
+ let illegal=|t:&Triangulation,e:usize|{let h=t.halfedges[e];if h==EMPTY{return false;}let[a,b,c,d]=[t.triangles[e],t.triangles[next(e)],t.triangles[prev(e)],t.triangles[prev(h)]];let o=robust::orient2d(coord(a),coord(b),coord(c));let det=robust::incircle(coord(a),coord(b),coord(c),coord(d));det!=0.&&det.is_sign_positive()==o.is_sign_positive()};
+ let mut queue=(0..t.halfedges.len()).filter(|&e|t.halfedges[e]!=EMPTY&&e<t.halfedges[e]).collect::<Vec<_>>();let mut flips=0;
+ while let Some(e)=queue.pop(){if !illegal(t,e){continue;}let h=t.halfedges[e];let(e1,e2,h1,h2)=(next(e),prev(e),next(h),prev(h));
+  let[a,b,c,d]=[t.triangles[e],t.triangles[e1],t.triangles[e2],t.triangles[h2]];
+  let orientation=robust::orient2d(coord(a),coord(b),coord(c));
+  ensure!(robust::orient2d(coord(c),coord(d),coord(b))*orientation>0.&&robust::orient2d(coord(d),coord(c),coord(a))*orientation>0.,"堅牢な辺交換が不可能な面です");
+  let[o1,o2,p1,p2]=[t.halfedges[e1],t.halfedges[e2],t.halfedges[h1],t.halfedges[h2]];
+  t.triangles[e]=c;t.triangles[e1]=d;t.triangles[e2]=b;t.triangles[h]=d;t.triangles[h1]=c;t.triangles[h2]=a;
+  for(x,y)in [(e,h),(e1,p2),(e2,o1),(h1,o2),(h2,p1)]{t.halfedges[x]=y;if y!=EMPTY{t.halfedges[y]=x;}}
+  queue.extend([e1,e2,h1,h2]);flips+=1;ensure!(flips<=t.triangles.len()*16,"堅牢なDelaunay復旧が収束しません");
+ }
+ ensure!((0..t.halfedges.len()).all(|e|!illegal(t,e)),"局所Delaunayの空円条件が未達です");Ok(flips)
+}
 impl Surface {
     pub fn new(points: Vec<[f64; 3]>) -> Result<Self> { Self::build(points, false) }
+    pub fn certified(points: Vec<[f64;3]>)->Result<Self>{Self::build_internal(points,false,true)}
     // 呼出元が既存の検証済み面から一点だけ除いた場合に限る。
     pub(crate) fn verified_subset(points: Vec<[f64; 3]>) -> Result<Self> { Self::build(points, true) }
-    fn build(points: Vec<[f64; 3]>, unique_known: bool) -> Result<Self> {
+    fn build(points: Vec<[f64;3]>,unique_known:bool)->Result<Self>{Self::build_internal(points,unique_known,false)}
+    fn build_internal(points: Vec<[f64; 3]>, unique_known: bool, certify:bool) -> Result<Self> {
         ensure!(points.len()>=3 && points.iter().flatten().all(|v|v.is_finite()), "制御点が不正です");
         if !unique_known {
         let mut unique=HashSet::with_capacity(points.len());
         for p in &points { ensure!(unique.insert((if p[0]==0.{0}else{p[0].to_bits()},if p[1]==0.{0}else{p[1].to_bits()})), "XYが重複しています"); }
         }
         let xy=points.iter().map(|v|Point{x:v[0],y:v[1]}).collect::<Vec<_>>();
-        let topology=delaunator::triangulate(&xy);
+        let mut topology=delaunator::triangulate(&xy);
+        if certify { certified_legalize(&mut topology,&points)?; }
         ensure!(!topology.triangles.is_empty(), "制御点が一直線です");
         let mut circles=Vec::with_capacity(topology.triangles.len()/3);
         let mut neighbors=vec![Vec::new();points.len()];
@@ -184,4 +203,8 @@ impl Surface {
     #[test] fn exact_points() {let s=Surface::new(points()).unwrap();let mut start=0;for p in &s.points {assert!((s.evaluate([p[0],p[1]],&mut start).unwrap()-p[2]).abs()<1e-10);}}
     #[test] fn global_offset_keeps_precision() {let mut p=points();for v in &mut p {v[0]+=35000000.;v[1]+=15000000.;}let s=Surface::new(p).unwrap();let mut t=0;assert!((s.evaluate([35000004.25,15000005.5],&mut t).unwrap()-26.).abs()<1e-7);}
     #[test] fn bad_input_is_not_a_fallback_surface() {assert!(Surface::new(vec![[0.;3];4]).is_err());let s=Surface::new(points()).unwrap();assert!(s.evaluate([-1.,5.],&mut 0).is_err());assert!(s.evaluate([f64::NAN,0.],&mut 0).is_err());}
+}
+
+#[cfg(test)]mod certified_tests{use super::*;
+ #[test]fn repairs_illegal_diagonal(){let p=vec![[0.,0.,0.],[2.,0.,0.],[2.,2.,0.],[0.,1.,0.]];let mut t=Triangulation{triangles:vec![0,1,2,0,2,3],halfedges:vec![EMPTY,EMPTY,3,2,EMPTY,EMPTY],hull:vec![0,1,2,3]};assert_eq!(certified_legalize(&mut t,&p).unwrap(),1);for e in 0..6{if t.halfedges[e]!=EMPTY{assert_eq!(t.halfedges[t.halfedges[e]],e);}}}
 }
