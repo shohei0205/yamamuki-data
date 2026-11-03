@@ -9,13 +9,13 @@ import re
 from prepare_national_shared import ROOT, save_json
 
 
-def qualify(prepared, engine, test_log):
+def qualify(prepared, engine, test_log, pilot_suffix="pilot-v1"):
     with closing(sqlite3.connect(prepared/'engine-lock.sqlite3', timeout=0)) as guard:
         guard.execute('BEGIN EXCLUSIVE')
-        return _qualify(prepared, engine, test_log)
+        return _qualify(prepared, engine, test_log, pilot_suffix)
 
 
-def _qualify(prepared, engine, test_log):
+def _qualify(prepared, engine, test_log, pilot_suffix):
     job = json.loads((prepared/'job.json').read_text(encoding='utf-8'))
     if not job['inputs_verified'] or job['issues']:
         raise ValueError('全国入力の全件検証が必要です')
@@ -25,7 +25,7 @@ def _qualify(prepared, engine, test_log):
         raise ValueError('現在のRustテスト32件以上の成功が必要です')
     pilots = []
     for region in ['yari', 'fuji', 'tsukuba']:
-        root = ROOT/f'build/national-shared-{region}-pilot-v1'
+        root = ROOT/f'build/national-shared-{region}-{pilot_suffix}'
         progress = json.loads((root/'progress.json').read_text(encoding='utf-8'))
         verification = json.loads((root/'verify.json').read_text(encoding='utf-8'))
         if progress.get('complete') is not True or progress.get('national_complete') is not False:
@@ -61,7 +61,8 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--prepared', type=Path, default=ROOT/'build/national-shared-z6-z13-v1')
     p.add_argument('--engine', type=Path, default=ROOT/'build/natural-fixed-lpf-target/release/terrain-natural-shared-national.exe')
+    p.add_argument('--pilot-suffix', default='pilot-v1')
     p.add_argument('--test-log', type=Path, required=True)
     a = p.parse_args()
-    result = qualify(a.prepared.resolve(), a.engine.resolve(), a.test_log.resolve())
+    result = qualify(a.prepared.resolve(), a.engine.resolve(), a.test_log.resolve(), a.pilot_suffix)
     print(json.dumps({k: result[k] for k in ['ready_to_generate', 'generation_id', 'engine_sha256', 'rust_tests']}, ensure_ascii=False, indent=2))

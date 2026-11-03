@@ -1,4 +1,4 @@
-param([switch]$Test, [switch]$NoRun, [switch]$Check, [switch]$Codecs, [switch]$AdaptiveTin, [switch]$AdaptiveNational, [switch]$QNational, [switch]$QPack, [switch]$Decimation, [switch]$Seam, [switch]$Overlap, [switch]$SummitPrepare, [switch]$XyzRegion, [switch]$NaturalNational, [switch]$NaturalRegional, [switch]$NaturalScaleBench, [switch]$NaturalSharedCompare, [switch]$NaturalSharedStress, [switch]$NaturalSharedNational, [switch]$NaturalSharedPack, [string]$TargetDirectory)
+﻿param([switch]$Test, [switch]$NativeCpu, [switch]$NoRun, [switch]$Check, [switch]$Codecs, [switch]$AdaptiveTin, [switch]$AdaptiveNational, [switch]$QNational, [switch]$QPack, [switch]$Decimation, [switch]$Seam, [switch]$Overlap, [switch]$SummitPrepare, [switch]$XyzRegion, [switch]$NaturalNational, [switch]$NaturalRegional, [switch]$NaturalScaleBench, [switch]$NaturalSharedCompare, [switch]$NaturalSharedStress, [switch]$NaturalSharedNational, [switch]$NaturalSharedPack, [string]$TargetDirectory)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $localCargo = Join-Path $repo 'build/rust-tools/cargo/bin/cargo.exe'
@@ -27,5 +27,6 @@ $binaryName = if ($NaturalSharedStress) { 'terrain-natural-shared-stress' } else
 if ($Check) { & $cargo check --locked --manifest-path $manifest --bin $binaryName --tests }
 elseif ($Test -and $NoRun) { & $cargo test --locked --no-run --manifest-path $manifest --bin $binaryName }
 elseif ($Test) { & $cargo test --locked --manifest-path $manifest --bin $binaryName }
+elseif ($NativeCpu) { & $cargo rustc --locked --release --manifest-path $manifest --bin $binaryName -- -C target-cpu=native }
 else { & $cargo build --locked --release --manifest-path $manifest --bin $binaryName }
 exit $LASTEXITCODE

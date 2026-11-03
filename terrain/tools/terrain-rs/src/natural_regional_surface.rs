@@ -1,4 +1,6 @@
 //! 地域試験用の事前計算セル。自然近傍の式と全画素監査を保ち、照会間の領域を再利用する。
+#[path = "natural_incremental.rs"]
+mod incremental;
 use crate::natural_surface::Surface;
 use anyhow::{Result, ensure};
 use std::sync::OnceLock;
@@ -100,6 +102,11 @@ pub struct Work {
     poly: Vec<[f64; 2]>,
     temporary: Vec<[f64; 2]>,
     weights: Vec<(usize, f64)>,
+}
+impl Work {pub fn at_face(start:usize)->Self {Self{start,..Self::default()}} pub fn set_start(&mut self,start:usize){self.start=start;}}
+#[derive(Default)]
+pub struct RemovalWork {
+    points:Vec<[f64;3]>, cell:Vec<[f64;2]>, temporary:Vec<[f64;2]>, poly:Vec<[f64;2]>,
 }
 pub struct Fast {
     pub base: Surface,
@@ -273,6 +280,45 @@ impl Fast {
         }
         Ok(())
     }
+    /// 点を削除せず、削除後の一点のSibson値を近傍Voronoi分割から求める。
+    /// 旧星形領域の外の空円に触れる場合は使用せず、通常の仮想削除へ戻す。
+    pub fn evaluate_without_vertex(&self,id:usize,q:[f64;2])->Result<Option<f64>> {
+        let mut work=RemovalWork::default();
+        self.evaluate_without_vertex_work(id,q,&mut work)
+    }
+    pub fn evaluate_without_vertex_work(&self,id:usize,q:[f64;2],work:&mut RemovalWork)->Result<Option<f64>> {
+        let ns=&self.base.neighbors[id];
+        if ns.len()<3 || ns.len()>64 || self.base.topology.hull.contains(&id) {return Ok(None);}
+        for f in self.base.faces_for_point_from(q,self.base.incident[id][0])? {
+            if !self.base.topology.triangles[f*3..f*3+3].contains(&id) {return Ok(None);}
+        }
+        let RemovalWork{points,cell,temporary:temp,poly}=work;
+        points.clear();points.extend(ns.iter().map(|&k|{let p=self.base.points[k];[p[0]-q[0],p[1]-q[1],p[2]]}));
+        let mut radius=points.iter().map(|p|p[0].hypot(p[1])).fold(1.,f64::max)*4.;
+        let mut closed=false;
+        for _ in 0..8 {
+            cell.clear();cell.extend([[-radius,-radius],[radius,-radius],[radius,radius],[-radius,radius]]);
+            for p in points.iter() {
+                clip_into(cell,p[0],p[1],(p[0]*p[0]+p[1]*p[1])*0.5,temp);std::mem::swap(cell,temp);
+            }
+            if cell.len()>=3 && cell.iter().all(|v|v[0].abs()<radius*0.999999&&v[1].abs()<radius*0.999999) {closed=true;break;}
+            radius*=2.;
+        }
+        if !closed {return Ok(None);}
+        let mut total=0.;let mut height=0.;let base=points[0][2];
+        for (i,p) in points.iter().enumerate() {
+            poly.clear();poly.extend_from_slice(cell);
+            for (j,r) in points.iter().enumerate() {
+                if i==j {continue;}
+                clip_into(poly,r[0]-p[0],r[1]-p[1],(r[0]*r[0]+r[1]*r[1]-p[0]*p[0]-p[1]*p[1])*0.5,temp);std::mem::swap(poly,temp);
+                if poly.is_empty(){break;}
+            }
+            let a=area(poly);total+=a;height+=a*(p[2]-base);
+        }
+        if total<=1e-15 || !total.is_finite() {return Ok(None);}
+        let value=base+height/total;
+        Ok(value.is_finite().then_some(value))
+    }
     pub fn evaluate(&self, q: [f64; 2], w: &mut Work) -> Result<f64> {
         self.fill_basis(q, w)?;
         let value = w
@@ -289,9 +335,15 @@ impl Fast {
         &self,
         rect: [f64; 4],
         samples: impl Iterator<Item = ([f64; 2], f64)>,
-    ) -> Result<f64> {
+    ) -> Result<f64> {self.affine_error_bound_from(rect,samples,0)}
+    pub fn affine_error_bound_from(&self,rect:[f64;4],samples:impl Iterator<Item=([f64;2],f64)>,start:usize)->Result<f64> {
+        let [up, down] = self.affine_error_bounds_from(rect, samples, start)?;
+        Ok(up.max(down))
+    }
+    /// 同じ支持区間から上向き・下向きを別々に証明する。非対称な許容誤差に用いる。
+    pub fn affine_error_bounds_from(&self,rect:[f64;4],samples:impl Iterator<Item=([f64;2],f64)>,start:usize)->Result<[f64;2]> {
         let center = [(rect[0] + rect[2]) * 0.5, (rect[1] + rect[3]) * 0.5];
-        let (face, _) = self.base.locate(center, 0)?;
+        let (face, _) = self.base.locate(center, start)?;
         let ids = &self.base.topology.triangles[face * 3..face * 3 + 3];
         let [a, b, c] = [
             self.base.points[ids[0]],
@@ -306,7 +358,7 @@ impl Fast {
         let plane = |q: [f64; 2]| a[2] + gx * (q[0] - a[0]) + gy * (q[1] - a[1]);
         let mut lo = f64::INFINITY;
         let mut hi = f64::NEG_INFINITY;
-        for face in self.base.faces_for_rect(rect) {
+        for face in self.base.faces_for_rect_walk_from(rect,face)? {
             for &i in &self.base.topology.triangles[3 * face..3 * face + 3] {
                 let p = self.base.points[i];
                 let v = p[2] - plane([p[0], p[1]]);
@@ -327,7 +379,7 @@ impl Fast {
         );
         let margin = 0.02f64
             .max(128. * f64::EPSILON * (1. + lo.abs() + hi.abs() + raw_lo.abs() + raw_hi.abs()));
-        Ok((raw_lo - hi).abs().max((raw_hi - lo).abs()) + margin)
+        Ok([hi - raw_lo + margin, raw_hi - lo + margin])
     }
     pub fn deletion_box(&self, i: usize, margin: f64) -> [f64; 4] {
         let mut b = [
@@ -403,6 +455,17 @@ impl Fast {
 mod tests {
     use super::*;
     #[test]
+    fn rectangle_cavity_walk_matches_circle_index() {
+        let mut points=vec![[-100.,-100.,0.],[100.,-100.,0.],[100.,100.,0.],[-100.,100.,0.]];
+        for k in 0..400 {points.push([((k*71)%409) as f64/8.-25.,((k*173)%419) as f64/8.-25.,0.]);}
+        let m=Fast::certified(points).unwrap();
+        for k in 0..300 {
+            let x=((k*127)%337) as f64/8.-22.;let y=((k*41)%331) as f64/8.-22.;let size=(k%17) as f64*0.5;
+            let rect=[x,y,x+size,y+size];
+            let mut a=m.base.faces_for_rect(rect);let mut b=m.base.faces_for_rect_walk(rect).unwrap();a.sort_unstable();b.sort_unstable();assert_eq!(a,b);
+        }
+    }
+    #[test]
     fn matches_baseline_and_affine() {
         let p = vec![
             [-100., -100., -499.],
@@ -463,8 +526,40 @@ mod tests {
                     .map(|&(q, z)| (m.evaluate(q, &mut w).unwrap() - z).abs())
                     .fold(0., f64::max);
                 assert!(actual <= bound + 1e-8, "{actual} > {bound}");
+                let [up, down] = m.affine_error_bounds_from(rect, q.iter().copied(), 0).unwrap();
+                for &(q, z) in &q {
+                    let delta = m.evaluate(q, &mut w).unwrap() - z;
+                    assert!(delta <= up + 1e-8 && -delta <= down + 1e-8);
+                }
             }
         }
+    }
+    #[test]
+    fn direct_voronoi_removal_matches_global_rebuild() {
+        let mut points=vec![[0.,0.,0.],[40075016.,0.,0.],[40075016.,40075016.,0.],[0.,40075016.,0.]];
+        for y in 0..17 {for x in 0..17 {points.push([35000000.+x as f64*10.+((x*3+y*7)%13) as f64/16.,14000000.+y as f64*10.+((x*7+y*3)%11) as f64/16.,((x*13+y*17)%101) as f64]);}}
+        let m=Fast::certified(points.clone()).unwrap();let mut count=0;
+        for id in (75..220).step_by(7) {
+            let expected=Fast::certified(points.iter().enumerate().filter_map(|(k,&p)|(k!=id).then_some(p)).collect()).unwrap();
+            let mut w=Work::default();
+            for dx in [-0.031,0.,0.031] {for dy in [-0.031,0.,0.031] {
+                let q=[points[id][0]+dx,points[id][1]+dy];
+                if let Some(h)=m.evaluate_without_vertex(id,q).unwrap() {
+                    let want=expected.evaluate(q,&mut w).unwrap();
+                    assert!((h-want).abs()<1e-7,"id={id} q={q:?} {h} != {want}");count+=1;
+                }
+            }}
+        }
+        assert!(count>100,"checked {count}");
+    }
+    #[test]
+    fn directional_bound_preserves_asymmetric_error() {
+        let m = Fast::certified(vec![[-100.,-100.,0.],[100.,-100.,0.],[-100.,100.,0.],[100.,100.,0.]]).unwrap();
+        let samples = vec![([-1.,-1.],10.),([1.,1.],10.)];
+        let [up, down] = m.affine_error_bounds_from([-1.,-1.,1.,1.], samples.into_iter(), 0).unwrap();
+        assert!(up < 0. && down >= 10. && down < 10.1);
+        assert!((up * 4.).max(down) < 25.);
+        assert!(up.max(down) * 4. > 25.);
     }
     #[test]
     fn streaming_clipped_area_matches_polygon() {

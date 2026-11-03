@@ -48,7 +48,7 @@ fn area(poly: &[[f64; 2]]) -> f64 {
 }
 #[derive(Clone,Debug)] pub struct CircleEntry {pub id:usize,box_:rstar::AABB<[f64;2]>}
 impl rstar::RTreeObject for CircleEntry {type Envelope=rstar::AABB<[f64;2]>;fn envelope(&self)->Self::Envelope {self.box_}}
-fn certified_legalize(t:&mut Triangulation,p:&[[f64;3]])->Result<usize>{
+pub(crate) fn certified_legalize(t:&mut Triangulation,p:&[[f64;3]])->Result<usize>{
  let coord=|i:usize|robust::Coord{x:p[i][0],y:p[i][1]};
  let next=|e:usize|e/3*3+(e+1)%3;let prev=|e:usize|e/3*3+(e+2)%3;
  let illegal=|t:&Triangulation,e:usize|{let h=t.halfedges[e];if h==EMPTY{return false;}let[a,b,c,d]=[t.triangles[e],t.triangles[next(e)],t.triangles[prev(e)],t.triangles[prev(h)]];let o=robust::orient2d(coord(a),coord(b),coord(c));let det=robust::incircle(coord(a),coord(b),coord(c),coord(d));det!=0.&&det.is_sign_positive()==o.is_sign_positive()};
@@ -111,8 +111,9 @@ impl Surface {
     }
     // 点を挿入するときの外接円群はDelaunay上で連結する。
     // 毎回全域のR-treeを作らず、包含面から同じ外接円判定でたどる。
-    pub fn faces_for_point(&self, q: [f64;2]) -> Result<Vec<usize>> {
-        let (face,_)=self.locate(q,0)?;
+    pub fn faces_for_point(&self, q: [f64;2]) -> Result<Vec<usize>> {self.faces_for_point_from(q,0)}
+    pub fn faces_for_point_from(&self, q: [f64;2], start:usize) -> Result<Vec<usize>> {
+        let (face,_)=self.locate(q,start)?;
         let mut stack=vec![face];let mut seen=HashSet::with_capacity(32);let mut out=Vec::new();
         while let Some(t)=stack.pop() {
             if !seen.insert(t) {continue;}
@@ -127,22 +128,51 @@ impl Surface {
         let bounds=rstar::AABB::from_corners([rect[0],rect[1]],[rect[2],rect[3]]);
         self.circle_index.get_or_init(|| rstar::RTree::bulk_load(self.circles.iter().enumerate().map(|(id,c)|{let r=c[2].sqrt();CircleEntry{id,box_:rstar::AABB::from_corners([c[0]-r,c[1]-r],[c[0]+r,c[1]+r])}}).collect())).locate_in_envelope_intersecting(&bounds).filter_map(|v|{let c=self.circles[v.id];let x=c[0].clamp(rect[0],rect[2]);let y=c[1].clamp(rect[1],rect[3]);(((c[0]-x).powi(2)+(c[1]-y).powi(2))<=c[2]*(1.+1e-12)+1e-8).then_some(v.id)}).collect()
     }
+    /// 凸な照会矩形に触れる空円群を隣接面から探索する。毎回全外接円の索引を作らない。
+    pub fn faces_for_rect_walk(&self,rect:[f64;4])->Result<Vec<usize>> {self.faces_for_rect_walk_from(rect,0)}
+    pub fn faces_for_rect_walk_from(&self,rect:[f64;4],start:usize)->Result<Vec<usize>> {
+        let center=[(rect[0]+rect[2])*0.5,(rect[1]+rect[3])*0.5];
+        let (first,_)=self.locate(center,start)?;
+        let mut seen=HashSet::with_capacity(64);let mut stack=vec![first];let mut result=Vec::new();
+        while let Some(t)=stack.pop() {
+            if !seen.insert(t) {continue;}
+            let c=self.circles[t];let x=c[0].clamp(rect[0],rect[2]);let y=c[1].clamp(rect[1],rect[3]);
+            if (c[0]-x).powi(2)+(c[1]-y).powi(2)>c[2]*(1.+1e-12)+1e-8 {continue;}
+            result.push(t);
+            for e in t*3..t*3+3 {let h=self.topology.halfedges[e];if h!=EMPTY {stack.push(h/3);}}
+        }
+        Ok(result)
+    }
     pub fn support_vertices(&self,rect:[f64;4])->Vec<usize> {
         let mut ids=std::collections::BTreeSet::new();
         for t in self.faces_for_rect(rect) {for &v in &self.topology.triangles[3*t..3*t+3] {ids.insert(v);for &u in &self.neighbors[v]{ids.insert(u);}}}
         ids.into_iter().collect()
     }
-    pub fn locate(&self,q:[f64;2], start:usize) -> Result<(usize,[f64;3])> {
-        ensure!(q.iter().all(|v|v.is_finite()), "照会点が不正です");
-        let mut t=start.min(self.circles.len()-1);
-        for _ in 0..self.circles.len().min(100000) {
-            let w=self.weights(t,q);
-            let i=(0..3).min_by(|&i,&j|w[i].total_cmp(&w[j])).unwrap();
-            if w[i]>=-1e-12 { return Ok((t,w)); }
-            let h=self.topology.halfedges[3*t+(i+1)%3];
-            ensure!(h!=EMPTY,"照会点が制御点の凸包外です");t=h/3;
+    fn robust_weights(&self,t:usize,q:[f64;2])->[f64;3] {
+        let ids=&self.topology.triangles[t*3..t*3+3];
+        let at=|i:usize|robust::Coord{x:self.points[i][0],y:self.points[i][1]};let q=robust::Coord{x:q[0],y:q[1]};
+        let [a,b,c]=[at(ids[0]),at(ids[1]),at(ids[2])];let d=robust::orient2d(a,b,c);
+        [robust::orient2d(b,c,q)/d,robust::orient2d(c,a,q)/d,robust::orient2d(a,b,q)/d]
+    }
+    pub fn locate(&self,q:[f64;2],start:usize)->Result<(usize,[f64;3])> {
+        ensure!(q.iter().all(|v|v.is_finite()),"照会点が不正です");
+        let mut t=start.min(self.circles.len()-1);let mut previous=EMPTY;
+        for _ in 0..self.circles.len().min(64) {
+            let mut w=self.weights(t,q);
+            if w.iter().any(|v|v.abs()<1e-10) {w=self.robust_weights(t,q);}
+            let i=(0..3).min_by(|&a,&b|w[a].total_cmp(&w[b])).unwrap();
+            if w[i]>=0. {return Ok((t,w));}
+            let h=self.topology.halfedges[3*t+(i+1)%3];if h==EMPTY||h/3==previous {break;}
+            previous=t;t=h/3;
         }
-        bail!("面探索が収束しません")
+        // 極端に長い番兵面では通常の差積が桁落ちする。堅牢な符号判定で同じ面を探す。
+        for _ in 0..self.circles.len() {
+            let w=self.robust_weights(t,q);let i=(0..3).min_by(|&a,&b|w[a].total_cmp(&w[b])).unwrap();
+            if w[i]>=0. {return Ok((t,w));}
+            let h=self.topology.halfedges[3*t+(i+1)%3];if h==EMPTY {break;}t=h/3;
+        }
+        for face in 0..self.circles.len() {let w=self.robust_weights(face,q);if w.iter().all(|v|*v>=0.) {return Ok((face,w));}}
+        bail!("照会点が制御点の凸包外です")
     }
     pub fn evaluate(&self,q:[f64;2], start:&mut usize) -> Result<f64> {self.evaluate_reusing(q,start,&mut Workspace::default())}
     pub fn evaluate_reusing(&self,q:[f64;2],start:&mut usize,work:&mut Workspace)->Result<f64> {
