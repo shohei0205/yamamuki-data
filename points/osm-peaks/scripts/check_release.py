@@ -102,7 +102,7 @@ def validate(directory, *, tag=None, channel="stable"):
         sources = manifest["sourcePbfs"]
         if not isinstance(sources, list) or len(sources) != 2:
             raise ValueError("追加 PBF を含む取得元記録が不正です")
-        regions, dates, timestamps = set(), set(), []
+        regions, timestamps = set(), []
         for source in sources:
             if not isinstance(source, dict):
                 raise ValueError("PBF の取得元記録が不正です")
@@ -110,14 +110,13 @@ def validate(directory, *, tag=None, channel="stable"):
             if not isinstance(url, str) or not re.search(r"-[0-9]{6}\.osm\.pbf$", url):
                 raise ValueError("取得元は日付付き PBF の URL で指定してください")
             regions.add(source_region(url))
-            dates.add(url[-14:])
             if type(source.get("sizeBytes")) is not int or source["sizeBytes"] <= 0:
                 raise ValueError("PBF のサイズが不正です")
             if not isinstance(source.get("md5"), str) or not re.fullmatch(r"[0-9a-f]{32}", source["md5"]):
                 raise ValueError("PBF の MD5 が不正です")
             timestamps.append(source_time(source.get("sourceTimestamp")))
-        if regions != {"japan", "far-eastern-fed-district"} or len(dates) != 1:
-            raise ValueError("取得元の地域または配布日が一致しません")
+        if regions != {"japan", "far-eastern-fed-district"}:
+            raise ValueError("取得元の地域が一致しません")
         if ((manifest["schemaVersion"] < 6 and max(timestamps) != source_time(manifest["sourceTimestamp"]))
                 or (manifest["schemaVersion"] >= 6 and latest > max(timestamps))):
             raise ValueError("元データ全体の基準日時が PBF の記録と一致しません")

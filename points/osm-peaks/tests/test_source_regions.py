@@ -131,10 +131,22 @@ class SourceRegionTests(unittest.TestCase):
             self.generate()
         self.assertFalse((self.root/"out").exists())
 
-    def test_different_day_is_rejected(self):
-        self.save_source("far-eastern-fed-district","2026-10-02")
-        with self.assertRaisesRegex(ValueError,"配布日"):
-            self.generate()
+    def test_different_days_are_combined_and_validated(self):
+        for day, timestamp in [("2026-10-02", "2026-10-02T20:21:04Z"),
+                               ("2026-10-04", "2026-10-04T20:21:04Z")]:
+            with self.subTest(day=day):
+                self.save_source("far-eastern-fed-district", day)
+                with patch("scripts.build_data.subprocess.check_output", side_effect=[STAMP, timestamp]), \
+                        patch("scripts.build_data.subprocess.run", side_effect=self.extract):
+                    manifest = build(self.pbfs["japan"], self.root / "out", "test",
+                                     additional_pbfs=self.additional(), supplements_path=self.supplements)
+                sources = manifest["sourcePbfs"]
+                self.assertEqual([source_url_for_date("2026-10-03"),
+                                  source_url_for_date(day, "far-eastern-fed-district")],
+                                 [source["url"] for source in sources])
+                self.assertEqual([STAMP, timestamp], [source["sourceTimestamp"] for source in sources])
+                self.assertEqual([1, 2, 3], [int(row["id"].removeprefix("osm:")) for row in self.rows()])
+                self.assertEqual(manifest, validate(self.root / "out")[0])
 
     def test_incomplete_source_set_is_rejected(self):
         with self.assertRaises(ValueError):
