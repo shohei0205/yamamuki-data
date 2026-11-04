@@ -208,6 +208,16 @@ class BuildDataTests(unittest.TestCase):
         self.assertEqual(len(archive), manifest["sizeBytes"])
         self.assertEqual(len(raw), manifest["uncompressedSizeBytes"])
         self.assertEqual(4, manifest["metadata"]["pointCount"])
+        self.assertEqual([{"name": "The yamamuki Authors", "role": "配布データの編集・加工",
+                           "url": "https://github.com/shohei0205/yamamuki-data/blob/main/AUTHORS.md"}],
+                         manifest["metadata"]["authors"])
+        self.assertEqual(manifest["downloadUrl"].rsplit("/", 1)[0] + "/LICENSE.txt", manifest["licenseUrl"])
+        license_text = (self.root / "LICENSE.txt").read_text(encoding="utf-8")
+        self.assertIn("Open Database License (ODbL) 1.0 で提供する", license_text)
+        self.assertIn("帰属表示: © OpenStreetMap contributors", license_text)
+        self.assertIn("- The yamamuki Authors（配布データの編集・加工）", license_text)
+        self.assertIn("この表示は義務ではありません", license_text)
+        self.assertIn("Open Database License", (self.root / "ODbL-1.0.txt").read_text(encoding="utf-8"))
         write_distribution(mountains, self.root / "again", "20260930-2", TIMESTAMP, "2026-09-29T12:00:00Z")
         self.assertEqual(archive, (self.root / "again" / FILE_NAME).read_bytes())
 
