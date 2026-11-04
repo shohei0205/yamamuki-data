@@ -210,7 +210,7 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 
 ### 取得対象日を指定する
 
-「地点 / OSM山頂：Release 生成・検査」の Run workflow で、`source_date` に `YYYY-MM-DD` を入力すると、`latest` の転送を使わず日付付き URL を直接取得する。例えば `2026-09-29` は `https://download.geofabrik.de/asia/japan-260929.osm.pbf` になる。空欄または月次実行では`latest` を使う。入力欄を表示するため、main 側の入口にも同じ入力項目が必要。
+「地点 / OSM山頂：Release 生成・検査」の Run workflow で、`source_date` に `YYYY-MM-DD` を入力すると、`latest` の転送を使わず日付付き URL を直接取得する。例えば `2026-09-29` は `https://download.geofabrik.de/asia/japan-260929.osm.pbf` になる。空欄または月次実行では、日本とロシア極東のそれぞれで `latest` から配布日を確定し、その日付の PBF を取得する。日付を指定した場合は、両地域とも指定日の PBF を取得する。入力欄を表示するため、main 側の入口にも同じ入力項目が必要。
 
 Actions の実行日はデータの配布日とは限らず、当日分はまだ存在しない場合がある。配布済みの日付を指定する。対象が404の場合は失敗とし、別の日付への自動切り替えはしない。サイズと日付付き URL の MD5 を照合し、別の版の途中ファイルを混ぜない。古い日付を指定しても、公開前の日時・件数・同一更新日時の検査はそのまま行う。
 
