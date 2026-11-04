@@ -2,6 +2,14 @@
 use super::*;
 pub(super) struct Verified {flags:Vec<u8>,count:usize,index:rstar::RTree<InputBox>,lookup:HashMap<(i32,i32),usize>,pub enabled:bool}
 impl Verified {
+    pub fn empty(inputs: &[Input]) -> Self {
+        Self { flags: vec![0; inputs.len().div_ceil(8)], count: 0,
+            index: input_index(inputs),
+            lookup: inputs.iter().enumerate().map(|(k,i)| ((i.x,i.y),k)).collect(),
+            enabled: true }
+    }
+    pub fn clear(&mut self) { self.flags.fill(0); self.count = 0; }
+
     pub fn load(s:&Store,inputs:&[Input],signature:&str)->Result<Self> {
         s.db.execute_batch("CREATE TABLE IF NOT EXISTS fit_verified(id INTEGER PRIMARY KEY CHECK(id=1),signature TEXT,epoch INTEGER,flags BLOB)")?;
         let disabled=s.db.query_row("SELECT 1 FROM meta WHERE key='benchmark_disable_fit_verified' AND EXISTS(SELECT 1 FROM meta WHERE key='benchmark_only')",[],|_|Ok(())).optional()?.is_some();

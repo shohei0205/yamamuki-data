@@ -1522,10 +1522,40 @@ fn repair_certify_fit(s:&Store,inputs:&[Input],dem:&mut Dem,root:&Path)->Result<
     fit_finest(s,inputs,dem,root)?;
     s.db.execute("DELETE FROM meta WHERE key='certify-repair-fit-13-v1'",[])?;Ok(())
 }
+// 挿入空洞とその頂点の一周近傍を含め、傾き復元が変わる範囲も無効化する。
+fn repair_support_circles(p: &Patch, xy: [f64; 2]) -> Result<Vec<[f64; 3]>> {
+    let faces = p.model.base.faces_for_point([xy[0]-p.origin[0], xy[1]-p.origin[1]])?;
+    let mut selected = BTreeSet::new();
+    for face in faces {
+        selected.insert(face);
+        for &vertex in &p.model.base.topology.triangles[face*3..face*3+3] {
+            selected.extend(p.model.base.incident[vertex].iter().copied());
+        }
+    }
+    Ok(selected.into_iter().map(|face| {
+        let mut c = p.model.base.circles[face];
+        c[0] += p.origin[0]; c[1] += p.origin[1]; c
+    }).collect())
+}
+fn repair_insert(s: &Store, z: i64, q: [i32; 3], p: &mut Patch,
+    angles: &mut fit_cache::Verified, errors: &mut fit_cache::Verified) -> Result<bool> {
+    let xy = [q[0] as f64/16., q[1] as f64/16.];
+    let mut circles = repair_support_circles(p, xy)?;
+    let changed = s.insert_cached(z, q, p)?;
+    if changed {
+        circles.extend(repair_support_circles(p, xy)?);
+        angles.invalidate(&circles);
+        errors.invalidate(&circles);
+    }
+    Ok(changed)
+}
 fn certify(s: &Store, z: i64, inputs: &[Input], dem: &mut Dem, root: &Path) -> Result<()> {
     s.cache_level(z)?;
     if z==13&&s.db.query_row("SELECT 1 FROM meta WHERE key='certify-repair-fit-13-v1'",[],|_|Ok(())).optional()?.is_some(){repair_certify_fit(s,inputs,dem,root)?;}
     let spatial_inputs = input_index(inputs);
+    let local_checks = z < 13 && std::env::var_os("TERRAIN_FULL_CERTIFY").is_none();
+    let mut angle_proofs = fit_cache::Verified::empty(inputs);
+    let mut error_proofs = fit_cache::Verified::empty(inputs);
     let key = format!("certify-{z}");
     if state(s, &key)?.is_some_and(|v| v["epoch"].as_i64() == Some(s.epoch(z).unwrap_or(-1))) {
         return Ok(());
@@ -1545,10 +1575,18 @@ fn certify(s: &Store, z: i64, inputs: &[Input], dem: &mut Dem, root: &Path) -> R
         let cursor=resume.take();
         let mut changes=cursor.as_ref().and_then(|v|v["changes"].as_u64()).unwrap_or(0);
         let mut min=cursor.as_ref().and_then(|v|v["minimum_angle"].as_f64()).unwrap_or(180.);
-        let next=cursor.as_ref().and_then(|v|v["next_input"].as_u64()).unwrap_or(0) as usize;
+        let repair_key = format!("certify-repair-{z}");
+        let repairing = z < 13 && s.db.query_row(
+            "SELECT 1 FROM meta WHERE key=?", [&repair_key], |_| Ok(())
+        ).optional()?.is_some();
+        let next = if repairing { changes = 0; inputs.len() } else {
+            cursor.as_ref().and_then(|v|v["next_input"].as_u64()).unwrap_or(0) as usize
+        };
         save_certify_cursor(s,z,inputs.len(),pass,next,changes,min)?;
         let mut prefetched=VecDeque::new();let mut unchanged_streak=0usize;
         for (n, i) in inputs.iter().enumerate().skip(next) {
+            if local_checks && angle_proofs.has(n) { continue; }
+            let input_epoch = s.epoch(z)?;
             let before=changes;
             if prefetched.is_empty() && unchanged_streak>=8 && prefetch_limit>1 {
                 let bounds=inputs[n..(n+prefetch_limit).min(inputs.len())].iter().map(rect).collect::<Vec<_>>();
@@ -1755,7 +1793,7 @@ fn certify(s: &Store, z: i64, inputs: &[Input], dem: &mut Dem, root: &Path) -> R
                     if fine.is_some() {
                         let id = nearest_fine(s, z, q)?
                             .context("細品質に角度補修候補がありません。品質を緩めず停止")?;
-                        s.insert_cached(z, quant(s.point(id)?)?, &mut p)?;
+                        repair_insert(s,z,quant(s.point(id)?)?,&mut p,&mut angle_proofs,&mut error_proofs)?;
                     } else {
                         let px = q[0] / STEP - 0.5;
                         let py = q[1] / STEP - 0.5;
@@ -1813,39 +1851,75 @@ fn certify(s: &Store, z: i64, inputs: &[Input], dem: &mut Dem, root: &Path) -> R
                     }
                 }
             }
+            if local_checks && input_epoch == s.epoch(z)? { angle_proofs.mark(i); }
             if changes==before {unchanged_streak+=1;}else{unchanged_streak=0;prefetched.clear();}
             if n%32==0 || n+1==inputs.len() {save_certify_cursor(s,z,inputs.len(),pass,n+1,changes,min)?;}
             if n % 32 == 0 {
                 progress(
                     root,
-                    json!({"stage":"certify","z":z,"pass":pass,"done":n+1,"total":inputs.len(),"minimum_angle":min,"added":changes,"complete":false}),
+                    json!({"stage":"certify","z":z,"pass":pass,"done":n+1,"total":inputs.len(),"minimum_angle":min,"added":changes,"angle_verified":angle_proofs.count(),"error_verified":error_proofs.count(),"complete":false}),
                 )?;
             }
         }
         if changes == 0 {
             let error = LEVELS.iter().find(|v| v.0 == z).unwrap().1;
-            let (ok, max, valid) = audit_all_policy(s, z, error, inputs, dem, root, true, true)?;
+            let (ok, max, valid) = if local_checks && error_proofs.count() < inputs.len() {
+                (false, 0., 0)
+            } else {
+                audit_all_policy(s, z, error, inputs, dem, root, true, true)?
+            };
             if !ok {
                 if z == 13 {
                     repair_certify_fit(s, inputs, dem, root)?;
                     continue;
                 }
+                if local_checks && error_proofs.count() == inputs.len() { error_proofs.clear(); }
+                s.db.execute("INSERT OR REPLACE INTO meta VALUES(?,?)",
+                    params![&repair_key, s.epoch(z)?.to_string()])?;
                 let mut repaired = false;
-                for input in inputs {
-                    let patch = s.patch(z, rect(input))?;
-                    let a = audit_patch(&patch, input, &dem.read(input)?)?;
-                    if a.max <= error {
-                        continue;
+                let started = Instant::now();
+                let mut restored = 0usize;
+                for (batch, group) in inputs.chunks(prefetch_limit).enumerate() {
+                    ensure!(!root.join("stop-requested").exists(), "誤差修復を停止。復帰済み点は保存されています");
+                    let selected = group.iter().enumerate().filter(|(offset,_)|
+                        !local_checks || !error_proofs.has(batch*prefetch_limit+offset)
+                    ).map(|(_,input)|input.clone()).collect::<Vec<_>>();
+                    let group = selected.as_slice();
+                    let patches = s.patches(z, &group.iter().map(rect).collect::<Vec<_>>())?;
+                    let rasters = group.iter().map(|input| dem.read(input)).collect::<Result<Vec<_>>>()?;
+                    let audits = patches.par_iter().zip(group).zip(&rasters)
+                        .map(|((patch, input), raster)| audit_patch(patch, input, raster))
+                        .collect::<Result<Vec<_>>>()?;
+                    for (((input, patch), raster), audit) in group.iter().zip(&patches).zip(&rasters).zip(audits) {
+                        // 先行する復帰で変わった曲面は、現世代で評価し直してから点を選ぶ。
+                        let audit = if patch.epoch != s.epoch(z)? {
+                            audit_patch(&s.patch(z, rect(input))?, input, raster)?
+                        } else {
+                            audit
+                        };
+                        if audit.max <= error {
+                            if local_checks { error_proofs.mark(input); }
+                            continue;
+                        }
+                        let q = audit.candidate.context("誤差補修点なし")?;
+                        let id = nearest_fine(s, z, [q[0] as f64 / 16., q[1] as f64 / 16.])?
+                            .context("誤差補修の細品質点がありません")?;
+                        let mut current = s.patch(z, rect(input))?;
+                        repair_insert(s,z,quant(s.point(id)?)?,&mut current,&mut angle_proofs,&mut error_proofs)?;
+                        restored += 1;
+                        repaired = true;
                     }
-                    let q = a.candidate.context("誤差補修点なし")?;
-                    let id = nearest_fine(s, z, [q[0] as f64 / 16., q[1] as f64 / 16.])?
-                        .context("誤差補修の細品質点がありません")?;
-                    s.set_active(z, id, true)?;
-                    repaired = true;
+                    progress(root, json!({"stage":"certify-repair","z":z,"pass":pass,
+                        "done":((batch+1)*prefetch_limit).min(inputs.len()),"total":inputs.len(),
+                        "angle_verified":angle_proofs.count(),"error_verified":error_proofs.count(),
+                        "restored":restored,"workers":prefetch_limit,
+                        "elapsed_seconds":started.elapsed().as_secs_f64(),"complete":false}))?;
                 }
-                ensure!(repaired, "角度補修後の誤差を解消できません");
+                ensure!(repaired || (local_checks && error_proofs.count()==inputs.len()), "角度補修後の誤差を解消できません");
+                s.db.execute("DELETE FROM meta WHERE key=?", [&repair_key])?;
                 continue;
             }
+            s.db.execute("DELETE FROM meta WHERE key=?", [&repair_key])?;
             let page_workers=rayon::current_num_threads().clamp(1,10);
             for (batch,group) in inputs.chunks(page_workers).enumerate() {
                 let patches=s.patches(z,&group.iter().map(rect).collect::<Vec<_>>())?;
@@ -2530,7 +2604,7 @@ pub fn benchmark_prune(root:&Path,snapshot:&Path,output:&Path,count:usize,skip:u
     }
     let n:i64=s.db.query_row("SELECT count(*) FROM prune_queue",[],|r|r.get(0))?;
     s.db.execute("UPDATE stages SET details=? WHERE name=?",[json!({"workers":workers,"candidates":n}).to_string(),queue_name])?;
-    let _=rayon::ThreadPoolBuilder::new().num_threads(workers).build_global();
+    let _=rayon::ThreadPoolBuilder::new().num_threads(configured_threads(workers)).build_global();
     let mut dem=Dem{root:PathBuf::from(job["identity"]["cache"].as_str().context("cache")?),cache:HashMap::new(),order:VecDeque::new()};
     parallel_prune::run(&s,z,13,error,&inputs,&mut dem,output,workers)
 }
@@ -2856,12 +2930,17 @@ fn initial_fit_required(s:&Store)->Result<bool> {
     Ok(state(s,"fit-13")?.is_none()
         || (state(s,"prune-queue-13")?.is_none() && state(s,"prune-13")?.is_none()))
 }
+fn configured_threads(default: usize) -> usize {
+    let available = std::thread::available_parallelism().map(|n|n.get()).unwrap_or(1);
+    std::env::var("TERRAIN_PRUNE_THREADS").ok().and_then(|v|v.parse().ok())
+        .unwrap_or(default).clamp(1,available)
+}
 pub fn execute(root: &Path, limit: usize, mode: &str, window: Vec<u32>) -> Result<()> {
     let workers = std::thread::available_parallelism()
         .map(|v| (v.get() / 2).max(1))
         .unwrap_or(1);
     let _ = rayon::ThreadPoolBuilder::new()
-        .num_threads(workers)
+        .num_threads(configured_threads(workers))
         .build_global();
     if mode == "run" && window.is_empty() {
         let proof: Value = serde_json::from_slice(
@@ -3457,6 +3536,42 @@ mod tests {
         let b=rect(&inputs[0]);let side=b[2]-b[0];
         cache.invalidate(&[[(b[0]+b[2])*0.5,(b[1]+b[3])*0.5,(side*340.).powi(2)]]);
         assert!(!cache.has(0));assert!(!cache.has(300));assert!(cache.has(599));Ok(())
+    }
+
+    #[test]
+    fn repair_local_invalidation_encloses_changed_surface_and_keeps_remote_proofs() -> Result<()> {
+        let root=temporary(); fixture(&root)?;
+        let(s,_,inputs)=initialize(&root,8192,&[14500,6400,14503,6401])?;
+        let b=fit_bounds(&inputs[0]);
+        for y in 0..17 { for x in 0..17 {
+            s.insert(12,quant([b[0]+STEP*(x as f64*16.+0.5),
+                b[1]+STEP*(y as f64*16.+0.5),((x*7+y*11)%31) as f64])?,false)?;
+        }}
+        let before=s.patch(12,b)?;
+        let mut after=s.patch(12,b)?;
+        let q=quant([b[0]+STEP*127.37,b[1]+STEP*129.71,500.])?;
+        let xy=[q[0] as f64/16.,q[1] as f64/16.];
+        let mut circles=repair_support_circles(&before,xy)?;
+        let mut angles=fit_cache::Verified::empty(&inputs);
+        let mut errors=fit_cache::Verified::empty(&inputs);
+        for i in &inputs { angles.mark(i); errors.mark(i); }
+        assert!(repair_insert(&s,12,q,&mut after,&mut angles,&mut errors)?);
+        circles.extend(repair_support_circles(&after,xy)?);
+        assert!(!angles.has(0)); assert!(!errors.has(0));
+        let mut a=Work::default();let mut c=Work::default();let mut outside=0;
+        for y in 1..64 {for x in 1..64 {
+            let q=[b[0]+(b[2]-b[0])*x as f64/64.,b[1]+(b[3]-b[1])*y as f64/64.];
+            if !circles.iter().any(|&v|circle_hits(v,[q[0],q[1],q[0],q[1]])) {
+                outside+=1;
+                assert!((before.evaluate(q,&mut a)?-after.evaluate(q,&mut c)?).abs()<1e-7);
+            }
+        }}
+        assert!(outside>1000);
+        let remote=Input{x:15000,y:6400,sha:String::new()};
+        let mut proof=fit_cache::Verified::empty(&[inputs[0].clone(),remote.clone()]);
+        proof.mark(&inputs[0]);proof.mark(&remote);proof.invalidate(&circles);
+        assert!(!proof.has(0));assert!(proof.has(1));
+        drop(s);fs::remove_dir_all(root)?;Ok(())
     }
 
 }

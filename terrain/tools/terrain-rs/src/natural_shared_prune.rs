@@ -372,7 +372,7 @@ fn localize_queue(s:&Store,z:i64,root:&Path)->Result<()> {
 }
 /// 作業レーンを分け、物理スレッドを増やさず重い地域の待ちを隠す。
 fn split_queue(s:&Store,z:i64,threads:usize,root:&Path)->Result<()> {
-    if z!=13 {return Ok(());}
+    if z!=13 && std::env::var_os("TERRAIN_COARSE_PRUNE_LANES").is_none() {return Ok(());}
     let factor=std::env::var("TERRAIN_PRUNE_LANE_FACTOR").ok().and_then(|v|v.parse::<usize>().ok()).unwrap_or(2).clamp(1,4);
     let key=format!("prune-lanes-{z}-v1");
     if let Some(value)=s.db.query_row("SELECT value FROM meta WHERE key=?",[&key],|r|r.get::<_,String>(0)).optional()? {
@@ -455,6 +455,7 @@ pub(super) fn run(
     localize_queue(s,z,root)?;
     split_queue(s,z,workers,root)?;
     let physical_threads=workers;
+    let execution_threads=rayon::current_num_threads();
     let queue = state(s, &queued)?.unwrap();
     let workers = queue["workers"].as_u64().context("並列数がありません")? as usize;
     let total = queue["candidates"].as_u64().unwrap();
@@ -656,7 +657,7 @@ pub(super) fn run(
                     }
                 }
                 sync_seconds+=sync_started.elapsed().as_secs_f64();turn=(turn+1)%workers;
-                progress(root,json!({"stage":"prune-parallel","z":z,"done":total-remaining,"total":total,"accepted":accepted,"workers":physical_threads,"lanes":workers,"complete":false,"profile":{"prepare_seconds":prepare_seconds,"evaluate_seconds":evaluate_seconds,"save_seconds":save_seconds,"sync_seconds":sync_seconds,"cache_rebuilds":cache_rebuilds,"dem":dem_profile(),"closed_circles":s.certificate_stats(),"block_candidates":block_candidates,"block_size":block_size,"blocks_enabled":blocks_enabled,"fused_preparation":true,"deferred_sync":deferred_sync,"elapsed_seconds":started.elapsed().as_secs_f64()}}))?;
+                progress(root,json!({"stage":"prune-parallel","z":z,"done":total-remaining,"total":total,"accepted":accepted,"workers":execution_threads,"lanes":workers,"complete":false,"profile":{"prepare_seconds":prepare_seconds,"evaluate_seconds":evaluate_seconds,"save_seconds":save_seconds,"sync_seconds":sync_seconds,"cache_rebuilds":cache_rebuilds,"dem":dem_profile(),"closed_circles":s.certificate_stats(),"block_candidates":block_candidates,"block_size":block_size,"blocks_enabled":blocks_enabled,"fused_preparation":true,"deferred_sync":deferred_sync,"elapsed_seconds":started.elapsed().as_secs_f64()}}))?;
                 continue;
             }
             phase=Instant::now();
@@ -852,7 +853,7 @@ pub(super) fn run(
         if (total - remaining) % 32 < workers as u64 || remaining == 0 {
             progress(
                 root,
-                json!({"stage":"prune-parallel","z":z,"done":total-remaining,"total":total,"accepted":accepted,"workers":physical_threads,"lanes":workers,"complete":false,"profile":{"prepare_seconds":prepare_seconds,"evaluate_seconds":evaluate_seconds,"save_seconds":save_seconds,"sync_seconds":sync_seconds,"cache_rebuilds":cache_rebuilds,"dem":dem_profile(),"closed_circles":s.certificate_stats(),"preflight_rejections":preflight_rejections,"serial_candidates":serial_candidates,"expanded_candidates":expanded_candidates,"unaffected_regions":unaffected_regions,"early_rejections":early_rejections,"evaluated_candidates":evaluated_candidates,"elapsed_seconds":started.elapsed().as_secs_f64()}}),
+                json!({"stage":"prune-parallel","z":z,"done":total-remaining,"total":total,"accepted":accepted,"workers":execution_threads,"lanes":workers,"complete":false,"profile":{"prepare_seconds":prepare_seconds,"evaluate_seconds":evaluate_seconds,"save_seconds":save_seconds,"sync_seconds":sync_seconds,"cache_rebuilds":cache_rebuilds,"dem":dem_profile(),"closed_circles":s.certificate_stats(),"preflight_rejections":preflight_rejections,"serial_candidates":serial_candidates,"expanded_candidates":expanded_candidates,"unaffected_regions":unaffected_regions,"early_rejections":early_rejections,"evaluated_candidates":evaluated_candidates,"elapsed_seconds":started.elapsed().as_secs_f64()}}),
             )?;
         }
     }
@@ -866,7 +867,7 @@ pub(super) fn run(
             ensure!(ok,"限定キューの削減後独立監査が未達です");
             json!({"all_valid_pixels":true,"inputs":scope.len(),"pixels":valid,"maximum_error":max,"seconds":audit_started.elapsed().as_secs_f64()})
         } else {Value::Null};
-        let report=json!({"scope":"prune-only / limited real queue / no final audit","workers":physical_threads,"lanes":workers,"block_candidates":block_candidates,"block_size":block_size,"blocks_enabled":blocks_enabled,"fused_preparation":true,"deferred_sync":deferred_sync,"processed_candidates":initial_remaining,"accepted":accepted,"seconds":core_seconds,"quality_audit":quality,"prepare_seconds":prepare_seconds,"evaluate_seconds":evaluate_seconds,"save_seconds":save_seconds,"sync_seconds":sync_seconds,"preflight_rejections":preflight_rejections,"cache_rebuilds":cache_rebuilds,"dem":dem_profile(),"closed_circles":s.certificate_stats(),"national_complete":false,"distributable":false});
+        let report=json!({"scope":"prune-only / limited real queue / no final audit","workers":execution_threads,"lanes":workers,"block_candidates":block_candidates,"block_size":block_size,"blocks_enabled":blocks_enabled,"fused_preparation":true,"deferred_sync":deferred_sync,"processed_candidates":initial_remaining,"accepted":accepted,"seconds":core_seconds,"quality_audit":quality,"prepare_seconds":prepare_seconds,"evaluate_seconds":evaluate_seconds,"save_seconds":save_seconds,"sync_seconds":sync_seconds,"preflight_rejections":preflight_rejections,"cache_rebuilds":cache_rebuilds,"dem":dem_profile(),"closed_circles":s.certificate_stats(),"national_complete":false,"distributable":false});
         fs::write(root.join("benchmark-prune.json"),serde_json::to_vec_pretty(&report)?)?;
         return Ok(());
     }
