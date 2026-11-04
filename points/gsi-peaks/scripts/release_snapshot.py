@@ -120,6 +120,8 @@ def prepare(version, directory, channel, source=DATA):
             raise ValueError("元データと補足の出典 ID が競合しています: " + key)
         sources[key] = entry
     common["sources"] = sources
+    from distribution_license import authors, license_url, write_license_files
+    common["authors"] = authors()
     tags = {**common.pop("tags", {}), **supplements.get("tags", {})}
     body = document(points, tags, **common)
     common = body["metadata"]
@@ -134,6 +136,7 @@ def prepare(version, directory, channel, source=DATA):
                     downloadUrl=f"https://github.com/{repo}/releases/download/{tag}/{FILE}.gz",
                     sha256=hashlib.sha256(archive).hexdigest(), sizeBytes=len(archive),
                     uncompressedSizeBytes=len(raw), inputSha256=info["inputSha256"], sourceSnapshot=info["sourceSnapshot"])
+    manifest["licenseUrl"] = license_url(manifest["downloadUrl"])
     manifest["dataTimestamp"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     from document_metadata import copy_manifest_metadata
     copy_manifest_metadata(manifest, common)
@@ -142,6 +145,7 @@ def prepare(version, directory, channel, source=DATA):
     (directory / FILE).write_bytes(raw)
     shutil.copyfile(source / INFO, directory / INFO)
     (directory / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    write_license_files(directory, manifest)
     from scripts.distribution_parts import write_parts, validate_parts
     write_parts(directory, original, supplements, manifest)
     validate_parts(directory, manifest, points)
@@ -161,7 +165,8 @@ def publish(version, directory, source=DATA):
                      + "\n## 出典\n\n"
                      + "".join(f"- {key}: {value.get('attribution','')} / {value.get('license','')}\n" for key,value in metadata_maps(manifest["metadata"])["sources"].items()), encoding="utf-8", newline="\n")
     from scripts.distribution_parts import filenames
-    names = (FILE, FILE + ".gz", "manifest.json", INFO, *filenames("gsi-peaks"))
+    from distribution_license import LICENSE_FILE
+    names = (FILE, FILE + ".gz", "manifest.json", INFO, LICENSE_FILE, *filenames("gsi-peaks"))
     release_data.create_verified_release(tag, directory, names, notes, tag, channel)
     release_data.append_summary(f"\n## 国土地理院の山頂\n\n{manifest['metadata']['pointCount']:,} 地点を Release `{tag}` に公開しました。\n")
 

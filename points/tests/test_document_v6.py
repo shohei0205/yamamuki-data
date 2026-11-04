@@ -170,6 +170,14 @@ class MetadataArrayTests(unittest.TestCase):
                 with self.subTest(field=field,items=items), self.assertRaises(ValueError):
                     validate_metadata({field:items})
 
+    def test_authors_need_unique_names_and_text_attributes(self):
+        from document_metadata import validate_metadata
+        validate_metadata({"authors":[{"name":"作成者","role":"編集","url":"https://example.com/"}]})
+        for authors in ([], [{"name":"同じ"},{"name":"同じ"}], [{"name":" 空白"}], [{"role":"編集"}],
+                        [{"name":"作成者","role":1}], [{"name":"作成者","url":None}], {"name":"作成者"}, [None]):
+            with self.subTest(authors=authors), self.assertRaises(ValueError):
+                validate_metadata({"authors":authors})
+
 
 class ExtensibleDocumentTests(unittest.TestCase):
     def test_unknown_fields_are_accepted_without_affecting_known_values(self):

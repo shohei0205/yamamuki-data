@@ -24,6 +24,7 @@ points/            地点データ（詳細は points/README.md）
 formats/           データ種別に共通する manifest の版別形式説明
 schemas/           データ種別に共通する manifest の版別スキーマ
 release_tools/     データ種別共通の公開入口
+LICENSES/          Release に添付するライセンスの本文
 .github/workflows/ GitHub Actions の定義
 ```
 
@@ -174,6 +175,18 @@ CI の「共通：文字形式の確認」はすべての PR で文字コード�
 | 動作確認用の架空の地点データ | このリポジトリで作成 | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | [テスト用地点](points/testdata/README.md)。内蔵画像と分類タグを含む |
 
 地点に追加する画像は、画像ごとの出典・利用条件を各データセットの文書で確認する。
+
+### 配布データの作成者と利用条件のファイル
+
+配布データは、上の表の元データを [The yamamuki Authors](AUTHORS.md) が選び、照合・補正して作っている。作成者は manifest の `metadata.authors` に記録し、元データの作者とは分けて扱う。元データの出典・利用条件・帰属表示は、これまでどおり `metadata.sources` に記録する。
+
+各 Release には、そのデータの利用条件をまとめた `LICENSE.txt` を添付し、manifest の `licenseUrl` から参照できるようにする。`LICENSE.txt` には、データ全体のライセンス、出典ごとの利用条件と帰属表示、作成者、表示のお願いを記載する。OpenStreetMap 由来のデータは ODbL 1.0 の派生データベースとして配るため、本文 `ODbL-1.0.txt`（[LICENSES/ODbL-1.0.txt](LICENSES/ODbL-1.0.txt) の写し）も添付する。国土地理院由来のデータは、データ全体に一つのライセンスを定めず、出典ごとの利用条件に従う。
+
+元データのライセンスが求める表示に加えて、できれば作成者も表示してほしい。表示の例は次のとおり。この表示はお願いで、義務ではない。
+
+```text
+山データ：yamamuki-data（The yamamuki Authors）
+```
 
 ### ビューアーが利用する外部データ
 

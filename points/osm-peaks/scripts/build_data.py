@@ -176,7 +176,8 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
         if name in sources and sources[name] != entry:
             raise ValueError("元データと補足の出典 ID が競合しています: " + name)
         sources[name] = dict(entry)
-    raw = point_document_json(document(mountains, tag_metadata, sources=sources)).encode("utf-8")
+    from distribution_license import authors, license_url, write_license_files
+    raw = point_document_json(document(mountains, tag_metadata, sources=sources, authors=authors())).encode("utf-8")
     # ファイル名と生成時刻をヘッダーに含めず、同じ内容の圧縮結果をそろえる。
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -204,6 +205,7 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
             "pointCount": len(mountains),
             "dataTimestamp": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
             "sources": sources,
+            "licenseUrl": license_url(target_url),
         }
         if source_pbfs is not None:
             manifest["sourcePbfs"] = source_pbfs
@@ -213,7 +215,10 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
         copy_manifest_metadata(manifest, json.loads(raw)["metadata"])
         manifest_path = Path(temporary) / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+        license_names = write_license_files(temporary, manifest, odbl=True)
         archive.replace(output_dir / FILE_NAME)
+        for name in license_names:
+            (Path(temporary) / name).replace(output_dir / name)
         manifest_path.replace(output_dir / "manifest.json")
     logging.info("配布ファイルの保存完了: %s", output_dir)
     return manifest

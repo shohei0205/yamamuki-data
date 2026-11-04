@@ -87,6 +87,8 @@ Pages の初期設定、サイト全体の一覧・履歴の引き継ぎ、配�
 | `osm-peaks-source.json.gz` | `osm-peaks-source-manifest.json` | 補足適用前のオリジナル地点データ |
 | `supplements.json.gz` | `supplements-manifest.json` | タグ・名称・読み・別名の補正、配布除外を指定する補足データ |
 
+同じ Release に、利用条件のファイル `LICENSE.txt`（データ全体のライセンス・出典ごとの帰属表示・作成者）と ODbL 1.0 の本文 `ODbL-1.0.txt` も添付する。`manifest.json` の `licenseUrl` は `LICENSE.txt` を指す。
+
 各 manifest は [共通の manifest フォーマット](../../formats/manifest.md) に従い、それぞれが指す JSON の `metadata` をそのままコピーする。地点 JSON の形式は [地点データフォーマット](../formats/data.md)、補足 JSON の形式は [補足データフォーマット](../formats/supplements-data.md) を参照する。
 
 公開前に添付ファイルを再取得し、各 JSON と manifest の整合性、およびオリジナルに補足を適用して配布地点を再現できることを検証する。補足関連の添付がない過去の Release も検証できるが、一部だけそろっている場合は公開しない。

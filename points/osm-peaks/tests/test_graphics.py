@@ -46,7 +46,7 @@ class GraphicsTests(unittest.TestCase):
             manifest = self.generate(channel)
             self.assertNotIn("graphics", manifest)
             self.assertEqual(self.rows, validate(self.output, channel=channel)[1])
-            self.assertEqual({"manifest.json", "osm-peaks.json.gz"}, {p.name for p in self.output.iterdir()})
+            self.assertEqual({"manifest.json", "osm-peaks.json.gz", "LICENSE.txt", "ODbL-1.0.txt"}, {p.name for p in self.output.iterdir()})
             with patch.dict(release_data.os.environ, {"GH_REPO": "shohei0205/yamamuki-data"}):
                 entry = common.points_catalog({release_data.manifest_path(channel): manifest}, channel)["datasets"][0]
                 self.assertNotIn("graphics", entry["manifest"])

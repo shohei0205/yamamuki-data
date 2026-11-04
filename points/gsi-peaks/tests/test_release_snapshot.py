@@ -179,7 +179,7 @@ class GsiReleaseTests(unittest.TestCase):
                             checked = Path(args[args.index('--dir') + 1])
                             checked.mkdir()
                             from scripts.distribution_parts import filenames
-                            for name in (target.FILE, target.FILE + '.gz', 'manifest.json', target.INFO, *filenames('gsi-peaks')):
+                            for name in (target.FILE, target.FILE + '.gz', 'manifest.json', target.INFO, 'LICENSE.txt', *filenames('gsi-peaks')):
                                 shutil.copyfile(root / name, checked / name)
                             if corrupt:
                                 (checked / target.FILE).write_bytes(b'corrupt')
@@ -199,6 +199,15 @@ class GsiReleaseTests(unittest.TestCase):
                         self.assertEqual(create[create.index('--title') + 1], 'gsi-peaks-' + ('dev-' if branch == 'dev' else '') + 'test-1')
                         self.assertEqual('--prerelease' in create, branch == 'dev')
                         self.assertIn('--latest=false', create)
+                        self.assertIn(str(root / 'LICENSE.txt'), create)
+                        manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+                        self.assertEqual(manifest['metadata']['authors'][0]['name'], 'The yamamuki Authors')
+                        self.assertEqual(manifest['licenseUrl'], manifest['downloadUrl'].rsplit('/', 1)[0] + '/LICENSE.txt')
+                        license_text = (root / 'LICENSE.txt').read_text(encoding='utf-8')
+                        self.assertIn('データ全体に一つのライセンスは定めていない', license_text)
+                        self.assertIn('- 国土地理院（最適化ベクトルタイル）', license_text)
+                        self.assertIn('この表示は義務ではありません', license_text)
+                        self.assertFalse((root / 'ODbL-1.0.txt').exists())
                         edits = [call for call in calls.call_args_list if call.args[:2] == ('release', 'edit')]
                         self.assertEqual(len(edits), 0 if corrupt else 1)
 

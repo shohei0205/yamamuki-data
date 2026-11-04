@@ -125,6 +125,13 @@ def validate_metadata(data, point_count=None):
         if not isinstance(sources, dict) or any(not text(k) or not isinstance(v, dict)
                 or any(not isinstance(item,str) for k,item in v.items() if k in {"source","license","attribution","changes","latestTimestamp"}) for k,v in sources.items()):
             raise ValueError("出典情報が不正です")
+    if "authors" in data:
+        authors = data["authors"]
+        if (not isinstance(authors, list) or not authors
+                or any(not isinstance(v, dict) or not text(v.get("name"))
+                       or any(not isinstance(v[k], str) for k in ("role", "url") if k in v) for v in authors)
+                or len({v["name"] for v in authors}) != len(authors)):
+            raise ValueError("作成者情報が不正です")
     if "pointCount" in data:
         count = data["pointCount"]
         if type(count) is not int or count < 1 or (point_count is not None and count != point_count):

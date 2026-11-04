@@ -13,10 +13,37 @@
     "pointCount": {
       "type": "integer",
       "minimum": 1
+    },
+    "authors": {
+      "$ref": "#/$defs/authors"
     }
   },
   "additionalProperties": true,
   "$defs": {
+    "authors": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^\\S(?:.*\\S)?$"
+          },
+          "role": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true,
+        "required": [
+          "name"
+        ]
+      },
+      "description": "配布データを編集・加工した主体。元データの作者は sources に記載する。name は重複しない。"
+    },
     "sources": {
       "type": "array",
       "items": {
