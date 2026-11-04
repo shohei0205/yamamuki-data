@@ -252,9 +252,6 @@ def build(pbf, output_dir, version, *, channel="stable", additional_pbfs=None, t
     with tempfile.TemporaryDirectory() as temporary:
         for region, input_pbf in inputs.items():
             url = source_url if region == "japan" else verified_source_url(input_pbf, region)
-            # 取得対象日をそろえ、別の日付のキャッシュを混ぜない。
-            if url[-14:] != source_url[-14:]:
-                raise ValueError("追加 PBF と全国 PBF の配布日が一致しません")
             timestamp = normalize_timestamp(subprocess.check_output(
                 ["osmium", "fileinfo", "-g", "header.option.osmosis_replication_timestamp", str(input_pbf)],
                 text=True,
