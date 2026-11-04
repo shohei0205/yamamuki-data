@@ -35,7 +35,7 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。�
 | `name` | string | 任意 | データセットの表示名 | [版5] 追加 |
 | `version` | string | 必須 | データセットの配布版。英数字で始まり、英数字・ピリオド・ハイフン・下線で構成する | [版1] 追加 |
 | `downloadUrl` | string | 必須 | この版の gzip データ本体を取得する HTTPS URL | [版4] 追加 |
-| `licenseUrl` | string | 任意 | データ本体と同じ Release に添付した利用条件のファイル `LICENSE.txt` の HTTPS URL。データ全体のライセンス、出典ごとの帰属表示、作成者を記載する | [版6.1] 追加（#PR） |
+| `licenseUrl` | string | 任意 | データ本体と同じ Release に添付した利用条件のファイル `LICENSE.txt` の HTTPS URL。データ全体のライセンス、出典ごとの帰属表示、作成者を記載する | [版6.1] 追加（#91） |
 | `fileName` | string | 必須 | gzip データ本体のファイル名。データセットごとに定める | [版1] 追加 |
 | `sha256` | string | 必須 | gzip ファイルそのものの SHA-256。小文字の16進数64文字 | [版1] 追加 |
 | `sizeBytes` | integer | 必須 | gzip ファイルのバイト数。正の整数 | [版1] 追加 |
@@ -247,7 +247,7 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。�
 
 ### 版6.1（2026-11-04）
 
-- 任意の `licenseUrl` を追加し、同じ Release に添付した利用条件のファイル `LICENSE.txt` を manifest からたどれるようにする。未知の項目を無視する版6の読み手と、版6のスキーマで扱えるため、版は上げない（#PR）。
+- 任意の `licenseUrl` を追加し、同じ Release に添付した利用条件のファイル `LICENSE.txt` を manifest からたどれるようにする。未知の項目を無視する版6の読み手と、版6のスキーマで扱えるため、版は上げない（#91）。
 
 ### 版6（2026-10-14）
 
