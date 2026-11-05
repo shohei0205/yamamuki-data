@@ -1569,6 +1569,8 @@ fn certify(s: &Store, z: i64, inputs: &[Input], dem: &mut Dem, root: &Path) -> R
     let mut pass=resume.as_ref().and_then(|v|v["pass"].as_u64()).unwrap_or(1)-1;
     let virtual_delete=std::env::var_os("TERRAIN_ANGLE_LEGACY_DELETE").is_none();
     let mut virtual_checks=0u64;
+    let mut recertifications=0u64;
+    let mut recertification_changes=0u64;
     let prefetch_limit=std::thread::available_parallelism().map(|n|(n.get()/2).max(1).min(10)).unwrap_or(1);
     loop {
         pass += 1;
@@ -1593,7 +1595,28 @@ fn certify(s: &Store, z: i64, inputs: &[Input], dem: &mut Dem, root: &Path) -> R
                 prefetched=s.patches(z,&bounds)?.into();
             }
             let mut p=if let Some(p)=prefetched.pop_front(){p}else{s.patch(z,rect(i))?};
+            let mut rebuilt_at = changes;
             loop {
+                // 長い差分挿入列は正本点集合から再構築して接続を再認証する。
+                if changes.saturating_sub(rebuilt_at) >= 32 {
+                    let before_angle = minimum_angle(&p, rect(i));
+                    let rebuilt = s.patch(z, rect(i))?;
+                    let after_angle = minimum_angle(&rebuilt, rect(i));
+                    recertifications += 1;
+                    if (before_angle-after_angle).abs() > 1e-7 {
+                        recertification_changes += 1;
+                        angle_proofs.clear();
+                        error_proofs.clear();
+                    }
+                    p = rebuilt;
+                    rebuilt_at = changes;
+                    prefetched.clear();
+                    progress(root,json!({"stage":"certify-local","z":z,"pass":pass,
+                        "input":n+1,"inputs":inputs.len(),"changes":changes,
+                        "recertifications":recertifications,"recertification_changes":recertification_changes,
+                        "angle_before_rebuild":before_angle,"angle_after_rebuild":after_angle,
+                        "note":"正本の点集合から局所接続を再構築して角度を再認証","complete":false}))?;
+                }
                 if p.epoch != s.epoch(z)? {
                     p = s.patch(z, rect(i))?;
                 }
@@ -1739,7 +1762,7 @@ fn certify(s: &Store, z: i64, inputs: &[Input], dem: &mut Dem, root: &Path) -> R
                         changes += 1;
                         progress(
                             root,
-                            json!({"stage":"angle-prune","z":z,"pass":pass,"input":n+1,"inputs":inputs.len(),"changes":changes,"virtual_checks":virtual_checks,"complete":false}),
+                            json!({"stage":"angle-prune","z":z,"pass":pass,"input":n+1,"inputs":inputs.len(),"changes":changes,"virtual_checks":virtual_checks,"recertifications":recertifications,"recertification_changes":recertification_changes,"complete":false}),
                         )?;
                         continue;
                     }
@@ -1846,7 +1869,7 @@ fn certify(s: &Store, z: i64, inputs: &[Input], dem: &mut Dem, root: &Path) -> R
                     if changes % 32 == 0 {
                         progress(
                             root,
-                            json!({"stage":"certify-local","z":z,"pass":pass,"input":n+1,"inputs":inputs.len(),"changes":changes,"virtual_checks":virtual_checks,"complete":false}),
+                            json!({"stage":"certify-local","z":z,"pass":pass,"input":n+1,"inputs":inputs.len(),"changes":changes,"virtual_checks":virtual_checks,"recertifications":recertifications,"recertification_changes":recertification_changes,"complete":false}),
                         )?;
                     }
                 }
