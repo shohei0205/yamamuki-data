@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<title>富士山256 km 地表XYZタイル</title>
+<style>
+body{margin:0;font:14px system-ui;color:#243342}header{padding:10px 14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+canvas{width:100%;height:calc(100dvh - 90px);display:block;touch-action:none;cursor:grab}
+#status{padding:0 14px;min-height:24px}button,select{font:inherit}
+</style>
+<header><strong>富士山256 km 地表XYZタイル</strong>
+<label>地表LOD <select id="level"><option>3</option><option>4</option><option>5</option><option selected>6</option></select></label>
+<label><input id="borders" type="checkbox" checked>タイル境界</label>
+<button id="summit">山頂周辺10 km</button><button id="overview">全体</button><button id="coast">水際の境界へ</button>
+<span>ドラッグで移動、ホイールで拡大縮小</span></header>
+<div id="status" role="status"></div><canvas aria-label="地表タイル地図"></canvas>
+<script type="module">
+import {decodeBezierCoverage} from '/landcover_bezier_decode.js';
+const canvas=document.querySelector('canvas'), ctx=canvas.getContext('2d');
+const level=document.querySelector('#level'), borders=document.querySelector('#borders'), status=document.querySelector('#status');
+const query=new URLSearchParams(location.search);
+if(['3','4','5','6'].includes(query.get('lod')))level.value=query.get('lod');
+const colors=['#e2dcca','#72935d','#ba9c79','#83b4d0'];
+const coast=document.querySelector('#coast');
+const pending=new Map();
+let manifest, x=128000, y=128000, span=256000, frame, revision=0;
+const key=tile=>[tile.z,tile.x,tile.y].join('/');
+function get(tile){
+ if(tile.kind!==-1)return Promise.resolve(null);
+ const id=key(tile);
+ if(!pending.has(id)){
+  const request=fetch('/xyz-data/'+id).then(async response=>{
+   if(!response.ok)throw Error('HTTP '+response.status+' '+id);
+   return decodeBezierCoverage(await response.arrayBuffer(),{});
+  }).catch(error=>{pending.delete(id);throw error;});
+  pending.set(id,request);
+ }
+ return pending.get(id);
+}
+function schedule(){
+ if(frame!==undefined)return;
+ frame=requestAnimationFrame(()=>{frame=undefined; draw().catch(error=>{status.textContent=String(error);});});
+}
+async function draw(){
+ if(!manifest)return;
+ const ticket=++revision;
+ const ratio=devicePixelRatio||1, width=Math.round(canvas.clientWidth*ratio), height=Math.round(canvas.clientHeight*ratio);
+ const scale=Math.min(width,height)/span;
+ const sx=v=>width/2+(v-x)*scale, sy=v=>height/2+(v-y)*scale;
+ const row=manifest.levels.find(r=>r.level===Number(level.value));
+ coast.disabled=!row.waterExample;
+ const visible=manifest.tiles.filter(tile=>{
+  const [l,t,r,b]=tile.bounds;
+  return tile.z===row.z&&sx(l)<width&&sy(t)<height&&sx(r)>0&&sy(b)>0;
+ });
+ status.textContent='L'+row.level+' / z'+row.z+' ／ '+visible.length+' タイルを準備中';
+ const data=await Promise.all(visible.map(get));
+ if(ticket!==revision)return;
+ canvas.width=width;canvas.height=height;
+ ctx.fillStyle='#f4f4f4';ctx.fillRect(0,0,width,height);
+ const box=([l,t,r,b])=>ctx.rect(sx(l),sy(t),(r-l)*scale,(b-t)*scale);
+ ctx.beginPath();visible.forEach(tile=>box(tile.bounds));ctx.fillStyle=colors[0];ctx.fill();
+ for(let cls=1;cls<=3;cls++){
+  ctx.beginPath();
+  visible.forEach((tile,i)=>{
+   if(tile.kind===cls){box(tile.bounds);return;}
+   for(const polygon of data[i]?.features[cls].geometry.coordinates??[]){
+    for(const ring of polygon){
+     ctx.moveTo(sx(ring[0][0]),sy(ring[0][1]));
+     for(const [px,py] of ring.slice(1))ctx.lineTo(sx(px),sy(py));
+     ctx.closePath();
+    }
+   }
+  });
+  ctx.fillStyle=colors[cls];ctx.fill('evenodd');
+ }
+ if(borders.checked){
+  ctx.strokeStyle='#263545';ctx.fillStyle='#263545';ctx.lineWidth=ratio;ctx.font=(12*ratio)+'px system-ui';
+  for(const tile of visible){
+   const [l,t,r,b]=tile.bounds;
+   ctx.strokeRect(sx(l),sy(t),(r-l)*scale,(b-t)*scale);
+   ctx.fillText(key(tile),Math.max(4,sx(l)+5*ratio),Math.max(14*ratio,sy(t)+15*ratio));
+  }
+ }
+ const bytes=visible.reduce((sum,tile)=>sum+tile.bytes,0);
+ status.textContent='L'+row.level+' / z'+row.z+' ／ 表示範囲 '+visible.length+' タイル・圧縮 '+bytes.toLocaleString()+' B ／ 照合済みの隣接境界 '+row.checkedSeams+'（水域と陸地が交差 '+row.waterCrossingSeams+'）';
+ canvas.dataset.ready=String(row.level);
+}
+function reset(size){x=y=128000;span=size;schedule();}
+document.querySelector('#summit').onclick=()=>reset(10000);
+document.querySelector('#overview').onclick=()=>reset(256000);
+function showCoast(){
+ const point=manifest?.levels.find(row=>row.level===Number(level.value))?.waterExample;
+ if(!point)return;
+ [x,y]=point;span=10000;schedule();
+}
+coast.onclick=showCoast;
+level.onchange=borders.onchange=schedule;
+canvas.onpointerdown=event=>canvas.setPointerCapture(event.pointerId);
+canvas.onpointermove=event=>{
+ if(!canvas.hasPointerCapture(event.pointerId))return;
+ const metres=span/Math.min(canvas.clientWidth,canvas.clientHeight);
+ x-=event.movementX*metres;y-=event.movementY*metres;schedule();
+};
+canvas.addEventListener('wheel',event=>{
+ event.preventDefault();
+ const next=Math.max(400,Math.min(512000,span*Math.exp(Math.sign(event.deltaY)*0.17)));
+ const f=(span-next)/Math.min(canvas.clientWidth,canvas.clientHeight);
+ x+=(event.offsetX-canvas.clientWidth/2)*f;y+=(event.offsetY-canvas.clientHeight/2)*f;span=next;schedule();
+},{passive:false});
+new ResizeObserver(schedule).observe(canvas);
+try{
+ const response=await fetch('/xyz-data/manifest.json');
+ if(!response.ok)throw Error('HTTP '+response.status);
+ manifest=await response.json();
+ if(query.get('view')==='summit')reset(manifest.summitWindowMetres);else if(query.get('view')==='coast')showCoast();else schedule();
+}catch(error){status.textContent=String(error);}
+</script>
+</html>

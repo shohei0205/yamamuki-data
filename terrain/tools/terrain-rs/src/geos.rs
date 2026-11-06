@@ -152,6 +152,54 @@ impl<'a> Geometry<'a> {
     pub fn is_valid(&self) -> Result<bool> {
         self.predicate(None, b"GEOSisValid_r")
     }
+    pub fn invalid_location(&self) -> Result<Option<[f64; 2]>> {
+        Ok(self.invalid_detail()?.map(|v| v.0))
+    }
+    pub fn invalid_detail(&self) -> Result<Option<([f64; 2], String)>> {
+        unsafe {
+            let f: libloading::Symbol<
+                unsafe extern "C" fn(Ptr, Ptr, i32, *mut *mut i8, *mut Ptr) -> i8,
+            > = self.api.library.get(b"GEOSisValidDetail_r")?;
+            let free: libloading::Symbol<unsafe extern "C" fn(Ptr, Ptr)> =
+                self.api.library.get(b"GEOSFree_r")?;
+            let mut reason = std::ptr::null_mut();
+            let mut location = std::ptr::null_mut();
+            let result = f(
+                self.api.context,
+                self.pointer,
+                0,
+                &mut reason,
+                &mut location,
+            );
+            let message = if reason.is_null() {
+                String::new()
+            } else {
+                std::ffi::CStr::from_ptr(reason)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            if !reason.is_null() {
+                free(self.api.context, reason.cast());
+            }
+            ensure!(result == 0 || result == 1, "Geometry validity exception");
+            if result == 1 {
+                return Ok(None);
+            }
+            let point = self.api.owned(location)?;
+            let fx: libloading::Symbol<unsafe extern "C" fn(Ptr, Ptr, *mut f64) -> i32> =
+                self.api.library.get(b"GEOSGeomGetX_r")?;
+            let fy: libloading::Symbol<unsafe extern "C" fn(Ptr, Ptr, *mut f64) -> i32> =
+                self.api.library.get(b"GEOSGeomGetY_r")?;
+            let mut x = 0.;
+            let mut y = 0.;
+            ensure!(
+                fx(self.api.context, point.pointer, &mut x) == 1
+                    && fy(self.api.context, point.pointer, &mut y) == 1,
+                "Validity error location"
+            );
+            Ok(Some(([x, y], message)))
+        }
+    }
     pub fn is_empty(&self) -> Result<bool> {
         self.predicate(None, b"GEOSisEmpty_r")
     }
@@ -164,11 +212,76 @@ impl<'a> Geometry<'a> {
     pub fn intersection(&self, other: &Self) -> Result<Self> {
         self.binary(other, b"GEOSIntersection_r")
     }
+    pub fn buffer(&self, distance: f64, quadrant_segments: i32) -> Result<Self> {
+        unsafe {
+            let f: libloading::Symbol<unsafe extern "C" fn(Ptr, Ptr, f64, i32) -> Ptr> =
+                self.api.library.get(b"GEOSBuffer_r")?;
+            self.api.owned(f(self.api.context, self.pointer, distance, quadrant_segments))
+        }
+    }
     pub fn difference(&self, other: &Self) -> Result<Self> {
         self.binary(other, b"GEOSDifference_r")
     }
     pub fn union(&self) -> Result<Self> {
         self.unary(b"GEOSUnaryUnion_r")
+    }
+    pub fn boundary(&self) -> Result<Self> {
+        self.unary(b"GEOSBoundary_r")
+    }
+    pub fn polygonize(&self) -> Result<Self> {
+        unsafe {
+            let f: libloading::Symbol<unsafe extern "C" fn(Ptr, *const Ptr, u32) -> Ptr> =
+                self.api.library.get(b"GEOSPolygonize_r")?;
+            self.api.owned(f(self.api.context, &self.pointer, 1))
+        }
+    }
+    pub fn interior_xy(&self) -> Result<[f64; 2]> {
+        let p = self.unary(b"GEOSPointOnSurface_r")?;
+        unsafe {
+            let fx: libloading::Symbol<unsafe extern "C" fn(Ptr, Ptr, *mut f64) -> i32> =
+                self.api.library.get(b"GEOSGeomGetX_r")?;
+            let fy: libloading::Symbol<unsafe extern "C" fn(Ptr, Ptr, *mut f64) -> i32> =
+                self.api.library.get(b"GEOSGeomGetY_r")?;
+            let mut x = 0.;
+            let mut y = 0.;
+            ensure!(
+                fx(self.api.context, p.pointer, &mut x) == 1
+                    && fy(self.api.context, p.pointer, &mut y) == 1,
+                "Point coordinates"
+            );
+            Ok([x, y])
+        }
+    }
+    pub fn covers_xy(&self, x: f64, y: f64) -> Result<bool> {
+        unsafe {
+            let f: libloading::Symbol<unsafe extern "C" fn(Ptr, f64, f64) -> Ptr> =
+                self.api.library.get(b"GEOSGeom_createPointFromXY_r")?;
+            self.covers(&self.api.owned(f(self.api.context, x, y))?)
+        }
+    }
+    pub fn coverage_union(&self) -> Result<Self> {
+        self.unary(b"GEOSCoverageUnion_r")
+    }
+    pub fn topology_simplify(&self,tolerance:f64)->Result<Self>{
+        unsafe{
+            let f:libloading::Symbol<unsafe extern "C" fn(Ptr,Ptr,f64)->Ptr>=self.api.library.get(b"GEOSTopologyPreserveSimplify_r")?;
+            self.api.owned(f(self.api.context,self.pointer,tolerance))
+        }
+    }
+    pub fn coverage_simplify(&self, tolerance: f64) -> Result<Self> {
+        self.coverage_simplify_with_boundary(tolerance, true)
+    }
+    pub fn coverage_simplify_with_boundary(&self, tolerance: f64, preserve_boundary: bool) -> Result<Self> {
+        unsafe {
+            ensure!(
+                tolerance >= 0. && tolerance.is_finite(),
+                "Invalid tolerance"
+            );
+            let f: libloading::Symbol<unsafe extern "C" fn(Ptr, Ptr, f64, i32) -> Ptr> =
+                self.api.library.get(b"GEOSCoverageSimplifyVW_r")?;
+            self.api
+                .owned(f(self.api.context, self.pointer, tolerance, i32::from(preserve_boundary)))
+        }
     }
     pub fn triangulate(&self) -> Result<Self> {
         self.unary(b"GEOSConstrainedDelaunayTriangulation_r")
@@ -181,6 +294,15 @@ impl<'a> Geometry<'a> {
             let f: libloading::Symbol<unsafe extern "C" fn(Ptr, Ptr, f64, i32) -> Ptr> =
                 self.api.library.get(b"GEOSGeom_setPrecision_r")?;
             self.api.owned(f(self.api.context, self.pointer, grid, 0))
+        }
+    }
+    pub fn length(&self) -> Result<f64> {
+        unsafe {
+            let f: libloading::Symbol<unsafe extern "C" fn(Ptr, Ptr, *mut f64) -> i32> =
+                self.api.library.get(b"GEOSLength_r")?;
+            let mut length = 0.;
+            ensure!(f(self.api.context, self.pointer, &mut length) == 1, "GEOS length failed");
+            Ok(length)
         }
     }
     pub fn area(&self) -> Result<f64> {

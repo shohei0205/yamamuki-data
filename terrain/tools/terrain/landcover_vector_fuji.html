@@ -1,0 +1,394 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>富士山・地表ベクトルLOD</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#e8edf0;color:#273b39;font:14px system-ui,"Yu Gothic",sans-serif}header{background:#fafcf9ed;padding:12px 18px;border-bottom:1px solid #d4ded5;position:relative;z-index:2}h1{font-size:19px;margin:0 16px 0 0;display:inline}.row{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:8px 0}select,button{padding:6px 10px;border:1px solid #b6c6bc;border-radius:5px;background:white;color:inherit}button{cursor:pointer}label{white-space:nowrap}#legend span{display:inline-flex;align-items:center;margin-right:18px}i{display:inline-block;width:13px;height:13px;border-radius:3px;margin-right:6px}#stats{font-size:13px;color:#46665b}#map{display:block;width:100vw;height:calc(100vh - 238px);min-height:320px;touch-action:none;cursor:grab}#note{font-size:12px;color:#55645e;padding:9px 18px;background:#fafcf9;line-height:1.7}a{color:#346854}#error{color:#b43636}#status{font-size:13px}table{border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:12px}th,td{text-align:right;padding:4px 11px;border-bottom:1px solid #e3e9e2}th:first-child,td:first-child{text-align:left}details{margin:6px 0}#position{position:absolute;bottom:95px;left:16px;background:#fffE;padding:5px 9px;border-radius:4px;font-size:12px;pointer-events:none}
+</style>
+<header><div class="row"><h1>富士山 · 地表ベクトルLOD</h1><span id="status">データを確認中…</span><button id="reset">範囲全体</button><button id="summit">富士山へ</button><a id="mapExtent" href="/wide">256 km版</a></div>
+<div class="row"><label>画像前処理 <select id="filter"><option value="legacy">従来データ（ベジェ比較用）</option><option value="none">なし（Rust・比較基準）</option><option value="majority-clean" selected>元分類で多数決＋孤立領域除去（Rust）</option><option value="majority">3×3多数決（Rust）</option><option value="regions">小領域除去（Rust）</option></select></label><label>表示 <select id="mode"><option value="vector">ベクトル</option><option value="filter-split" selected>左：前処理なし ／ 右：選択方式</option><option value="split">左：表示用分類PNG ／ 右：ベクトル</option><option value="raster">参考分類PNG（表示用）</option><option value="cleanup-split">左：前回 ／ 右：水域内の小さな穴を統合</option><option value="curve-split">左：直線 ／ 右：共有ベジェ</option></select></label>
+<label>地表LOD <select id="lod"><option value="auto">自動</option></select></label><label>境界 <select id="curve"><option value="bezier" selected>共有ベジェ（新）</option><option value="line">直線（従来）</option><option value="fit">共有三次ベジェ適合（Rust・新）</option></select></label>
+<label>丸め <select id="curveStrength"><option value="0.35">弱</option><option value="0.75" selected>標準</option><option value="1">強</option></select></label>
+<label>曲線細分 <select id="curveSteps"><option value="4">4</option><option value="8">8</option></select></label>
+<label><input type="checkbox" id="shade" checked>参考地形の陰影</label><label><input type="checkbox" id="edges">領域の境界</label><label>制御点 <select id="controls"><option value="off">なし</option><option value="endpoints">端点</option><option value="all">端点＋ベジェ制御点</option></select></label><small id="controlLegend" hidden>白：端点 ／ 橙：ベジェ制御点</small></div>
+<div class="row" id="legend"></div><div class="row"><output id="coordinates" aria-live="polite">地図をクリックすると地点の座標を表示</output><label>ピン半径 <input id="pinRadius" type="number" min="0" max="128000" step="any" value="0" style="width:7em"> m（投影距離）</label><button id="copyLocation" disabled>地点リンクをコピー</button><button id="clearLocation" disabled>印を消す</button><input id="locationLink" aria-label="地点リンク" readonly hidden></div><div id="stats"></div><details><summary>レベル別のデータ量・生成条件</summary><div id="table"></div><div id="filterTable"></div><div id="fitTable"></div></details><div id="error"></div></header>
+<canvas id="map"></canvas><canvas id="overlay" style="position:absolute;pointer-events:none"></canvas><div id="position"></div>
+<div id="note">ドラッグ：移動 ／ ホイール：拡大・縮小。海・河川・湖沼は「水域」として表示。市街地は「その他」に統合。<br>
+<a href="https://esa-worldcover.org/en/data-access" target="_blank">ESA WorldCover 2021 v200</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank">CC BY 4.0</a> · 分類を統合・再投影・ベクトル化・簡略化。
+© ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium<br>海岸線・参考陰影：<a href="https://maps.gsi.go.jp/development/vt_expt.html" target="_blank">国土地理院</a>。陰影は地表データに焼き込んでいません。</div>
+<script src="/vendor/earcut-3.2.4.min.js"></script><script type="module">
+import {decodeBezierCoverage} from "/landcover_bezier_decode.js?v=control-classes";
+const wide=location.pathname==='/wide'||location.pathname==='/wide/';
+const mapSide=wide?256000:128000, mapCenter=mapSide/2;
+const maxSpan=wide?1600000:300000, defaultSpan=mapSide/128000*140000;
+const apiPrefix=wide?'/wide':'';
+const $=id=>document.getElementById(id),canvas=$('map'),gl=canvas.getContext('webgl2',{alpha:false,antialias:true}),overlay=$('overlay'),ctx=overlay.getContext('2d');
+if(!gl)throw Error('WebGL 2を利用できません');
+let manifest=null,current=null,straight=null,currentLevel=-1,wanted=-1,token=0,cx=mapCenter,cy=mapCenter,span=defaultSpan,raf=0,drag=null,lastMs=0,raster=null,relief=null;
+let activeFilter=new URLSearchParams(location.search).get('filter')||'majority-clean';
+if(!['legacy','none','majority','regions','majority-clean'].includes(activeFilter))activeFilter='majority';
+let wideCapabilities=null;
+$('filter').value=activeFilter;
+if(wide){
+ $('mapExtent').href='/';
+ $('mapExtent').textContent='128 km版';
+ $('filter').querySelector('option[value=legacy]').textContent='共有ベジェ丸め（比較用）';
+}
+const query=new URLSearchParams(location.search);
+const initialPin=['pinX','pinY'].map(key=>query.has(key)?Number(query.get(key)):NaN);
+let pin=initialPin.every(value=>Number.isFinite(value)&&value>=0&&value<=mapSide)?initialPin:null;
+const pinRadiusInput=$('pinRadius');
+const maxPinRadius=mapSide;
+pinRadiusInput.max=String(maxPinRadius);
+function validPinRadius(value){
+ return Number.isFinite(value)&&value>=0&&value<=maxPinRadius;
+}
+const initialRadius=Number(query.get('pinRadius'));
+let pinRadius=validPinRadius(initialRadius)?initialRadius:0;
+pinRadiusInput.value=String(pinRadius);
+pinRadiusInput.addEventListener('input',()=>{
+ const value=pinRadiusInput.valueAsNumber;
+ if(!validPinRadius(value))return;
+ pinRadius=value;
+ $('locationLink').hidden=true;
+ $('copyLocation').textContent='地点リンクをコピー';
+ schedule();
+});
+pinRadiusInput.addEventListener('blur',()=>{pinRadiusInput.value=String(pinRadius);});
+let dragged=false;
+
+function updateCoordinates(){
+ const bounds=manifest?.bounds;
+ const ready=Boolean(pin&&bounds?.length===4);
+ $('copyLocation').disabled=!ready;
+ $('clearLocation').disabled=!pin;
+ if(!ready){
+  $('coordinates').textContent='地図をクリックすると地点の座標を表示';
+  return;
+ }
+ const radius=6378137;
+ const lon=(bounds[0]+pin[0])/radius*180/Math.PI;
+ const lat=Math.atan(Math.sinh((bounds[3]-pin[1])/radius))*180/Math.PI;
+ $('coordinates').textContent='緯度 '+lat.toFixed(6)+'° ／ 経度 '+lon.toFixed(6)+'°';
+}
+
+function setPin(point){
+ pin=point;
+ $('locationLink').hidden=true;
+ $('copyLocation').textContent='地点リンクをコピー';
+ updateCoordinates();
+ schedule();
+}
+
+$('clearLocation').onclick=()=>setPin(null);
+$('copyLocation').onclick=async()=>{
+ if(!pin)return;
+ const link=new URL(location.href);
+ const settings={filter:activeFilter,curve:$('curve').value,mode:$('mode').value,
+  lod:String(currentLevel>=0?currentLevel:desired()),px:cx.toFixed(2),py:cy.toFixed(2),
+  span:span.toFixed(2),pinX:pin[0].toFixed(2),pinY:pin[1].toFixed(2)};
+ if(pinRadius>0)settings.pinRadius=String(pinRadius);
+ else link.searchParams.delete('pinRadius');
+ for(const [key,value] of Object.entries(settings))link.searchParams.set(key,value);
+ try{
+  await navigator.clipboard.writeText(link.href);
+  $('copyLocation').textContent='コピー済み';
+ }catch{
+  const input=$('locationLink');
+  input.value=link.href;
+  input.hidden=false;
+  input.select();
+ }
+};
+for(const [name,apply]of [['px',v=>cx=v],['py',v=>cy=v],['span',v=>span=v]]){if(query.has(name)){const v=Number(query.get(name));if(Number.isFinite(v)&&v>=0)apply(name==='span'?Math.max(1500,Math.min(maxSpan,v)):v);}}
+if(['majority','regions','majority-clean'].includes(activeFilter)){
+ $('curve').value=query.get('curve')==='line'?'line':'fit';
+ $('mode').value=query.get('mode')||(wide?'vector':'curve-split');
+}
+else if(activeFilter==='legacy'){$('mode').value='vector';}else{$('curve').value='line';}
+if(wide){
+ const requestedMode=query.get('mode');
+ const excluded=activeFilter==='legacy'?['filter-split','cleanup-split']:activeFilter==='none'?['curve-split','cleanup-split']:[];
+ if(requestedMode&&!excluded.includes(requestedMode)&&[...$('mode').options].some(option=>option.value===requestedMode)){
+  $('mode').value=requestedMode;
+ }
+ if(activeFilter==='legacy'&&query.get('curve')==='line')$('curve').value='line';
+}
+const dataPrefix=(id=activeFilter)=>apiPrefix+(id==='legacy'?'/data/':'/filtered/'+id+'/');
+const fitManifests=new Map(),levelTextures=new Map();
+const cache=new Map(),enabled=new Set([0,1,2,3,4]);
+const bytes=n=>n>=1048576?(n/1048576).toFixed(2)+' MiB':(n/1024).toFixed(1)+' KiB';
+const vertexSource='#version 300 es\nprecision highp float;layout(location=0)in vec3 point;uniform vec4 view;out vec2 xy;flat out int code;void main(){xy=point.xy;code=int(point.z);vec2 p=(point.xy-view.xy)*2./view.z;gl_Position=vec4(p.x,-p.y*view.w,0.,1.);}';
+const fragmentSource='#version 300 es\nprecision highp float;in vec2 xy;flat in int code;uniform vec4 colors[5];uniform int mode;uniform float shade;uniform float mapSide;uniform sampler2D referenceImage;uniform sampler2D reliefImage;out vec4 color;void main(){vec3 c=colors[code].rgb;if(mode==2)c=texture(referenceImage,xy/mapSide).rgb;if(mode==1){color=vec4(.12,.22,.18,.3);return;}float h=texture(reliefImage,xy/mapSide).r;if(code<3)c*=mix(1.,h,shade);color=vec4(c,1.);}';
+function shader(type,source){const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s;}
+const program=gl.createProgram();gl.attachShader(program,shader(gl.VERTEX_SHADER,vertexSource));gl.attachShader(program,shader(gl.FRAGMENT_SHADER,fragmentSource));gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(program));
+const locations=Object.fromEntries(['view','colors[0]','mode','shade','mapSide','referenceImage','reliefImage'].map(n=>[n,gl.getUniformLocation(program,n)]));
+function buffer(target,values){const b=gl.createBuffer();gl.bindBuffer(target,b);gl.bufferData(target,values,gl.STATIC_DRAW);return b;}
+function gpu(vertices,indices,edges){const v=new Float32Array(vertices),i=new Uint32Array(indices),e=new Uint32Array(edges);
+return{vertex:buffer(gl.ARRAY_BUFFER,v),index:buffer(gl.ELEMENT_ARRAY_BUFFER,i),edge:buffer(gl.ELEMENT_ARRAY_BUFFER,e),count:i.length,edgeCount:e.length,gpuBytes:v.byteLength+i.byteLength+e.byteLength};}
+const quad=gpu([0,0,0,mapSide,0,0,mapSide,mapSide,0,0,mapSide,0],[0,1,2,0,2,3],[]);
+function image(url){return new Promise((resolve,reject)=>{const im=new Image();im.onload=()=>resolve(im);im.onerror=reject;im.src=url;});}
+function texture(im){const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);return t;}
+function variant(){if(wide)return activeFilter==='majority-clean'&&($('mode').value==='cleanup-split'||$('curve').value==='fit')?'fit':'line';if($('mode').value==='cleanup-split')return wide&&!overlayComparison(desired())&&!wideCapabilities?.fitted.includes(activeFilter)?'line':'fit';if(activeFilter==='none')return 'line';if(activeFilter!=='legacy')return $('curve').value==='fit'&&(!wide||overlayComparison(desired())||wideCapabilities?.fitted.includes(activeFilter))?'fit':'line';return $('mode').value==='curve-split'?'bezier':$('curve').value;}
+function requestKey(level,kind=variant(),filter=activeFilter){if(kind==='fit'&&overlayComparison(level))kind='fit-overlay';return filter+'/'+(kind==='line'?level+'/line':level+'/'+kind+'/'+$('curveStrength').value+'/'+$('curveSteps').value);}
+function overlayComparison(level){
+ return (level===4||(wide&&(level>=5||wideCapabilities?.fineOverlayLevels?.includes(level))))&&activeFilter==='majority-clean'&&(wide?wideCapabilities?.overlay:($('mode').value==='cleanup-split'&&query.get('overlay')==='1'));
+}
+async function prepare(level,kind,filter=activeFilter){
+if(kind==='fit'&&overlayComparison(level))kind='fit-overlay';
+const key=requestKey(level,kind,filter);if(cache.has(key))return cache.get(key);
+const isPrior=kind==='fit-old',isOverlayPrior=kind==='fit-overlay-prior',isOverlay=kind==='fit-overlay'||isOverlayPrior,isFit=kind==='fit'||kind==='fit-base'||isPrior||isOverlay,isCurve=kind==='bezier',strength=isCurve?$('curveStrength').value:'0',steps=$('curveSteps').value;
+const uri=isCurve?apiPrefix+'/curves?level='+level+'&strength='+strength+'&steps='+steps:dataPrefix(filter)+manifest.levels.find(row=>row.level===level).file+'?v='+encodeURIComponent(manifest.levels.find(row=>row.level===level).geojsonSha256||manifest.levels.find(row=>row.level===level).transferBytes);
+
+let json=null;if(!isFit){const response=await fetch(uri);if(!response.ok)throw Error('HTTP '+response.status);json=await response.json();if(wide&&level===6)json.fittedStats=manifest.levels.find(row=>row.level===level);}
+if(isFit){
+ const fitPrefix=apiPrefix+(isOverlayPrior?'/fitted-overlay-prior/':isOverlay?'/fitted-overlay/':isPrior?'/fitted-prior/':'/fitted/'),fitKey=fitPrefix+filter;
+ if(!fitManifests.has(fitKey)){const mr=await fetch(fitPrefix+filter+'/manifest.json');if(!mr.ok)throw Error('ベジェ適合データ HTTP '+mr.status);fitManifests.set(fitKey,await mr.json());}
+ const fm=fitManifests.get(fitKey),row=fm.levels.find(v=>v.level===level),cr=await fetch(fitPrefix+filter+'/'+row.curveInfo.controlFile+'?v='+encodeURIComponent(row.curveInfo.controlSha256||row.curveInfo.controlBytes+'-'+row.curveInfo.seconds));
+ if(isOverlay&&!isOverlayPrior&&level===desired())$('fitTable').textContent='L'+level+' 水域統合・'+(row.boundaryCodec||'BZF1')+(wide?' 圧縮直線 ':' 圧縮曲線 ')+bytes(row.curveInfo.controlBytes)+(row.commonLod?.evaluationDistanceM?' ／ 評価距離 '+row.commonLod.evaluationDistanceM.toLocaleString()+' m':'')+(row.pixelPreviewSide?' ／ '+row.pixelPreviewSide+'×'+row.pixelPreviewSide+' px・'+row.pixelPreviewCellM+' m/px':'')+(row.coastStoredSegments==null?'':' ／ 海岸の区間 '+row.coastSourceSegments.toLocaleString()+' → '+row.coastStoredSegments.toLocaleString()+' 本');
+ else if(filter===activeFilter&&!isPrior&&!isOverlayPrior&&kind!=='fit-base')$('fitTable').innerHTML='<p>共有三次ベジェ（曲線制御データのみ、全LOD計 '+bytes(fm.levels.reduce((sum,v)=>sum+v.curveInfo.controlBytes,0))+')</p><table><tr><th>LOD</th><th>適合目安</th><th>三次曲線</th><th>直線</th><th>制御データgzip</th><th>最詳細比</th></tr>'+fm.levels.map(v=>'<tr><td>L'+v.level+'</td><td>'+v.curveInfo.fitToleranceM+' m</td><td>'+v.curveInfo.bezierSegments.toLocaleString()+'</td><td>'+v.curveInfo.lineSegments.toLocaleString()+'</td><td>'+bytes(v.curveInfo.controlBytes)+'</td><td>'+(v.curveInfo.controlBytes/fm.levels[0].curveInfo.controlBytes*100).toFixed(1)+'%</td></tr>').join('')+'</table><small>川・海岸は固定。表示用に細分したGeoJSON・WKBは制御データの配布容量に合算しません。</small>';
+ if(!cr.ok)throw Error('曲線制御データ HTTP '+cr.status);
+ json=decodeBezierCoverage(await cr.arrayBuffer(),row.curveInfo,true);json.fittedStats={...row,transferBytes:row.curveInfo.controlBytes};
+}
+const vertices=[],indices=[],edges=[];let area=0,nativeFallbacks=0;const start=performance.now();
+let waterStart=null,waterEdgeStart=null;
+const features=isOverlay?[...json.features].sort((a,b)=>(a.properties.class===3)-(b.properties.class===3)):json.features;
+for(const feature of features){
+ if(isOverlay&&feature.properties.class===3&&waterStart===null){waterStart=indices.length;waterEdgeStart=edges.length;}const g=feature.geometry,polys=g.type==='Polygon'?[g.coordinates]:g.type==='MultiPolygon'?g.coordinates:[];
+ for(const [polygonIndex,rings] of polys.entries()){const valid=rings.filter(r=>r.length>=4).map(r=>r.slice(0,-1));if(!valid.length)continue;
+  const f=earcut.flatten(valid),base=vertices.length/3;
+  for(let j=0;j<f.vertices.length;j+=2)vertices.push(f.vertices[j],f.vertices[j+1],feature.properties.class);
+  // Use polygon-local coordinates so area checks retain precision for tiny faces.
+  const local=f.vertices.map((value,index)=>value-f.vertices[index%2]);
+  let triangulated=earcut.default(local,f.holes,2);
+  const deviation=earcut.deviation(local,f.holes,2,triangulated);
+  if(!Number.isFinite(deviation)||deviation>1e-8){
+   if(wide){
+    const polygonArea=valid.reduce((sum,ring,index)=>{
+     const [x0,y0]=ring[0];
+     let twiceArea=0;
+     for(let k=1;k<ring.length;k++){
+      const [ax,ay]=ring[k-1],[bx,by]=ring[k];
+      twiceArea+=(ax-x0)*(by-y0)-(bx-x0)*(ay-y0);
+     }
+     return sum+(index===0?1:-1)*Math.abs(twiceArea)/2;
+    },0);
+    // Skip sub-millimetre slivers created by numerical intersections.
+    if(polygonArea>=0&&polygonArea<1e-6)continue;
+   }
+   const response=await fetch(apiPrefix+'/triangulate?level='+level+'&class='+feature.properties.class+'&polygon='+polygonIndex+'&strength='+strength+'&steps='+steps+'&filter='+filter+'&fit='+(isOverlayPrior?'overlay-prior':isOverlay?'overlay':isPrior?'old':isFit?'1':'0'));
+   if(!response.ok)throw Error("領域の三角形化に失敗: "+response.status);
+   triangulated=(await response.json()).indices;nativeFallbacks++;
+  }
+  for(let j=0;j<triangulated.length;j+=3){const a=triangulated[j]*2,b=triangulated[j+1]*2,c=triangulated[j+2]*2;area+=Math.abs((f.vertices[b]-f.vertices[a])*(f.vertices[c+1]-f.vertices[a+1])-(f.vertices[b+1]-f.vertices[a+1])*(f.vertices[c]-f.vertices[a]))*.5;}
+  for(const index of triangulated)indices.push(base+index);
+  let at=base;for(const ring of valid){for(let i=0;i<ring.length;i++)edges.push(at+i,at+(i+1)%ring.length);at+=ring.length;}
+ }}
+let data=gpu(vertices,indices,edges);data.robustFallbacks=nativeFallbacks;data.waterStart=waterStart;data.waterEdgeStart=waterEdgeStart;
+const expectedArea=mapSide**2+(json.fittedStats?.waterOverlay?(json.fittedStats.waterOverlayAreaM2??json.fittedStats.areaM2['3']):0)-(json.fittedStats?.implicitBackground?json.fittedStats.areaM2['0']:0);
+data.areaRelativeError=Math.abs(area-expectedArea)/expectedArea;if(data.areaRelativeError>1e-7)throw Error("領域の三角形化面積が一致しません: "+data.areaRelativeError);data.prepareMs=performance.now()-start;data.curveInfo=json.curveInfo;data.controlPoints=json.controlPoints;data.fittedStats=json.fittedStats;data.key=key;cache.set(key,data);
+for(const [oldKey,old]of cache){if([...cache.values()].reduce((n,v)=>n+v.gpuBytes,0)<=256*1048576)break;
+ if(old!==current&&old!==straight&&old!==data){gl.deleteBuffer(old.vertex);gl.deleteBuffer(old.index);gl.deleteBuffer(old.edge);cache.delete(oldKey);}}
+return data;
+}
+async function levelReference(level){
+ const row=manifest.levels.find(row=>row.level===level);if(!manifest.progressiveLod||!row.referenceFile)return raster;
+ const key=activeFilter+'/'+row.referenceFile+'/'+row.referenceSha256;
+ if(levelTextures.has(key))return levelTextures.get(key);
+ const tex=texture(await image(dataPrefix()+row.referenceFile+'?v='+encodeURIComponent(row.referenceSha256||row.changedCellsFromFine)));
+ levelTextures.set(key,tex);
+ for(const [oldKey,old]of levelTextures){if(levelTextures.size<=3)break;if(old!==raster&&old!==tex){gl.deleteTexture(old);levelTextures.delete(oldKey);}}
+ return tex;
+}
+async function load(level){const key=requestKey(level);wanted=key;const mine=++token;$('status').textContent='L'+level+'・'+(variant()==='fit'?'三次ベジェ適合':variant()==='bezier'?'共有ベジェ':'直線')+' を準備中…';$('error').textContent='';
+try{const data=await prepare(level,variant());let baseline=null;if($('mode').value==='curve-split')baseline=await prepare(level,'line');if($('mode').value==='filter-split')baseline=await prepare(wide&&level>=5?4:level,'line','none');if($('mode').value==='cleanup-split')baseline=wide&&level===6?await prepare(5,'fit','majority-clean'):await prepare(level,wide?'line':(overlayComparison(level)?'fit-overlay-prior':'fit-old'),'majority-clean');
+const tex=await levelReference(level);if(mine!==token)return;if(tex!==raster&&!Array.from(levelTextures.values()).includes(raster))gl.deleteTexture(raster);raster=tex;current=data;straight=baseline;currentLevel=level;$('status').textContent='L'+level+' 読込完了';schedule();
+}catch(e){$('error').textContent=e.stack||e.message;}}
+function desired(){if($('lod').value!=='auto')return +$('lod').value;const scale=canvas.clientWidth/span;let level=manifest.levels[0].level;for(const row of manifest.levels)if(row.tolerance*scale<=1.5)level=row.level;return level;}
+function schedule(){if(!raf)raf=requestAnimationFrame(draw);}
+function bind(mesh){gl.bindBuffer(gl.ARRAY_BUFFER,mesh.vertex);gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,12,0);}
+function drawControlPoints(data,left,right,center,scale,height,showHandles){
+ const points=data?.controlPoints;
+ if(!points)return;
+ ctx.save();
+ ctx.beginPath();
+ ctx.rect(left,0,right-left,height);
+ ctx.clip();
+ let selected=0;
+ for(const code of enabled)selected|=1<<code;
+ function marks(coords,offsets,color,size){
+  ctx.fillStyle=color;
+  const half=size/2;
+  for(let path=0;path<points.classes.length;path++){
+   if(!(points.classes[path]&selected))continue;
+   for(let i=offsets[path];i<offsets[path+1];i+=2){
+    const x=center+(coords[i]-cx)*scale,y=height/2+(coords[i+1]-cy)*scale;
+    if(x>=left-half&&x<=right+half&&y>=-half&&y<=height+half)ctx.fillRect(x-half,y-half,size,size);
+   }
+  }
+ }
+ if(showHandles)marks(points.handles,points.handleOffsets,'#ffab45',4);
+ marks(points.endpoints,points.endpointOffsets,'#fff',3);
+ ctx.restore();
+}
+function draw(){raf=0;if(!manifest||!raster)return;const target=desired();if(requestKey(target)!==wanted)load(target);
+const dpr=devicePixelRatio,w=canvas.clientWidth,h=canvas.clientHeight;
+if(canvas.width!==Math.round(w*dpr)||canvas.height!==Math.round(h*dpr)){canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);}
+const r=canvas.getBoundingClientRect();overlay.style.left=r.left+'px';overlay.style.top=(r.top+scrollY)+'px';overlay.style.width=w+'px';overlay.style.height=h+'px';overlay.width=canvas.width;overlay.height=canvas.height;
+gl.viewport(0,0,canvas.width,canvas.height);gl.disable(gl.SCISSOR_TEST);if(enabled.has(3))gl.clearColor(.5255,.7059,.7961,1);else gl.clearColor(.902,.918,.89,1);gl.clear(gl.COLOR_BUFFER_BIT);gl.useProgram(program);
+gl.uniform4f(locations.view,cx,cy,span,w/h);
+const implicitBackground=Boolean(current?.fittedStats?.implicitBackground);
+const otherLabel=$('legend').querySelector('[data-class="0"]');
+if(otherLabel)otherLabel.hidden=implicitBackground;
+const colors=[];for(let code=0;code<5;code++){let c=(enabled.has(code)||(code===0&&implicitBackground))?manifest.classes[Math.min(code,3)].color:'#e6eae3';colors.push(parseInt(c.slice(1,3),16)/255,parseInt(c.slice(3,5),16)/255,parseInt(c.slice(5,7),16)/255,1);}gl.uniform4fv(locations['colors[0]'],colors);
+gl.uniform1f(locations.mapSide,mapSide);
+gl.uniform1f(locations.shade,$('shade').checked&&relief?.55:0);
+gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,raster);gl.uniform1i(locations.referenceImage,0);
+gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,relief||raster);gl.uniform1i(locations.reliefImage,1);
+const start=performance.now();
+function layer(vector,left,right,override=null){gl.enable(gl.SCISSOR_TEST);gl.scissor(Math.round(left*dpr),0,Math.round((right-left)*dpr),canvas.height);
+const mesh=vector?(override||current):quad;if(!mesh)return;
+if(vector&&mesh.fittedStats?.implicitBackground){
+ bind(quad);gl.uniform1i(locations.mode,0);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,quad.index);
+ gl.drawElements(gl.TRIANGLES,quad.count,gl.UNSIGNED_INT,0);
+}
+bind(mesh);gl.uniform1i(locations.mode,vector?0:2);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,mesh.index);gl.drawElements(gl.TRIANGLES,mesh.waterStart!=null&&!enabled.has(3)?mesh.waterStart:mesh.count,gl.UNSIGNED_INT,0);
+if(vector&&$('edges').checked){gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.uniform1i(locations.mode,1);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,mesh.edge);gl.drawElements(gl.LINES,mesh.waterEdgeStart!=null&&!enabled.has(3)?mesh.waterEdgeStart:mesh.edgeCount,gl.UNSIGNED_INT,0);gl.disable(gl.BLEND);}}
+const mode=$('mode').value;
+if(wide){
+ $('mode').querySelector('option[value=filter-split]').textContent=target>=5
+  ? '左：前処理なし L4 ／ 右：L'+target
+  : wideCapabilities?.nonePreview?'左：前処理なし暫定125 m ／ 右：選択方式':'左：前処理なし ／ 右：選択方式';
+}
+document.querySelector('#mode option[value="cleanup-split"]').textContent=wide?(target===6?'左：L5 ／ 右：L6':'左：比較元 ／ 右：圧縮直線'):overlayComparison(target)?'左：前回のL4 ／ 右：水域の切れ目と沿岸細片を整理':'左：前回 ／ 右：水域内の小さな穴を統合';$('curve').disabled=(wide&&activeFilter!=='legacy'&&!overlayComparison(target)&&!wideCapabilities?.fitted.includes(activeFilter))||activeFilter==='none'||(mode==='curve-split'&&activeFilter==='legacy');$('curveStrength').disabled=activeFilter!=='legacy';$('curveSteps').disabled=activeFilter!=='legacy';if(mode==='cleanup-split'){
+ const half=w/2;
+ gl.viewport(0,0,Math.round(half*dpr),canvas.height);gl.uniform4f(locations.view,cx,cy,span,half/h);layer(true,0,half,straight);
+ gl.viewport(Math.round(half*dpr),0,Math.round((w-half)*dpr),canvas.height);gl.uniform4f(locations.view,cx,cy,span,(w-half)/h);layer(true,half,w);
+ gl.viewport(0,0,canvas.width,canvas.height);
+}else if(mode==='curve-split'||mode==='filter-split'){layer(true,0,w/2,straight);layer(true,w/2,w);}else if(mode==='split'){layer(false,0,w/2);layer(true,w/2,w);}else layer(mode==='vector',0,w);
+lastMs=performance.now()-start;
+ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
+const controls=$('controls').value,showHandles=controls==='all';
+const showingControls=controls!=='off'&&mode!=='raster'&&Boolean(current?.controlPoints||straight?.controlPoints);
+$('controlLegend').hidden=!showingControls;
+$('controlLegend').textContent=showHandles?'白：端点 ／ 橙：ベジェ制御点':'白：端点';
+if(showingControls){
+ if(mode==='cleanup-split'){
+  drawControlPoints(straight,0,w/2,w/4,w/2/span,h,showHandles);
+  drawControlPoints(current,w/2,w,w*3/4,w/2/span,h,showHandles);
+ }else if(mode==='curve-split'||mode==='filter-split'||mode==='split'){
+  if(mode!=='split')drawControlPoints(straight,0,w/2,w/2,w/span,h,showHandles);
+  drawControlPoints(current,w/2,w,w/2,w/span,h,showHandles);
+ }else drawControlPoints(current,0,w,w/2,w/span,h,showHandles);
+}
+if(mode==='split'||mode==='curve-split'||mode==='filter-split'||mode==='cleanup-split'){ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(w/2,0);ctx.lineTo(w/2,h);ctx.stroke();}
+const scale=(mode==='cleanup-split'?w/2:w)/span;for(const center of mode==='cleanup-split'?[w/4,w*3/4]:[w/2]){const x=center+(mapCenter-cx)*scale,y=h/2+(mapCenter-cy)*scale;ctx.fillStyle='#fff';ctx.strokeStyle='#223d32';ctx.lineWidth=2;ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.font='bold 13px system-ui';ctx.fillStyle='#19372b';ctx.strokeStyle='#fff';ctx.lineWidth=3;ctx.strokeText('富士山',x+10,y-8);ctx.fillText('富士山',x+10,y-8);}
+if(pin){
+ const centers=mode==='cleanup-split'?[w/4,w*3/4]:[w/2];
+ for(const center of centers){
+  const x=center+(pin[0]-cx)*scale,y=h/2+(pin[1]-cy)*scale;
+  const half=mode==='cleanup-split'?w/4:w/2;
+  const r=pinRadius*scale;
+  if(r>0&&x+r>=center-half&&x-r<=center+half&&y+r>=0&&y-r<=h){
+   ctx.save();
+   ctx.beginPath();
+   ctx.rect(center-half,0,half*2,h);
+   ctx.clip();
+   ctx.beginPath();
+   ctx.arc(x,y,r,0,Math.PI*2);
+   ctx.fillStyle='#db3b3126';
+   ctx.fill();
+   ctx.lineWidth=2;
+   ctx.strokeStyle='#db3b31';
+   ctx.stroke();
+   ctx.restore();
+  }
+  if(x<center-half||x>center+half||y<0||y>h)continue;
+  ctx.beginPath();
+  ctx.arc(x,y,7,0,Math.PI*2);
+  ctx.fillStyle='#db3b31';
+  ctx.fill();
+  ctx.lineWidth=2;
+  ctx.strokeStyle='#fff';
+  ctx.stroke();
+ }
+}
+const length=10**Math.floor(Math.log10(span/6)),px=length*scale;ctx.strokeStyle='#19372b';ctx.fillStyle='#fffD';ctx.fillRect(16,h-45,Math.max(110,px+20),32);ctx.beginPath();ctx.moveTo(26,h-22);ctx.lineTo(26+px,h-22);ctx.stroke();ctx.fillStyle='#19372b';ctx.font='12px system-ui';ctx.fillText(length/1000+' km（投影距離）',26,h-30);
+if(currentLevel>=0){const v=current.fittedStats||manifest.levels.find(row=>row.level===currentLevel);$('stats').textContent='L'+currentLevel+' ／ '+v.polygons.toLocaleString()+'領域・'+v.vertices.toLocaleString()+'頂点 ／ ベクトル転送 '+bytes(v.transferBytes)+(current.fittedStats?' ／ 表示用WKB＋zlib ':' ／ WKB＋zlib ')+bytes(v.wkbZlibBytes)+(current.curveInfo?' ／ 曲線制御 '+bytes(current.curveInfo.controlBytes):'')+(manifest.filter?' ／ '+manifest.filter.label+'・変更 '+manifest.filter.changedCells.toLocaleString()+'画素':'')+(current.curveInfo?.bezierSegments!==undefined?' ／ ベジェ '+current.curveInfo.bezierSegments.toLocaleString()+'本・適合目安 '+current.curveInfo.fitToleranceM+' m'+(current.curveInfo.fairBoundary?'・境界点を平滑化':''):'')+(manifest.filterBeforeVectorization?' ／ 入力 '+manifest.sourcePixelProjectedM+' m・除去窓 '+manifest.filterSpanProjectedM+' m':'')+' ／ GPU '+bytes(current.gpuBytes)+' ／ 準備 '+current.prepareMs.toFixed(0)+' ms ／ 描画命令 '+lastMs.toFixed(1)+' ms';}
+$('position').textContent=(mapSide/1000)+' km × '+(mapSide/1000)+' km（Webメルカトル） ／ '+(span/1000).toFixed(1)+' km幅 ／ '+($('lod').value==='auto'?'自動LOD':'固定LOD');}
+canvas.addEventListener('pointerdown',e=>{
+ if(e.button!==0||drag)return;
+ drag=[e.clientX,e.clientY,cx,cy,e.pointerId];
+ dragged=false;
+ canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove',e=>{
+ if(!drag||e.pointerId!==drag[4])return;
+ const dx=e.clientX-drag[0],dy=e.clientY-drag[1];
+ if(!dragged&&Math.hypot(dx,dy)<4)return;
+ dragged=true;
+ const scale=($('mode').value==='cleanup-split'?canvas.clientWidth/2:canvas.clientWidth)/span;
+ cx=drag[2]-dx/scale;cy=drag[3]-dy/scale;schedule();
+});
+canvas.addEventListener('pointerup',e=>{
+ if(!drag||e.pointerId!==drag[4])return;
+ if(!dragged&&Math.hypot(e.clientX-drag[0],e.clientY-drag[1])<4){
+  const r=canvas.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;
+  const dual=$('mode').value==='cleanup-split';
+  const width=dual?r.width/2:r.width;
+  const center=dual?(x<width?width/2:width*1.5):width/2;
+  const scale=width/span;
+  const point=[cx+(x-center)/scale,cy+(y-r.height/2)/scale];
+  if(point.every(value=>value>=0&&value<=mapSide))setPin(point);
+ }
+ drag=null;
+});canvas.addEventListener('pointercancel',()=>drag=null);
+canvas.addEventListener('wheel',e=>{e.preventDefault();const r=canvas.getBoundingClientRect(),vw=$('mode').value==='cleanup-split'?canvas.clientWidth/2:canvas.clientWidth,offset=$('mode').value==='cleanup-split'&&e.clientX-r.left>=vw?vw:0,u=(e.clientX-r.left-offset-vw/2)/vw,v=(e.clientY-r.top-canvas.clientHeight/2)/vw,old=span;span=Math.min(maxSpan,Math.max(1500,span*Math.exp(e.deltaY*.0015)));cx+=u*(old-span);cy+=v*(old-span);schedule();},{passive:false});
+for(const id of ['mode','lod','shade','edges','controls','curve','curveStrength','curveSteps'])$(id).addEventListener('change',()=>{if(id==='mode')wanted=-1;schedule();});
+$('filter').onchange=()=>{activeFilter=$('filter').value;token++;wanted=-1;current=null;straight=null;currentLevel=-1;manifest=null;
+$('fitTable').textContent='';for(const tex of levelTextures.values())if(tex!==raster)gl.deleteTexture(tex);levelTextures.clear();$('legend').replaceChildren();$('lod').innerHTML='<option value="auto">自動</option>';
+$('status').textContent='前処理データを取得中…';$('error').textContent='';
+if(activeFilter==='none'){$('curve').value='line';if($('mode').value==='curve-split')$('mode').value='filter-split';}else if(activeFilter!=='legacy'){$('curve').value='fit';$('mode').value='curve-split';}
+else {$('curve').value='bezier';if(['filter-split','cleanup-split'].includes($('mode').value))$('mode').value='vector';}
+const next=new URL(location.href);next.searchParams.set('filter',activeFilter);history.replaceState(null,'',next);init();};
+const fullMapSpan=()=>wide?defaultSpan*Math.max(1,canvas.clientWidth/Math.max(1,canvas.clientHeight)):defaultSpan;
+$('reset').onclick=()=>{cx=cy=mapCenter;span=fullMapSpan();schedule();};$('summit').onclick=()=>{cx=cy=mapCenter;span=22000;schedule();};
+new ResizeObserver(()=>{canvas.style.height=Math.max(320,innerHeight-document.querySelector('header').offsetHeight-$('note').offsetHeight)+'px';schedule();}).observe(document.querySelector('header'));window.addEventListener('resize',schedule);
+async function init(){try{
+if(wide){
+ wideCapabilities=await (await fetch(apiPrefix+'/capabilities.json',{cache:'no-store'})).json();
+ const available=id=>wideCapabilities.filters.includes(id==='legacy'?'majority-clean':id);
+ for(const option of $('filter').options)option.disabled=!available(option.value);
+ $('filter').querySelector('option[value=none]').textContent=wideCapabilities.nonePreview?'なし（暫定・125 m）':'なし（Rust・比較基準）';
+ $('mode').querySelector('option[value=filter-split]').textContent=wideCapabilities.nonePreview?'左：前処理なし暫定125 m ／ 右：選択方式':'左：前処理なし ／ 右：選択方式';
+ if(!available(activeFilter)){
+  activeFilter='majority-clean';
+  $('filter').value=activeFilter;
+ }
+ $('shade').disabled=!wideCapabilities.relief;
+}
+const response=await fetch(dataPrefix()+'manifest.json',{cache:'no-store'});if(!response.ok){$('status').textContent='ベクトルLODを生成中…';setTimeout(init,4000);return;}
+manifest=await response.json();updateCoordinates();
+if(wide){
+ const curve=$('curve');
+ curve.querySelector('option[value="fit"]').textContent='直線（圧縮）';
+ curve.querySelector('option[value="line"]').textContent='直線（比較元）';
+ curve.querySelector('option[value="bezier"]').hidden=true;
+ if(activeFilter!=='majority-clean')curve.value='line';
+ $('curveStrength').closest('label').hidden=true;
+ $('curveSteps').closest('label').hidden=true;
+ document.querySelector('#mode option[value="curve-split"]').textContent='左：比較元 ／ 右：圧縮直線';
+}document.querySelector('#mode option[value="cleanup-split"]').disabled=activeFilter!=='majority-clean';document.querySelector('#mode option[value="curve-split"]').disabled=activeFilter==='none';document.querySelector('#curve option[value="fit"]').disabled=activeFilter==='legacy'||activeFilter==='none';document.querySelector('#curve option[value="bezier"]').disabled=activeFilter!=='legacy';document.querySelector('#mode option[value="filter-split"]').disabled=activeFilter==='legacy'||(wide&&!wideCapabilities.filters.includes('none'));for(const v of manifest.levels){const op=document.createElement('option');op.value=v.level;op.textContent='L'+v.level+'・境界目安 '+v.tolerance+' m';$('lod').append(op);}
+if(wide&&!query.has('lod')&&manifest.levels.some(row=>row.level===4))$('lod').value='4';
+if(query.has('lod')&&[...$('lod').options].some(v=>v.value===query.get('lod')))$('lod').value=query.get('lod');
+for(const [code,v]of Object.entries(manifest.classes)){if(+code===4)continue;const label=document.createElement('label');label.dataset.class=code;label.innerHTML='<input type="checkbox" checked><i style="background:'+v.color+'"></i>'+(+code===3?'水域':v.label);label.firstChild.onchange=e=>{for(const id of +code===3?[3,4]:[+code])e.target.checked?enabled.add(id):enabled.delete(id);schedule();};$('legend').append(label);}
+$('table').innerHTML='<p>直線境界（比較元）</p><table><tr><th>LOD</th><th>境界目安</th><th>小領域統合</th><th>領域数</th><th>頂点数</th><th>転送gzip</th><th>WKB＋zlib</th></tr>'+manifest.levels.map(v=>'<tr><td>L'+v.level+'</td><td>'+v.tolerance+' m</td><td>'+v.minimumArea.toLocaleString()+' m²未満</td><td>'+v.polygons.toLocaleString()+'</td><td>'+v.vertices.toLocaleString()+'</td><td>'+bytes(v.transferBytes)+'</td><td>'+bytes(v.wkbZlibBytes)+'</td></tr>').join('')+'</table><small>'+(manifest.filterBeforeVectorization?'元分類を保持した密度で62.5m四方の多数決を行い、その後でベクトル化。表示用PNGだけは処理後2048へ縮小し、ベクトル生成には使いません。小領域除去は面積基準。粗LODの追加窓も物理距離で指定。':manifest.progressiveLod?'粗いLODほど陸上分類を整理します。多数決半径0/1/2/4/8画素、小領域統合9/16/64/256/1024画素。内水と海は固定。':manifest.filter?'画像前処理：'+manifest.filter.label+'。多数決は3×3を1回。小領域除去は4連結9画素未満。「多数決＋孤立領域除去」はこの順に両方を適用。全方式でベクトル化後の小領域統合は無し。内水と海は保護。':'陸地3分類の小領域を隣接領域へ統合。')+(manifest.filterBeforeVectorization?'水域は多数決の対象外として保持。':'水域・海岸の境界目安は最大16 m。')+'分類元は '+manifest.sourcePixelProjectedM+' m間隔でサンプル。GPU上の三角形は表示時だけ作り、保存データは領域ポリゴンです。平面比較用です。</small>';
+if(activeFilter!=='legacy'){
+const response=await fetch(apiPrefix+'/filters.json');if(response.ok){const all=await response.json();
+$('filterTable').innerHTML='<p>画像前処理の比較</p><table><tr><th>方式</th><th>変更画素</th><th>最詳細の領域数</th><th>最詳細の頂点数</th><th>SQLite</th></tr>'+all.variants.map(v=>'<tr><td>'+v.label+'</td><td>'+v.changedCells.toLocaleString()+'</td><td>'+v.levels[0].polygons.toLocaleString()+'</td><td>'+v.levels[0].vertices.toLocaleString()+'</td><td>'+bytes(v.sqliteBytes)+'</td></tr>').join('')+'</table>';}}
+else $('filterTable').textContent='';
+if(raster)gl.deleteTexture(raster);if(relief)gl.deleteTexture(relief);
+const images=await Promise.all([image(dataPrefix()+'reference.png'),wide&&wideCapabilities.relief?image(apiPrefix+'/relief.png'):manifest.relief?image(dataPrefix()+'relief.png'):Promise.resolve(null)]);raster=texture(images[0]);relief=images[1]?texture(images[1]):null;
+if(wide&&!query.has('span')&&!window.landcoverPrototype)span=fullMapSpan();
+window.landcoverPrototype={manifest,cache,get filter(){return activeFilter},get currentLevel(){return currentLevel},get drawMs(){return lastMs},get currentData(){return current}};schedule();
+}catch(e){$('error').textContent=e.stack||e.message;}}
+init();
+</script></html>

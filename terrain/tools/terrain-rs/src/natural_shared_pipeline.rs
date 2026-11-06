@@ -2002,9 +2002,9 @@ fn restore(
 }
 fn distribution(path: &Path, generation: &Value) -> Result<Connection> {
     let c = Connection::open(path)?;
-    c.execute_batch("PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;PRAGMA cache_size=-65536;
+    c.execute_batch("PRAGMA page_size=512;PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;PRAGMA cache_size=-65536;
  CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT) WITHOUT ROWID;
- CREATE TABLE IF NOT EXISTS tiles(z INTEGER,x INTEGER,y INTEGER,origin_x INTEGER,origin_y INTEGER,kind TEXT,points INTEGER,xyz_sha256 TEXT,payload BLOB,depth INTEGER,PRIMARY KEY(z,x,y)) WITHOUT ROWID;
+ CREATE TABLE IF NOT EXISTS tiles(z INTEGER NOT NULL,x INTEGER NOT NULL,y INTEGER NOT NULL,origin_x INTEGER,origin_y INTEGER,kind TEXT,points INTEGER,xyz_sha256 TEXT,payload BLOB,depth INTEGER,PRIMARY KEY(z,x,y));
  CREATE TABLE IF NOT EXISTS parents(z INTEGER,x INTEGER,y INTEGER,slot INTEGER,parent_z INTEGER,parent_x INTEGER,parent_y INTEGER,PRIMARY KEY(z,x,y,slot)) WITHOUT ROWID;")?;
     let id = generation.to_string();
     let previous = c
@@ -3150,6 +3150,21 @@ mod tests {
             [natural_inventory::hash(&raw)],
         )?;
         Ok(())
+    }
+    #[test]
+    fn distribution_uses_compact_rowid_layout_without_changing_keys()->Result<()>{
+        let root=temporary();fs::create_dir_all(&root)?;
+        let path=root.join("layout.sqlite3");
+        let c=distribution(&path,&json!("layout-test"))?;
+        assert_eq!(c.query_row("PRAGMA page_size",[],|r|r.get::<_,i64>(0))?,512);
+        let ddl:String=c.query_row("SELECT sql FROM sqlite_master WHERE name='tiles'",[],|r|r.get(0))?;
+        assert!(!ddl.contains("WITHOUT ROWID"));
+        let blob=vec![7u8;6000];
+        c.execute("INSERT INTO tiles VALUES(6,1,2,0,0,'NQC1',4,'hash',?,0)",[&blob])?;
+        assert_eq!(c.query_row("SELECT payload FROM tiles WHERE z=6 AND x=1 AND y=2",[],|r|r.get::<_,Vec<u8>>(0))?,blob);
+        assert!(c.execute("INSERT INTO tiles VALUES(6,1,2,0,0,'NQC1',4,'hash',NULL,0)",[]).is_err());
+        assert!(c.execute("INSERT INTO tiles VALUES(NULL,1,2,0,0,'NQC1',4,'hash',NULL,0)",[]).is_err());
+        drop(c);fs::remove_dir_all(root)?;Ok(())
     }
     #[test]
     fn parallel_proposals_recompute_interfering_input() -> Result<()> {

@@ -93,3 +93,15 @@ path = "src/natural_shared_national.rs"
 [[bin]]
 name = "terrain-natural-shared-stress"
 path = "src/natural_shared_stress.rs"
+
+[[bin]]
+name = "terrain-landcover-raster"
+path = "src/landcover_raster.rs"
+
+[[bin]]
+name = "terrain-landcover-bezier-fit"
+path = "src/landcover_bezier_fit.rs"
+
+[[bin]]
+name = "terrain-landcover-relief"
+path = "src/landcover_relief.rs"
