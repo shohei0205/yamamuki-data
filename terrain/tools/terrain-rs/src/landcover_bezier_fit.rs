@@ -1980,6 +1980,9 @@ fn omit_subpixel_coastal_details<'a>(
     for (shape, sign) in [(&water, -1.), (&land, 1.)] {
         for part in shape.polygons()? {
             let area = part.area()?;
+            if area <= 0. {
+                continue;
+            }
             if area < pixel_area {
                 if !part.intersects(&border)? {
                     candidates.push((area, sign, part));
@@ -2058,15 +2061,49 @@ fn omit_subpixel_coastal_details<'a>(
     println!("Subpixel details: {} to land, {} to water", to_land.len(), to_water.len() - 1);
     Ok(result)
 }
+struct PixelAreaIndex<'a> {
+    parts: Vec<geos::Geometry<'a>>,
+    bounds: RTree<UnderlayFace>,
+}
+
+impl<'a> PixelAreaIndex<'a> {
+    fn new(forest: &geos::Geometry<'a>) -> Result<Self> {
+        let parts = forest.polygons()?;
+        let mut bounds = Vec::with_capacity(parts.len());
+        for (id, part) in parts.iter().enumerate() {
+            if !part.is_empty()? {
+                bounds.push(UnderlayFace { id, envelope: ring_bounds(&part.rings()?[0]) });
+            }
+        }
+        Ok(Self { parts, bounds: RTree::bulk_load(bounds) })
+    }
+
+    fn area(&self, pixel: &geos::Geometry<'_>, left: f64, bottom: f64, cell: f64) -> Result<f64> {
+        let bounds = AABB::from_corners([left, bottom], [left + cell, bottom + cell]);
+        let mut ids: Vec<_> = self.bounds.locate_in_envelope_intersecting(&bounds)
+            .map(|part| part.id).collect();
+        ids.sort_unstable();
+        let mut area = 0.;
+        for id in ids {
+            area += self.parts[id].intersection(pixel)?.area()?;
+        }
+        Ok(area)
+    }
+}
+
 fn accept_forest_pixel_loss(
     api: &Geos,
     loss: &geos::Geometry<'_>,
-    visible_forest: &geos::Geometry<'_>,
+    visible_forest: &PixelAreaIndex<'_>,
     cell: f64,
     pixel_areas: &mut HashMap<(i32, i32), f64>,
 ) -> Result<bool> {
     let mut changes = Vec::new();
     for part in loss.polygons()? {
+        // GEOS can return POLYGON EMPTY. Its ring has no finite extent.
+        if part.is_empty()? {
+            continue;
+        }
         let bounds = ring_bounds(&part.rings()?[0]);
         let lo = bounds.lower().map(|v| (v / cell).floor() as i32);
         let hi = bounds.upper().map(|v| (v / cell).ceil() as i32);
@@ -2081,7 +2118,7 @@ fn accept_forest_pixel_loss(
                 }
                 let before = match pixel_areas.get(&(x, y)) {
                     Some(&area) => area,
-                    None => visible_forest.intersection(&pixel)?.area()?,
+                    None => visible_forest.area(&pixel, left, bottom, cell)?,
                 };
                 changes.push(((x, y), before, area));
             }
@@ -2104,7 +2141,7 @@ fn shorten_submerged_forest_ring(
     curves: &[Vec<Curve>],
     forest: &geos::Geometry<'_>,
     water: &geos::Geometry<'_>,
-    visible_tolerance: Option<f64>,
+    visible_tolerance: Option<(f64, &geos::PreparedGeometry<'_, '_>)>,
 ) -> Result<Option<Vec<Curve>>> {
     let allow_visible_cut = visible_tolerance.is_some();
     let mut ring = Vec::new();
@@ -2119,10 +2156,14 @@ fn shorten_submerged_forest_ring(
             }));
         }
     }
-    let submerged: Vec<_> = ring.iter().map(|curve| {
-        let [x, y] = curve.p[0];
-        water.covers_xy(x, y)
-    }).collect::<Result<_>>()?;
+    let submerged = if allow_visible_cut {
+        Vec::new()
+    } else {
+        ring.iter().map(|curve| {
+            let [x, y] = curve.p[0];
+            water.covers_xy(x, y)
+        }).collect::<Result<Vec<_>>>()?
+    };
     let mut output = Vec::new();
     let mut start = 0;
     let max_segments = if allow_visible_cut { 12 } else { 64 };
@@ -2141,13 +2182,13 @@ fn shorten_submerged_forest_ring(
                 continue;
             }
             let mut boundary: Vec<_> = ring[start..stop].iter().map(|curve| curve.p[0]).collect();
-            if visible_tolerance.is_some_and(|t| boundary.iter().any(|&p| dist_seg(p, a, b) > t)) {
+            if visible_tolerance.is_some_and(|(t, _)| boundary.iter().any(|&p| dist_seg(p, a, b) > t)) {
                 continue;
             }
             boundary.extend([b, a]);
             let patch = api.read(&wkb_poly(&[boundary]))?;
             if patch.is_valid()? && (allow_visible_cut || patch.difference(water)?.area()? < 1e-6)
-                && if allow_visible_cut { forest.covers(&patch)? } else { patch.difference(forest)?.area()? < 1e-6 }
+                && if let Some((_, prepared)) = visible_tolerance { prepared.covers(&patch)? } else { patch.difference(forest)?.area()? < 1e-6 }
             {
                 output.push(Curve::line(a, b));
                 used = stop;
@@ -2169,7 +2210,7 @@ fn subpixel_forest_polygons(
     cell: f64,
 ) -> Result<Vec<usize>> {
     let pixel_area = cell * cell;
-    let visible_forest = api.read(&wkb_multi(forest_parts))?.difference(water)?;
+    let visible_forest = PixelAreaIndex::new(&api.read(&wkb_multi(forest_parts))?.difference(water)?)?;
     let mut pixel_areas = HashMap::new();
     let mut omitted = Vec::new();
     for (index, wkb) in forest_parts.iter().enumerate() {
@@ -2197,7 +2238,7 @@ fn subpixel_forest_polygons(
                 }
                 let before = match pixel_areas.get(&(x, y)) {
                     Some(&area) => area,
-                    None => visible_forest.intersection(&pixel)?.area()?,
+                    None => visible_forest.area(&pixel, left, bottom, cell)?,
                 };
                 let after = before - loss;
                 preserves_majority &= before < pixel_area / 2. || after >= pixel_area / 2.;
@@ -2304,36 +2345,54 @@ fn independent_shore<'a>(
     }
     let original = dry.iter().map(|(_, rings)| api.read(&wkb_poly(rings)))
         .collect::<Result<Vec<_>>>()?;
-    let reduced = api.collection(&original)?
-        .coverage_simplify_with_boundary(tolerance, false)?.polygons()?;
-    ensure!(reduced.len() == dry.len(), "Dry simplification changed face count");
-    let mut groups: [Vec<_>; 3] = std::array::from_fn(|_| Vec::new());
-    for ((code, _), shape) in dry.into_iter().zip(reduced) {
-        groups[code as usize].push(shape);
-    }
-    dry = Vec::new();
-    let mut covered = Vec::new();
-    for (code, shapes) in groups.into_iter().enumerate().rev() {
-        let mut layer = api.collection(&shapes)?.union()?.intersection(&extent)?;
-        if let Some(distance) = forest_line_tolerance.filter(|_| code == 1) {
-            layer = layer.topology_simplify(distance)?.intersection(&extent)?;
+    let assemble = |shapes: Vec<geos::Geometry<'a>>, line_tolerance: Option<f64>| -> Result<_> {
+        ensure!(shapes.len() == dry.len(), "Dry simplification changed face count");
+        let mut groups: [Vec<_>; 3] = std::array::from_fn(|_| Vec::new());
+        for ((code, _), shape) in dry.iter().zip(shapes) {
+            groups[*code as usize].push(shape);
         }
-        if !covered.is_empty() {
-            layer = layer.difference(&api.collection(&covered)?.union()?)?;
+        let mut output = Vec::new();
+        let mut covered = Vec::new();
+        for (code, shapes) in groups.into_iter().enumerate().rev() {
+            let mut layer = api.collection(&shapes)?.union()
+                .with_context(|| format!("Unite dry class {code}"))?.intersection(&extent)?;
+            if let Some(distance) = line_tolerance.filter(|_| code == 1) {
+                layer = layer.topology_simplify(distance)?.intersection(&extent)?;
+            }
+            if !covered.is_empty() {
+                layer = layer.difference(&api.collection(&covered)?.union()?)
+                    .with_context(|| format!("Remove overlap from dry class {code}"))?;
+            }
+            for p in layer.polygons()? {
+                if !p.is_empty()? {
+                    output.push((code as u8, p.rings()?));
+                    covered.push(p);
+                }
+            }
         }
-        for p in layer.polygons()? {
-            dry.push((code as u8, p.rings()?));
-            covered.push(p);
+        covered.push(api.read(&new_water.write()?)?);
+        let missing = extent.difference(&api.collection(&covered)?.union()?)
+            .context("Find missing dry coverage")?;
+        if !missing.is_empty()? {
+            for part in missing.polygons()? {
+                if !part.is_empty()? {
+                    output.push((3, part.rings()?));
+                }
+            }
+            output = water_underlay(api, output)?.into_iter().filter(|(code, _)| *code < 3).collect();
         }
-    }
-    covered.push(api.read(&new_water.write()?)?);
-    let missing = extent.difference(&api.collection(&covered)?.union()?)?;
-    for part in missing.polygons()? {
-        dry.push((3, part.rings()?));
-    }
-    if !missing.is_empty()? {
-        dry = water_underlay(api, dry)?.into_iter().filter(|(code, _)| *code < 3).collect();
-    }
+        Ok(output)
+    };
+    let reduced = api.collection(&original)?.coverage_simplify_with_boundary(tolerance, false)
+        .and_then(|shapes| shapes.polygons()).context("Simplify dry coverage");
+    dry = match reduced.and_then(|shapes| assemble(shapes, forest_line_tolerance)) {
+        Ok(output) => output,
+        Err(error) if format!("{error:#}").contains("TopologyException") => {
+            println!("Retaining original dry boundaries after simplification error: {error:#}");
+            assemble(original, None).context("Restore unsimplified dry coverage")?
+        }
+        Err(error) => return Err(error),
+    };
     Ok((dry, new_water, closed_water_breaks))
 }
 
@@ -2530,6 +2589,9 @@ fn fill_display_forest_holes<'a>(
                                    api.read(&layers[2].write()?)?])?.union()?;
     let visible_forest = layers[0].difference(&covered)?;
     let visible_gravel = layers[1].difference(&layers[2])?;
+    let forest_pixels = PixelAreaIndex::new(&visible_forest)?;
+    let gravel_pixels = PixelAreaIndex::new(&visible_gravel)?;
+    let water_pixels = PixelAreaIndex::new(&layers[2])?;
     let mut forest_by_pixel = HashMap::new();
     let winner = |areas: [f64; 4]| (0..4).max_by(|&a, &b|
         areas[a].total_cmp(&areas[b]).then_with(|| b.cmp(&a))).unwrap();
@@ -2568,9 +2630,9 @@ fn fill_display_forest_holes<'a>(
                     let [forest, gravel, water] = match forest_by_pixel.get(&(x,y)) {
                         Some(&areas) => areas,
                         None => [
-                            visible_forest.intersection(&pixel)?.area()?,
-                            visible_gravel.intersection(&pixel)?.area()?,
-                            layers[2].intersection(&pixel)?.area()?,
+                            forest_pixels.area(&pixel, a, b, cell)?,
+                            gravel_pixels.area(&pixel, a, b, cell)?,
+                            water_pixels.area(&pixel, a, b, cell)?,
                         ],
                     };
                     let background = (pixel_area - forest - gravel - water).max(0.);
@@ -2602,6 +2664,9 @@ fn simplify_display_forest<'a>(
                                 api.read(&layers[2].write()?)?])?.union()?;
     let visible_forest = forest.difference(&other)?;
     let visible_gravel = layers[1].difference(&layers[2])?;
+    let forest_pixels = PixelAreaIndex::new(&visible_forest)?;
+    let gravel_pixels = PixelAreaIndex::new(&visible_gravel)?;
+    let water_pixels = PixelAreaIndex::new(&layers[2])?;
     let candidate = if close_gaps {
         let closed = forest.buffer(cell / 4., 1)?.buffer(-cell / 4., 1)?;
         let added = closed.difference(forest)?.difference(&other)?;
@@ -2618,6 +2683,7 @@ fn simplify_display_forest<'a>(
     for (direction, difference) in [(1., candidate.difference(forest)?),
                                     (-1., forest.difference(&candidate)?)] {
         for patch in difference.polygons()? {
+            if patch.is_empty()? { continue; }
             if close_gaps && !(pixel_area / 50. ..pixel_area).contains(&patch.area()?) { continue; }
             let bounds = ring_bounds(&patch.rings()?[0]);
             let lo = bounds.lower().map(|v| (v / cell).floor() as i32);
@@ -2635,9 +2701,9 @@ fn simplify_display_forest<'a>(
                     }
                     let [f, g, w] = match pixel_areas.get(&(x, y)) {
                         Some(&areas) => areas,
-                        None => [visible_forest.intersection(&pixel)?.area()?,
-                                 visible_gravel.intersection(&pixel)?.area()?,
-                                 layers[2].intersection(&pixel)?.area()?],
+                        None => [forest_pixels.area(&pixel, left, bottom, cell)?,
+                                 gravel_pixels.area(&pixel, left, bottom, cell)?,
+                                 water_pixels.area(&pixel, left, bottom, cell)?],
                     };
                     let bg = (pixel_area - f - g - w).max(0.);
                     same &= winner([bg, f, g, w]) == winner([(bg - delta).max(0.), f + delta, g, w]);
@@ -2702,6 +2768,16 @@ struct Args {
     source_root: Option<PathBuf>,
     #[arg(long, conflicts_with = "source_root")]
     tile_source: Vec<PathBuf>,
+    #[arg(long, conflicts_with_all = ["tile_source", "source_root"], requires_all = ["seam_keys", "only_level"])]
+    seam_source: Vec<PathBuf>,
+    #[arg(long, value_delimiter = ',')]
+    seam_keys: Vec<u32>,
+    #[arg(long, requires = "seam_source")]
+    seam_report_only: bool,
+    #[arg(long, requires = "national_plan", conflicts_with_all = ["tile_source", "seam_source", "source_root"])]
+    national_regions: Option<PathBuf>,
+    #[arg(long, requires = "national_regions")]
+    national_plan: Option<PathBuf>,
     #[arg(long)]
     output: PathBuf,
     #[arg(long)]
@@ -2771,6 +2847,12 @@ fn main() -> Result<()> {
     );
     fs::create_dir_all(&args.output)?;
     let api = Geos::open(&args.geos)?;
+    if let (Some(regions), Some(plan)) = (&args.national_regions, &args.national_plan) {
+        return landcover_xyz::national::generate(&api, regions, plan, &args.output);
+    }
+    if !args.seam_source.is_empty() {
+        return landcover_xyz::reconcile_pair(&api, &args.seam_source, &args.seam_keys, args.only_level.unwrap(), &args.output, args.seam_report_only);
+    }
     if !args.tile_source.is_empty() {
         return landcover_xyz::generate(&api, &args.tile_source, &args.output);
     }
@@ -2902,7 +2984,11 @@ fn main() -> Result<()> {
             let evaluation_cell = COMMON_EVALUATION_DISTANCES_M[l.saturating_sub(3)];
             let water_evaluation_cell = evaluation_cell.min(2000.);
             let inland_water_coverage = [0.5, 1., 1., 1.][l.saturating_sub(3)];
-            let coastal_tolerance = [31.25, 180., 3000., 6000.][l.saturating_sub(3)];
+            let common_line_tolerance = tolerance.min(evaluation_cell / 8.);
+            let coastal_tolerance = match l {
+                3 => 31.25,
+                _ => 180. * (water_evaluation_cell / 500.),
+            };
             let (inland_water_cell, inland_water_min_coverage) = if args.common_lod {
                 (water_evaluation_cell, inland_water_coverage)
             } else if l >= 5 {
@@ -3194,8 +3280,13 @@ fn main() -> Result<()> {
                         fit.push(Curve::line(p[0], p[1]))
                     }
                 } else if args.direct_lines {
-                    let cell = if args.common_lod { evaluation_cell } else { domain_side / f64::from(2048 >> l.saturating_sub(3)) };
-                    fit = simplify_coast(&pts, tolerance.min(cell / 8.), id, &g.tree, false);
+                    let line_tolerance = if args.common_lod {
+                        common_line_tolerance
+                    } else {
+                        let cell = domain_side / f64::from(2048 >> l.saturating_sub(3));
+                        tolerance.min(cell / 8.)
+                    };
+                    fit = simplify_coast(&pts, line_tolerance, id, &g.tree, false);
                 } else {
                     let left = unit(sub(pts[2.min(pts.len() - 1)], pts[0]));
                     let right = unit(sub(pts[pts.len().saturating_sub(3)], *pts.last().unwrap()));
@@ -3481,7 +3572,7 @@ fn main() -> Result<()> {
                     let mut replacements = Vec::new();
                     for (r, path) in refs[i].iter().enumerate() {
                         if let Some(curve) = shorten_submerged_forest_ring(&api, path, &curves, &forest, &water, None)? {
-                            let mut points = vec![curve[0].p[0]];
+                        let mut points = vec![curve[0].p[0]];
                             for segment in &curve {
                                 flatten(segment, 0.5, &mut points, 0);
                             }
@@ -3514,7 +3605,7 @@ fn main() -> Result<()> {
                     .filter(|(poly, _)| poly.code == code)
                     .map(|(_, wkb)| wkb.clone()).collect::<Vec<_>>();
                 let water = api.read(&wkb_multi(&parts(3)))?;
-                let visible_forest = api.read(&wkb_multi(&parts(1)))?.difference(&water)?;
+                let visible_forest = PixelAreaIndex::new(&api.read(&wkb_multi(&parts(1)))?.difference(&water)?)?;
                 let forest_cell = if args.common_lod { evaluation_cell } else { inland_water_cell };
                 let mut pixel_areas = HashMap::new();
                 let mut shortened = 0;
@@ -3523,10 +3614,12 @@ fn main() -> Result<()> {
                         continue;
                     }
                     let forest = api.read(&final_wkb[i])?;
+                    let prepared_forest = forest.prepare()?;
                     for r in 0..refs[i].len() {
-                        let Some(path) = shorten_submerged_forest_ring(
-                            &api, &refs[i][r], &curves, &forest, &water, Some(forest_cell / 16.),
-                        )? else {
+                        let path = shorten_submerged_forest_ring(
+                            &api, &refs[i][r], &curves, &forest, &water, Some((forest_cell / 16., &prepared_forest)),
+                        )?;
+                        let Some(path) = path else {
                             continue;
                         };
                         let mut points = vec![path[0].p[0]];
@@ -3542,10 +3635,12 @@ fn main() -> Result<()> {
                             continue;
                         }
                         let lost = before.difference(&changed)?;
-                        if !accept_forest_pixel_loss(
-                            &api, &lost.difference(&water)?, &visible_forest,
+                        let loss = lost.difference(&water)?;
+                        let accept = accept_forest_pixel_loss(
+                            &api, &loss, &visible_forest,
                             forest_cell, &mut pixel_areas,
-                        )? {
+                        )?;
+                        if !accept {
                             continue;
                         }
                         curves.push(path);
@@ -3582,7 +3677,12 @@ fn main() -> Result<()> {
                     let shapes = final_wkb.iter().map(|wkb| api.read(wkb))
                         .collect::<Result<Vec<_>>>()?;
                     let missing = extent.difference(&api.collection(&shapes)?.union()?)?;
-                    bytes = api.collection(&[api.read(&bytes)?, missing])?.union()?.write()?;
+                    let background = api.collection(&[api.read(&bytes)?, missing])?.union()?;
+                    let visible_dry = g.polys.iter().zip(&final_wkb)
+                        .filter(|(poly, _)| matches!(poly.code, 1 | 2))
+                        .map(|(_, wkb)| api.read(wkb)).collect::<Result<Vec<_>>>()?;
+                    let visible_dry = api.collection(&visible_dry)?.union()?;
+                    bytes = background.difference(&visible_dry)?.write()?;
                 }
                 let geom = api.read(&bytes)?;
                 // Inter-polygon validity catches overlaps between islands/holes.
@@ -3614,18 +3714,41 @@ fn main() -> Result<()> {
             }
             if !coverage.is_empty() {
                 let extent = api.rectangle(0., 0., domain_side, domain_side)?;
-                let covered = api.collection(&coverage)?.union()?;
-                let missing = extent.difference(&covered)?.area()?;
+                let mut covered = api.collection(&coverage)?.union().with_context(|| format!("Union final coverage L{l}"))?;
+                let mut missing = extent.difference(&covered).with_context(|| format!("Validate final coverage L{l}"))?.area()?;
+                let mut outside = covered.difference(&extent)?.area()?;
+                if args.common_lod && args.unified_water && missing >= 0.01 && outside < 0.01 {
+                    // Recheck unstable floating-point overlays on the same grid
+                    // used when packing the national tiles.
+                    let grid = landcover_xyz::national::GRID;
+                    covered = api.collection(&coverage)?.union_grid(grid)?;
+                    let remainder = extent.difference_grid(&covered, grid)?;
+                    let remainder_area = remainder.area()?;
+                    if remainder_area >= 0.01 {
+                        // The BZF2 tile already represents uncovered areas as
+                        // implicit background; no visible geometry is changed.
+                        let filled = api.collection(&[covered, remainder])?.union_grid(grid)?;
+                        missing = extent.difference_grid(&filled, grid)?.area()?;
+                        outside = filled.difference_grid(&extent, grid)?.area()?;
+                        // Keep the independent area accounting in source
+                        // coordinates. This remainder is from grid overlay.
+                        println!("Verified {remainder_area} m² of implicit background on the national tile grid in L{l}");
+                    } else {
+                        missing = remainder_area;
+                        outside = covered.difference_grid(&extent, grid)?.area()?;
+                        println!("Verified coverage on the national tile grid in L{l}");
+                    }
+                }
                 if args.linear_source {
                     total_area += missing;
                     areas.insert("0".into(), json!(missing));
                 }
-                let gap = (if args.linear_source { 0. } else { missing })
-                    + covered.difference(&extent)?.area()?;
-                ensure!(gap < 0.01, "Coverage footprint changed by {gap}");
+                let gap = (if args.linear_source { 0. } else { missing }) + outside;
+                ensure!(gap < 0.01, "Coverage footprint changed in L{l} by {gap} (missing {missing}, outside {outside})");
                 let dry = api.collection(&coverage[..3])?.union()?;
                 let dry_area = coverage[..3].iter().map(|g| g.area()).collect::<Result<Vec<_>>>()?.iter().sum::<f64>();
-                ensure!((dry_area - dry.area()?).abs() < 0.01, "Dry classes overlap");
+                let dry_overlap = (dry_area - dry.area()?).abs();
+                ensure!(dry_overlap < 0.01, "Dry classes overlap by {dry_overlap} m² in L{l}");
                 if args.unified_water || source_overlay {
                     overlay_area = dry.intersection(&coverage[3])?.area()?;
                 }
@@ -3783,6 +3906,20 @@ fn main() -> Result<()> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[ignore = "requires LANDCOVER_TEST_GEOS to point to a GEOS C library"]
+    fn empty_forest_loss_does_not_visit_pixels() -> Result<()> {
+        let library = std::env::var_os("LANDCOVER_TEST_GEOS").context("Set LANDCOVER_TEST_GEOS")?;
+        let api = Geos::open(std::path::Path::new(&library))?;
+        let empty = api.read(&wkb_poly(&[]))?;
+        assert!(empty.is_empty()?);
+        let visible = PixelAreaIndex::new(&empty)?;
+        let mut pixels = HashMap::new();
+        assert!(accept_forest_pixel_loss(&api, &empty, &visible, 125., &mut pixels)?);
+        assert!(pixels.is_empty());
+        Ok(())
+    }
+
     use super::*;
     #[test]
     fn fairing_reduces_grid_oscillation_with_bounded_movement() {

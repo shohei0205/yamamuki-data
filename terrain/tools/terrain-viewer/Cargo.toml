@@ -11,6 +11,7 @@ glam = { version = "0.30", features = ["bytemuck"] }
 bytemuck = { version = "1", features = ["derive"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 png = "0.18"
+flate2 = "1"
 serde_json = "1"
 delaunator = "1"
 robust = "1.2"

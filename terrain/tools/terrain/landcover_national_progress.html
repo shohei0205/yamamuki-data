@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ja"><meta charset="utf-8"><title>全国地表生成の進捗</title>
+<style>body{font:15px system-ui;margin:24px;color:#243342}table{border-collapse:collapse}th,td{padding:6px 12px;border-bottom:1px solid #ddd;text-align:left}pre{white-space:pre-wrap;background:#f2f4f6;padding:12px}summary{cursor:pointer}</style>
+<h1>全国地表生成の進捗</h1><p id="summary" role="status">読み込み中</p>
+<p id="delivery">作業区画のL3〜L6の生成状況です。</p>
+<details open><summary>直近のログ</summary><pre id="logs"></pre></details>
+<p id="seams"></p><h2>作業区画</h2><table><thead><tr><th>区画</th><th>L3</th><th>L4</th><th>L5</th><th>L6</th></tr></thead><tbody id="areas"></tbody></table>
+<script>
+const date = timestamp => new Date(timestamp*1000).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'});
+async function update(){
+ try{
+  const response=await fetch('/national-progress.json',{cache:'no-store'});
+  if(!response.ok)throw Error('HTTP '+response.status);
+  const data=await response.json();
+  const complete=data.areas.filter(a=>a.done).length;
+  const started=data.areas.filter(a=>a.started).length;
+  document.querySelector('#summary').textContent=
+   '完了 '+complete+' / '+data.areas.length+'区画 ／ 着手 '+started+'区画 ／ ESA原本 '+data.sources+'枚確認済み ／ 全国VRT '+(data.vrt?'作成済み':'未作成')+' ／ 取得 '+date(Date.now()/1000);
+  document.querySelector('#delivery').textContent=data.delivery?.status==='verified'
+   ? '配布用SQLite完成 ／ '+data.delivery.tiles.toLocaleString()+'タイル ／ '+data.delivery.bytes.toLocaleString()+' B ／ 復号後の境界 '+data.delivery.checkedSeams.toLocaleString()+'本を照合'
+   : '作業区画のL3〜L6の生成状況です。配布用SQLiteの作成は別工程です。';
+  document.querySelector('#logs').textContent=Object.entries(data.logs)
+   .filter(([,value])=>value.tail).map(([name,value])=>name+'（最終更新 '+date(value.updated)+'）\n'+value.tail).join('\n\n')||'ログはまだありません。';
+  document.querySelector('#seams').textContent=data.seams?.length
+   ? '境界監査 ／ 水域の不一致（1 m超） '+data.seams.map(r=>'L'+r.level+' '+r.edgesOverThreshold.water+'/'+r.edgesChecked+'本').join('、')
+   : '';
+  const rows=data.areas.map(area=>{
+   const row=document.createElement('tr');
+   for(const value of ['z8/'+area.x+'/'+area.y+(area.sourceGap?' ／ ESA原本なし '+area.sourceGap:''),...area.stages])row.insertCell().textContent=value;
+   return row;
+  });
+  document.querySelector('#areas').replaceChildren(...rows);
+ }catch(error){document.querySelector('#summary').textContent='進捗の取得失敗 '+error.message;}
+ finally{setTimeout(update,5000);}
+}
+update();
+</script></html>

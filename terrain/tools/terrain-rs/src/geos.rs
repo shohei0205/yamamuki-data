@@ -1,17 +1,39 @@
 //! GEOS の C API を直接使う。Python と Shapely の実行環境には依存しない。
 use anyhow::{Result, ensure};
-use std::{ffi::c_void, path::Path};
+use std::{cell::RefCell, ffi::{CStr, c_char, c_void}, path::Path};
 type Ptr = *mut c_void;
 type Unary = unsafe extern "C" fn(Ptr, Ptr) -> Ptr;
 type Binary = unsafe extern "C" fn(Ptr, Ptr, Ptr) -> Ptr;
 pub struct Geos {
     library: libloading::Library,
     context: Ptr,
+    last_error: Box<RefCell<Option<String>>>,
 }
 pub struct Geometry<'a> {
     api: &'a Geos,
     pointer: Ptr,
 }
+pub struct PreparedGeometry<'g, 'a> {
+    source: &'g Geometry<'a>,
+    pointer: Ptr,
+    covers: unsafe extern "C" fn(Ptr, Ptr, Ptr) -> i8,
+    destroy: unsafe extern "C" fn(Ptr, Ptr),
+}
+impl PreparedGeometry<'_, '_> {
+    pub fn covers(&self, other: &Geometry<'_>) -> Result<bool> {
+        let api = self.source.api;
+        ensure!(std::ptr::eq(api, other.api), "GEOS context mismatch");
+        let answer = unsafe { (self.covers)(api.context, self.pointer, other.pointer) };
+        ensure!(matches!(answer, 0 | 1), "GEOS prepared covers failed");
+        Ok(answer == 1)
+    }
+}
+impl Drop for PreparedGeometry<'_, '_> {
+    fn drop(&mut self) {
+        unsafe { (self.destroy)(self.source.api.context, self.pointer) }
+    }
+}
+
 impl Geos {
     pub fn open(path: &Path) -> Result<Self> {
         unsafe {
@@ -20,11 +42,25 @@ impl Geos {
                 library.get(b"GEOS_init_r")?;
             let context = init();
             ensure!(!context.is_null(), "GEOS の初期化に失敗しました");
-            Ok(Self { library, context })
+            unsafe extern "C" fn report(message: *const c_char, data: Ptr) {
+                let error = unsafe { &*data.cast::<RefCell<Option<String>>>() };
+                *error.borrow_mut() = Some(unsafe { CStr::from_ptr(message) }.to_string_lossy().into_owned());
+            }
+            type Handler = unsafe extern "C" fn(*const c_char, Ptr);
+            let last_error = Box::new(RefCell::new(None));
+            if let Ok(set_handler) = library.get::<unsafe extern "C" fn(Ptr, Handler, Ptr) -> Option<Handler>>(
+                b"GEOSContext_setErrorMessageHandler_r",
+            ) {
+                set_handler(context, report, (&*last_error as *const RefCell<Option<String>>).cast_mut().cast());
+            }
+            Ok(Self { library, context, last_error })
         }
     }
     fn owned(&self, pointer: Ptr) -> Result<Geometry<'_>> {
-        ensure!(!pointer.is_null(), "GEOS の地形処理に失敗しました");
+        if pointer.is_null() {
+            let error = self.last_error.borrow_mut().take();
+            anyhow::bail!("GEOS の地形処理に失敗しました: {}", error.as_deref().unwrap_or("詳細なし"));
+        }
         Ok(Geometry { api: self, pointer })
     }
     pub fn read(&self, bytes: &[u8]) -> Result<Geometry<'_>> {
@@ -113,6 +149,16 @@ impl Drop for Geometry<'_> {
     }
 }
 impl<'a> Geometry<'a> {
+    pub fn prepare(&self) -> Result<PreparedGeometry<'_, 'a>> {
+        unsafe {
+            let prepare: libloading::Symbol<Unary> = self.api.library.get(b"GEOSPrepare_r")?;
+            let covers = *self.api.library.get(b"GEOSPreparedCovers_r")?;
+            let destroy = *self.api.library.get(b"GEOSPreparedGeom_destroy_r")?;
+            let pointer = prepare(self.api.context, self.pointer);
+            ensure!(!pointer.is_null(), "GEOS prepare failed");
+            Ok(PreparedGeometry { source: self, pointer, covers, destroy })
+        }
+    }
     fn unary(&self, name: &[u8]) -> Result<Self> {
         unsafe {
             let f: libloading::Symbol<Unary> = self.api.library.get(name)?;
@@ -217,6 +263,28 @@ impl<'a> Geometry<'a> {
             let f: libloading::Symbol<unsafe extern "C" fn(Ptr, Ptr, f64, i32) -> Ptr> =
                 self.api.library.get(b"GEOSBuffer_r")?;
             self.api.owned(f(self.api.context, self.pointer, distance, quadrant_segments))
+        }
+    }
+
+    pub fn intersection_grid(&self, other: &Self, grid: f64) -> Result<Self> {
+        self.binary_grid(other, grid, b"GEOSIntersectionPrec_r")
+    }
+    pub fn difference_grid(&self, other: &Self, grid: f64) -> Result<Self> {
+        self.binary_grid(other, grid, b"GEOSDifferencePrec_r")
+    }
+    fn binary_grid(&self, other: &Self, grid: f64, symbol: &[u8]) -> Result<Self> {
+        ensure!(std::ptr::eq(self.api, other.api), "GEOS context mismatch");
+        unsafe {
+            let function: libloading::Symbol<unsafe extern "C" fn(Ptr, Ptr, Ptr, f64) -> Ptr> =
+                self.api.library.get(symbol)?;
+            self.api.owned(function(self.api.context, self.pointer, other.pointer, grid))
+        }
+    }
+    pub fn union_grid(&self, grid: f64) -> Result<Self> {
+        unsafe {
+            let function: libloading::Symbol<unsafe extern "C" fn(Ptr, Ptr, f64) -> Ptr> =
+                self.api.library.get(b"GEOSUnaryUnionPrec_r")?;
+            self.api.owned(function(self.api.context, self.pointer, grid))
         }
     }
     pub fn difference(&self, other: &Self) -> Result<Self> {
@@ -353,7 +421,7 @@ impl<'a> Geometry<'a> {
             Ok(result)
         }
     }
-    fn kind(&self) -> Result<i32> {
+    pub(crate) fn kind(&self) -> Result<i32> {
         unsafe {
             let f: libloading::Symbol<unsafe extern "C" fn(Ptr, Ptr) -> i32> =
                 self.api.library.get(b"GEOSGeomTypeId_r")?;

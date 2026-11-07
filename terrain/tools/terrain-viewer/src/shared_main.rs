@@ -1,4 +1,5 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+mod landcover;
 #[path = "../../terrain-rs/src/natural_codec.rs"]
 #[allow(dead_code)]
 mod natural_codec;
@@ -164,6 +165,12 @@ struct App {
     last_interaction: Instant,
     settled: bool,
     zoom_probe: Option<(PathBuf, Option<Instant>)>,
+    landcover: Option<landcover::Loader>,
+    landcover_path: String,
+    landcover_visible: bool,
+    landcover_status: String,
+    landcover_style: landcover::Style,
+    last_landcover_request: Instant,
 }
 impl App {
     fn new(
@@ -171,26 +178,9 @@ impl App {
         path: PathBuf,
         smoke: Option<PathBuf>,
         region: &str,
+        landcover_path: Option<PathBuf>,
     ) -> Self {
-        for path in [
-            "C:/Windows/Fonts/meiryo.ttc",
-            "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
-            "/System/Library/Fonts/ヒラギノ角ゴシック W3.otf",
-        ] {
-            if let Ok(bytes) = std::fs::read(path) {
-                let mut fonts = egui::FontDefinitions::default();
-                fonts
-                    .font_data
-                    .insert("日本語".into(), Arc::new(egui::FontData::from_owned(bytes)));
-                fonts
-                    .families
-                    .get_mut(&egui::FontFamily::Proportional)
-                    .unwrap()
-                    .push("日本語".into());
-                cc.egui_ctx.set_fonts(fonts);
-                break;
-            }
-        }
+        install_fonts(&cc.egui_ctx);
         let state = cc.wgpu_render_state.as_ref().expect("wgpu初期化").clone();
         eprintln!("GPU {:?}", state.adapter.get_info());
         let (send, requests) = mpsc::channel();
@@ -237,7 +227,18 @@ impl App {
             last_interaction: Instant::now(),
             settled: false,
             zoom_probe: None,
+            landcover: None,
+            landcover_path: landcover_path
+                .as_ref()
+                .map_or_else(String::new, |p| p.to_string_lossy().into()),
+            landcover_visible: landcover_path.is_some(),
+            landcover_status: String::new(),
+            landcover_style: landcover::Style::default(),
+            last_landcover_request: Instant::now() - Duration::from_secs(1),
         };
+        if landcover_path.is_some() {
+            app.open_landcover(&cc.egui_ctx);
+        }
         if region != "national" {
             app.region(region);
         }
@@ -386,6 +387,63 @@ impl App {
         }
         Ok(true)
     }
+    fn open_landcover(&mut self, ctx: &egui::Context) {
+        self.renderer.clear_landcover();
+        self.landcover = None;
+        self.landcover_status.clear();
+        if !self.landcover_path.trim().is_empty() {
+            self.landcover = Some(landcover::Loader::start(
+                PathBuf::from(&self.landcover_path),
+                ctx.clone(),
+                true,
+            ));
+            self.landcover_visible = true;
+            self.landcover_status = "地表SQLiteを読み込み中".into();
+        }
+    }
+
+    fn update_landcover(&mut self) {
+        let Some(loader) = &mut self.landcover else {
+            return;
+        };
+        if self.renderer.landcover_blend(self.landcover_style.animate) >= 1. {
+            self.renderer.finish_landcover_transition();
+            let mut detail = None;
+            for message in loader.receive.try_iter() {
+                match message {
+                    landcover::Message::Extent(extent) => loader.extent = Some(extent),
+                    landcover::Message::Overview(image) => {
+                        self.renderer.upload_landcover(image, true, false);
+                        if self.landcover_status == "地表SQLiteを読み込み中" {
+                            self.landcover_status = "地表 z6 ／ ESA WorldCover 2021".into();
+                        }
+                    }
+                    landcover::Message::Detail(image) => detail = Some(image),
+                    landcover::Message::Error(error) => self.landcover_status = error,
+                }
+            }
+            if let Some(image) = detail {
+                self.landcover_status = format!("地表 z{} ／ ESA WorldCover 2021", image.z);
+                self.renderer
+                    .upload_landcover(image, false, self.landcover_style.animate);
+            }
+        }
+        if self.landcover_visible
+            && loader.extent.is_some()
+            && self.last_landcover_request.elapsed() > Duration::from_millis(160)
+        {
+            let span = 2f64.powf((self.camera.distance.max(100.).log2() * 2.).ceil() / 2.) * 4.;
+            let step = span / 16.;
+            let center = self.camera.center.map(|v| (v / step).round() * step);
+            let size = [1536, 1536];
+            loader.request(
+                self.landcover_style
+                    .request(center, size, span / size[0] as f64),
+            );
+            self.last_landcover_request = Instant::now();
+        }
+    }
+
     fn open(&mut self, ctx: &egui::Context) {
         let (send, requests) = mpsc::channel();
         let (messages, receive) = mpsc::channel();
@@ -410,6 +468,7 @@ impl App {
 }
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.update_landcover();
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32();
         self.last_frame = now;
@@ -503,7 +562,14 @@ impl eframe::App for App {
                 ui.label(format!("{:0.0} fps",self.fps));
             });
             egui::CollapsingHeader::new("表示・SQLite設定").default_open(true).show(ui,|ui|{
-                ui.horizontal(|ui|{ui.text_edit_singleline(&mut self.path);if ui.button("SQLiteを開く").clicked(){self.open(ctx);}});
+                ui.horizontal(|ui|{ui.text_edit_singleline(&mut self.path);if ui.button("地形SQLiteを開く").clicked(){self.open(ctx);}});
+                ui.horizontal_wrapped(|ui|{
+                    ui.checkbox(&mut self.landcover_visible,"地表分類");
+                    ui.text_edit_singleline(&mut self.landcover_path);
+                    if ui.button("地表SQLiteを開く").clicked(){self.open_landcover(ctx);}
+                    ui.label(&self.landcover_status);
+                    if self.landcover_visible && self.landcover.is_some() { self.landcover_style.controls(ui); }
+                });
                 ui.horizontal_wrapped(|ui|{
                     changed|=ui.checkbox(&mut self.camera.auto,"自動LOD").changed();
                     let old=self.camera.maximum;
@@ -612,6 +678,8 @@ impl eframe::App for App {
                     self.resolution == 0,
                     rect,
                     ctx.pixels_per_point(),
+                    self.landcover_visible,
+                    self.landcover_style.animate,
                 );
                 ui.painter().add(callback);
                 ui.painter().image(
@@ -688,24 +756,7 @@ impl eframe::App for App {
         for event in ctx.input(|i| i.events.clone()) {
             if let egui::Event::Screenshot { image, .. } = event {
                 if let Some(path) = &self.smoke {
-                    let result = (|| -> Result<()> {
-                        let mut encoder = png::Encoder::new(
-                            std::fs::File::create(path)?,
-                            image.size[0] as u32,
-                            image.size[1] as u32,
-                        );
-                        encoder.set_color(png::ColorType::Rgba);
-                        encoder.set_depth(png::BitDepth::Eight);
-                        encoder.write_header()?.write_image_data(
-                            &image
-                                .pixels
-                                .iter()
-                                .flat_map(|p| p.to_array())
-                                .collect::<Vec<_>>(),
-                        )?;
-                        Ok(())
-                    })();
-                    if let Err(e) = result {
+                    if let Err(e) = landcover::write_screenshot(path, &image) {
                         self.status = format!("{e:#}");
                     }
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -715,6 +766,28 @@ impl eframe::App for App {
         ctx.request_repaint();
     }
 }
+fn install_fonts(ctx: &egui::Context) {
+    for path in [
+        "C:/Windows/Fonts/meiryo.ttc",
+        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+        "/System/Library/Fonts/ヒラギノ角ゴシック W3.otf",
+    ] {
+        if let Ok(bytes) = std::fs::read(path) {
+            let mut fonts = egui::FontDefinitions::default();
+            fonts
+                .font_data
+                .insert("日本語".into(), Arc::new(egui::FontData::from_owned(bytes)));
+            fonts
+                .families
+                .get_mut(&egui::FontFamily::Proportional)
+                .unwrap()
+                .push("日本語".into());
+            ctx.set_fonts(fonts);
+            break;
+        }
+    }
+}
+
 fn run() -> Result<()> {
     let args = std::env::args().collect::<Vec<_>>();
     let option = |name: &str| {
@@ -722,7 +795,44 @@ fn run() -> Result<()> {
             .position(|v| v == name)
             .and_then(|i| args.get(i + 1))
     };
-    let path = option("--database").map(PathBuf::from).unwrap_or_else(|| {
+    let landcover_path = option("--landcover").map(PathBuf::from);
+    if args.iter().any(|a| a == "--check-landcover") {
+        let source = landcover_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("--check-landcover requires --landcover"))?;
+        return landcover::check(source);
+    }
+    let explicit_path = option("--database").map(PathBuf::from);
+    let map_path = if args.iter().any(|a| a == "--landcover-only") {
+        landcover_path.clone().or_else(|| explicit_path.clone())
+    } else if explicit_path.is_none() {
+        landcover_path.clone()
+    } else {
+        explicit_path
+            .as_ref()
+            .filter(|path| landcover::Database::open(path).is_ok())
+            .cloned()
+    };
+    if let Some(path) = map_path {
+        let smoke = option("--smoke-output").map(PathBuf::from);
+        return eframe::run_native(
+            "山むき・全国地表",
+            eframe::NativeOptions {
+                renderer: eframe::Renderer::Wgpu,
+                viewport: egui::ViewportBuilder::default().with_inner_size([1280., 900.]),
+                ..Default::default()
+            },
+            Box::new(move |cc| {
+                install_fonts(&cc.egui_ctx);
+                Ok(Box::new(landcover::Map::new(&cc.egui_ctx, path, smoke)))
+            }),
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"));
+    }
+    if args.iter().any(|a| a == "--landcover-only") {
+        anyhow::bail!("--landcover-only requires a SQLite path");
+    }
+    let path = explicit_path.unwrap_or_else(|| {
         let mut choices = vec![
             PathBuf::from("terrain-shared.sqlite3"),
             PathBuf::from("tools/terrain-viewer/terrain-shared.sqlite3"),
@@ -800,7 +910,7 @@ fn run() -> Result<()> {
     eframe::run_native(
         "山むき・全国共有曲面",
         options,
-        Box::new(move |cc| Ok(Box::new(App::new(cc, path, smoke, &region)))),
+        Box::new(move |cc| Ok(Box::new(App::new(cc, path, smoke, &region, landcover_path)))),
     )
     .map_err(|e| anyhow::anyhow!("{e}"))
 }

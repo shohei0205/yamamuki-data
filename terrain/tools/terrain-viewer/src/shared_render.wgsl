@@ -10,6 +10,36 @@ struct Record { bounds:vec4<f32>, data:vec4<u32>, neighbors:vec4<u32> }
 @group(0) @binding(5) var<storage,read> links:array<u32>;
 @group(0) @binding(6) var<storage,read> controls:array<vec4<f32>>;
 @group(0) @binding(7) var<storage,read> triangles:array<u32>;
+struct LandcoverView { areas:array<vec4<f32>,3>, settings:vec4<f32> }
+@group(1) @binding(0) var landcoverOverview:texture_2d<f32>;
+@group(1) @binding(1) var landcoverDetail:texture_2d<f32>;
+@group(1) @binding(2) var landcoverSampler:sampler;
+@group(1) @binding(3) var<uniform> landcover:LandcoverView;
+
+@group(1) @binding(4) var landcoverPrevious:texture_2d<f32>;
+
+fn landcoverSample(tex:texture_2d<f32>,area:vec4<f32>,q:vec2<f32>)->vec4<f32>{
+ if area.z>0.{
+  let uv=(q-area.xy)/area.zw;
+  if all(uv>=vec2(0.))&&all(uv<vec2(1.)){
+   return textureSampleLevel(tex,landcoverSampler,uv,0.);
+  }
+ }
+ return vec4(0.);
+}
+
+fn landcoverColor(p:vec3<f32>,fallback:vec3<f32>)->vec3<f32>{
+ let q=p.xz/view.offset.z;
+ let blend=landcover.settings.x;
+ let next=landcoverSample(landcoverDetail,landcover.areas[1],q);
+ if blend>=1. && next.a>=1.{ return next.rgb; }
+ let overview=landcoverSample(landcoverOverview,landcover.areas[0],q);
+ let base=fallback*(1.-overview.a)+overview.rgb;
+ let current=base*(1.-next.a)+next.rgb;
+ if blend>=1.{ return current; }
+ let old=landcoverSample(landcoverPrevious,landcover.areas[2],q);
+ return mix(base*(1.-old.a)+old.rgb,current,blend);
+}
 struct Varying {
  @builtin(position) clip: vec4<f32>,
  @location(0) position: vec3<f32>,
@@ -104,7 +134,7 @@ fn linear(c:vec3<f32>)->vec3<f32>{
  let light=normalize(vec3(-.55,1.,.65));
  let flat=.39+.70*light.y;
  let shade=clamp(flat+.70*(max(dot(normal,light),0.)-light.y)*view.settings.z,.08,1.3);
- var base=mix(vec3(.41,.49,.33),vec3(.65,.62,.47),smoothstep(900.,3800.,v.height));
+ var base=landcoverColor(v.position,mix(vec3(.41,.49,.33),vec3(.65,.62,.47),smoothstep(900.,3800.,v.height)));
  if (view.extra.w&2u)!=0u{
   let errors=array<f32,8>(500.,400.,300.,250.,200.,125.,60.,25.);
   let z=log2(errors[records[view.flags.w].data.z-6u]/12.5)/6.;
@@ -136,7 +166,7 @@ fn linear(c:vec3<f32>)->vec3<f32>{
  let light=normalize(vec3(-.55,1.,.65));
  let flat=.39+.70*light.y;
  let shade=clamp(flat+.70*(max(dot(normal,light),0.)-light.y)*view.settings.z,.08,1.3);
- let base=mix(vec3(.41,.49,.33),vec3(.65,.62,.47),smoothstep(900.,3800.,v.height));
+ let base=landcoverColor(v.position,mix(vec3(.41,.49,.33),vec3(.65,.62,.47),smoothstep(900.,3800.,v.height)));
  var color=clamp(base*shade,vec3(0.),vec3(1.));
  let width=max(fwidth(v.bary),vec3(.0001));
  let edge=min(min(v.bary.x/width.x,v.bary.y/width.y),v.bary.z/width.z);

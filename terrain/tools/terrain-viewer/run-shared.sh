@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 database="${1:-}"
+landcover="${2:-}"
+if [ -n "$landcover" ]; then
+    case "$landcover" in /*) ;; *) landcover="$PWD/$landcover";; esac
+fi
 if [ -n "$database" ]; then
     case "$database" in /*) ;; *) database="$PWD/$database";; esac
 fi
@@ -11,4 +15,7 @@ if [ -z "$database" ]; then
 fi
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/build/terrain-viewer-target}"
 cargo build --locked --release --manifest-path tools/terrain-viewer/Cargo.toml --bin terrain-shared-viewer
+if [ -n "$landcover" ]; then
+    exec "$CARGO_TARGET_DIR/release/terrain-shared-viewer" --database "$database" --landcover "$landcover"
+fi
 exec "$CARGO_TARGET_DIR/release/terrain-shared-viewer" --database "$database"

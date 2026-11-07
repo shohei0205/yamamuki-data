@@ -1,7 +1,10 @@
-use super::{Geos, P, Curve, Result, build_graph, encode_compact, ensure, references, zip, wkb_poly};
+use super::{geos, Geos, P, Curve, Result, build_graph, encode_compact, ensure, references, zip, wkb_poly};
+use anyhow::Context;
 use flate2::read::ZlibDecoder;
 use rusqlite::{Connection, OpenFlags, params};
 use serde_json::{Value, json};
+#[path = "landcover_national_xyz.rs"]
+pub mod national;
 use std::{collections::BTreeMap, fs, io::Read, path::{Path, PathBuf}};
 
 type Interval = (i64, i64);
@@ -174,5 +177,167 @@ pub fn generate(api: &Geos, sources: &[PathBuf], output: &Path) -> Result<()> {
     report["sqliteBytes"] = json!(fs::metadata(&path)?.len());
     fs::write(output.join("manifest.json"), serde_json::to_vec_pretty(&report)?)?;
     println!("{}", report["levels"]);
+    Ok(())
+}
+
+fn read_seam_layers<'a>(api: &'a Geos, source: &Path, level: usize) -> Result<([f64; 4], Vec<geos::Geometry<'a>>)> {
+    let manifest: Value = serde_json::from_slice(&fs::read(source.join("manifest.json"))?)?;
+    let extent = serde_json::from_value(manifest["bounds"].clone())?;
+    let db = Connection::open_with_flags(source.join("landcover-vectors.sqlite3"), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut layers = Vec::new();
+    for class in 1..=3 {
+        let compressed: Vec<u8> = db.query_row(
+            "SELECT geometry FROM features WHERE level=? AND class=?", params![level, class], |row| row.get(0),
+        )?;
+        let mut raw = Vec::new();
+        ZlibDecoder::new(compressed.as_slice()).read_to_end(&mut raw)?;
+        layers.push(api.read(&raw)?);
+    }
+    Ok((extent, layers))
+}
+
+fn touching_components<'a>(
+    difference: &geos::Geometry<'a>, edge: &geos::Geometry<'a>,
+    limit: &geos::Geometry<'a>,
+) -> Result<(Vec<geos::Geometry<'a>>, usize)> {
+    let mut selected = Vec::new();
+    let mut unresolved = 0;
+    for part in difference.polygons()? {
+        if part.is_empty()? || !part.intersects(edge)? {
+            continue;
+        }
+        if part.intersects(limit)? {
+            unresolved += 1;
+        } else {
+            selected.push(part);
+        }
+    }
+    Ok((selected, unresolved))
+}
+
+pub fn reconcile_pair(api: &Geos, sources: &[PathBuf], keys: &[u32], level: usize, output: &Path, report_only: bool) -> Result<()> {
+    match reconcile_pair_with_grid(api, sources, keys, level, output, report_only, None) {
+        Err(error) if format!("{error:#}").contains("TopologyException") => {
+            reconcile_pair_with_grid(api, sources, keys, level, output, report_only, Some(0.001))
+                .context("Retry seam overlay on a 1 mm grid")
+        }
+        result => result,
+    }
+}
+
+fn reconcile_pair_with_grid(
+    api: &Geos, sources: &[PathBuf], keys: &[u32], level: usize, output: &Path,
+    report_only: bool, grid: Option<f64>,
+) -> Result<()> {
+    ensure!(sources.len() == 2 && keys.len() == 4 && (3..=6).contains(&level),
+        "Provide two --seam-source paths, --seam-keys x1,y1,x2,y2 and --only-level 3–6");
+    let [x, y, nx, ny] = [keys[0], keys[1], keys[2], keys[3]];
+    ensure!([x, y, nx, ny].iter().all(|&key| key < 256), "Invalid z8 key");
+    ensure!((nx == x + 1 && ny == y) || (nx == x && ny == y + 1), "Expected east or south neighbor");
+    let (a, mut first) = read_seam_layers(api, &sources[0], level)?;
+    let (b, second) = read_seam_layers(api, &sources[1], level)?;
+    let [dx, dy] = [b[0] - a[0], a[3] - b[3]];
+    let mut second = second.into_iter().map(|shape| shape.transform(0., 0., 1.)?.transform(-dx, dy, 1.))
+        .collect::<Result<Vec<_>>>()?;
+    if let Some(grid) = grid {
+        for layer in first.iter_mut().chain(second.iter_mut()) {
+            *layer = layer.precision(grid)?;
+        }
+    }
+
+    let shared = api.rectangle(
+        dx.max(0.), dy.max(0.), (b[2] - a[0]).min(a[2] - a[0]), (a[3] - b[1]).min(a[3] - a[1]),
+    )?;
+    let limit = shared.boundary()?;
+    let side = WORLD / 256.;
+    let core = |x: u32, y: u32| -> Result<geos::Geometry<'_>> {
+        let left = f64::from(x) * side - WORLD / 2. - a[0];
+        let top = a[3] - WORLD / 2. + f64::from(y) * side;
+        let right = f64::from(x + 1) * side - WORLD / 2. - a[0];
+        let bottom = a[3] - WORLD / 2. + f64::from(y + 1) * side;
+        api.rectangle(left, top, right, bottom)
+    };
+    let cores = [core(x, y)?, core(nx, ny)?];
+    let edge = cores[0].boundary()?.intersection(&cores[1].boundary()?)?;
+    ensure!(edge.length()? > side - 1e-6, "Shared core edge is missing");
+    let mut summary = Vec::new();
+    for class in 0..3 {
+        let left = first[class].intersection(&shared)?;
+        let right = second[class].intersection(&shared)?;
+        let a_only = left.difference(&right)?;
+        let b_only = right.difference(&left)?;
+        let measure = |a: &geos::Geometry<'_>, b: &geos::Geometry<'_>| -> Result<f64> {
+            let a = a.intersection(&edge)?;
+            let b = b.intersection(&edge)?;
+            Ok(a.difference(&b)?.length()? + b.difference(&a)?.length()?)
+        };
+        let before = measure(&left, &right)?;
+        let (patch_a, unresolved_a) = touching_components(&a_only, &edge, &limit)?;
+        let (patch_b, unresolved_b) = touching_components(&b_only, &edge, &limit)?;
+        let mut added = [0.; 2];
+        let mut removed = [0.; 2];
+        let mut rejected = 0;
+        let mut adds: [Vec<_>; 2] = Default::default();
+        let mut cuts: [Vec<_>; 2] = Default::default();
+        let water_cell: f64 = [125., 500., 1000., 2000.][level - 3];
+        let max_gain = (water_cell.powi(2) / 4.).min(562_500.);
+        let max_loss = water_cell.powi(2);
+        for (owner, patches, other) in [(0, patch_a, &right), (1, patch_b, &left)] {
+            let neighbor = 1 - owner;
+            for patch in patches {
+                let gain = patch.intersection(&cores[neighbor])?.area()?;
+                let loss = patch.intersection(&cores[owner])?.area()?;
+                let can_add = class != 2 || (
+                    added.iter().sum::<f64>() + gain <= max_gain
+                    && patch.boundary()?.intersection(other)?.length()? > 1e-6
+                );
+                let can_cut = class != 2 || removed.iter().sum::<f64>() + loss <= max_loss;
+                if can_add && (gain < loss || !can_cut) {
+                    added[neighbor] += gain;
+                    adds[neighbor].push(patch);
+                } else if can_cut {
+                    removed[owner] += loss;
+                    cuts[owner].push(patch);
+                } else {
+                    rejected += 1;
+                }
+            }
+        }
+        for (side, layer) in [&mut first[class], &mut second[class]].into_iter().enumerate() {
+            let cut = api.collection(&cuts[side])?.union()?;
+            let add = api.collection(&adds[side])?.union()?;
+            *layer = api.collection(&[layer.difference(&cut)?, add])?.union()?;
+            ensure!(layer.is_valid()?, "Reconciled shape invalid");
+        }
+        summary.push(json!({"class":class+1,"beforeM":before,"afterM":measure(&first[class],&second[class])?,
+            "openComponents":unresolved_a+unresolved_b,"rejectedComponents":rejected,
+            "addedCoreM2":added,"removedCoreM2":removed}));
+    }
+    let passed = summary.iter().all(|layer| layer["afterM"].as_f64().is_some_and(|meters| meters <= 1e-5));
+    let report = json!({"passed":passed,"level":level,"z":8,"keys":keys,"referenceBounds":a,"precisionRetryM":grid,"classes":summary});
+    if report_only || !passed {
+        fs::write(output.join("manifest.json"), serde_json::to_vec_pretty(&report)?)?;
+        println!("{report}");
+        return Ok(());
+    }
+    let path = output.join("landcover-seam-pair.sqlite3");
+    ensure!(!path.exists(), "Use a new seam output");
+    let mut db = Connection::open(path)?;
+    db.execute_batch("CREATE TABLE tiles(x INTEGER,y INTEGER,payload BLOB NOT NULL,PRIMARY KEY(x,y));
+        CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);")?;
+    let tx = db.transaction()?;
+    for (([x, y], core), layers) in [[x,y],[nx,ny]].into_iter().zip(&cores).zip([first,second]) {
+        let mut polygons = Vec::new();
+        for (index, layer) in layers.iter().enumerate() {
+            for part in layer.intersection(core)?.polygons()? {
+                if !part.is_empty()? { polygons.push(((index + 1) as u8, part.rings()?)); }
+            }
+        }
+        tx.execute("INSERT INTO tiles VALUES(?,?,?)", params![x,y,pack(polygons)?])?;
+    }
+    tx.execute("INSERT INTO metadata VALUES('manifest',?)", [report.to_string()])?;
+    tx.commit()?;
+    fs::write(output.join("manifest.json"),serde_json::to_vec_pretty(&report)?)?;
+    println!("{report}");
     Ok(())
 }

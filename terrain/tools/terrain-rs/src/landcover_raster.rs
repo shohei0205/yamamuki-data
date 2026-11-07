@@ -2,6 +2,7 @@
 mod geos;
 use anyhow::{Context, Result, ensure};
 use clap::Parser;
+use rayon::prelude::*;
 use flate2::{
     Compression,
     write::{GzEncoder, ZlibEncoder},
@@ -54,6 +55,8 @@ struct Args {
     extent_m: Option<f64>,
     #[arg(long, value_parser = clap::value_parser!(u8).range(0..=5))]
     only_level: Option<u8>,
+    #[arg(long, value_delimiter = ',', conflicts_with = "only_level", value_parser = clap::value_parser!(u8).range(0..=5))]
+    levels: Vec<u8>,
 }
 #[derive(Clone)]
 struct WaterBounds{envelope:AABB<[f64;2]>,id:usize}
@@ -168,10 +171,15 @@ fn majority_radius(src: &[u8], land: &[u8], w: usize, h: usize, radius: usize) -
 fn majority_window(src:&[u8],land:&[u8],w:usize,h:usize,width_cells:usize)->Vec<u8>{
     if width_cells<=1{return src.to_vec()}
     let radius=width_cells/2;let half=width_cells%2==0;
-    let mut columns=vec![[0u32;3];w];let mut vertical=columns.clone();let mut result=src.to_vec();
-    for y in 0..=radius.min(h-1){for x in 0..w{let i=y*w+x;if land[i]!=0&&src[i]<3{columns[x][src[i]as usize]+=1;}}}
-    for y in 0..h{
-        if y>0{
+    let mut result=src.to_vec();
+    const BAND_ROWS: usize = 512;
+    result.par_chunks_mut(w * BAND_ROWS).enumerate().for_each(|(band, output)| {
+    let first = band * BAND_ROWS;
+    let end = first + output.len() / w;
+    let mut columns=vec![[0u32;3];w];let mut vertical=columns.clone();
+    for y in first.saturating_sub(radius)..=(first+radius).min(h-1){for x in 0..w{let i=y*w+x;if land[i]!=0&&src[i]<3{columns[x][src[i]as usize]+=1;}}}
+    for y in first..end{
+        if y>first{
             if y>radius{let row=y-radius-1;for x in 0..w{let i=row*w+x;if land[i]!=0&&src[i]<3{columns[x][src[i]as usize]-=1;}}}
             if y+radius<h{let row=y+radius;for x in 0..w{let i=row*w+x;if land[i]!=0&&src[i]<3{columns[x][src[i]as usize]+=1;}}}
         }
@@ -203,25 +211,31 @@ fn majority_window(src:&[u8],land:&[u8],w:usize,h:usize,width_cells:usize)->Vec<
             if counts[src[i]as usize]<best{
                 let mut winner=None;let mut tie=false;
                 for c in 0..3{if counts[c]==best{if winner.is_some(){tie=true;}winner=Some(c);}}
-                if !tie{result[i]=winner.unwrap()as u8;}
+                if !tie{output[i-first*w]=winner.unwrap()as u8;}
             }
         }
-    }result
+    }
+    });
+    result
 }
 // Four-connected components; merge whole small regions, never isolated pixels
 // from one region into multiple recipients. Larger-neighbor parent graph is acyclic.
 fn small_regions(src: &[u8], land: &[u8], w: usize, h: usize, minimum: usize) -> Vec<u8> {
-    let mut ids = vec![usize::MAX; src.len()];
+    if minimum <= 1 {
+        return src.to_vec();
+    }
+    let mut ids = vec![u32::MAX; src.len()];
+    let mut q = VecDeque::new();
     let mut sizes = Vec::new();
     let mut codes = Vec::new();
     let mut border = Vec::new();
     for start in 0..src.len() {
-        if ids[start] != usize::MAX || land[start] == 0 {
+        if ids[start] != u32::MAX || land[start] == 0 {
             continue;
         }
-        let id = sizes.len();
+        let id = u32::try_from(sizes.len()).expect("Too many connected regions");
         let code = src[start];
-        let mut q = VecDeque::from([start]);
+        q.push_back(start);
         ids[start] = id;
         let mut size = 0;
         let mut edge = false;
@@ -233,7 +247,7 @@ fn small_regions(src: &[u8], land: &[u8], w: usize, h: usize, minimum: usize) ->
             for j in neighbors(i, w, h) {
                 if land[j] == 0 {
                     edge = true
-                } else if ids[j] == usize::MAX && src[j] == code {
+                } else if ids[j] == u32::MAX && src[j] == code {
                     ids[j] = id;
                     q.push_back(j)
                 }
@@ -243,10 +257,13 @@ fn small_regions(src: &[u8], land: &[u8], w: usize, h: usize, minimum: usize) ->
         codes.push(code);
         border.push(edge);
     }
+    let eligible: Vec<_> = (0..sizes.len())
+        .map(|a| codes[a] < 3 && sizes[a] < minimum && !border[a])
+        .collect();
     let mut adjacency = vec![HashMap::<usize, usize>::new(); sizes.len()];
     for i in 0..src.len() {
         let a = ids[i];
-        if a == usize::MAX {
+        if a == u32::MAX {
             continue;
         }
         for j in [
@@ -257,15 +274,20 @@ fn small_regions(src: &[u8], land: &[u8], w: usize, h: usize, minimum: usize) ->
         .flatten()
         {
             let b = ids[j];
-            if b != usize::MAX && a != b {
-                *adjacency[a].entry(b).or_default() += 1;
-                *adjacency[b].entry(a).or_default() += 1;
+            if b != u32::MAX && a != b {
+                let (a, b) = (a as usize, b as usize);
+                if eligible[a] && codes[b] < 3 {
+                    *adjacency[a].entry(b).or_default() += 1;
+                }
+                if eligible[b] && codes[a] < 3 {
+                    *adjacency[b].entry(a).or_default() += 1;
+                }
             }
         }
     }
     let mut parent: Vec<_> = (0..sizes.len()).collect();
     for a in 0..sizes.len() {
-        if codes[a] >= 3 || sizes[a] >= minimum || border[a] {
+        if !eligible[a] {
             continue;
         }
         let best = adjacency[a]
@@ -280,10 +302,10 @@ fn small_regions(src: &[u8], land: &[u8], w: usize, h: usize, minimum: usize) ->
     }
     let mut result = src.to_vec();
     for i in 0..src.len() {
-        if ids[i] == usize::MAX {
+        if ids[i] == u32::MAX {
             continue;
         }
-        let mut a = ids[i];
+        let mut a = ids[i] as usize;
         while parent[a] != a {
             parent[a] = parent[parent[a]];
             a = parent[a]
@@ -871,7 +893,11 @@ fn main() -> Result<()> {
     }
     let side = bounds[2] - bounds[0];
     let started = Instant::now();
-    let g = unsafe { Library::new(&args.gdal) }.context("Load GDAL (add DLL directory to PATH)")?;
+    // GDAL registers process-wide drivers and TLS. Keep the DLL loaded until
+    // process exit instead of running its unload hooks through FreeLibrary.
+    let g = std::mem::ManuallyDrop::new(
+        unsafe { Library::new(&args.gdal) }.context("Load GDAL (add DLL directory to PATH)")?,
+    );
     unsafe {
         call!(&g, "GDALAllRegister", unsafe extern "C" fn());
     }
@@ -939,7 +965,13 @@ fn main() -> Result<()> {
         let thresholds=[9usize,16,64,256,1024,4096].map(|v|{
             ((v.max(args.minimum_cells)as f64)*cell_scale).ceil()as usize
         });
-        let selected_level = |level| args.only_level.map_or(level < 5, |selected| level == usize::from(selected));
+        let selected_level = |level| {
+            if args.levels.is_empty() {
+                args.only_level.map_or(level < 5, |selected| level == usize::from(selected))
+            } else {
+                args.levels.contains(&(level as u8))
+            }
+        };
         let mut level_changes = [0; 6];
         for (l, &t) in tolerances.iter().enumerate().filter(|(l, _)| selected_level(*l)) {
             let mut level_values = if args.progressive_lod && l > 0 {

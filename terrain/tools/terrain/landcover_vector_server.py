@@ -2,6 +2,7 @@
 import argparse
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 import json
+from os import fstat
 import gzip,sqlite3,zlib
 from contextlib import closing
 from functools import lru_cache
@@ -62,9 +63,75 @@ def robust_polygon(data,level,code,index,strength=0.,steps=4):
     indices=triangulate_indices(polys[index])
     return gzip.compress(json.dumps({"indices":indices}).encode(),mtime=0)
 
+def national_progress():
+    directory = ROOT/'build/landcover-national-regions-v1'
+    source = ROOT/'build/terrain-worldcover-source'
+    def read_json(path, default):
+        try:
+            return json.loads(path.read_bytes())
+        except (OSError, ValueError):
+            return default
+    plan = read_json(source/'japan-work-areas.json', [])
+    gaps = {(r['x'], r['y']): r['esa'] for r in read_json(directory/'source-gaps.json', [])}
+    audit = read_json(directory/'seam-audit.json', {})
+    delivery = read_json(directory/'delivery.json', None)
+    downloads = read_json(source/'japan-download-manifest.json', {})
+    def ready(area, prefix):
+        return any((path/'manifest.json').is_file() for path in area.glob(prefix+'*')
+                   if path.name == prefix or path.name.startswith(prefix+'-retry-'))
+    areas = []
+    for tile in plan:
+        area = directory/f"{tile['x']}-{tile['y']}"
+        stages = []
+        for level in range(3, 7):
+            stages.append('仕上げ済み' if ready(area, f'l{level}') else
+                          '簡略化済み' if ready(area, f'stage-l{level}') else
+                          '元ベクター化済み' if ready(area, f'raw-l{min(level, 5)}')
+                          or any((path/'manifest.json').is_file() and
+                                 (path/'majority-clean'/f'level-{min(level, 5)}.geojson.gz').is_file()
+                                 for path in area.glob('raw-shared*')) else '未完了')
+        areas.append({**tile, 'done': (area/'finished.json').is_file(),
+                      'started': area.is_dir(), 'stages': stages, 'sourceGap': gaps.get((tile['x'], tile['y']))})
+    logs = {}
+    for name in ('pilot.log', 'pilot.err.log', 'national.log', 'national.err.log',
+                 'national-worker-0.log', 'national-worker-0.err.log',
+                 'national-worker-1.log', 'national-worker-1.err.log'):
+        try:
+            with (directory/name).open('rb') as file:
+                size = file.seek(0, 2)
+                file.seek(max(0, size - 12000))
+                data = file.read()
+                modified = fstat(file.fileno()).st_mtime
+            try:
+                contents = data.decode('utf-8')
+            except UnicodeDecodeError:
+                contents = data.decode('cp932', errors='replace')
+            logs[name] = {'tail': '\n'.join(contents.splitlines()[-12:]), 'updated': modified}
+        except OSError:
+            continue
+    return {'areas': areas, 'sources': len(downloads.get('files', [])),
+            'absent': len(downloads.get('absentFromCatalog', [])),
+            'vrt': (source/'japan-2021-v200.vrt').is_file(), 'logs': logs, 'delivery': delivery,
+            'seams': [{k: v for k, v in row.items() if k != 'edges'} for row in audit.get('levels', [])]}
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         url=self.path.split('?',1)[0]
+        if url in ('/national-progress', '/national-progress.json'):
+            if url.endswith('.json'):
+                body = json.dumps(national_progress(), ensure_ascii=False).encode()
+                mime = 'application/json; charset=utf-8'
+            else:
+                body = (ROOT/'tools/terrain/landcover_national_progress.html').read_bytes()
+                mime = 'text/html; charset=utf-8'
+            self.send_response(200)
+            self.send_header('Content-Type', mime)
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if url == '/wide/xyz' or url.startswith('/xyz-data/'):
             directory = ROOT/'build/landcover-fuji-256-xyz-v3'
             if url == '/wide/xyz':

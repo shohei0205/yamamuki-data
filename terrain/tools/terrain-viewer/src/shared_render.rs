@@ -35,8 +35,153 @@ pub struct Tile {
     triangles: wgpu::Buffer,
     triangle_indices: u32,
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct LandcoverView {
+    areas: [[f32; 4]; 3],
+    settings: [f32; 4],
+}
+
+struct LandcoverGpu {
+    layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    uniform: wgpu::Buffer,
+    blank: wgpu::TextureView,
+    slots: [Option<(wgpu::TextureView, crate::landcover::Bounds)>; 3],
+    detail_z: Option<u32>,
+    transition: Option<std::time::Instant>,
+    group: wgpu::BindGroup,
+}
+
+impl LandcoverGpu {
+    fn texture(device: &wgpu::Device, size: [usize; 2]) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("地表分類"),
+            size: wgpu::Extent3d {
+                width: size[0] as u32,
+                height: size[1] as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        })
+    }
+
+    fn new(device: &wgpu::Device) -> Self {
+        let texture = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("地表分類"),
+            entries: &[
+                texture(0),
+                texture(1),
+                texture(4),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("地表分類の座標範囲"),
+            size: std::mem::size_of::<LandcoverView>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let blank = Self::texture(device, [1, 1]).create_view(&Default::default());
+        let group = Self::bind(
+            device,
+            &layout,
+            &sampler,
+            &uniform,
+            [&blank, &blank, &blank],
+        );
+        Self {
+            layout,
+            sampler,
+            uniform,
+            blank,
+            slots: [None, None, None],
+            detail_z: None,
+            transition: None,
+            group,
+        }
+    }
+
+    fn bind(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        uniform: &wgpu::Buffer,
+        textures: [&wgpu::TextureView; 3],
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("地表分類"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(textures[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(textures[1]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(textures[2]),
+                },
+            ],
+        })
+    }
+
+    fn refresh(&mut self, device: &wgpu::Device) {
+        let textures =
+            std::array::from_fn(|i| self.slots[i].as_ref().map_or(&self.blank, |(view, _)| view));
+        self.group = Self::bind(device, &self.layout, &self.sampler, &self.uniform, textures);
+    }
+}
 pub struct Renderer {
     pub state: RenderState,
+    landcover: LandcoverGpu,
     pub texture: egui::TextureId,
     color: wgpu::Texture,
     depth: wgpu::Texture,
@@ -148,9 +293,10 @@ impl Renderer {
                 },
             ],
         });
+        let landcover = LandcoverGpu::new(d);
         let layout = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[&bind_layout],
+            bind_group_layouts: &[&bind_layout, &landcover.layout],
             push_constant_ranges: &[],
         });
         let mut descriptor = wgpu::RenderPipelineDescriptor {
@@ -260,6 +406,7 @@ impl Renderer {
         );
         Self {
             indices,
+            landcover,
             state,
             texture,
             color,
@@ -273,6 +420,65 @@ impl Renderer {
             control_fallback,
         }
     }
+    pub fn upload_landcover(
+        &mut self,
+        image: crate::landcover::Image,
+        overview: bool,
+        animate: bool,
+    ) {
+        let size = image.request.size;
+        let texture = LandcoverGpu::texture(&self.state.device, size);
+        self.state.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &image.pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size[0] as u32 * 4),
+                rows_per_image: Some(size[1] as u32),
+            },
+            texture.size(),
+        );
+        if !overview {
+            let old_z = self
+                .landcover
+                .detail_z
+                .or_else(|| self.landcover.slots[0].as_ref().map(|_| 6));
+            if animate && old_z.is_some_and(|z| z != image.z) {
+                self.landcover.slots[2] = self.landcover.slots[1].take();
+                self.landcover.transition = Some(std::time::Instant::now());
+            }
+            self.landcover.detail_z = Some(image.z);
+        }
+        self.landcover.slots[usize::from(!overview)] = Some((
+            texture.create_view(&Default::default()),
+            image.request.bounds,
+        ));
+        self.landcover.refresh(&self.state.device);
+    }
+
+    pub fn landcover_blend(&self, animate: bool) -> f32 {
+        crate::landcover::fade(self.landcover.transition, animate)
+    }
+
+    pub fn finish_landcover_transition(&mut self) {
+        self.landcover.transition = None;
+        if self.landcover.slots[2].take().is_some() {
+            self.landcover.refresh(&self.state.device);
+        }
+    }
+
+    pub fn clear_landcover(&mut self) {
+        self.landcover.slots = [None, None, None];
+        self.landcover.detail_z = None;
+        self.landcover.transition = None;
+        self.landcover.refresh(&self.state.device);
+    }
+
     pub fn metrics(&self) -> (u64, usize, usize) {
         let renderer = self.state.renderer.read();
         renderer
@@ -428,6 +634,8 @@ impl Renderer {
         tin: bool,
         rect: egui::Rect,
         ppp: f32,
+        landcover_enabled: bool,
+        landcover_animate: bool,
     ) -> egui::PaintCallback {
         let tiles: Vec<_> = tiles
             .into_iter()
@@ -456,6 +664,16 @@ impl Renderer {
             rect,
             Frame {
                 tiles,
+                landcover_group: self.landcover.group.clone(),
+                landcover_blend: self.landcover_blend(landcover_enabled && landcover_animate),
+                landcover_uniform: self.landcover.uniform.clone(),
+                landcover_bounds: std::array::from_fn(|i| {
+                    if landcover_enabled {
+                        self.landcover.slots[i].as_ref().map(|(_, b)| *b)
+                    } else {
+                        None
+                    }
+                }),
                 roots,
                 camera: camera.clone(),
                 settings,
@@ -479,6 +697,10 @@ impl Renderer {
     }
 }
 struct Frame {
+    landcover_group: wgpu::BindGroup,
+    landcover_uniform: wgpu::Buffer,
+    landcover_bounds: [Option<crate::landcover::Bounds>; 3],
+    landcover_blend: f32,
     indices: Arc<std::collections::HashMap<u32, wgpu::Buffer>>,
     tiles: Vec<Arc<Tile>>,
     roots: Vec<Arc<Tile>>,
@@ -509,6 +731,24 @@ impl CallbackTrait for Frame {
         resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let camera = &self.camera;
+        let areas = self.landcover_bounds.map(|bounds| {
+            bounds.map_or([0.; 4], |[l, t, r, b]| {
+                [
+                    (l - camera.center[0]) as f32,
+                    (t - camera.center[1]) as f32,
+                    (r - l) as f32,
+                    (b - t) as f32,
+                ]
+            })
+        });
+        queue.write_buffer(
+            &self.landcover_uniform,
+            0,
+            bytemuck::bytes_of(&LandcoverView {
+                areas,
+                settings: [self.landcover_blend, 0., 0., 0.],
+            }),
+        );
         let eye = camera.back() * camera.distance + glam::DVec3::new(0., camera.height, 0.);
         let view = Mat4::look_at_rh(
             eye.as_vec3(),
@@ -784,6 +1024,7 @@ impl CallbackTrait for Frame {
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_stencil_reference(1);
+        pass.set_bind_group(1, &self.landcover_group, &[]);
         for (i, plan) in cache.plans.iter().enumerate() {
             let fallback = i >= self.tiles.len();
             pass.set_stencil_reference(if fallback { 0 } else { 1 });
