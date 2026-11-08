@@ -1,5 +1,5 @@
 use crate::points::Mark;
-use eframe::egui::{Color32, Stroke};
+use eframe::egui::{self, Color32, Stroke};
 
 const LARGE_FILE: usize = 20_000;
 const LIMIT: usize = 10_000;
@@ -36,6 +36,18 @@ pub fn displayed(candidates: Vec<Mark>, count: usize, selected: Option<usize>) -
     }
     result.extend(active);
     result
+}
+
+pub fn in_paint_order(
+    marks: &[Mark],
+    selected: Option<usize>,
+) -> impl DoubleEndedIterator<Item = &Mark> {
+    marks
+        .iter()
+        .filter(|m| !m.matched)
+        .chain(marks.iter().filter(|m| m.matched))
+        .filter(move |m| selected != Some(m.index))
+        .chain(marks.iter().filter(move |m| selected == Some(m.index)))
 }
 
 pub fn style(
@@ -81,6 +93,107 @@ pub fn style(
         Color32::from_rgba_unmultiplied(r, g, b, a),
         Stroke::new(weight, Color32::from_rgb(r, g, b)),
     )
+}
+
+pub struct Sprites {
+    texture: egui::TextureHandle,
+    styles: [(f32, Color32, Stroke); 4],
+    pixels_per_point: f32,
+    side: f32,
+}
+
+impl Sprites {
+    pub fn update<'a>(
+        cache: &'a mut Option<Self>,
+        ctx: &egui::Context,
+        zoom: f64,
+        count: usize,
+    ) -> &'a Self {
+        let density = ctx.pixels_per_point();
+        let styles = [
+            style(zoom, false, count, false),
+            style(zoom, true, count, false),
+            style(zoom, false, count, true),
+            style(zoom, true, count, true),
+        ];
+        if cache
+            .as_ref()
+            .is_none_or(|atlas| atlas.pixels_per_point != density || atlas.styles != styles)
+        {
+            use resvg::tiny_skia as skia;
+
+            let radius = styles
+                .iter()
+                .map(|(r, _, s)| r + s.width)
+                .fold(0_f32, f32::max);
+            let side = 2 * ((radius * density).ceil() as u32 + 2);
+            let mut pixmap = skia::Pixmap::new(side * 4, side).expect("地点マーカーのテクスチャ");
+            let center = side as f32 / 2.;
+            let mut paint = skia::Paint {
+                anti_alias: true,
+                ..Default::default()
+            };
+            for (i, (radius, fill, stroke)) in styles.iter().copied().enumerate() {
+                let x = i as f32 * side as f32 + center;
+                let radius = radius * density;
+                let width = stroke.width * density;
+                let [r, g, b, a] = fill.to_srgba_unmultiplied();
+                paint.set_color_rgba8(r, g, b, a);
+                if let Some(path) = skia::PathBuilder::from_circle(x, center, radius) {
+                    pixmap.fill_path(
+                        &path,
+                        &paint,
+                        skia::FillRule::Winding,
+                        skia::Transform::identity(),
+                        None,
+                    );
+                }
+                let [r, g, b, a] = stroke.color.to_srgba_unmultiplied();
+                paint.set_color_rgba8(r, g, b, a);
+                if let Some(path) = skia::PathBuilder::from_circle(x, center, radius + width / 2.) {
+                    let stroke = skia::Stroke {
+                        width,
+                        ..Default::default()
+                    };
+                    pixmap.stroke_path(&path, &paint, &stroke, skia::Transform::identity(), None);
+                }
+            }
+            let image = egui::ColorImage::from_rgba_premultiplied(
+                [side as usize * 4, side as usize],
+                pixmap.data(),
+            );
+            *cache = Some(Self {
+                texture: ctx.load_texture("地点マーカー", image, egui::TextureOptions::LINEAR),
+                styles,
+                pixels_per_point: density,
+                side: side as f32 / density,
+            });
+        }
+        cache.as_ref().unwrap()
+    }
+
+    pub fn mesh(
+        &self,
+        positions: impl Iterator<Item = (egui::Pos2, bool, bool)>,
+        count: usize,
+    ) -> egui::Mesh {
+        let mut mesh = egui::Mesh::with_texture(self.texture.id());
+        mesh.vertices.reserve(count * 4);
+        mesh.indices.reserve(count * 6);
+        for (position, matched, active) in positions {
+            let u = (usize::from(matched) + 2 * usize::from(active)) as f32 / 4.;
+            mesh.add_rect_with_uv(
+                egui::Rect::from_center_size(position, egui::Vec2::splat(self.side)),
+                egui::Rect::from_min_max(egui::pos2(u, 0.), egui::pos2(u + 0.25, 1.)),
+                Color32::WHITE,
+            );
+        }
+        mesh
+    }
+
+    pub fn texture_id(&self) -> egui::TextureId {
+        self.texture.id()
+    }
 }
 
 #[cfg(test)]

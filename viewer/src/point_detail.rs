@@ -1,4 +1,5 @@
 use crate::{
+    appearance,
     point_list::{self, PointList},
     points::{PROVENANCE_FIELDS, Point, Points},
 };
@@ -87,12 +88,21 @@ impl Detail {
         let mut action = None;
         egui::TopBottomPanel::bottom("point")
             .resizable(true)
+            .frame(appearance::panel(appearance::PAPER, 14, 8))
             .default_height(230.)
             .height_range(110_f32.min(max_height)..=max_height)
             .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new("地点の詳細")
+                        .color(appearance::ACCENT)
+                        .small()
+                        .strong(),
+                );
                 ui.horizontal_wrapped(|ui| {
-                    ui.heading(&point.name);
-                    ui.label(point_list::reading(point));
+                    ui.heading(egui::RichText::new(&point.name).strong());
+                    ui.label(
+                        egui::RichText::new(point_list::reading(point)).color(appearance::MUTED),
+                    );
                     if ui.button("近くの山").clicked() {
                         self.nearby_open = true;
                     }
@@ -100,6 +110,7 @@ impl Detail {
                         action = Some(Action::Close);
                     }
                 });
+                ui.separator();
                 egui::ScrollArea::vertical()
                     .auto_shrink([true, false])
                     .id_salt(index)

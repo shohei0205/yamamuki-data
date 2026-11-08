@@ -225,9 +225,14 @@ impl Tiles {
         painter: &egui::Painter,
         rect: Rect,
         view: &View,
+        dragging: bool,
     ) -> bool {
         self.frame += 1;
-        for (tile, result) in self.replies.try_iter() {
+        let limit = if dragging { 1 } else { MAX_PENDING };
+        let mut processed = 0;
+        // 取得とPNGの展開はワーカーで行う。ドラッグ中はGPUへ渡すタイル数を抑える。
+        for (tile, result) in self.replies.try_iter().take(limit) {
+            processed += 1;
             self.pending.remove(&tile);
             let entry = match result {
                 Ok(Some(image)) => Cached::Texture(ui.ctx().load_texture(
@@ -239,6 +244,9 @@ impl Tiles {
                 Err(_) => Cached::Failed(Instant::now()),
             };
             self.cache.insert(tile, (entry, self.frame));
+        }
+        if processed == limit && !self.pending.is_empty() {
+            ui.ctx().request_repaint();
         }
         let tiles = view.tiles(rect);
         let mut failed = false;
@@ -294,6 +302,52 @@ impl Tiles {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drag_spreads_ready_tile_uploads_over_frames() {
+        let ctx = egui::Context::default();
+        let (queue, _jobs) = mpsc::channel();
+        let (send, replies) = mpsc::channel();
+        let pending: HashSet<_> = (0..MAX_PENDING as u32)
+            .map(|x| Tile { z: 5, x, y: 0 })
+            .collect();
+        for &tile in &pending {
+            send.send((
+                tile,
+                Ok(Some(ColorImage::new([TILE_SIZE; 2], egui::Color32::WHITE))),
+            ))
+            .unwrap();
+        }
+        let mut tiles = Tiles {
+            queue,
+            replies,
+            pending,
+            cache: HashMap::new(),
+            frame: 0,
+        };
+        let view = View {
+            center: [0.5; 2],
+            zoom: MIN_ZOOM,
+        };
+        let mut frame = |dragging| {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    tiles.paint(
+                        ui,
+                        ui.painter(),
+                        ui.available_rect_before_wrap(),
+                        &view,
+                        dragging,
+                    );
+                });
+            });
+            tiles.cache.len()
+        };
+
+        assert_eq!(frame(true), 1);
+        assert_eq!(frame(true), 2);
+        assert_eq!(frame(false), MAX_PENDING);
+    }
 
     #[test]
     fn cursor_anchor_survives_zoom_and_fuji_uses_expected_xyz() {

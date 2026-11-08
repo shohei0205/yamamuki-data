@@ -1,4 +1,5 @@
 use crate::{
+    appearance,
     boundaries::Location,
     points::{PROVENANCE_FIELDS, Point, Points},
 };
@@ -201,10 +202,11 @@ impl PointList {
         points: &Points,
         selected: Option<usize>,
     ) -> (Option<usize>, bool) {
-        ui.heading("地点一覧");
+        ui.heading(egui::RichText::new("地点一覧").strong());
         let edit = ui.add(
             egui::TextEdit::singleline(&mut self.query)
                 .hint_text("地点名・読み・別名・IDで検索")
+                .margin(egui::Margin::symmetric(10, 7))
                 .desired_width(f32::INFINITY),
         );
         let mut changed = edit.changed();
@@ -286,7 +288,8 @@ impl PointList {
         if changed {
             self.rebuild(points);
         }
-        ui.label(format!("{} / {} 地点", self.rows.len(), points.len()));
+        appearance::badge(ui, format!("{} / {} 地点", self.rows.len(), points.len()));
+        ui.separator();
         let id = ui.id().with("地点一覧のキーボード");
         ui.interact(
             ui.available_rect_before_wrap(),
@@ -349,7 +352,7 @@ impl PointList {
                     table = table.animate_scrolling(false).scroll_to_row(row, None);
                 }
                 table
-                    .header(24., |mut header| {
+                    .header(28., |mut header| {
                         for (title, sort) in COLUMNS {
                             header.col(|ui| {
                                 if let Some(sort) = sort {
@@ -379,7 +382,7 @@ impl PointList {
                         }
                     })
                     .body(|body| {
-                        body.rows(24., self.rows.len(), |mut row| {
+                        body.rows(28., self.rows.len(), |mut row| {
                             let number = row.index();
                             let index = self.rows[number];
                             row.set_selected(next.or(selected) == Some(index));
