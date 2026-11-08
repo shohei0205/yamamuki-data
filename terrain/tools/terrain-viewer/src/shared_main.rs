@@ -411,7 +411,27 @@ impl App {
             let mut detail = None;
             for message in loader.receive.try_iter() {
                 match message {
-                    landcover::Message::Extent(extent) => loader.extent = Some(extent),
+                    landcover::Message::Extent {
+                        bounds,
+                        supports_blur,
+                        layered,
+                        split_land,
+                        unified_land,
+                        default_bare_on_top,
+                        l3_zoom,
+                        l4_zoom,
+                        has_z7,
+                    } => {
+                        loader.extent = Some(bounds);
+                        loader.supports_blur = supports_blur;
+                        loader.layered = layered;
+                        loader.split_land = split_land;
+                        loader.unified_land = unified_land;
+                        self.landcover_style.bare_on_top = default_bare_on_top;
+                        self.landcover_style.l3_zoom = l3_zoom;
+                        self.landcover_style.l4_zoom = l4_zoom;
+                        self.landcover_style.has_z7 = has_z7;
+                    }
                     landcover::Message::Overview(image) => {
                         self.renderer.upload_landcover(image, true, false);
                         if self.landcover_status == "地表SQLiteを読み込み中" {
@@ -423,7 +443,7 @@ impl App {
                 }
             }
             if let Some(image) = detail {
-                self.landcover_status = format!("地表 z{} ／ ESA WorldCover 2021", image.z);
+                self.landcover_status = format!("{} ／ ESA WorldCover 2021", image.status());
                 self.renderer
                     .upload_landcover(image, false, self.landcover_style.animate);
             }
@@ -561,6 +581,9 @@ impl eframe::App for App {
                 }
                 ui.label(format!("{:0.0} fps",self.fps));
             });
+            if let Some(loader) = self.landcover.as_ref().filter(|_| self.landcover_visible) {
+                ui.horizontal_wrapped(|ui| self.landcover_style.level_picker(ui, loader.layered, loader.split_land, loader.unified_land));
+            }
             egui::CollapsingHeader::new("表示・SQLite設定").default_open(true).show(ui,|ui|{
                 ui.horizontal(|ui|{ui.text_edit_singleline(&mut self.path);if ui.button("地形SQLiteを開く").clicked(){self.open(ctx);}});
                 ui.horizontal_wrapped(|ui|{
@@ -568,7 +591,9 @@ impl eframe::App for App {
                     ui.text_edit_singleline(&mut self.landcover_path);
                     if ui.button("地表SQLiteを開く").clicked(){self.open_landcover(ctx);}
                     ui.label(&self.landcover_status);
-                    if self.landcover_visible && self.landcover.is_some() { self.landcover_style.controls(ui); }
+                    if let Some(loader) = self.landcover.as_ref().filter(|_| self.landcover_visible) {
+                        self.landcover_style.controls(ui, loader.supports_blur);
+                    }
                 });
                 ui.horizontal_wrapped(|ui|{
                     changed|=ui.checkbox(&mut self.camera.auto,"自動LOD").changed();
@@ -680,6 +705,7 @@ impl eframe::App for App {
                     ctx.pixels_per_point(),
                     self.landcover_visible,
                     self.landcover_style.animate,
+                    self.landcover_style.bilinear,
                 );
                 ui.painter().add(callback);
                 ui.painter().image(

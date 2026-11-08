@@ -50,6 +50,7 @@ struct LandcoverGpu {
     blank: wgpu::TextureView,
     slots: [Option<(wgpu::TextureView, crate::landcover::Bounds)>; 3],
     detail_z: Option<u32>,
+    visible_layers: Option<crate::landcover::LayerVisibility>,
     transition: Option<std::time::Instant>,
     group: wgpu::BindGroup,
 }
@@ -133,6 +134,7 @@ impl LandcoverGpu {
             blank,
             slots: [None, None, None],
             detail_z: None,
+            visible_layers: None,
             transition: None,
             group,
         }
@@ -422,11 +424,22 @@ impl Renderer {
     }
     pub fn upload_landcover(
         &mut self,
-        image: crate::landcover::Image,
+        mut image: crate::landcover::Image,
         overview: bool,
         animate: bool,
     ) {
         let size = image.request.size;
+        let visible = image.request.visibility();
+        let visibility_changed = self
+            .landcover
+            .visible_layers
+            .is_some_and(|old| old != visible);
+        if visibility_changed {
+            self.clear_landcover();
+        }
+        self.landcover.visible_layers = Some(visible);
+        // The shader composites premultiplied texture colors over terrain.
+        image.premultiply_for_display();
         let texture = LandcoverGpu::texture(&self.state.device, size);
         self.state.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
@@ -448,11 +461,11 @@ impl Renderer {
                 .landcover
                 .detail_z
                 .or_else(|| self.landcover.slots[0].as_ref().map(|_| 6));
-            if animate && old_z.is_some_and(|z| z != image.z) {
+            if animate && !visibility_changed && old_z.is_some_and(|z| z != image.lod()) {
                 self.landcover.slots[2] = self.landcover.slots[1].take();
                 self.landcover.transition = Some(std::time::Instant::now());
             }
-            self.landcover.detail_z = Some(image.z);
+            self.landcover.detail_z = Some(image.lod());
         }
         self.landcover.slots[usize::from(!overview)] = Some((
             texture.create_view(&Default::default()),
@@ -475,6 +488,7 @@ impl Renderer {
     pub fn clear_landcover(&mut self) {
         self.landcover.slots = [None, None, None];
         self.landcover.detail_z = None;
+        self.landcover.visible_layers = None;
         self.landcover.transition = None;
         self.landcover.refresh(&self.state.device);
     }
@@ -636,6 +650,7 @@ impl Renderer {
         ppp: f32,
         landcover_enabled: bool,
         landcover_animate: bool,
+        landcover_bilinear: bool,
     ) -> egui::PaintCallback {
         let tiles: Vec<_> = tiles
             .into_iter()
@@ -666,7 +681,9 @@ impl Renderer {
                 tiles,
                 landcover_group: self.landcover.group.clone(),
                 landcover_blend: self.landcover_blend(landcover_enabled && landcover_animate),
+                landcover_water_only: self.landcover.visible_layers.is_some_and(|(layers, _, _)| layers == [false, true]),
                 landcover_uniform: self.landcover.uniform.clone(),
+                landcover_bilinear,
                 landcover_bounds: std::array::from_fn(|i| {
                     if landcover_enabled {
                         self.landcover.slots[i].as_ref().map(|(_, b)| *b)
@@ -701,6 +718,8 @@ struct Frame {
     landcover_uniform: wgpu::Buffer,
     landcover_bounds: [Option<crate::landcover::Bounds>; 3],
     landcover_blend: f32,
+    landcover_water_only: bool,
+    landcover_bilinear: bool,
     indices: Arc<std::collections::HashMap<u32, wgpu::Buffer>>,
     tiles: Vec<Arc<Tile>>,
     roots: Vec<Arc<Tile>>,
@@ -746,7 +765,12 @@ impl CallbackTrait for Frame {
             0,
             bytemuck::bytes_of(&LandcoverView {
                 areas,
-                settings: [self.landcover_blend, 0., 0., 0.],
+                settings: [
+                    self.landcover_blend,
+                    f32::from(self.landcover_water_only),
+                    f32::from(!self.landcover_bilinear),
+                    0.,
+                ],
             }),
         );
         let eye = camera.back() * camera.distance + glam::DVec3::new(0., camera.height, 0.);

@@ -1,4 +1,4 @@
-﻿param([string]$Database, [switch]$Build, [string]$Landcover)
+param([string]$Database, [switch]$Build, [string]$Landcover)
 $ErrorActionPreference = 'Stop'
 $terrain = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 if (-not $Database -and -not $Landcover) {
@@ -7,10 +7,20 @@ if (-not $Database -and -not $Landcover) {
         $Database = Join-Path $terrain 'build/national-shared-z6-z13-v1/terrain-shared.sqlite3'
     }
 }
-$binary = Join-Path $terrain 'build/terrain-viewer-target/release/terrain-shared-viewer.exe'
-if ($Build -or -not (Test-Path -LiteralPath $binary)) {
-    & (Join-Path $PSScriptRoot 'build.ps1')
+$release = Join-Path $terrain 'build/terrain-shared-viewer-target/release'
+$regular = Join-Path $release 'terrain-shared-viewer.exe'
+$staged = Join-Path $release 'terrain-shared-viewer-nearest.exe'
+$newest = @($regular, $staged) |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+    ForEach-Object { Get-Item -LiteralPath $_ } |
+    Sort-Object LastWriteTimeUtc -Descending |
+    Select-Object -First 1
+if ($Build -or -not $newest) {
+    & (Join-Path $PSScriptRoot 'build.ps1') -Shared
     if ($LASTEXITCODE -ne 0) { throw 'ビューワーのビルドが失敗しました。' }
+    $binary = $regular
+} else {
+    $binary = $newest.FullName
 }
 $arguments = @()
 foreach ($entry in @(@('--database', $Database), @('--landcover', $Landcover))) {

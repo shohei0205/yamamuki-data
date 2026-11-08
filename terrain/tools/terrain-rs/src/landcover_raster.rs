@@ -1,5 +1,9 @@
 //! Raster classification denoising and shared-boundary polygonization.
 mod geos;
+#[allow(dead_code)]
+mod codec;
+#[allow(dead_code)]
+mod mesh;
 use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use rayon::prelude::*;
@@ -25,6 +29,8 @@ type H = *mut c_void;
 macro_rules! call { ($g:expr,$name:literal,$ty:ty $(,$arg:expr)*) => {{
     let f:libloading::Symbol<$ty>=$g.get(concat!($name,"\0").as_bytes())?; f($($arg),*)
 }}}
+#[path = "landcover_raster/national_astc.rs"]
+mod national_astc;
 #[derive(Parser)]
 struct Args {
     #[arg(long)]
@@ -864,6 +870,21 @@ fn png_labels(path:&Path,src:&[u8],mask:&[u8],n:usize)->Result<()>{
 }
 
 fn main() -> Result<()> {
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "--optimize-mask-png") {
+        return national_astc::optimize_mask_png();
+    }
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "--unify-forest-underlay") {
+        return national_astc::unify_forest_underlay();
+    }
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "--split-land-mix4") {
+        return national_astc::split_land_mix4();
+    }
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "--repack-land-webp") {
+        return national_astc::repack_land();
+    }
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "--national-astc") {
+        return national_astc::run();
+    }
     let args = Args::parse();
     ensure!(
         args.size >= 256 && args.size % 256 == 0,

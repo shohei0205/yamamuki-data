@@ -10,18 +10,25 @@ if not exist "%terrain_database%" (
     echo SQLite file not found: "%terrain_database%"
     goto failed_popd
 )
-if not exist "build\terrain-viewer-target\release\terrain-shared-viewer.exe" (
-    pwsh.exe -NoProfile -File "%~dp0build.ps1"
+set "viewer_dir=build\terrain-shared-viewer-target\release"
+set "viewer_binary="
+for /f "delims=" %%F in ('dir /b /a:-d /o:-d /t:w "%viewer_dir%\terrain-shared-viewer*.exe" 2^>nul') do (
+    if not defined viewer_binary if /i "%%F"=="terrain-shared-viewer.exe" set "viewer_binary=%viewer_dir%\%%F"
+    if not defined viewer_binary if /i "%%F"=="terrain-shared-viewer-nearest.exe" set "viewer_binary=%viewer_dir%\%%F"
+)
+if not defined viewer_binary (
+    pwsh.exe -NoProfile -File "%~dp0build.ps1" -Shared
     if errorlevel 1 goto failed_popd
+    set "viewer_binary=%viewer_dir%\terrain-shared-viewer.exe"
 )
 if defined landcover_database (
     if not exist "%landcover_database%" (
         echo Landcover SQLite file not found: "%landcover_database%"
         goto failed_popd
     )
-    start "" "build\terrain-viewer-target\release\terrain-shared-viewer.exe" --database "%terrain_database%" --landcover "%landcover_database%"
+    start "" "%viewer_binary%" --database "%terrain_database%" --landcover "%landcover_database%"
 ) else (
-    start "" "build\terrain-viewer-target\release\terrain-shared-viewer.exe" --database "%terrain_database%"
+    start "" "%viewer_binary%" --database "%terrain_database%"
 )
 if errorlevel 1 goto failed_popd
 popd

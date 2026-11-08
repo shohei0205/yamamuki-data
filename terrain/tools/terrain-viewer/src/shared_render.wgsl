@@ -22,10 +22,19 @@ fn landcoverSample(tex:texture_2d<f32>,area:vec4<f32>,q:vec2<f32>)->vec4<f32>{
  if area.z>0.{
   let uv=(q-area.xy)/area.zw;
   if all(uv>=vec2(0.))&&all(uv<vec2(1.)){
+   if landcover.settings.z>0.{
+    let size=textureDimensions(tex);
+    let pixel=min(vec2<u32>(uv*vec2<f32>(size)),size-vec2(1u));
+    return textureLoad(tex,vec2<i32>(pixel),0);
+   }
    return textureSampleLevel(tex,landcoverSampler,uv,0.);
   }
  }
  return vec4(0.);
+}
+
+fn landcoverContains(area:vec4<f32>,q:vec2<f32>)->bool{
+ return area.z>0. && all(q>=area.xy) && all(q<area.xy+area.zw);
 }
 
 fn landcoverColor(p:vec3<f32>,fallback:vec3<f32>)->vec3<f32>{
@@ -35,10 +44,14 @@ fn landcoverColor(p:vec3<f32>,fallback:vec3<f32>)->vec3<f32>{
  if blend>=1. && next.a>=1.{ return next.rgb; }
  let overview=landcoverSample(landcoverOverview,landcover.areas[0],q);
  let base=fallback*(1.-overview.a)+overview.rgb;
- let current=base*(1.-next.a)+next.rgb;
+ let waterOnly=landcover.settings.y>0.;
+ // Transparent water texels inside the detailed image expose the terrain.
+ let currentBase=select(base,fallback,waterOnly && landcoverContains(landcover.areas[1],q));
+ let current=currentBase*(1.-next.a)+next.rgb;
  if blend>=1.{ return current; }
  let old=landcoverSample(landcoverPrevious,landcover.areas[2],q);
- return mix(base*(1.-old.a)+old.rgb,current,blend);
+ let oldBase=select(base,fallback,waterOnly && landcoverContains(landcover.areas[2],q));
+ return mix(oldBase*(1.-old.a)+old.rgb,current,blend);
 }
 struct Varying {
  @builtin(position) clip: vec4<f32>,
