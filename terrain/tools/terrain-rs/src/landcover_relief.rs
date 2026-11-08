@@ -1,5 +1,13 @@
 //! Generate a reference hillshade from cached GSI DEM PNG tiles.
 mod bench_png;
+#[allow(dead_code)]
+mod codec;
+#[allow(dead_code)]
+mod mesh;
+#[path = "landcover_hillshade.rs"]
+mod hillshade;
+#[path = "landcover_shade_compress.rs"]
+mod shade_compress;
 
 use anyhow::{Result, ensure};
 use clap::Parser;
@@ -19,6 +27,18 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    if std::env::args_os().any(|arg| arg == "--compress-hillshade") {
+        return shade_compress::run();
+    }
+    if std::env::args_os().any(|arg| arg == "--pack-ground-512") {
+        return hillshade::pack_ground();
+    }
+    if std::env::args_os().any(|arg| arg == "--merge-hillshade") {
+        return hillshade::merge();
+    }
+    if std::env::args_os().any(|arg| arg == "--compare-dem") {
+        return hillshade::run();
+    }
     let args = Args::parse();
     let manifest: Value = serde_json::from_slice(&fs::read(&args.manifest)?)?;
     let [left, bottom, right, top]: [f64; 4] = serde_json::from_value(manifest["bounds"].clone())?;

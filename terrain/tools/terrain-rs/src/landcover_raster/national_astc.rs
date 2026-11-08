@@ -120,6 +120,12 @@ struct Args {
     /// Generate the combined raster levels at z10, z9, z8, z7, and z6.
     #[arg(long, requires = "water_over_bare")]
     compact_zooms: bool,
+    /// Add L2 / z11 to the compact levels.
+    #[arg(long, requires_all = ["compact_zooms", "lpf"])]
+    include_l2: bool,
+    /// Classify WorldCover NoData as water unless the DEM confirms land.
+    #[arg(long, requires = "water_over_bare")]
+    esa_zero_land_dem: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -130,7 +136,9 @@ enum CompositeOrder {
 
 impl Args {
     fn zooms(&self) -> &'static [u32] {
-        if self.compact_zooms {
+        if self.include_l2 {
+            &[11, 10, 9, 8, 7, 6]
+        } else if self.compact_zooms {
             &[10, 9, 8, 7, 6]
         } else if self.layer.is_some() {
             &[11, 10, 8, 6]
@@ -2811,7 +2819,7 @@ pub(super) fn run() -> Result<()> {
     let gaps_set: BTreeSet<_> = gaps.iter().map(|a| (a.x, a.y)).collect();
     let mut areas: Vec<Area> = serde_json::from_slice(&fs::read(&args.plan)?)?;
     areas.retain(|a| {
-        !gaps_set.contains(&(a.x, a.y))
+        (args.esa_zero_land_dem.is_some() || !gaps_set.contains(&(a.x, a.y)))
             && args
                 .only_area
                 .as_ref()
@@ -2891,6 +2899,11 @@ pub(super) fn run() -> Result<()> {
         .urban_forest_relief_dem
         .as_deref()
         .map(urban_relief::ReliefDem::open)
+        .transpose()?;
+    let zero_land_dem = args
+        .esa_zero_land_dem
+        .as_deref()
+        .map(|path| urban_relief::ReliefDem::open_for_zoom(path, 12))
         .transpose()?;
     let filename = if relief_dem.is_some() {
         "landcover-national-urban-forest-relief.sqlite3"
@@ -2983,8 +2996,12 @@ pub(super) fn run() -> Result<()> {
                     ) == 0,
                     "Read z8/{x}/{y}"
                 );
-                let land =
+                let mut land =
                     coast_mask(&g, &coast, expanded_bounds(x, y, x + 1, y + 1), sample_side)?;
+                if let Some(dem) = &zero_land_dem {
+                    dem.mark_unclassified_land(x, y, CORE, halo, &classes, &mut land)
+                        .with_context(|| format!("Confirm NoData land z8/{x}/{y}"))?;
+                }
                 if let Some(built) = &mut built {
                     built.par_iter_mut().zip(&classes).zip(&land).for_each(
                         |((built, &class), &land)| {
@@ -2992,14 +3009,20 @@ pub(super) fn run() -> Result<()> {
                         },
                     );
                 }
-                for (code, &land) in classes.iter_mut().zip(&land) {
-                    *code = if land == 0 {
-                        3
-                    } else if *code == 0 {
-                        4
+                for (code, land) in classes.iter_mut().zip(&mut land) {
+                    if *code == 0 && zero_land_dem.is_some() {
+                        let confirmed = *land == 2;
+                        *land = u8::from(confirmed);
+                        *code = if confirmed { 0 } else { 3 };
                     } else {
-                        classify(*code)
-                    };
+                        *code = if *land == 0 {
+                            3
+                        } else if *code == 0 {
+                            4
+                        } else {
+                            classify(*code)
+                        };
+                    }
                 }
                 if let Some(cleaned) = &mut cleaned {
                     pool.install(|| remove_isolated_classes(&classes, &land, sample_side, cleaned));
@@ -3148,7 +3171,8 @@ pub(super) fn run() -> Result<()> {
         .collect();
     save(&args, &pool, &mut db, &roots)?;
     let mut levels = Vec::new();
-    for (level, &z) in (3..).zip(args.zooms()) {
+    let first_level = if args.include_l2 { 2 } else { 3 };
+    for (level, &z) in (first_level..).zip(args.zooms()) {
         let (count, bytes): (u64, u64) = db.query_row(
             "SELECT count(*),sum(length(payload)) FROM tiles WHERE z=?",
             [z],
@@ -3214,6 +3238,13 @@ pub(super) fn run() -> Result<()> {
             "builtUpWindowPixels": 25, "builtUpPercent": [10, 25], "reliefMeters": [25, 8],
             "forestProtectionWindowPixels": 9, "forestProtectionPercent": [30, 60],
             "application": "forest coverage before LPF"
+        });
+    }
+    if zero_land_dem.is_some() {
+        report["sourceNoDataClassification"] = json!({
+            "default": "water", "confirmedLand": "other", "demZoom": 12,
+            "landEvidence": "positive-elevation-or-valid-elevation-and-coast-land",
+            "includeEsaSourceGapRegions": true
         });
     }
     if args.full_forested_inland_water {

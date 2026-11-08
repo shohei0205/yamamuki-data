@@ -22,6 +22,7 @@ const PALETTE: [[u8; 4]; 4] = [
     [114, 172, 204, 255],
 ];
 const ASTC_SIDE: usize = 256;
+const HILLSHADE_NEUTRAL: u8 = 136;
 const ASTC_BYTES: usize = ASTC_SIDE * ASTC_SIDE / 4;
 
 #[derive(Clone, Copy)]
@@ -73,19 +74,23 @@ fn land_mix_palette() -> [[u8; 4]; 253] {
     colors
 }
 
-fn decode_land_gray(payload: &[u8]) -> Result<Vec<u8>> {
+fn decode_land_gray(payload: &[u8], side: usize) -> Result<Vec<u8>> {
+    decode_gray(payload, &[png::BitDepth::Two, png::BitDepth::Four], side)
+}
+
+fn decode_gray(payload: &[u8], depths: &[png::BitDepth], side: usize) -> Result<Vec<u8>> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(payload));
     decoder.set_transformations(png::Transformations::EXPAND);
     let mut reader = decoder.read_info()?;
     let info = reader.info();
     ensure!(
-        info.width == ASTC_SIDE as u32
-            && info.height == ASTC_SIDE as u32
-            && matches!(info.bit_depth, png::BitDepth::Two | png::BitDepth::Four)
+        info.width == side as u32
+            && info.height == side as u32
+            && depths.contains(&info.bit_depth)
             && info.color_type == png::ColorType::Grayscale,
-        "Invalid packed land layer"
+        "Invalid grayscale landcover tile"
     );
-    let mut pixels = vec![0; ASTC_SIDE * ASTC_SIDE];
+    let mut pixels = vec![0; side * side];
     reader.next_frame(&mut pixels)?;
     Ok(pixels)
 }
@@ -95,38 +100,45 @@ enum SplitLandAux<'a> {
     Unified(Option<&'a [u8]>),
 }
 
-fn decode_land_missing(payload: &[u8]) -> Result<Vec<u8>> {
+fn decode_land_missing(payload: &[u8], side: usize) -> Result<Vec<u8>> {
     let mut reader = png::Decoder::new(std::io::Cursor::new(payload)).read_info()?;
     let info = reader.info();
     ensure!(
-        info.width == ASTC_SIDE as u32
-            && info.height == ASTC_SIDE as u32
+        info.width == side as u32
+            && info.height == side as u32
             && info.bit_depth == png::BitDepth::One
             && info.color_type == png::ColorType::Grayscale,
         "Invalid 1-bit land missing tile"
     );
-    let mut packed = vec![0; ASTC_SIDE * ASTC_SIDE / 8];
+    let mut packed = vec![0; side * side / 8];
     reader.next_frame(&mut packed)?;
     Ok(packed)
 }
 
 fn decode_land_split(
     forest: &[u8],
-    bare: &[u8],
+    bare: Option<&[u8]>,
     aux: SplitLandAux<'_>,
     visible: [bool; 2],
     bare_overlay: bool,
+    side: usize,
+    mask_webp: bool,
 ) -> Result<Vec<u8>> {
-    let forest = decode_land_gray(forest)?;
-    let bare = decode_land_gray(bare)?;
+    let forest = if mask_webp && forest.starts_with(b"RIFF") {
+        decode_webp_gray(forest, side)?
+    } else {
+        decode_land_gray(forest, side)?
+    };
+    let bare = bare.map(|payload| decode_land_gray(payload, side)).transpose()?;
     let (underlay, missing, legacy) = match aux {
-        SplitLandAux::Legacy(payload) => (payload.map(decode_land_gray).transpose()?, None, true),
+        SplitLandAux::Legacy(payload) => (payload.map(|payload| decode_land_gray(payload, side)).transpose()?, None, true),
         SplitLandAux::Unified(payload) => {
-            (None, payload.map(decode_land_missing).transpose()?, false)
+            (None, payload.map(|payload| decode_land_missing(payload, side)).transpose()?, false)
         }
     };
     let mut rgba = Vec::with_capacity(forest.len() * 4);
-    for (i, (forest, bare)) in forest.into_iter().zip(bare).enumerate() {
+    for (i, forest) in forest.into_iter().enumerate() {
+        let bare = bare.as_ref().map_or(0, |pixels| pixels[i]);
         if (legacy && forest == 255 && bare == 255)
             || missing
                 .as_ref()
@@ -182,17 +194,21 @@ fn forest_underlay_preserves_coverage_and_layer_order() {
     let underlay = tile(0xf0, png::BitDepth::Four);
     let normal = decode_land_split(
         &forest,
-        &bare,
+        Some(&bare),
         SplitLandAux::Legacy(None),
         [true, true],
+        false,
+        ASTC_SIDE,
         false,
     )
     .unwrap();
     let filled = decode_land_split(
         &forest,
-        &bare,
+        Some(&bare),
         SplitLandAux::Legacy(Some(&underlay)),
         [true, false],
+        false,
+        ASTC_SIDE,
         false,
     )
     .unwrap();
@@ -202,17 +218,21 @@ fn forest_underlay_preserves_coverage_and_layer_order() {
     let missing = tile(0x40, png::BitDepth::One);
     let with_bare = decode_land_split(
         &forest,
-        &bare,
+        Some(&bare),
         SplitLandAux::Unified(Some(&missing)),
         [true, true],
+        false,
+        ASTC_SIDE,
         false,
     )
     .unwrap();
     let without_bare = decode_land_split(
         &forest,
-        &bare,
+        Some(&bare),
         SplitLandAux::Unified(Some(&missing)),
         [true, false],
+        false,
+        ASTC_SIDE,
         false,
     )
     .unwrap();
@@ -221,13 +241,14 @@ fn forest_underlay_preserves_coverage_and_layer_order() {
 }
 
 fn decode_land_mix(payload: &[u8]) -> Result<Vec<u8>> {
+    let side = ASTC_SIDE;
     static COLORS: std::sync::OnceLock<[[u8; 4]; 253]> = std::sync::OnceLock::new();
     let colors = COLORS.get_or_init(land_mix_palette);
     let mut reader = png::Decoder::new(std::io::Cursor::new(payload)).read_info()?;
     let info = reader.info();
     ensure!(
-        info.width == ASTC_SIDE as u32
-            && info.height == ASTC_SIDE as u32
+        info.width == side as u32
+            && info.height == side as u32
             && info.bit_depth == png::BitDepth::Eight
             && info.color_type == png::ColorType::Grayscale,
         "Invalid land mixture tile"
@@ -247,7 +268,7 @@ fn decode_land_mix(payload: &[u8]) -> Result<Vec<u8>> {
 
 fn decode_land_image(payload: &[u8]) -> Result<Vec<u8>> {
     if !payload.starts_with(b"RIFF") {
-        return decode_png(payload);
+        return decode_png(payload, ASTC_SIDE);
     }
     let mut decoder = image_webp::WebPDecoder::new(std::io::Cursor::new(payload))?;
     let side = ASTC_SIDE as u32;
@@ -268,14 +289,31 @@ fn decode_land_image(payload: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
-fn decode_png(payload: &[u8]) -> Result<Vec<u8>> {
+fn decode_webp_gray(payload: &[u8], side: usize) -> Result<Vec<u8>> {
+    let mut decoder = image_webp::WebPDecoder::new(std::io::Cursor::new(payload))?;
+    ensure!(
+        decoder.dimensions() == (side as u32, side as u32) && !decoder.has_alpha(),
+        "Invalid grayscale WebP tile"
+    );
+    decoder.set_memory_limit(8 * 1024 * 1024);
+    let mut rgb = vec![0; side * side * 3];
+    decoder.read_image(&mut rgb)?;
+    Ok(rgb.chunks_exact(3).map(|p| p[1]).collect())
+}
+
+fn water_rgba(mask: Vec<u8>) -> Vec<u8> {
+    let [r, g, b, _] = PALETTE[3];
+    mask.into_iter().flat_map(|alpha| [r, g, b, alpha]).collect()
+}
+
+fn decode_png(payload: &[u8], side: usize) -> Result<Vec<u8>> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(payload));
     decoder.set_transformations(png::Transformations::EXPAND);
     let mut reader = decoder.read_info()?;
     let info = reader.info();
     ensure!(
-        info.width == ASTC_SIDE as u32
-            && info.height == ASTC_SIDE as u32
+        info.width == side as u32
+            && info.height == side as u32
             && (info.bit_depth == png::BitDepth::Eight
                 || (info.color_type == png::ColorType::Grayscale
                     && matches!(info.bit_depth, png::BitDepth::Two | png::BitDepth::Four)))
@@ -288,11 +326,7 @@ fn decode_png(payload: &[u8]) -> Result<Vec<u8>> {
     let mut pixels = vec![0; reader.output_buffer_size().context("PNG tile size")?];
     let frame = reader.next_frame(&mut pixels)?;
     if frame.color_type == png::ColorType::Grayscale {
-        let [r, g, b, _] = PALETTE[3];
-        Ok(pixels
-            .into_iter()
-            .flat_map(|alpha| [r, g, b, alpha])
-            .collect())
+        Ok(water_rgba(pixels))
     } else if frame.color_type == png::ColorType::Rgb {
         Ok(pixels
             .chunks_exact(3)
@@ -440,17 +474,22 @@ struct Tile {
     polygons: Vec<Polygon>,
 }
 
-fn landcover_l3_l4(connection: &Connection, table: &str) -> Result<[u32; 2]> {
+fn landcover_levels(connection: &Connection, table: &str, levels: &Value) -> Result<(bool, [u32; 2])> {
     let (has_z11, has_z10, has_z9): (bool, bool, bool) = connection.query_row(
         &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE z=11), EXISTS(SELECT 1 FROM {table} WHERE z=10), EXISTS(SELECT 1 FROM {table} WHERE z=9)"),
         [],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
-    Ok(match (has_z11, has_z10, has_z9) {
+    let has_l2 = levels.as_array().is_some_and(|rows| rows.iter().any(|row| row["level"] == 2 && row["z"] == 11));
+    if has_l2 {
+        ensure!(has_z11 && has_z10 && has_z9, "地表SQLiteのL2〜L4が揃っていません");
+        return Ok((true, [10, 9]));
+    }
+    Ok((false, match (has_z11, has_z10, has_z9) {
         (false, true, true) => [10, 9],
         (_, true, _) => [11, 10],
         _ => [11, 9],
-    })
+    }))
 }
 
 fn has_z7(connection: &Connection, table: &str) -> Result<bool> {
@@ -461,20 +500,62 @@ fn has_z7(connection: &Connection, table: &str) -> Result<bool> {
     )?)
 }
 
+fn l2_pixel_size(metadata: &Value, default: usize) -> Result<usize> {
+    match metadata["l2TilePixels"].as_u64() {
+        None => Ok(default),
+        Some(384) if default == 512 => Ok(384),
+        _ => anyhow::bail!("未対応のL2タイルサイズです"),
+    }
+}
+
+fn raster_layout(metadata: &Value) -> Result<(usize, u32)> {
+    match (metadata["tilePixels"].as_u64(), metadata["tileKeyZoomOffset"].as_i64()) {
+        (Some(512), Some(-1)) => Ok((512, 1)),
+        (Some(256) | None, None | Some(0)) => Ok((ASTC_SIDE, 0)),
+        _ => anyhow::bail!("未対応の地表タイルサイズまたは座標です"),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum HillshadeEncoding {
+    Png(png::BitDepth),
+    WebpOrPng8,
+}
+
+impl HillshadeEncoding {
+    fn decode(self, payload: &[u8], side: usize) -> Result<Vec<u8>> {
+        match self {
+            Self::Png(depth) => decode_gray(payload, &[depth], side),
+            Self::WebpOrPng8 if !payload.starts_with(b"RIFF") => {
+                decode_gray(payload, &[png::BitDepth::Eight], side)
+            }
+            Self::WebpOrPng8 => decode_webp_gray(payload, side),
+        }
+    }
+}
+
 pub struct Database {
+    tile_pixels: usize,
+    l2_tile_pixels: usize,
+    key_zoom_shift: u32,
     connection: Connection,
     pub extent: Bounds,
     cache: HashMap<Key, Option<Tile>>,
     format: Format,
     water: Option<Box<Database>>,
     reads_water_table: bool,
+    mask_webp: bool,
+    hillshade_encoding: Option<HillshadeEncoding>,
+    shade_cache: HashMap<Key, Option<Arc<[u8]>>>,
     forest_underlay: bool,
     unified_forest: bool,
+    has_bare: bool,
     default_bare_on_top: bool,
     l3_zoom: u32,
     l4_zoom: u32,
+    has_l2: bool,
     has_z7: bool,
-    raster_cache: HashMap<(Key, [bool; 2], bool), Option<Arc<[u8]>>>,
+    raster_cache: HashMap<(Key, [bool; 2], bool, bool), Option<Arc<[u8]>>>,
 }
 
 impl Database {
@@ -510,6 +591,8 @@ impl Database {
         } else {
             None
         };
+        let (tile_pixels, key_zoom_shift) = raster_layout(&metadata)?;
+        let l2_tile_pixels = l2_pixel_size(&metadata, tile_pixels)?;
         let format = match metadata["format"].as_str() {
             Some("BZF2+gzip") => Format::Vector,
             Some("ASTC_8x8_UNORM")
@@ -518,7 +601,7 @@ impl Database {
             {
                 Format::Astc
             }
-            Some("PNG") if metadata["tilePixels"] == ASTC_SIDE => {
+            Some("PNG") if metadata["tilePixels"] == tile_pixels => {
                 match metadata["landEncoding"].as_str() {
                     Some("webp-lossless-or-png") => Format::PngOrWebp,
                     Some("mix21-index8") => Format::LandMixIndex,
@@ -532,36 +615,68 @@ impl Database {
             }
             _ => anyhow::bail!("全国地表SQLiteの形式に対応していません"),
         };
+        ensure!(key_zoom_shift == 0 || matches!(format, Format::LandSplitGray4), "512画素の地表形式に対応していません");
         let [xmin, ymin, xmax, ymax]: [i32; 4] = connection.query_row(
             "SELECT min(x),min(y),max(x),max(y) FROM tiles WHERE z=8",
             [],
             |r| Ok([r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?]),
         )?;
-        let [l3_zoom, l4_zoom] = landcover_l3_l4(&connection, "tiles")?;
+        let (has_l2, [l3_zoom, l4_zoom]) = landcover_levels(&connection, "tiles", &metadata["levels"])?;
         let has_z7 = has_z7(&connection, "tiles")?;
+        use rusqlite::OptionalExtension;
+        let hillshade: Option<String> = connection
+            .query_row("SELECT value FROM metadata WHERE key='hillshade'", [], |row| row.get(0))
+            .optional()?;
+        let hillshade_encoding = if let Some(spec) = hillshade.as_deref() {
+            let spec: Value = serde_json::from_str(spec)?;
+            ensure!(
+                water.is_some() && !matches!(format, Format::Vector)
+                    && spec["version"] == 1 && spec["type"] == "hillshade"
+                    && spec["scheme"] == "xyz" && raster_layout(&spec)? == (tile_pixels, key_zoom_shift)
+                    && l2_pixel_size(&spec, tile_pixels)? == l2_tile_pixels
+                    && spec["neutral"] == HILLSHADE_NEUTRAL,
+                "地表の陰影形式に対応していません"
+            );
+            Some(match (spec["encoding"].as_str(), spec["bitDepth"].as_u64()) {
+                (Some("png-gray4"), Some(4)) => HillshadeEncoding::Png(png::BitDepth::Four),
+                (Some("png-gray8"), Some(8)) => HillshadeEncoding::Png(png::BitDepth::Eight),
+                (Some("webp-or-png-gray8"), Some(8)) => HillshadeEncoding::WebpOrPng8,
+                _ => anyhow::bail!("地表の陰影形式に対応していません"),
+            })
+        } else {
+            None
+        };
         ensure!(
-            water.as_ref().is_none_or(|water| [water.l3_zoom, water.l4_zoom] == [l3_zoom, l4_zoom] && water.has_z7 == has_z7),
+            water.as_ref().is_none_or(|water| [water.l3_zoom, water.l4_zoom] == [l3_zoom, l4_zoom] && water.has_z7 == has_z7 && water.has_l2 == has_l2),
             "陸地と水域のズーム構成が一致していません"
         );
-        let left = bounds((8, xmin, ymin));
-        let right = bounds((8, xmax, ymax));
+        let left = bounds((8 - key_zoom_shift, xmin, ymin));
+        let right = bounds((8 - key_zoom_shift, xmax, ymax));
         Ok(Self {
             connection,
+            tile_pixels,
+            l2_tile_pixels,
+            key_zoom_shift,
             extent: [left[0], left[1], right[2], right[3]],
             cache: HashMap::new(),
             format,
             water,
             reads_water_table: false,
+            mask_webp: metadata["maskWebp"] == true,
+            hillshade_encoding,
             forest_underlay: metadata["forestUnderlay"] == "source-lpf-gray4-xor",
             unified_forest: matches!(
                 metadata["landEncoding"].as_str(),
                 Some("forest-bare-unified-gray4" | "forest-bare-unified-gray2")
             ),
-            default_bare_on_top: metadata["compositeOrder"] == "forest-water-bare",
+            has_bare: metadata["bareOmitted"] != true,
+            default_bare_on_top: metadata["bareOmitted"] != true && metadata["compositeOrder"] == "forest-water-bare",
             l3_zoom,
             l4_zoom,
+            has_l2,
             has_z7,
             raster_cache: HashMap::new(),
+            shade_cache: HashMap::new(),
         })
     }
 
@@ -572,11 +687,13 @@ impl Database {
                 r.get(0)
             })?;
         let metadata: Value = serde_json::from_str(&metadata)?;
+        let (tile_pixels, key_zoom_shift) = raster_layout(&metadata)?;
+        let l2_tile_pixels = l2_pixel_size(&metadata, tile_pixels)?;
         ensure!(
             metadata["format"] == "PNG"
                 && metadata["layer"] == if combined { "combined" } else { "water" }
                 && metadata["worldWidthM"].as_f64() == Some(WORLD)
-                && metadata["tilePixels"] == ASTC_SIDE,
+                && metadata["tilePixels"] == tile_pixels,
             "Invalid water layer"
         );
         let extent_sql = if combined {
@@ -588,24 +705,33 @@ impl Database {
             Ok([r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?])
         })?;
         let table = if combined { "water_tiles" } else { "tiles" };
-        let [l3_zoom, l4_zoom] = landcover_l3_l4(&connection, table)?;
+        let levels = &metadata[if combined { "waterLevels" } else { "levels" }];
+        let (has_l2, [l3_zoom, l4_zoom]) = landcover_levels(&connection, table, levels)?;
         let has_z7 = has_z7(&connection, table)?;
-        let a = bounds((8, xmin, ymin));
-        let b = bounds((8, xmax, ymax));
+        let a = bounds((8 - key_zoom_shift, xmin, ymin));
+        let b = bounds((8 - key_zoom_shift, xmax, ymax));
         Ok(Self {
             connection,
+            tile_pixels,
+            l2_tile_pixels,
+            key_zoom_shift,
             extent: [a[0], a[1], b[2], b[3]],
             format: Format::Png,
             water: None,
             reads_water_table: combined,
+            mask_webp: combined && metadata["maskWebp"] == true,
+            hillshade_encoding: None,
             forest_underlay: false,
             unified_forest: false,
+            has_bare: false,
             default_bare_on_top: false,
             l3_zoom,
             l4_zoom,
+            has_l2,
             has_z7,
             cache: HashMap::new(),
             raster_cache: HashMap::new(),
+            shade_cache: HashMap::new(),
         })
     }
 
@@ -653,11 +779,39 @@ impl Database {
         Ok(self.cache[&key].as_ref())
     }
 
+    fn tile_pixels_at(&self, level: u32) -> usize {
+        if level == 11 { self.l2_tile_pixels } else { self.tile_pixels }
+    }
+
+    fn hillshade_tile(&mut self, key: Key) -> Result<Option<Arc<[u8]>>> {
+        use rusqlite::OptionalExtension;
+        let Some(encoding) = self.hillshade_encoding else {
+            return Ok(None);
+        };
+        if !self.shade_cache.contains_key(&key) {
+            if self.shade_cache.len() >= 128 / (1 << (2 * self.key_zoom_shift)) {
+                self.shade_cache.clear();
+            }
+            let payload: Option<Vec<u8>> = self.connection.query_row(
+                "SELECT payload FROM hillshade_tiles WHERE z=? AND x=? AND y=?",
+                key, |row| row.get(0),
+            ).optional()?;
+            let tile = payload.map(|bytes| {
+                let gray = encoding.decode(&bytes, self.tile_pixels_at(key.0))
+                    .with_context(|| format!("陰影画像 {key:?}"))?;
+                Ok::<_, anyhow::Error>(Arc::from(gray.into_iter().flat_map(|v| [v,v,v,255]).collect::<Vec<_>>()))
+            }).transpose()?;
+            self.shade_cache.insert(key, tile);
+        }
+        Ok(self.shade_cache[&key].clone())
+    }
+
     fn raster_tile(
         &mut self,
         key: Key,
         split_layers: [bool; 2],
         bare_overlay: bool,
+        hillshade: bool,
     ) -> Result<Option<Arc<[u8]>>> {
         use rusqlite::OptionalExtension;
         let split_layers = if matches!(self.format, Format::LandSplitGray4) {
@@ -665,12 +819,14 @@ impl Database {
         } else {
             [true; 2]
         };
-        let cache_key = (key, split_layers, bare_overlay);
+        let hillshade_encoding = self.hillshade_encoding.filter(|_| hillshade);
+        let cache_key = (key, split_layers, bare_overlay, hillshade_encoding.is_some());
         if !self.raster_cache.contains_key(&cache_key) {
-            if self.raster_cache.len() >= 512 {
+            if self.raster_cache.len() >= 512 / (1 << (2 * self.key_zoom_shift)) {
                 self.raster_cache.clear();
             }
             let (z, x, y) = key;
+            let tile_pixels = self.tile_pixels_at(z);
             let payload: Option<Vec<u8>> = self
                 .connection
                 .query_row(
@@ -683,18 +839,25 @@ impl Database {
                     |row| row.get(0),
                 )
                 .optional()?;
-            let pixels = payload
+            let mut pixels = payload
                 .as_deref()
                 .map(|payload| match self.format {
-                    Format::Png => decode_png(payload),
+                    Format::Png if self.mask_webp && payload.starts_with(b"RIFF") => {
+                        Ok(water_rgba(decode_webp_gray(payload, tile_pixels)?))
+                    }
+                    Format::Png => decode_png(payload, tile_pixels),
                     Format::PngOrWebp => decode_land_image(payload),
                     Format::LandMixIndex => decode_land_mix(payload),
                     Format::LandSplitGray4 => {
-                        let bare: Vec<u8> = self.connection.query_row(
-                            "SELECT payload FROM bare_tiles WHERE z=? AND x=? AND y=?",
-                            params![z, x, y],
-                            |row| row.get(0),
-                        )?;
+                        let bare: Option<Vec<u8>> = if self.has_bare {
+                            Some(self.connection.query_row(
+                                "SELECT payload FROM bare_tiles WHERE z=? AND x=? AND y=?",
+                                params![z, x, y],
+                                |row| row.get(0),
+                            )?)
+                        } else {
+                            None
+                        };
                         let aux_payload: Option<Vec<u8>> = if self.unified_forest {
                             self.connection.query_row(
                                 "SELECT payload FROM land_missing_tiles WHERE z=? AND x=? AND y=?",
@@ -715,13 +878,25 @@ impl Database {
                         } else {
                             SplitLandAux::Legacy(aux_payload.as_deref())
                         };
-                        decode_land_split(payload, &bare, aux, split_layers, bare_overlay)
+                        decode_land_split(payload, bare.as_deref(), aux, split_layers, bare_overlay, tile_pixels, self.mask_webp)
                     }
                     Format::Astc => decode_astc(payload),
                     Format::Vector => unreachable!("vector tiles are decoded separately"),
                 })
                 .transpose()
                 .with_context(|| format!("地表画像 z{z}/{x}/{y}"))?;
+            if let (Some(pixels), Some(encoding)) = (pixels.as_mut(), hillshade_encoding) {
+                let shade: Option<Vec<u8>> = self.connection.query_row(
+                    "SELECT payload FROM hillshade_tiles WHERE z=? AND x=? AND y=?",
+                    params![z, x, y],
+                    |row| row.get(0),
+                ).optional()?;
+                if let Some(shade) = shade {
+                    let shade = encoding.decode(&shade, tile_pixels)
+                        .with_context(|| format!("陰影画像 z{z}/{x}/{y}"))?;
+                    apply_hillshade(pixels, shade);
+                }
+            }
             self.raster_cache.insert(cache_key, pixels.map(Arc::from));
         }
         Ok(self.raster_cache[&cache_key].clone())
@@ -731,15 +906,25 @@ impl Database {
         let z = request.level;
         ensure!(LEVELS.contains(&z) || z == 10, "Invalid landcover level");
         if self.water.is_some() {
-            let bare_on_top = self.unified_forest
+            let shade_z = (request.hillshade && request.visible_layers[0] && self.hillshade_encoding.is_some())
+                .then_some(request.shade_level);
+            let separate_shade = shade_z.filter(|&shade_z| shade_z != z)
+                .map(|shade_z| self.rasterize_layer(Request { level: shade_z, water_layer: false, ..request }, true))
+                .transpose()?;
+            let bare_on_top = self.unified_forest && self.has_bare
                 && request.bare_on_top
                 && request.visible_layers == [true, true]
                 && request.split_layers[1];
             let mut image = if request.visible_layers[0] {
-                self.rasterize(request)?
+                self.rasterize(Request { hillshade: shade_z == Some(z), ..request })?
             } else {
                 Image::empty(request)
             };
+            image.request = request;
+            image.shade_z = shade_z;
+            if let Some(shade) = &separate_shade {
+                apply_hillshade(&mut image.pixels, shade.pixels.chunks_exact(4).map(|p| if p[3] == 0 { HILLSHADE_NEUTRAL } else { p[0] }));
+            }
             if !request.visible_layers[1] {
                 image.water_z = Some(request.water_level);
                 return Ok(image);
@@ -759,7 +944,12 @@ impl Database {
                 let mut bare_request = request;
                 bare_request.bare_overlay = true;
                 bare_request.water_layer = true;
-                Some(self.rasterize(bare_request)?)
+                bare_request.hillshade = shade_z == Some(z);
+                let mut bare = self.rasterize(bare_request)?;
+                if let Some(shade) = &separate_shade {
+                    apply_hillshade(&mut bare.pixels, shade.pixels.chunks_exact(4).map(|p| if p[3] == 0 { HILLSHADE_NEUTRAL } else { p[0] }));
+                }
+                Some(bare)
             } else {
                 None
             };
@@ -814,41 +1004,50 @@ impl Database {
             request: output,
             z,
             water_z: None,
+            shade_z: None,
             pixels,
         })
     }
 
     fn rasterize(&mut self, request: Request) -> Result<Image> {
+        self.rasterize_layer(request, false)
+    }
+
+    fn rasterize_layer(&mut self, request: Request, shade_only: bool) -> Result<Image> {
         let z = request.level;
         let mut image = Image::empty(request);
-        let side = WORLD / f64::from(1u32 << z);
-        let index = |v: f64| (v / side).floor().clamp(0., f64::from((1u32 << z) - 1)) as i32;
+        let key_zoom = z - self.key_zoom_shift;
+        let side = WORLD / f64::from(1u32 << key_zoom);
+        let index = |v: f64| (v / side).floor().clamp(0., f64::from((1u32 << key_zoom) - 1)) as i32;
         let [left, top, right, bottom] = request.bounds;
         let [extent_left, extent_top, extent_right, extent_bottom] = self.extent;
+        let tile_pixels = self.tile_pixels_at(z);
+        let neutral: Option<Arc<[u8]>> = shade_only.then(|| Arc::from([HILLSHADE_NEUTRAL, HILLSHADE_NEUTRAL, HILLSHADE_NEUTRAL, 255].repeat(tile_pixels * tile_pixels)));
         for y in index(top.max(extent_top))..=index(bottom.min(extent_bottom)) {
             for x in index(left.max(extent_left))..=index(right.min(extent_right)) {
                 let key = (z, x, y);
-                let tile_bounds = bounds(key);
+                let tile_bounds = bounds((key_zoom, x, y));
                 if !matches!(self.format, Format::Vector) {
                     let area = image.raster_area(tile_bounds);
                     if area[0] < area[2] && area[1] < area[3] {
-                        if let Some(tile) =
-                            self.raster_tile(key, request.split_layers, request.bare_overlay)?
-                        {
+                        let mut read = |key| {
+                            if shade_only {
+                                Ok(self.hillshade_tile(key)?.or_else(|| neutral.clone()))
+                            } else {
+                                self.raster_tile(key, request.split_layers, request.bare_overlay, request.hillshade)
+                            }
+                        };
+                        if let Some(tile) = read(key)? {
                             let mut neighbors = [const { None }; 9];
                             neighbors[4] = Some(tile);
                             if request.bilinear {
                                 for (i, slot) in neighbors.iter_mut().enumerate() {
                                     if i != 4 {
-                                        *slot = self.raster_tile(
-                                            (z, x + (i % 3) as i32 - 1, y + (i / 3) as i32 - 1),
-                                            request.split_layers,
-                                            request.bare_overlay,
-                                        )?;
+                                        *slot = read((z, x + (i % 3) as i32 - 1, y + (i / 3) as i32 - 1))?;
                                     }
                                 }
                             }
-                            image.blit_raster(tile_bounds, area, &neighbors);
+                            image.blit_raster(tile_bounds, area, &neighbors, tile_pixels);
                         }
                     }
                     continue;
@@ -886,6 +1085,18 @@ impl Database {
     }
 }
 
+fn apply_hillshade(pixels: &mut [u8], shade: impl IntoIterator<Item = u8>) {
+    let neutral = f32::from(HILLSHADE_NEUTRAL);
+    for (pixel, shade) in pixels.chunks_exact_mut(4).zip(shade) {
+        if pixel[3] != 0 && shade != HILLSHADE_NEUTRAL {
+            let gain = 1. + 0.65 * (f32::from(shade) - neutral) / neutral;
+            for channel in &mut pixel[..3] {
+                *channel = (f32::from(*channel) * gain).round() as u8;
+            }
+        }
+    }
+}
+
 fn composite_water(land: &mut [u8], water: &[u8], bare_on_top: Option<&[u8]>) {
     for (i, (land, water)) in land
         .chunks_exact_mut(4)
@@ -916,8 +1127,9 @@ fn sample_raster(
     (y, fy): (i32, f32),
     water_layer: bool,
     bilinear: bool,
+    tile_pixels: usize,
 ) -> [u8; 4] {
-    let side = ASTC_SIDE as i32;
+    let side = tile_pixels as i32;
     let texel = |x: i32, y: i32| {
         let (tile, sx, sy) = if (0..side).contains(&x) && (0..side).contains(&y) {
             (&tiles[4], x, y)
@@ -929,7 +1141,7 @@ fn sample_raster(
                 (&tiles[4], x.clamp(0, side - 1), y.clamp(0, side - 1))
             }
         };
-        let offset = (sy as usize * ASTC_SIDE + sx as usize) * 4;
+        let offset = (sy as usize * tile_pixels + sx as usize) * 4;
         &tile.as_deref().expect("center raster tile")[offset..offset + 4]
     };
     let nearest = texel(x + i32::from(fx >= 0.5), y + i32::from(fy >= 0.5));
@@ -1065,6 +1277,8 @@ pub fn fade(start: Option<std::time::Instant>, enabled: bool) -> f32 {
     t * t * (3. - 2. * t)
 }
 
+// Existing choices use legacy zoom labels; use a distinct choice for L2.
+const L2_CHOICE: u32 = 12;
 const LEVELS: [u32; 5] = [11, 9, 8, 7, 6];
 // Projected metres, matching the L3–L6 generator fit tolerances.
 const FIT_TOLERANCE_M: [u32; 5] = [200, 500, 2000, 3000, 4000];
@@ -1080,8 +1294,10 @@ fn level_index(z: u32) -> usize {
 pub struct Style {
     level: Option<u32>,
     water_level: Option<u32>,
+    shade_level: Option<u32>,
     pub l3_zoom: u32,
     pub l4_zoom: u32,
+    pub has_l2: bool,
     pub has_z7: bool,
     visible_layers: [bool; 2],
     split_layers: [bool; 2],
@@ -1090,6 +1306,7 @@ pub struct Style {
     blur: [u32; LEVELS.len()],
     pub animate: bool,
     pub bilinear: bool,
+    hillshade: bool,
 }
 
 impl Default for Style {
@@ -1097,8 +1314,10 @@ impl Default for Style {
         Self {
             level: None,
             water_level: None,
+            shade_level: None,
             l3_zoom: 11,
             l4_zoom: 9,
+            has_l2: false,
             has_z7: false,
             visible_layers: [true; 2],
             split_layers: [true; 2],
@@ -1107,6 +1326,7 @@ impl Default for Style {
             blur: DEFAULT_BLUR_M,
             animate: true,
             bilinear: true,
+            hillshade: true,
         }
     }
 }
@@ -1114,10 +1334,24 @@ impl Default for Style {
 impl Style {
     fn actual_zoom(&self, zoom: u32) -> u32 {
         match zoom {
+            L2_CHOICE => 11,
             11 => self.l3_zoom,
             9 => self.l4_zoom,
             _ => zoom,
         }
+    }
+
+    fn select_level(&self, fixed: Option<u32>, metres: f64) -> u32 {
+        let choice = fixed
+            .filter(|&zoom| (zoom != 7 || self.has_z7) && (zoom != L2_CHOICE || self.has_l2))
+            .unwrap_or_else(|| {
+                if self.has_l2 && metres < 100. {
+                    L2_CHOICE
+                } else {
+                    auto_level(metres, self.l3_zoom, self.l4_zoom, self.has_z7)
+                }
+            });
+        self.actual_zoom(choice)
     }
 
     pub fn request(&self, center: Point, size: [usize; 2], metres: f64) -> Request {
@@ -1125,25 +1359,17 @@ impl Style {
             center,
             size,
             metres,
-            Some(
-                self.actual_zoom(
-                    self.level
-                        .filter(|&zoom| zoom != 7 || self.has_z7)
-                        .unwrap_or_else(|| auto_level(metres / self.quality, self.l3_zoom, self.l4_zoom, self.has_z7)),
-                ),
-            ),
+            Some(self.select_level(self.level, metres / self.quality)),
         );
-        request.water_level = self.actual_zoom(
-            self.water_level
-                .filter(|&zoom| zoom != 7 || self.has_z7)
-                .unwrap_or_else(|| auto_level(metres / self.quality / 2., self.l3_zoom, self.l4_zoom, self.has_z7)),
-        );
+        request.water_level = self.select_level(self.water_level, metres / self.quality / 2.);
+        request.shade_level = self.select_level(self.shade_level, metres / self.quality);
         request.visible_layers = self.visible_layers;
         request.split_layers = self.split_layers;
         request.bare_on_top = self.bare_on_top;
         request.blur = self.blur[level_index(if request.level == self.l3_zoom { 11 } else { request.level })];
         request.overview_blur = self.blur[level_index(6)];
         request.bilinear = self.bilinear;
+        request.hillshade = self.hillshade;
         request
     }
 
@@ -1153,42 +1379,57 @@ impl Style {
         layered: bool,
         split_land: bool,
         unified_land: bool,
+        has_bare: bool,
+        has_hillshade: bool,
     ) {
         if split_land {
             ui.checkbox(&mut self.visible_layers[0], "陸地");
             ui.add_enabled_ui(self.visible_layers[0], |ui| {
                 ui.checkbox(&mut self.split_layers[0], "森林");
-                ui.checkbox(&mut self.split_layers[1], "砂礫地");
+                if has_bare {
+                    ui.checkbox(&mut self.split_layers[1], "砂礫地");
+                }
             });
         } else if layered {
             ui.checkbox(&mut self.visible_layers[0], "森林・砂礫地");
         } else {
             ui.label("地表レベル");
         }
-        ui.selectable_value(&mut self.level, None, "自動");
-        let has_z7 = self.has_z7;
-        let zooms = || LEVELS.into_iter().filter(move |&z| z != 7 || has_z7);
-        for (i, z) in zooms().enumerate() {
-            let label = format!("L{} / z{}", i + 3, self.actual_zoom(z));
-            ui.selectable_value(&mut self.level, Some(z), label);
-        }
-        if unified_land {
+        let choices: Vec<_> = LEVELS.into_iter()
+            .filter(|&z| z != 7 || self.has_z7)
+            .enumerate().map(|(i, z)| (z, format!("L{} / z{}", i + 3, self.actual_zoom(z))))
+            .collect();
+        let has_l2 = self.has_l2;
+        let picker = |ui: &mut egui::Ui, level: &mut Option<u32>| {
+            ui.selectable_value(level, None, "自動");
+            if has_l2 {
+                ui.selectable_value(level, Some(L2_CHOICE), "L2 / z11");
+            }
+            for (z, label) in &choices {
+                ui.selectable_value(level, Some(*z), label);
+            }
+        };
+        picker(ui, &mut self.level);
+        if unified_land && has_bare {
             ui.checkbox(&mut self.bare_on_top, "砂礫地を水域の上に表示");
         }
         if layered {
             ui.separator();
             ui.checkbox(&mut self.visible_layers[1], "水域");
-            ui.selectable_value(&mut self.water_level, None, "自動");
-            for (i, z) in zooms().enumerate() {
-                let label = format!("L{} / z{}", i + 3, self.actual_zoom(z));
-                ui.selectable_value(&mut self.water_level, Some(z), label);
-            }
+            picker(ui, &mut self.water_level);
+        }
+        if has_hillshade {
+            ui.separator();
+            ui.checkbox(&mut self.hillshade, "陰影");
+            ui.add_enabled_ui(self.hillshade && self.visible_layers[0], |ui| {
+                picker(ui, &mut self.shade_level);
+            });
         }
     }
 
-    pub fn controls(&mut self, ui: &mut egui::Ui, supports_blur: bool) {
+    pub fn controls(&mut self, ui: &mut egui::Ui, supports_blur: bool, layered: bool, has_hillshade: bool) {
         ui.add_enabled(
-            self.level.is_none(),
+            self.level.is_none() || (layered && self.water_level.is_none()) || (has_hillshade && self.hillshade && self.shade_level.is_none()),
             egui::Slider::new(&mut self.quality, 0.5..=4.)
                 .step_by(0.25)
                 .text("地表LOD精細度"),
@@ -1211,6 +1452,7 @@ impl Style {
         }
         ui.checkbox(&mut self.animate, "地表LODを滑らかに切替");
         ui.checkbox(&mut self.bilinear, "地表バイリニア補間");
+
     }
 }
 
@@ -1220,6 +1462,7 @@ pub struct Request {
     pub size: [usize; 2],
     level: u32,
     water_level: u32,
+    shade_level: u32,
     water_layer: bool,
     pub visible_layers: [bool; 2],
     split_layers: [bool; 2],
@@ -1228,13 +1471,14 @@ pub struct Request {
     blur: u32,
     overview_blur: u32,
     bilinear: bool,
+    hillshade: bool,
 }
 
-pub type LayerVisibility = ([bool; 2], [bool; 2], bool);
+pub type LayerVisibility = ([bool; 2], [bool; 2], bool, bool);
 
 impl Request {
     pub fn visibility(self) -> LayerVisibility {
-        (self.visible_layers, self.split_layers, self.bare_on_top)
+        (self.visible_layers, self.split_layers, self.bare_on_top, self.hillshade)
     }
 
     fn blur_pixels(self) -> [usize; 2] {
@@ -1287,6 +1531,7 @@ impl Request {
             size,
             level,
             water_level: level,
+            shade_level: level,
             water_layer: false,
             visible_layers: [true; 2],
             split_layers: [true; 2],
@@ -1295,6 +1540,7 @@ impl Request {
             blur: DEFAULT_BLUR_M[level_index(level)],
             overview_blur: DEFAULT_BLUR_M[level_index(6)],
             bilinear: true,
+            hillshade: true,
         }
     }
 }
@@ -1303,6 +1549,7 @@ pub struct Image {
     pub request: Request,
     pub z: u32,
     pub water_z: Option<u32>,
+    shade_z: Option<u32>,
     pub pixels: Vec<u8>,
 }
 
@@ -1312,6 +1559,7 @@ impl Image {
             request,
             z: request.level,
             water_z: None,
+            shade_z: None,
             pixels: vec![0; request.size[0] * request.size[1] * 4],
         }
     }
@@ -1328,13 +1576,17 @@ impl Image {
     }
 
     pub fn lod(&self) -> u32 {
-        self.water_z.map_or(self.z, |z| self.z * 16 + z)
+        self.water_z.map_or(self.z, |z| self.z * 16 + z) * 16 + self.shade_z.unwrap_or(0)
     }
     pub fn status(&self) -> String {
-        self.water_z.map_or_else(
+        let mut status = self.water_z.map_or_else(
             || format!("地表 z{}", self.z),
-            |z| format!("森林・砂礫地 z{} ／ 水域 z{z}", self.z),
-        )
+            |z| format!("陸地 z{} ／ 水域 z{z}", self.z),
+        );
+        if let Some(z) = self.shade_z {
+            status.push_str(&format!(" ／ 陰影 z{z}"));
+        }
+        status
     }
 
     fn pixel(&self, x: f64, y: f64) -> Point {
@@ -1366,12 +1618,13 @@ impl Image {
         [l, t, r, b]: Bounds,
         [x0, y0, x1, y1]: [usize; 4],
         tiles: &[Option<Arc<[u8]>>; 9],
+        tile_pixels: usize,
     ) {
         let [l, t] = self.pixel(l, t);
         let [r, b] = self.pixel(r, b);
         let sample = |pixel: usize, start: f64, end: f64| {
-            let position = ((pixel as f64 + 0.5 - start) * ASTC_SIDE as f64 / (end - start))
-                .clamp(0., ASTC_SIDE as f64)
+            let position = ((pixel as f64 + 0.5 - start) * tile_pixels as f64 / (end - start))
+                .clamp(0., tile_pixels as f64)
                 - 0.5;
             let base = position.floor();
             (base as i32, (position - base) as f32)
@@ -1386,7 +1639,7 @@ impl Image {
                 .zip(&columns)
             {
                 pixel.copy_from_slice(&sample_raster(
-                    tiles, column, row, self.request.water_layer, self.request.bilinear,
+                    tiles, column, row, self.request.water_layer, self.request.bilinear, tile_pixels,
                 ));
             }
         }
@@ -1477,11 +1730,14 @@ pub enum Message {
         bounds: Bounds,
         supports_blur: bool,
         layered: bool,
+        has_hillshade: bool,
         split_land: bool,
         unified_land: bool,
+        has_bare: bool,
         default_bare_on_top: bool,
         l3_zoom: u32,
         l4_zoom: u32,
+        has_l2: bool,
         has_z7: bool,
     },
     Overview(Image),
@@ -1492,9 +1748,11 @@ pub enum Message {
 pub struct Loader {
     pub extent: Option<Bounds>,
     pub supports_blur: bool,
+    pub has_hillshade: bool,
     pub layered: bool,
     pub split_land: bool,
     pub unified_land: bool,
+    pub has_bare: bool,
     pub receive: mpsc::Receiver<Message>,
     sender: mpsc::Sender<Request>,
     last: Option<Request>,
@@ -1515,12 +1773,15 @@ impl Loader {
                 send(Message::Extent {
                     bounds: database.extent,
                     supports_blur: matches!(database.format, Format::Vector),
+                    has_hillshade: database.hillshade_encoding.is_some(),
                     layered: database.water.is_some(),
                     split_land: matches!(database.format, Format::LandSplitGray4),
                     unified_land: database.unified_forest,
+                    has_bare: database.has_bare,
                     default_bare_on_top: database.default_bare_on_top,
                     l3_zoom: database.l3_zoom,
                     l4_zoom: database.l4_zoom,
+                    has_l2: database.has_l2,
                     has_z7: database.has_z7,
                 });
                 let mut overview_request = overview.then(|| {
@@ -1551,6 +1812,7 @@ impl Loader {
                             base.split_layers = request.split_layers;
                             base.bare_on_top = request.bare_on_top;
                             base.bilinear = request.bilinear;
+                            base.hillshade = request.hillshade;
                             send(Message::Overview(database.image(*base)?));
                         }
                     }
@@ -1568,9 +1830,11 @@ impl Loader {
         Self {
             extent: None,
             supports_blur: false,
+            has_hillshade: false,
             layered: false,
             split_land: false,
             unified_land: false,
+            has_bare: true,
             receive,
             sender,
             last: None,
@@ -1655,21 +1919,27 @@ impl eframe::App for Map {
                         bounds,
                         supports_blur,
                         layered,
+                        has_hillshade,
                         split_land,
                         unified_land,
+                        has_bare,
                         default_bare_on_top,
                         l3_zoom,
                         l4_zoom,
+                        has_l2,
                         has_z7,
                     } => {
                         self.loader.extent = Some(bounds);
                         self.loader.supports_blur = supports_blur;
+                        self.loader.has_hillshade = has_hillshade;
                         self.loader.layered = layered;
                         self.loader.split_land = split_land;
                         self.loader.unified_land = unified_land;
+                        self.loader.has_bare = has_bare;
                         self.style.bare_on_top = default_bare_on_top;
                         self.style.l3_zoom = l3_zoom;
                         self.style.l4_zoom = l4_zoom;
+                        self.style.has_l2 = has_l2;
                         self.style.has_z7 = has_z7;
                     }
                     Message::Detail(image) => next = Some(image),
@@ -1727,12 +1997,17 @@ impl eframe::App for Map {
                     self.loader.layered,
                     self.loader.split_land,
                     self.loader.unified_land,
+                    self.loader.has_bare,
+                    self.loader.has_hillshade,
                 );
-                self.style.controls(ui, self.loader.supports_blur);
+                self.style.controls(ui, self.loader.supports_blur, self.loader.layered, self.loader.has_hillshade);
             });
             ui.horizontal(|ui| {
                 for (class, label) in ["その他", "森林", "砂礫地", "水域"].iter().enumerate()
                 {
+                    if class == 2 && !self.loader.has_bare {
+                        continue;
+                    }
                     let [r, g, b, _] = PALETTE[class];
                     ui.colored_label(egui::Color32::from_rgb(r, g, b), format!("■ {label}"));
                 }
@@ -1874,16 +2149,16 @@ mod tests {
         tiles[5] = Some(solid([100, 120, 140, 255]));
         let edge = ASTC_SIDE as i32 - 1;
         assert_eq!(
-            sample_raster(&tiles, (edge, 0.5), (4, 0.25), false, true),
+            sample_raster(&tiles, (edge, 0.5), (4, 0.25), false, true, ASTC_SIDE),
             [80, 100, 120, 255]
         );
         tiles[5] = Some(solid([0; 4]));
         assert_eq!(
-            sample_raster(&tiles, (edge, 0.25), (4, 0.25), false, true),
+            sample_raster(&tiles, (edge, 0.25), (4, 0.25), false, true, ASTC_SIDE),
             [60, 80, 100, 255]
         );
         assert_eq!(
-            sample_raster(&tiles, (edge, 0.75), (4, 0.25), false, true),
+            sample_raster(&tiles, (edge, 0.75), (4, 0.25), false, true, ASTC_SIDE),
             [0; 4]
         );
     }
@@ -1895,15 +2170,15 @@ mod tests {
         center[..8].copy_from_slice(&[60, 80, 100, 255, 100, 120, 140, 85]);
         tiles[4] = Some(Arc::from(center));
         assert_eq!(
-            sample_raster(&tiles, (0, 0.25), (0, 0.), true, false),
+            sample_raster(&tiles, (0, 0.25), (0, 0.), true, false, ASTC_SIDE),
             [60, 80, 100, 255]
         );
         assert_eq!(
-            sample_raster(&tiles, (0, 0.75), (0, 0.), true, false),
+            sample_raster(&tiles, (0, 0.75), (0, 0.), true, false, ASTC_SIDE),
             [100, 120, 140, 85]
         );
         assert_eq!(
-            sample_raster(&tiles, (1, 0.75), (0, 0.), false, false),
+            sample_raster(&tiles, (1, 0.75), (0, 0.), false, false, ASTC_SIDE),
             [0; 4]
         );
     }
@@ -1943,7 +2218,7 @@ mod tests {
     fn compact_zooms_map_fixed_and_automatic_l3_to_z10() {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch("CREATE TABLE tiles(z INTEGER); INSERT INTO tiles VALUES (10),(9),(8),(6)").unwrap();
-        let [l3_zoom, l4_zoom] = landcover_l3_l4(&db, "tiles").unwrap();
+        let (_, [l3_zoom, l4_zoom]) = landcover_levels(&db, "tiles", &Value::Null).unwrap();
         assert_eq!([l3_zoom, l4_zoom], [10, 9]);
         let mut style = Style { l3_zoom, l4_zoom, blur: [10, 20, 30, 35, 40], ..Style::default() };
         assert_eq!(style.request([0.; 2], [32; 2], 150.).level, 10);
@@ -1951,7 +2226,16 @@ mod tests {
         style.level = Some(9);
         assert_eq!(style.request([0.; 2], [32; 2], 150.).level, 9);
         db.execute("INSERT INTO tiles VALUES (11)", []).unwrap();
-        assert_eq!(landcover_l3_l4(&db, "tiles").unwrap(), [11, 10]);
+        assert_eq!(landcover_levels(&db, "tiles", &Value::Null).unwrap(), (false, [11, 10]));
+        let levels = serde_json::json!([{"level":2,"z":11}]);
+        assert_eq!(landcover_levels(&db, "tiles", &levels).unwrap(), (true, [10, 9]));
+        style.has_l2 = true;
+        style.level = None;
+        assert_eq!(style.request([0.; 2], [32; 2], 75.).level, 11);
+        let mixed = style.request([0.; 2], [32; 2], 150.);
+        assert_eq!((mixed.level, mixed.water_level), (10, 11));
+        style.level = Some(L2_CHOICE);
+        assert_eq!(style.request([0.; 2], [32; 2], 500.).level, 11);
     }
 
     #[test]
@@ -2079,6 +2363,34 @@ pub fn check(path: &Path) -> Result<()> {
     let mut detail_request = Request::around(fuji, [768, 768], 30., Some(database.l3_zoom));
     detail_request.bare_on_top = database.default_bare_on_top;
     let detail = database.image(detail_request)?;
+    if database.hillshade_encoding.is_some() {
+        let mut unshaded = detail_request;
+        unshaded.hillshade = false;
+        ensure!(database.image(unshaded)?.pixels != detail.pixels, "Hillshade did not change land colors");
+        ensure!(database.image(detail_request)?.pixels == detail.pixels, "Hillshade toggle reused the wrong cache");
+        let mut separate_shade = detail_request;
+        separate_shade.shade_level = 8;
+        let mixed = database.image(separate_shade)?;
+        ensure!(
+            mixed.z == detail.z && mixed.water_z == detail.water_z
+                && mixed.shade_z == Some(8) && mixed.lod() != detail.lod()
+                && mixed.pixels != detail.pixels && mixed.pixels != database.image(unshaded)?.pixels,
+            "Independent hillshade LOD did not change the rendered image"
+        );
+        let bay = crate::selection::lonlat(139.839, 35.598);
+        let mut water_only = Request::around(bay, [256, 256], 60., Some(database.l3_zoom));
+        water_only.visible_layers = [false, true];
+        let shaded_water = database.image(water_only)?;
+        ensure!(
+            shaded_water.pixels.chunks_exact(4).any(|p| p[3] != 0),
+            "Empty water image in hillshade check"
+        );
+        water_only.shade_level = 8;
+        ensure!(database.image(water_only)?.pixels == shaded_water.pixels, "Changing hillshade LOD changed water colors");
+        water_only.hillshade = false;
+        ensure!(database.image(water_only)?.pixels == shaded_water.pixels, "Hillshade changed water colors");
+        println!("Independent hillshade LOD, toggle, cache and water verified");
+    }
     println!(
         "Default composite order: {}",
         if database.default_bare_on_top {
@@ -2095,6 +2407,12 @@ pub fn check(path: &Path) -> Result<()> {
             "Empty L4 image"
         );
         println!("Land and water L4 decoded at z{}", l4.z);
+        if database.has_l2 {
+            let l2 = database.image(Request::around(fuji, [512, 512], 50., Some(11)))?;
+            ensure!(l2.z == 11 && l2.water_z == Some(11) && l2.pixels != detail.pixels
+                && l2.pixels.chunks_exact(4).any(|p| p[3] != 0), "Empty or duplicate L2 image");
+            println!("Land and water L2 decoded at z11 ({} px)", database.tile_pixels_at(11));
+        }
         if database.has_z7 {
             let z7 = database.image(Request::around(fuji, [512, 512], 1200., Some(7)))?;
             ensure!(z7.z == 7 && z7.water_z == Some(7) && z7.pixels.chunks_exact(4).any(|p| p[3] != 0),
@@ -2120,6 +2438,7 @@ pub fn check(path: &Path) -> Result<()> {
             "Land LOD had no effect"
         );
         request.visible_layers = [true, false];
+        request.shade_level = request.level;
         let land = database.image(request)?;
         ensure!(
             land.pixels == database.rasterize(request)?.pixels,
@@ -2141,9 +2460,10 @@ pub fn check(path: &Path) -> Result<()> {
             "Hidden layers left visible pixels"
         );
         println!("Independent land/water LOD and visibility verified");
-        if matches!(database.format, Format::LandSplitGray4) {
+        if matches!(database.format, Format::LandSplitGray4) && database.has_bare {
             let mut request = Request::around(fuji, [768, 768], 30., Some(database.l3_zoom));
             request.visible_layers = [true, false];
+            request.hillshade = false;
             let all = database.image(request)?;
             request.split_layers = [false, true];
             let no_forest = database.image(request)?;

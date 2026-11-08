@@ -458,6 +458,14 @@ L3/z11、L4/z9、L5/z8、L6/z6のすべてを256×256画素で保存する。`ti
 
 `--water-over-bare --suppress-urban-forest` は、ESAの市街地分類を使い、8近傍でつながる森林が256標本以下の場合にだけ候補とする。森林成分の過半数で、周囲49×49標本に占める市街地が15%以上なら「その他」に置き換える。境界をまたぐ候補を同じ条件で評価できるよう512標本の余白を読む。孤立点除去を併用した場合は孤立点除去、都市森林フィルター、穴埋め、LPFの順に処理する。
 
-都市森林フィルターに `--urban-forest-relief-dem build/terrain-lod.sqlite3` を追加すると、起伏と市街地率によって森林を段階的に薄くする。基準は z11 の XYZ 画素で、標高差は9×9画素の最大値と最小値の差、市街地率は25×25画素相当の ESA 市街地分類の面積比。標高差が25 mから8 m、市街地率が10%から25%に近づくほど抑制を強める。中心に標高があり、周囲の標高が80%以上有効な場合に適用する。同じ9×9画素相当で元分類の森林率が30%から60%に上がるほど抑制を弱め、60%以上の森林は維持する。穴埋め後、LPF縮小前の森林レイヤーの濃度だけを変える。森林・砂礫地・水域は従来と同じ4ビットPNGで L3 / z11、L4 / z10、L5 / z8、L6 / z6 に格納する。全国版の `--compact-zooms` では L3 / z10、L4 / z9、L5 / z8、L6 / z7、L7 / z6 を使う。単体テストは `tools/terrain-rs/build.ps1 -LandcoverRaster -Test` で実行できる。
+都市森林フィルターに `--urban-forest-relief-dem build/terrain-lod.sqlite3` を追加すると、起伏と市街地率によって森林を段階的に薄くする。基準は z11 の XYZ 画素で、標高差は9×9画素の最大値と最小値の差、市街地率は25×25画素相当の ESA 市街地分類の面積比。標高差が25 mから8 m、市街地率が10%から25%に近づくほど抑制を強める。中心に標高があり、周囲の標高が80%以上有効な場合に適用する。同じ9×9画素相当で元分類の森林率が30%から60%に上がるほど抑制を弱め、60%以上の森林は維持する。穴埋め後、LPF縮小前の森林レイヤーの濃度だけを変える。森林・砂礫地・水域は従来と同じ4ビットPNGで L3 / z11、L4 / z10、L5 / z8、L6 / z6 に格納する。全国版の `--compact-zooms` では L3 / z10、L4 / z9、L5 / z8、L6 / z7、L7 / z6 を使う。 `--esa-zero-land-dem build/terrain-lod.sqlite3` ではESAの0を原則として水域にする。同じz12画素の標高が正、または標高が有効で海岸マスク上も陸地の場合は「その他」にする。ESA原本がない作業区画も同じ規則で処理する。単体テストは `tools/terrain-rs/build.ps1 -LandcoverRaster -Test` で実行できる。
 
 `--optimize-mask-png --gray2` は、比較用に4ビットの森林・砂礫地・水域を2ビットPNGへ変換する。0・1/3・2/3・1の最近傍に丸め、合成順と欠損マスクは引き継ぐ。形式名は陸地が `forest-bare-unified-gray2`、水域が `gray2-coverage`。 `--gray2-zoom 11` を加えるとL3だけ2ビットへ変換し、L4〜L6は4ビットのPNGをそのまま保持する。混在版のビット深度は `levels` と `waterLevels` の各行の `bitDepth` を参照する。
+
+## 陰影付き全国地表SQLite
+
+採用版は L2 / z11 相当が384画素、L3〜L7が512画素。座標は各レベルの解像度相当のzより1段粗いXYZグリッドを使う。陰影は単方向（北西315度、光源高度45度）で、局所的な明暗の変化に応じて8〜3ビット相当に量子化する。陰影はWebP品質89を使い、森林・水域は可逆WebPを使う。各タイルはPNGの方が小さければPNGで残す。砂礫地は省く。実測の配布SQLiteは43.38 MB。
+
+地表生成に `--compact-zooms --include-l2` を渡す。次に `terrain-landcover-relief` で同じ地表範囲を指定して `--compare-dem` と `--adaptive-graded` で陰影を生成し、`--merge-hillshade` と `--omit-bare` で統合する。`--pack-ground-512` と `--l2-384` でタイルをまとめる。最後に `--compress-hillshade` を `--quality 89`、続けて `--lossless-masks` で実行する。圧縮には `--libwebp` でWebPライブラリを指定する。
+
+生成側のテストは `tools/terrain-rs/build.ps1 -LandcoverRaster -Test` と `tools/terrain-rs/build.ps1 -LandcoverRelief -Test`。表示側は `tools/terrain-viewer/build.ps1 -Shared -Test` と、ビューワ実行ファイルの `--check-landcover --landcover <SQLite>` で確認する。

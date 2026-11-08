@@ -13,16 +13,70 @@ pub(super) struct ReliefDem(Connection);
 
 impl ReliefDem {
     pub(super) fn open(path: &Path) -> Result<Self> {
+        Self::open_for_zoom(path, Z)
+    }
+
+    pub(super) fn open_for_zoom(path: &Path, zoom: u32) -> Result<Self> {
         let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         ensure!(
             db.query_row(
                 "SELECT EXISTS(SELECT 1 FROM tiles WHERE z=?1 AND length(data)>0)",
-                [Z],
+                [zoom],
                 |r| r.get::<_, bool>(0)
             )?,
-            "z11 の標高タイルが必要です"
+            "z{zoom} の標高タイルが必要です"
         );
         Ok(Self(db))
+    }
+
+    // 地表の元標本と同じz12のXYZ画素を参照する。
+    pub(super) fn mark_unclassified_land(
+        &self,
+        x: u32,
+        y: u32,
+        core: usize,
+        halo: usize,
+        classes: &[u8],
+        land: &mut [u8],
+    ) -> Result<()> {
+        let side = (core + 2 * halo) as i64;
+        let first_x = x as i64 * core as i64 - halo as i64;
+        let first_y = y as i64 * core as i64 - halo as i64;
+        let max_tile = (1 << 12) - 1;
+        let mut read = self
+            .0
+            .prepare_cached("SELECT data FROM tiles WHERE z=12 AND x=? AND y=?")?;
+        for ty in first_y.div_euclid(TILE).max(0)..=((first_y + side - 1) / TILE).min(max_tile) {
+            for tx in first_x.div_euclid(TILE).max(0)..=((first_x + side - 1) / TILE).min(max_tile)
+            {
+                let left = first_x.max(tx * TILE);
+                let right = (first_x + side).min((tx + 1) * TILE);
+                let top = first_y.max(ty * TILE);
+                let bottom = (first_y + side).min((ty + 1) * TILE);
+                let width = (right - left) as usize;
+                let dst = |row: i64| ((row - first_y) * side + left - first_x) as usize;
+                if !(top..bottom).any(|row| classes[dst(row)..dst(row) + width].contains(&0)) {
+                    continue;
+                }
+                let data: Option<Vec<u8>> = read.query_row((tx, ty), |r| r.get(0)).optional()?;
+                let Some(data) = data else { continue };
+                let grid = crate::codec::decode_grid(&data)?;
+                ensure!(
+                    grid.rows == TILE as usize && grid.columns == TILE as usize,
+                    "標高タイルの寸法が不正です"
+                );
+                for row in top..bottom {
+                    let src = ((row - ty * TILE) * TILE + left - tx * TILE) as usize;
+                    for col in 0..width {
+                        let i = dst(row) + col;
+                        if classes[i] == 0 && confirms_land(grid.values[src + col], land[i]) {
+                            land[i] = 2;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn forest_weights(
@@ -67,6 +121,18 @@ impl ReliefDem {
         }
         Ok(forest_weights(&dem, built, classes, side as usize))
     }
+}
+
+fn confirms_land(height: f32, coast_land: u8) -> bool {
+    height.is_finite() && (height > 0. || coast_land != 0)
+}
+
+#[test]
+fn no_data_land_needs_dem_evidence() {
+    assert!(!confirms_land(f32::NAN, 1));
+    assert!(!confirms_land(0., 0));
+    assert!(confirms_land(0., 1));
+    assert!(confirms_land(5., 0));
 }
 
 fn remaining(built_fraction: f32, relief: f32, forest_fraction: f32) -> u8 {

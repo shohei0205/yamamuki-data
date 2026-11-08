@@ -681,7 +681,7 @@ impl Renderer {
                 tiles,
                 landcover_group: self.landcover.group.clone(),
                 landcover_blend: self.landcover_blend(landcover_enabled && landcover_animate),
-                landcover_water_only: self.landcover.visible_layers.is_some_and(|(layers, _, _)| layers == [false, true]),
+                landcover_water_only: self.landcover.visible_layers.is_some_and(|(layers, _, _, _)| layers == [false, true]),
                 landcover_uniform: self.landcover.uniform.clone(),
                 landcover_bilinear,
                 landcover_bounds: std::array::from_fn(|i| {

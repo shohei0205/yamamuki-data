@@ -415,21 +415,27 @@ impl App {
                         bounds,
                         supports_blur,
                         layered,
+                        has_hillshade,
                         split_land,
                         unified_land,
+                        has_bare,
                         default_bare_on_top,
                         l3_zoom,
                         l4_zoom,
+                        has_l2,
                         has_z7,
                     } => {
                         loader.extent = Some(bounds);
                         loader.supports_blur = supports_blur;
+                        loader.has_hillshade = has_hillshade;
                         loader.layered = layered;
                         loader.split_land = split_land;
                         loader.unified_land = unified_land;
+                        loader.has_bare = has_bare;
                         self.landcover_style.bare_on_top = default_bare_on_top;
                         self.landcover_style.l3_zoom = l3_zoom;
                         self.landcover_style.l4_zoom = l4_zoom;
+                        self.landcover_style.has_l2 = has_l2;
                         self.landcover_style.has_z7 = has_z7;
                     }
                     landcover::Message::Overview(image) => {
@@ -582,7 +588,7 @@ impl eframe::App for App {
                 ui.label(format!("{:0.0} fps",self.fps));
             });
             if let Some(loader) = self.landcover.as_ref().filter(|_| self.landcover_visible) {
-                ui.horizontal_wrapped(|ui| self.landcover_style.level_picker(ui, loader.layered, loader.split_land, loader.unified_land));
+                ui.horizontal_wrapped(|ui| self.landcover_style.level_picker(ui, loader.layered, loader.split_land, loader.unified_land, loader.has_bare, loader.has_hillshade));
             }
             egui::CollapsingHeader::new("表示・SQLite設定").default_open(true).show(ui,|ui|{
                 ui.horizontal(|ui|{ui.text_edit_singleline(&mut self.path);if ui.button("地形SQLiteを開く").clicked(){self.open(ctx);}});
@@ -592,7 +598,7 @@ impl eframe::App for App {
                     if ui.button("地表SQLiteを開く").clicked(){self.open_landcover(ctx);}
                     ui.label(&self.landcover_status);
                     if let Some(loader) = self.landcover.as_ref().filter(|_| self.landcover_visible) {
-                        self.landcover_style.controls(ui, loader.supports_blur);
+                        self.landcover_style.controls(ui, loader.supports_blur, loader.layered, loader.has_hillshade);
                     }
                 });
                 ui.horizontal_wrapped(|ui|{
