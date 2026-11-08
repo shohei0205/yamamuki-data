@@ -21,6 +21,12 @@ use std::{
     sync::{Arc, mpsc},
 };
 
+#[cfg(target_os = "macos")]
+const _: () = assert!(
+    eframe::wgpu::Instance::enabled_backend_features().contains(eframe::wgpu::Backends::METAL),
+    "macOSのビューワにはMetalが必要です"
+);
+
 const DEFAULT_WINDOW_SIZE: egui::Vec2 = egui::vec2(1150., 800.);
 const NORMAL_WINDOW_SIZE_KEY: &str = "normal_window_size";
 const NORMAL_WINDOW_POSITION_KEY: &str = "normal_window_position";

@@ -20,3 +20,6 @@ resvg = { version = "0.45", default-features = false }
 raw-window-handle = "0.6"
 wgpu = { version = "24", default-features = false, features = ["dx12"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { version = "24", default-features = false, features = ["metal"] }
