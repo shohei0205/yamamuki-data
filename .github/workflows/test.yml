@@ -33,6 +33,16 @@ jobs:
       - name: 共通ビューアのテスト
         run: python -m unittest discover -s points/tests -v
 
+  native-viewer:
+    name: 地点 / ネイティブビューワ
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust stable を準備
+        run: rustup update stable
+      - name: 地点スキーマとネイティブビューワのテスト
+        run: cargo +stable test --locked --manifest-path viewer/Cargo.toml
+
   osm-peaks:
     name: 地点 / OSM山頂
     runs-on: ubuntu-24.04
@@ -80,7 +90,7 @@ jobs:
   test:
     # dev の保護設定が要求するチェック名を維持する。
     name: test
-    needs: [common, points-viewer, osm-peaks, gsi-peaks, test-points]
+    needs: [common, points-viewer, native-viewer, osm-peaks, gsi-peaks, test-points]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -88,12 +98,14 @@ jobs:
         env:
           COMMON_RESULT: ${{ needs.common.result }}
           POINTS_VIEWER_RESULT: ${{ needs.points-viewer.result }}
+          NATIVE_VIEWER_RESULT: ${{ needs.native-viewer.result }}
           OSM_PEAKS_RESULT: ${{ needs.osm-peaks.result }}
           GSI_PEAKS_RESULT: ${{ needs.gsi-peaks.result }}
           TEST_POINTS_RESULT: ${{ needs.test-points.result }}
         run: |
           test "$COMMON_RESULT" = success
           test "$POINTS_VIEWER_RESULT" = success
+          test "$NATIVE_VIEWER_RESULT" = success
           test "$OSM_PEAKS_RESULT" = success
           test "$GSI_PEAKS_RESULT" = success
           test "$TEST_POINTS_RESULT" = success
