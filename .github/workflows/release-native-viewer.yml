@@ -1,0 +1,149 @@
+name: データビューワ：Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-native-viewer-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: ビューワの版とタグを決める
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Cargo.tomlの版を読む
+        id: version
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import tomllib
+
+          with open("viewer/Cargo.toml", "rb") as manifest:
+              version = tomllib.load(manifest)["package"]["version"]
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+              raise SystemExit("ビューワの版は数字3つで指定してください")
+          tag = f"viewer-v{version}"
+          ref = os.environ["GITHUB_REF"]
+          if ref != "refs/heads/main":
+              channel = "dev" if ref == "refs/heads/dev" else "test"
+              tag += f"-{channel}.{os.environ['GITHUB_RUN_ID']}"
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"version={version}\ntag={tag}", file=output)
+          PY
+
+  build:
+    name: 配布用ビルド (${{ matrix.platform }})
+    needs: plan
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x64
+          - os: macos-15
+            platform: macos-arm64
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+      PLATFORM: ${{ matrix.platform }}
+      CARGO_TARGET_DIR: ${{ github.workspace }}/viewer/target
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Rust stable を準備
+        run: rustup update stable
+      - name: ビューワのテスト
+        run: cargo +stable test --locked --release --manifest-path viewer/Cargo.toml
+      - name: ビューワのリリースビルド
+        run: cargo +stable build --locked --release --manifest-path viewer/Cargo.toml
+      - name: Windows版を検証してZIPにまとめる
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:CARGO_TARGET_DIR 'release/yamamuki-viewer.exe'
+          $points = (Resolve-Path 'points/gsi-peaks/gsi-peaks-source.json').Path
+          $log = Join-Path $env:RUNNER_TEMP 'viewer-check-points.log'
+          $result = Start-Process -FilePath $exe -ArgumentList @('--check-points', ('"{0}"' -f $points)) -Wait -PassThru -RedirectStandardOutput $log
+          Get-Content -LiteralPath $log -Encoding utf8
+          if ($result.ExitCode -ne 0) { exit $result.ExitCode }
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Compress-Archive -LiteralPath $exe -DestinationPath "dist/$env:RELEASE_TAG-$env:PLATFORM.zip"
+      - name: macOS版のアプリを作りZIPにまとめる
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          app="dist/YamamukiViewer.app"
+          mkdir -p "$app/Contents/MacOS"
+          install -m 755 "$CARGO_TARGET_DIR/release/yamamuki-viewer" "$app/Contents/MacOS/yamamuki-viewer"
+          cp viewer/release/Info.plist "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" "$app/Contents/Info.plist"
+          plutil -lint "$app/Contents/Info.plist"
+          codesign --force --sign - "$app"
+          codesign --verify --strict "$app"
+          "$app/Contents/MacOS/yamamuki-viewer" --check-points points/gsi-peaks/gsi-peaks-source.json
+          ditto -c -k --keepParent "$app" "dist/$RELEASE_TAG-$PLATFORM.zip"
+      - name: 配布用ZIPを保存
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-viewer-${{ matrix.platform }}
+          path: dist/${{ needs.plan.outputs.tag }}-${{ matrix.platform }}.zip
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+  publish:
+    name: GitHub Releasesに公開
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
+    needs: [plan, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-viewer-*
+          path: dist
+          merge-multiple: true
+      - name: 2環境のZIPを添付して公開
+        shell: bash
+        run: |
+          refs="$(gh api "repos/$GH_REPO/git/matching-refs/tags/$RELEASE_TAG" --jq '.[].ref')"
+          if grep -Fxq "refs/tags/$RELEASE_TAG" <<< "$refs"; then
+            echo "::error::$RELEASE_TAG は公開済み、または予約済みです。"
+            exit 1
+          fi
+
+          assets=()
+          for platform in windows-x64 macos-arm64; do
+            asset="dist/$RELEASE_TAG-$platform.zip"
+            test -s "$asset"
+            assets+=("$asset")
+          done
+          (cd dist && sha256sum "$RELEASE_TAG"-*.zip > SHA256SUMS.txt)
+          args=()
+          if [[ "$GITHUB_REF" == "refs/heads/dev" ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" "${assets[@]}" dist/SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --title "山むき・データビューワ ${RELEASE_TAG#viewer-v}" \
+            --latest=false "${args[@]}" \
+            --notes 'Windows x64、macOS Apple Silicon 向け。macOS版はアドホック署名で、公証は行っていません。'
