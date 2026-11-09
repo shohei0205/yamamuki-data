@@ -43,7 +43,7 @@
     },
     "fileName": {
       "type": "string",
-      "pattern": "^[^/\\\\\\s]+\\.gz$"
+      "pattern": "^[^/\\\\\\s]+\\.(?:gz|sqlite3)$"
     },
     "sha256": {
       "type": "string",
@@ -60,7 +60,7 @@
     "dataSchemaFormat": {
       "type": "string",
       "pattern": "^\\S(?:.*\\S)?$",
-      "description": "データ本体のschemaFormatと同じ値。manifest自身のschemaFormatとは独立。"
+      "description": "データ本体の形式識別子。SQLiteコンテナでは yamamuki-sqlite。manifest自身のschemaFormatとは独立。"
     },
     "dataSchemaVersion": {
       "type": "integer",
@@ -113,6 +113,29 @@
     }
   },
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "dataSchemaFormat": {
+            "const": "yamamuki-sqlite"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "fileName": {
+            "pattern": "^[^/\\\\\\s]+\\.sqlite3$"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "fileName": {
+            "pattern": "^[^/\\\\\\s]+\\.gz$"
+          }
+        }
+      }
+    },
     {
       "not": {
         "required": [

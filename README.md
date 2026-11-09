@@ -9,6 +9,7 @@
 | 種類 | 詳細 |
 |---|---|
 | 地点データ | [データ一覧・共通形式・公開手順](points/README.md) |
+| 地表データ | [ローカルでの取り込み・検証](surface/README.md) |
 | 地形データ | 将来追加予定・未実装 |
 
 収録対象、データ本体の形式、ダウンロード先、生成・公開手順、検査基準は、種類ごとの文書にまとめる。
@@ -23,7 +24,8 @@
 
 ```text
 points/            地点データ（詳細は points/README.md）
-formats/           データ種別に共通する manifest の版別形式説明
+surface/           地表データの生成・SQLite読取
+formats/           データ種別に共通する metadata・manifest・SQLite の仕様
 schemas/           データ種別に共通する manifest の版別スキーマ
 release_tools/     データ種別共通の公開入口
 LICENSES/          Release に添付するライセンスの本文
@@ -67,7 +69,8 @@ LICENSES/          Release に添付するライセンスの本文
 |---|---|
 | 共通：データ処理のテスト | 共通処理と各データのテスト |
 | 共通：文字形式の確認 | 改行コードとBOM |
-| 共通：確認済みデータを公開 | データ種別共通の手動公開 |
+| 共通：確認済みデータを公開 | 地点データの手動公開 |
+| 地表：確認済みデータを公開 | [ローカルで添付した下書きを検査・公開](surface/README.md#地表データの公開) |
 | 地点 / ネイティブビューワ：Release | [Windows・macOSのビューワを手動公開](viewer/README.md#配布版の公開) |
 
 データ固有のActionと操作手順は各READMEを参照する。

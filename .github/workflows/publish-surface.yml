@@ -1,0 +1,53 @@
+name: 地表：確認済みデータを公開
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: 地表データセットのフォルダー名
+        required: true
+        type: string
+      package:
+        description: 配布単位
+        required: true
+        type: string
+      tag:
+        description: 添付済みの下書きReleaseのタグ
+        required: true
+        type: string
+      sha256:
+        description: ローカルで検査したSQLiteのSHA-256
+        required: true
+        type: string
+      target_commit:
+        description: 生成に使ったコミットのSHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-surface-${{ inputs.tag }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - name: 下書きの添付を再検査して公開
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DATASET: ${{ inputs.dataset }}
+          PACKAGE: ${{ inputs.package }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          EXPECTED_SHA256: ${{ inputs.sha256 }}
+          TARGET_COMMIT: ${{ inputs.target_commit }}
+        run: >-
+          ./surface/scripts/publish_release.ps1
+          -Dataset $env:DATASET -Package $env:PACKAGE -Tag $env:RELEASE_TAG -Sha256 $env:EXPECTED_SHA256 -TargetCommit $env:TARGET_COMMIT

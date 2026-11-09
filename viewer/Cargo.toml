@@ -19,6 +19,10 @@ serde_json = { version = "1", features = ["raw_value"] }
 egui_extras = { version = "0.31.1", default-features = false }
 resvg = { version = "0.45", default-features = false }
 tempfile = "3"
+yamamuki-data-sqlite = { path = "../surface/common" }
+
+[dev-dependencies]
+pollster = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"

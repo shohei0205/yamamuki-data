@@ -1,0 +1,3 @@
+[workspace]
+members = ["esa_worldcover", "common", "tools"]
+resolver = "3"

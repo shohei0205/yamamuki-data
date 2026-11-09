@@ -63,6 +63,14 @@ pub fn panel(fill: Color32, x: i8, y: i8) -> egui::Frame {
         .stroke(Stroke::new(1_f32, LINE))
 }
 
+pub fn json_view(ui: &mut egui::Ui, mut json: &str) {
+    ui.add(
+        egui::TextEdit::multiline(&mut json)
+            .font(TextStyle::Monospace)
+            .desired_width(f32::INFINITY),
+    );
+}
+
 pub fn badge(ui: &mut egui::Ui, text: impl Into<RichText>) {
     egui::Frame::new()
         .fill(TINT)
@@ -71,4 +79,44 @@ pub fn badge(ui: &mut egui::Ui, text: impl Into<RichText>) {
         .show(ui, |ui| {
             ui.label(text.into().color(ACCENT).small());
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_view_wraps_at_the_available_width() {
+        let ctx = egui::Context::default();
+        let json = format!("{{\n  \"role\": \"{}\"\n}}", "metadata".repeat(20));
+        let rows_at = |width| {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 300.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let scroll =
+                            egui::ScrollArea::vertical().show(ui, |ui| json_view(ui, &json));
+                        assert!(scroll.content_size.x <= scroll.inner_rect.width() + 1.);
+                    });
+                },
+            );
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == json => {
+                        Some(text.galley.rows.len())
+                    }
+                    _ => None,
+                })
+                .expect("JSONの表示")
+        };
+        assert!(rows_at(700.) < rows_at(220.));
+    }
 }

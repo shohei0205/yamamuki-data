@@ -181,11 +181,7 @@ impl Detail {
                             if ui.button("コピー").clicked() {
                                 ctx.copy_text(self.json.clone());
                             }
-                            ui.add(
-                                egui::TextEdit::multiline(&mut self.json.as_str())
-                                    .font(egui::TextStyle::Monospace)
-                                    .desired_width(f32::INFINITY),
-                            );
+                            appearance::json_view(ui, &self.json);
                         });
                     });
             });

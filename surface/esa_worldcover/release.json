@@ -1,0 +1,36 @@
+{
+  "datasetId": "esa-worldcover-japan",
+  "versionPattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+  "packages": {
+    "all": {
+      "releaseId": "esa-worldcover-japan",
+      "fileName": "esa-worldcover.sqlite3",
+      "layers": [
+        "forest",
+        "hillshade",
+        "water"
+      ]
+    },
+    "forest": {
+      "releaseId": "esa-worldcover-japan-forest",
+      "fileName": "esa-worldcover-forest.sqlite3",
+      "layers": [
+        "forest"
+      ]
+    },
+    "hillshade": {
+      "releaseId": "esa-worldcover-japan-hillshade",
+      "fileName": "esa-worldcover-hillshade.sqlite3",
+      "layers": [
+        "hillshade"
+      ]
+    },
+    "water": {
+      "releaseId": "esa-worldcover-japan-water",
+      "fileName": "esa-worldcover-water.sqlite3",
+      "layers": [
+        "water"
+      ]
+    }
+  }
+}

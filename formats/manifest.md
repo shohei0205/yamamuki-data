@@ -30,18 +30,18 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。�
 |---|---|---|---|---|
 | `schemaFormat` | string | 必須 | JSON の形式の識別子。`yamamuki-manifest` 固定。他の形式と区別する | [版6] 追加 |
 | `schemaVersion` | integer | 必須 | JSON の形式の版。現行版は `6` | [版1] 追加 |
-| `dataSchemaFormat` | string | 必須 | データ本体の `schemaFormat` と同じ値。地点は `yamamuki-points`、補足は `yamamuki-point-supplements`。manifest 自身の `schemaFormat` とは独立 | [版6] 追加 |
+| `dataSchemaFormat` | string | 必須 | データ本体の形式識別子。地点は `yamamuki-points`、補足は `yamamuki-point-supplements`、SQLiteコンテナは `yamamuki-sqlite`。manifest 自身の `schemaFormat` とは独立 | [版6] 追加 |
 | `dataSchemaVersion` | integer | 必須 | データ本体のスキーマの版。正の整数。manifest の `schemaVersion` と独立して管理する | [版5] 追加<br>[版6] 必須化 |
 | `name` | string | 任意 | データセットの表示名 | [版5] 追加 |
 | `version` | string | 必須 | データセットの配布版。英数字で始まり、英数字・ピリオド・ハイフン・下線で構成する | [版1] 追加 |
-| `downloadUrl` | string | 必須 | この版の gzip データ本体を取得する HTTPS URL | [版4] 追加 |
+| `downloadUrl` | string | 必須 | この版のデータ本体を取得する HTTPS URL | [版4] 追加 |
 | `licenseUrl` | string | 任意 | データ本体と同じ Release に添付した利用条件のファイル `LICENSE.txt` の HTTPS URL。データ全体のライセンス、出典ごとの帰属表示、作成者を記載する | [版6.1] 追加（#91） |
-| `fileName` | string | 必須 | gzip データ本体のファイル名。データセットごとに定める | [版1] 追加 |
-| `sha256` | string | 必須 | gzip ファイルそのものの SHA-256。小文字の16進数64文字 | [版1] 追加 |
-| `sizeBytes` | integer | 必須 | gzip ファイルのバイト数。正の整数 | [版1] 追加 |
-| `uncompressedSizeBytes` | integer | 必須 | 展開後の JSON のバイト数。正の整数 | [版1] 追加 |
+| `fileName` | string | 必須 | 配布ファイル名。JSONのgzipは `.gz`、SQLiteは `.sqlite3` | [版1] 追加 |
+| `sha256` | string | 必須 | 配布ファイルそのものの SHA-256。小文字の16進数64文字 | [版1] 追加 |
+| `sizeBytes` | integer | 必須 | 配布ファイルのバイト数。正の整数 | [版1] 追加 |
+| `uncompressedSizeBytes` | integer | 必須 | 展開後のデータ本体のバイト数。正の整数。SQLiteは `sizeBytes` と同じ値 | [版1] 追加 |
 | `dataTimestamp` | string | 必須 | manifest が指す配布データを生成した日時。UTC の ISO 8601（例: `2026-10-14T03:00:00Z`）。元データの編集日時・取得日時・Release の公開日時ではない | [版6] 追加 |
-| `metadata` | object | 必須 | 指し示すデータ JSON の `metadata` をそのままコピーする。型・構造・制約は [metadata フォーマット](metadata.md) を参照。 | [版6] 追加 |
+| `metadata` | object | 必須 | データ本体の共通メタデータ。JSONは `metadata` をそのままコピーする。SQLiteはコンテナ仕様に従う。型・構造・制約は [metadata フォーマット](metadata.md) を参照。 | [版6] 追加 |
 | `pointCount` | integer | 廃止 | 版5の地点件数（必須）。版6では `metadata.pointCount` に移動する | [版1] 元の項目を追加<br>[版5] `mountainCount` から改名<br>[版6] 直下の項目を廃止 |
 | `latestPointTimestamp` | string または null | 廃止 | 版5の収録地点の最終編集日時の最大値（任意）。版6では `metadata.sources[].latestTimestamp` に移動する | [版3] 元の項目を追加<br>[版5] `latestMountainTimestamp` から改名し任意化<br>[版6] 直下の項目を廃止 |
 | `sourceTimestamp` | string | 廃止 | 版5以前の元データ全体の基準日時。版6では廃止。配布データの生成日時は `dataTimestamp` に記載する | [版1] 追加<br>[版5] 必須から任意に変更<br>[版6] 直下の項目を廃止 |
@@ -56,11 +56,15 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。�
 
 補足ファイルを単体で配布するときも、この文書の共通 manifest 形式を使う。`dataSchemaVersion` は補足 JSON 本体の版とし、取得先・サイズ・ハッシュは配布する補足ファイルの値を記載する。`metadata` は補足 JSON の `metadata` をそのままコピーする。
 
+### SQLiteファイルの配布
+
+SQLiteも共通manifest版6を使う。データ本体はSQLiteファイルを直接配布し、`dataSchemaVersion` と `metadata` の対応は [山むきSQLiteコンテナ仕様](sqlite.md#配布manifest) を参照する。
+
 ## 読み込みと検証
 
 現行形式では、各 object に未知の項目を許可し、読み手はそれを解釈しない。既知の項目の型・必須条件・重複などの制約は維持する。
 
-利用するアプリは対応する `schemaVersion` を確認し、`downloadUrl` から本体を取得する。展開前に `sizeBytes` と `sha256`、展開後に `uncompressedSizeBytes` を照合する。データ種別ごとの件数なども各仕様に従って照合する。地点データの件数は、manifest 版4では `mountainCount`、版5では `pointCount`、版6では `metadata.pointCount` を使う。通信や検証に失敗した場合は保存済みデータを維持する。
+利用するアプリは対応する `schemaVersion` を確認し、`downloadUrl` から本体を取得する。取得したファイルの `sizeBytes` と `sha256` を照合し、gzipの場合は展開後の `uncompressedSizeBytes` も照合する。SQLiteの場合は両サイズが一致することを確認する。データ種別ごとの件数なども各仕様に従って照合する。地点データの件数は、manifest 版4では `mountainCount`、版5では `pointCount`、版6では `metadata.pointCount` を使う。通信や検証に失敗した場合は保存済みデータを維持する。
 
 データセットと正式版・開発版ごとに最新版の manifest の URL を分ける。Release に添付する manifest と最新版として配置する manifest は同じ内容を使い、公開済みの版の本体は差し替えない。公開先の URL・Release タグ・ファイル名は各データセットの資料に記載する。
 

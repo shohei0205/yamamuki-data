@@ -117,6 +117,20 @@ impl Source {
         (endpoint, if self == Self::Photo { "jpg" } else { "png" })
     }
 
+    pub fn show_info(self, ui: &mut egui::Ui, zoom: f64) {
+        let (_, extension) = self.tile_endpoint();
+        let format = if extension == "jpg" { "JPEG" } else { "PNG" };
+        ui.set_max_width(360.);
+        ui.strong(self.label());
+        ui.label(format!(
+            "ビューワでの取得上限 z{}",
+            self.tile_zoom(MAX_ZOOM)
+        ));
+        ui.label(format!("画像形式 {format}"));
+        ui.separator();
+        self.attribution(ui, zoom);
+    }
+
     pub fn attribution(self, ui: &mut egui::Ui, zoom: f64) {
         if self.is_osm() {
             ui.hyperlink_to(
@@ -169,9 +183,9 @@ impl Source {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Tile {
-    z: u32,
-    x: u32,
-    y: u32,
+    pub z: u32,
+    pub x: u32,
+    pub y: u32,
 }
 
 impl Tile {
@@ -404,7 +418,10 @@ impl View {
     }
 
     fn tiles(&self, rect: Rect, source: Source) -> Vec<Tile> {
-        let z = source.tile_zoom(self.zoom);
+        self.tiles_at(rect, source.tile_zoom(self.zoom))
+    }
+
+    pub fn tiles_at(&self, rect: Rect, z: u32) -> Vec<Tile> {
         let side = 1u32 << z;
         let index = |x: f64| (x * side as f64).floor().clamp(0., (side - 1) as f64) as u32;
         let [min, max] = self.area(rect);
@@ -429,7 +446,7 @@ impl View {
         tiles
     }
 
-    fn tile_corners(&self, rect: Rect, tile: Tile) -> [Pos2; 4] {
+    pub fn tile_corners(&self, rect: Rect, tile: Tile) -> [Pos2; 4] {
         let side = (1u32 << tile.z) as f64;
         let [left, right] = [tile.x, tile.x + 1].map(|x| f64::from(x) / side);
         let [top, bottom] = [tile.y, tile.y + 1].map(|y| f64::from(y) / side);
@@ -437,7 +454,7 @@ impl View {
             .map(|world| self.screen(rect, world))
     }
 
-    fn paint_tile(
+    pub fn paint_tile(
         &self,
         painter: &egui::Painter,
         rect: Rect,
