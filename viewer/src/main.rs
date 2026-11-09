@@ -50,6 +50,7 @@ struct Viewer {
     list: point_list::PointList,
     selected: Option<usize>,
     marker_popup: bool,
+    map_pin: Option<[f64; 2]>,
     loading: Option<(PathBuf, mpsc::Receiver<Result<Points>>)>,
     source: Option<PathBuf>,
     error: Option<String>,
@@ -57,7 +58,7 @@ struct Viewer {
     marks: Vec<Mark>,
     marker_mesh: Option<Arc<egui::Mesh>>,
     marker_sprites: Option<markers::Sprites>,
-    mark_view: Option<([f64; 2], f64, Rect, Option<usize>)>,
+    mark_view: Option<(map::View, Rect, Option<usize>)>,
 }
 
 impl Viewer {
@@ -72,6 +73,7 @@ impl Viewer {
             view: map::View {
                 center: points::project(36.2, 138.3),
                 zoom: 5.,
+                orientation: map::Orientation::default(),
             },
             tiles: Vec::new(),
             map_source: map::Source::Gsi,
@@ -83,6 +85,7 @@ impl Viewer {
             list: point_list::PointList::default(),
             selected: None,
             marker_popup: false,
+            map_pin: None,
             loading: None,
             source: None,
             error: None,
@@ -191,6 +194,7 @@ impl Viewer {
                 });
                 self.selected = None;
                 self.marker_popup = false;
+                self.map_pin = None;
                 self.fit_pending = true;
                 self.mark_view = None;
             }
@@ -204,17 +208,20 @@ impl Viewer {
         rect: Rect,
         pointer: Option<Pos2>,
         clicked: bool,
-    ) {
-        let Some(points) = &self.points else { return };
-        let current = (self.view.center, self.view.zoom, rect, self.selected);
+    ) -> bool {
+        let Some(points) = &self.points else {
+            return false;
+        };
+        let current = (self.view, rect, self.selected);
         let view_changed = self.mark_view != Some(current);
         if view_changed {
             self.marker_mesh = None;
-            self.marks = markers::displayed(
-                points.filtered_marks(self.view.area(rect), self.view.scale(), self.list.prefix()),
-                points.len(),
-                self.selected,
-            );
+            let mut marks =
+                points.filtered_marks(self.view.area(rect), self.view.scale(), self.list.prefix());
+            if self.view.orientation != map::Orientation::default() {
+                marks.retain(|mark| rect.contains(self.view.screen(rect, mark.world)));
+            }
+            self.marks = markers::displayed(marks, points.len(), self.selected);
             self.mark_view = Some(current);
         }
         let count = self.list.visible_count();
@@ -282,7 +289,13 @@ impl Viewer {
                     painter,
                     rect,
                     position,
-                    format!("{}\n標高 {}　ID {}", point.name, elevation, point.id),
+                    format!(
+                        "{}\n{}\n標高 {}　ID {}",
+                        point.name,
+                        coordinate_label([point.latitude, point.longitude]),
+                        elevation,
+                        point.id
+                    ),
                     true,
                 );
             }
@@ -297,6 +310,7 @@ impl Viewer {
                 false,
             );
         }
+        clicked && hovered.is_some()
     }
 
     fn paint_marker_label(
@@ -478,7 +492,7 @@ impl eframe::App for Viewer {
                     ui.separator();
                     ui.label(
                         egui::RichText::new(
-                            "ドラッグで移動　／　ホイールで拡大縮小　／　地点をクリック",
+                            "左ドラッグで移動　／　右ドラッグで回転・傾き　／　ホイールで拡大縮小　／　クリックで座標",
                         )
                         .color(appearance::MUTED)
                         .small(),
@@ -528,12 +542,8 @@ impl eframe::App for Viewer {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(appearance::CANVAS).inner_margin(8))
             .show(ctx, |ui| {
-                let sense = if self.points.is_some() {
-                    egui::Sense::click_and_drag()
-                } else {
-                    egui::Sense::drag()
-                };
-                let (response, painter) = ui.allocate_painter(ui.available_size(), sense);
+                let (response, painter) =
+                    ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
                 let rect = response.rect;
                 if self.fit_pending
                     && let Some(points) = &self.points
@@ -541,7 +551,22 @@ impl eframe::App for Viewer {
                     self.view.fit(rect, points.bounds);
                     self.fit_pending = false;
                 }
-                let dragging = response.dragged_by(egui::PointerButton::Primary);
+                let compass_rect = Rect::from_center_size(
+                    rect.right_top() + egui::vec2(-32., 32.),
+                    egui::vec2(48., 48.),
+                );
+                let compass = ui
+                    .interact(
+                        compass_rect,
+                        ui.id().with("map-compass"),
+                        egui::Sense::click(),
+                    )
+                    .on_hover_text("北を上にして真上からの表示に戻す");
+                if compass.clicked() {
+                    self.view.orientation = map::Orientation::default();
+                }
+                let dragging = response.dragged();
+                let rotating = response.dragged_by(egui::PointerButton::Secondary);
                 if dragging {
                     let d = ctx.input(|input| {
                         if response.drag_started() {
@@ -556,10 +581,10 @@ impl eframe::App for Viewer {
                             input.pointer.delta()
                         }
                     });
-                    for (axis, delta) in [d.x, d.y].into_iter().enumerate() {
-                        self.view.center[axis] = (self.view.center[axis]
-                            - f64::from(delta) / self.view.scale())
-                        .clamp(0., 1.);
+                    if rotating {
+                        self.view.orientation.orbit(d);
+                    } else if response.dragged_by(egui::PointerButton::Primary) {
+                        self.view.pan(d);
                     }
                 }
                 let pointer = response.hover_pos();
@@ -584,8 +609,37 @@ impl eframe::App for Viewer {
                     );
                 }
                 let failed = self.tiles[0].paint(ui, &painter, rect, &self.view, dragging);
-                let marker_pointer = pointer.filter(|_| !response.dragged());
-                self.paint_markers(&painter, rect, marker_pointer, response.clicked());
+                let click_position = response
+                    .interact_pointer_pos()
+                    .filter(|pos| response.clicked() && !compass_rect.contains(*pos));
+                let marker_pointer = click_position
+                    .or_else(|| pointer.filter(|pos| !dragging && !compass_rect.contains(*pos)));
+                let marker_picked =
+                    self.paint_markers(&painter, rect, marker_pointer, click_position.is_some());
+                if let Some(position) = click_position {
+                    let world = self.view.world_at(rect, position);
+                    self.map_pin = (!marker_picked
+                        && world.iter().all(|value| (0. ..=1.).contains(value)))
+                    .then_some(world);
+                }
+                if let Some(world) = self.map_pin {
+                    let position = self.view.screen(rect, world);
+                    if rect.contains(position) {
+                        painter.circle_filled(position, 5., appearance::ACCENT);
+                        painter.circle_stroke(
+                            position,
+                            5.,
+                            egui::Stroke::new(1_f32, Color32::WHITE),
+                        );
+                        Self::paint_marker_label(
+                            &painter,
+                            rect,
+                            position,
+                            coordinate_label(points::unproject(world)),
+                            true,
+                        );
+                    }
+                }
                 if failed {
                     painter.text(
                         rect.left_top() + egui::vec2(8., 8.),
@@ -624,8 +678,48 @@ impl eframe::App for Viewer {
                     egui::StrokeKind::Inside,
                 );
                 painter.galley(position, zoom, appearance::INK);
+                paint_compass(
+                    &painter,
+                    compass_rect.center(),
+                    self.view.orientation.north(),
+                );
             });
     }
+}
+
+fn coordinate_label([latitude, longitude]: [f64; 2]) -> String {
+    format!("緯度 {latitude:.6}°　経度 {longitude:.6}°")
+}
+
+fn paint_compass(painter: &egui::Painter, center: Pos2, north: egui::Vec2) {
+    painter.circle(
+        center,
+        24.,
+        appearance::PAPER,
+        egui::Stroke::new(1_f32, appearance::LINE),
+    );
+    let side = egui::vec2(-north.y, north.x);
+    for (direction, color) in [
+        (north, Color32::from_rgb(177, 57, 47)),
+        (-north, appearance::MUTED),
+    ] {
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                center + direction * 11.,
+                center + side * 4.,
+                center - side * 4.,
+            ],
+            color,
+            egui::Stroke::NONE,
+        ));
+    }
+    painter.text(
+        center + north * 17.,
+        egui::Align2::CENTER_CENTER,
+        "N",
+        egui::FontId::proportional(11.),
+        appearance::INK,
+    );
 }
 
 fn install_japanese_font(ctx: &egui::Context) {
@@ -801,6 +895,44 @@ mod tests {
             matches!(commands.as_slice(), [egui::ViewportCommand::InnerSize(size), egui::ViewportCommand::OuterPosition(pos)] if *size == normal && *pos == position)
         );
         assert!(frame(false, normal).1.is_empty());
+    }
+
+    #[test]
+    fn clicking_the_map_displays_coordinates_without_a_points_file() {
+        use eframe::App as _;
+
+        let ctx = egui::Context::default();
+        let client = reqwest::blocking::Client::builder()
+            .proxy(reqwest::Proxy::all("http://127.0.0.1:9").unwrap())
+            .build()
+            .unwrap();
+        let mut viewer = Viewer::new(&ctx, client, None);
+        let mut app_frame = eframe::Frame::_new_kittest();
+        let pos = egui::pos2(430., 310.);
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut frame = |events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| viewer.update(ctx, &mut app_frame),
+            )
+        };
+        frame(vec![egui::Event::PointerMoved(pos)]);
+        frame(vec![button(true)]);
+        let output = frame(vec![button(false)]);
+
+        let label = coordinate_label(points::unproject(viewer.map_pin.expect("地図にピンを表示")));
+        assert!(output.shapes.iter().any(|clipped| {
+            matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text() == label)
+        }));
     }
 
     #[test]

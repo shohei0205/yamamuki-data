@@ -13,9 +13,9 @@ cargo run --locked --release --manifest-path viewer/Cargo.toml
 cargo run --locked --release --manifest-path viewer/Cargo.toml -- points/gsi-peaks/gsi-peaks-source.json
 ```
 
-Windowsでは `viewer\run.bat` からも起動できる。作成済みの `viewer\target\release\yamamuki-viewer.exe` があれば起動し、実行ファイルがなければCargoでビルドしてから起動する。ファイルのパスを引数に渡すこともできる。macOSではターミナルから上記のコマンドで起動する。
+Windowsでは `viewer\run_win.bat` からも起動できる。起動のたびにCargoで変更を確認し、必要な部分をリリースビルドしてから実行ファイルを起動する。ファイルのパスを引数に渡すこともできる。macOSではターミナルから上記のコマンドで起動する。
 
-「地点ファイルを開く」から `.json` または `.json.gz` を選ぶ。ファイルをウィンドウにドロップしても開ける。[地点データ版6](../points/schemas/data-v6.schema.json)と[版5の配列](../points/schemas/data-v5.schema.json)に対応する。左ドラッグで移動し、ホイールでカーソル位置を中心に拡大縮小する。マーカーをクリックすると名称・読み・座標・標高・IDを表示する。近接する地点もそれぞれの座標に表示する。
+「地点ファイルを開く」から `.json` または `.json.gz` を選ぶ。ファイルをウィンドウにドロップしても開ける。[地点データ版6](../points/schemas/data-v6.schema.json)と[版5の配列](../points/schemas/data-v5.schema.json)に対応する。左ドラッグで移動し、ホイールでカーソル位置を中心に拡大縮小する。右ドラッグの左右で地図を回転し、上下で最大80°まで傾ける。右上のコンパスは北を示し、クリックすると北が上の真上視点に戻る。地図をクリックすると、その位置にピンを置いて緯度・経度を表示する。地点マーカーをクリックすると名称・座標・標高・IDを表示し、一覧の地点を選ぶ。近接する地点もそれぞれの座標に表示する。
 
 上部の地図メニューで、地理院地図の標準地図・淡色地図・白地図・写真・色別標高図・陰影起伏図・傾斜量図と、OpenStreetMap系の標準地図・地形図（OpenTopoMap）・自転車地図（CyclOSM）・人道支援地図（HOT）を切り替えられる。地図の提供ズームより拡大したときは、取得できる最も細かいタイルを拡大表示する。選んだ地図は次回起動時も使う。出典は [国土地理院（地理院タイル一覧）](https://maps.gsi.go.jp/development/ichiran.html) と [© OpenStreetMap contributors](https://www.openstreetmap.org/copyright)。
 

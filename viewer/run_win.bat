@@ -1,7 +1,5 @@
 @echo off
 setlocal
-set "VIEWER_EXE=%~dp0target\release\yamamuki-viewer.exe"
-if exist "%VIEWER_EXE%" goto run
 
 set "VIEWER_CARGO="
 for %%I in (cargo.exe) do set "VIEWER_CARGO=%%~$PATH:I"
@@ -13,18 +11,19 @@ if not defined CARGO_TARGET_DIR set "CARGO_TARGET_DIR=%~dp0target"
 echo Building yamamuki-viewer...
 "%VIEWER_CARGO%" build --locked --release --manifest-path "%~dp0Cargo.toml" --target-dir "%CARGO_TARGET_DIR%"
 if errorlevel 1 goto build_failed
-if exist "%VIEWER_EXE%" goto run
-if not exist "%~dp0target\release\." mkdir "%~dp0target\release"
-copy /y "%CARGO_TARGET_DIR%\release\yamamuki-viewer.exe" "%VIEWER_EXE%" >nul
-if errorlevel 1 goto build_failed
 
-:run
+set "VIEWER_EXE=%CARGO_TARGET_DIR%\release\yamamuki-viewer.exe"
+if not exist "%VIEWER_EXE%" goto missing_exe
 start "" "%VIEWER_EXE%" %*
 exit /b %errorlevel%
 
 :no_cargo
 echo Cargo was not found. Install Rust stable or put cargo.exe on PATH. 1>&2
 echo See "%~dp0README.md". 1>&2
+exit /b 1
+
+:missing_exe
+echo Built executable was not found at "%VIEWER_EXE%". 1>&2
 exit /b 1
 
 :build_failed

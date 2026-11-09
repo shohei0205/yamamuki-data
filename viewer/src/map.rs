@@ -291,9 +291,49 @@ pub fn check() -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Orientation {
+    rotation: egui::emath::Rot2,
+    vertical_scale: f32,
+}
+
+impl Default for Orientation {
+    fn default() -> Self {
+        Self {
+            rotation: egui::emath::Rot2::IDENTITY,
+            vertical_scale: 1.,
+        }
+    }
+}
+
+impl Orientation {
+    pub fn orbit(&mut self, delta: egui::Vec2) {
+        const DRAG_SPEED: f32 = 0.006;
+        const MAX_TILT: f32 = 80_f32.to_radians();
+        self.rotation = egui::emath::Rot2::from_angle(self.rotation.angle() - delta.x * DRAG_SPEED);
+        let tilt = (self.vertical_scale.acos() - delta.y * DRAG_SPEED).clamp(0., MAX_TILT);
+        self.vertical_scale = tilt.cos();
+    }
+
+    fn project(self, offset: egui::Vec2) -> egui::Vec2 {
+        let rotated = self.rotation * offset;
+        egui::vec2(rotated.x, rotated.y * self.vertical_scale)
+    }
+
+    fn unproject(self, offset: egui::Vec2) -> egui::Vec2 {
+        self.rotation.inverse() * egui::vec2(offset.x, offset.y / self.vertical_scale)
+    }
+
+    pub fn north(self) -> egui::Vec2 {
+        self.project(-egui::Vec2::Y).normalized()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
 pub struct View {
     pub center: [f64; 2],
     pub zoom: f64,
+    pub orientation: Orientation,
 }
 
 impl View {
@@ -302,7 +342,7 @@ impl View {
     }
 
     pub fn world_at(&self, rect: Rect, pos: Pos2) -> [f64; 2] {
-        let d = pos - rect.center();
+        let d = self.orientation.unproject(pos - rect.center());
         [
             self.center[0] + f64::from(d.x) / self.scale(),
             self.center[1] + f64::from(d.y) / self.scale(),
@@ -311,14 +351,36 @@ impl View {
 
     pub fn screen(&self, rect: Rect, [x, y]: [f64; 2]) -> Pos2 {
         rect.center()
-            + egui::vec2(
+            + self.orientation.project(egui::vec2(
                 ((x - self.center[0]) * self.scale()) as f32,
                 ((y - self.center[1]) * self.scale()) as f32,
-            )
+            ))
     }
 
     pub fn area(&self, rect: Rect) -> [[f64; 2]; 2] {
-        [self.world_at(rect, rect.min), self.world_at(rect, rect.max)]
+        let corners = [
+            rect.left_top(),
+            rect.right_top(),
+            rect.right_bottom(),
+            rect.left_bottom(),
+        ];
+        let mut min = [f64::INFINITY; 2];
+        let mut max = [f64::NEG_INFINITY; 2];
+        for corner in corners {
+            let world = self.world_at(rect, corner);
+            for axis in 0..2 {
+                min[axis] = min[axis].min(world[axis]);
+                max[axis] = max[axis].max(world[axis]);
+            }
+        }
+        [min, max]
+    }
+
+    pub fn pan(&mut self, delta: egui::Vec2) {
+        let delta = self.orientation.unproject(delta);
+        for (axis, delta) in [delta.x, delta.y].into_iter().enumerate() {
+            self.center[axis] = (self.center[axis] - f64::from(delta) / self.scale()).clamp(0., 1.);
+        }
     }
 
     pub fn zoom_at(&mut self, rect: Rect, pointer: Pos2, delta: f64) {
@@ -334,7 +396,10 @@ impl View {
         self.center = std::array::from_fn(|i| (min[i] + max[i]) * 0.5);
         let dx = (max[0] - min[0]).max(1e-8);
         let dy = (max[1] - min[1]).max(1e-8);
-        let scale = (f64::from(rect.width()) / dx).min(f64::from(rect.height()) / dy) * 0.8;
+        let width = self.orientation.project(egui::vec2(dx as f32, 0.)).abs();
+        let height = self.orientation.project(egui::vec2(0., dy as f32)).abs();
+        let size = width + height;
+        let scale = f64::from((rect.width() / size.x).min(rect.height() / size.y)) * 0.8;
         self.zoom = (scale / TILE_SIZE as f64).log2().clamp(MIN_ZOOM, 14.);
     }
 
@@ -346,7 +411,12 @@ impl View {
         let mut tiles = Vec::new();
         for y in index(min[1])..=index(max[1]) {
             for x in index(min[0])..=index(max[0]) {
-                tiles.push(Tile { z, x, y });
+                let tile = Tile { z, x, y };
+                if self.orientation == Orientation::default()
+                    || Rect::from_points(&self.tile_corners(rect, tile)).intersects(rect)
+                {
+                    tiles.push(tile);
+                }
             }
         }
         tiles.sort_by(|a, b| {
@@ -359,15 +429,47 @@ impl View {
         tiles
     }
 
-    fn tile_rect(&self, rect: Rect, tile: Tile) -> Rect {
+    fn tile_corners(&self, rect: Rect, tile: Tile) -> [Pos2; 4] {
         let side = (1u32 << tile.z) as f64;
-        Rect::from_min_max(
-            self.screen(rect, [tile.x as f64 / side, tile.y as f64 / side]),
-            self.screen(
-                rect,
-                [(tile.x + 1) as f64 / side, (tile.y + 1) as f64 / side],
-            ),
-        )
+        let [left, right] = [tile.x, tile.x + 1].map(|x| f64::from(x) / side);
+        let [top, bottom] = [tile.y, tile.y + 1].map(|y| f64::from(y) / side);
+        [[left, top], [right, top], [right, bottom], [left, bottom]]
+            .map(|world| self.screen(rect, world))
+    }
+
+    fn paint_tile(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        tile: Tile,
+        texture: egui::TextureId,
+    ) {
+        let corners = self.tile_corners(rect, tile);
+        if self.orientation == Orientation::default() {
+            painter.image(
+                texture,
+                Rect::from_min_max(corners[0], corners[2]),
+                Rect::from_min_max(Pos2::ZERO, egui::pos2(1., 1.)),
+                egui::Color32::WHITE,
+            );
+        } else {
+            let mut mesh = egui::Mesh::with_texture(texture);
+            for (pos, uv) in corners.into_iter().zip([
+                Pos2::ZERO,
+                egui::pos2(1., 0.),
+                egui::pos2(1., 1.),
+                egui::pos2(0., 1.),
+            ]) {
+                mesh.vertices.push(egui::epaint::Vertex {
+                    pos,
+                    uv,
+                    color: egui::Color32::WHITE,
+                });
+            }
+            mesh.add_triangle(0, 1, 2);
+            mesh.add_triangle(0, 2, 3);
+            painter.add(egui::Shape::mesh(mesh));
+        }
     }
 }
 
@@ -457,6 +559,8 @@ impl Tiles {
             ui.ctx().request_repaint();
         }
         let tiles = view.tiles(rect, self.source);
+        // 傾斜で可視範囲が広がっても、表示中のタイルはキャッシュに収める。
+        let cache_limit = MAX_CACHE.max(tiles.len() + MAX_PENDING);
         let mut failed = false;
         for tile in tiles {
             if let Some((entry, touched)) = self.cache.get_mut(&tile) {
@@ -465,12 +569,7 @@ impl Tiles {
                     Cached::Texture(texture, expiry)
                         if expiry.is_none_or(|until| Instant::now() < until) =>
                     {
-                        painter.image(
-                            texture.id(),
-                            view.tile_rect(rect, tile),
-                            Rect::from_min_max(Pos2::ZERO, egui::pos2(1., 1.)),
-                            egui::Color32::WHITE,
-                        );
+                        view.paint_tile(painter, rect, tile, texture.id());
                         continue;
                     }
                     Cached::Texture(_, _) => {}
@@ -492,7 +591,7 @@ impl Tiles {
                 self.pending.insert(tile);
             }
         }
-        while self.cache.len() > MAX_CACHE {
+        while self.cache.len() > cache_limit {
             if let Some(key) = self
                 .cache
                 .iter()
@@ -521,6 +620,7 @@ mod tests {
         let view = View {
             center: crate::points::project(35.36, 138.73),
             zoom: 18.,
+            orientation: Orientation::default(),
         };
         let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.));
         for (source, max) in [
@@ -539,7 +639,7 @@ mod tests {
             let tiles = view.tiles(rect, source);
             assert!(!tiles.is_empty());
             assert!(tiles.iter().all(|tile| tile.z == max));
-            assert!(view.tile_rect(rect, tiles[0]).contains(rect.center()));
+            assert!(Rect::from_points(&view.tile_corners(rect, tiles[0])).contains(rect.center()));
         }
     }
 
@@ -637,6 +737,7 @@ mod tests {
         let view = View {
             center: [0.5; 2],
             zoom: MIN_ZOOM,
+            orientation: Orientation::default(),
         };
         let mut frame = |dragging| {
             let _ = ctx.run(egui::RawInput::default(), |ctx| {
@@ -659,10 +760,86 @@ mod tests {
     }
 
     #[test]
+    fn tilted_view_keeps_the_zoom_and_drag_anchors() {
+        let mut view = View {
+            center: [0.5; 2],
+            zoom: 8.,
+            orientation: Orientation::default(),
+        };
+        view.orientation.orbit(egui::vec2(100., -140.));
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.));
+        let pointer = egui::pos2(621., 405.);
+        let world = view.world_at(rect, pointer);
+        assert!(view.screen(rect, world).distance(pointer) < 0.001);
+        view.zoom_at(rect, pointer, 2.);
+        assert!(view.screen(rect, world).distance(pointer) < 0.001);
+        let delta = egui::vec2(31., -70.);
+        view.pan(delta);
+        assert!(view.screen(rect, world).distance(pointer + delta) < 0.001);
+
+        let fuji = [35.36, 138.73];
+        let world = crate::points::project(fuji[0], fuji[1]);
+        view.center = world;
+        let position = view.screen(rect, world);
+        let coordinates = crate::points::unproject(view.world_at(rect, position));
+        for (actual, expected) in coordinates.into_iter().zip(fuji) {
+            assert!((actual - expected).abs() < 1e-9);
+        }
+
+        let projected_north = view.screen(rect, [view.center[0], view.center[1] - 0.0001]);
+        let direction = (projected_north - rect.center()).normalized();
+        assert!((view.orientation.north() - direction).length() < 0.001);
+    }
+
+    #[test]
+    fn rotated_tiles_cover_the_viewport_and_share_edges() {
+        let mut view = View {
+            center: [0.5; 2],
+            zoom: 8.,
+            orientation: Orientation::default(),
+        };
+        view.orientation.orbit(egui::vec2(380., -400.));
+        assert!((view.orientation.vertical_scale.acos().to_degrees() - 80.).abs() < 0.001);
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(820., 620.));
+        let tiles = view.tiles(rect, Source::Gsi);
+        for pos in [
+            rect.left_top(),
+            rect.right_top(),
+            rect.right_bottom(),
+            rect.left_bottom(),
+        ] {
+            let [x, y] = view.world_at(rect, pos);
+            assert!(tiles.contains(&Tile {
+                z: 8,
+                x: (x * 256.).floor() as u32,
+                y: (y * 256.).floor() as u32,
+            }));
+        }
+        let a = view.tile_corners(
+            rect,
+            Tile {
+                z: 8,
+                x: 127,
+                y: 128,
+            },
+        );
+        let b = view.tile_corners(
+            rect,
+            Tile {
+                z: 8,
+                x: 128,
+                y: 128,
+            },
+        );
+        assert_eq!([a[1], a[2]], [b[0], b[3]]);
+    }
+
+    #[test]
     fn cursor_anchor_survives_zoom_and_fuji_uses_expected_xyz() {
         let mut view = View {
             center: crate::points::project(35.36, 138.73),
             zoom: 8.,
+            orientation: Orientation::default(),
         };
         let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.));
         assert_eq!(

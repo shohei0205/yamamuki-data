@@ -118,6 +118,14 @@ pub fn project(latitude: f64, longitude: f64) -> [f64; 2] {
     ]
 }
 
+pub fn unproject([x, y]: [f64; 2]) -> [f64; 2] {
+    let latitude = ((0.5 - y) * std::f64::consts::TAU)
+        .sinh()
+        .atan()
+        .to_degrees();
+    [latitude, (x - 0.5) * 360.]
+}
+
 fn morton([x, y]: [f64; 2]) -> u64 {
     let x = (x * AXIS).min(AXIS - 1.) as u32;
     let y = (y * AXIS).min(AXIS - 1.) as u32;
