@@ -34,7 +34,7 @@ jobs:
         run: python -m unittest discover -s points/tests -v
 
   native-viewer:
-    name: 地点 / ネイティブビューワ (${{ matrix.os }})
+    name: データビューワ (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -44,9 +44,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Rust stable を準備
         run: rustup update stable
-      - name: 地点スキーマとネイティブビューワのテスト
+      - name: 地点スキーマとデータビューワのテスト
         run: cargo +stable test --locked --release --manifest-path viewer/Cargo.toml
-      - name: ネイティブビューワをビルド
+      - name: データビューワをビルド
         run: cargo +stable build --locked --release --manifest-path viewer/Cargo.toml
       - name: Windows実行ファイルで地点JSONを開く
         if: runner.os == 'Windows'

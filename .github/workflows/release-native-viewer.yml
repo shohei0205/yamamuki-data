@@ -1,4 +1,4 @@
-name: 地点 / ネイティブビューワ：Release
+name: データビューワ：Release
 
 on:
   workflow_dispatch:
@@ -144,6 +144,6 @@ jobs:
             args+=(--prerelease)
           fi
           gh release create "$RELEASE_TAG" "${assets[@]}" dist/SHA256SUMS.txt \
-            --target "$GITHUB_SHA" --title "山むき・地点ビューワ ${RELEASE_TAG#viewer-v}" \
+            --target "$GITHUB_SHA" --title "山むき・データビューワ ${RELEASE_TAG#viewer-v}" \
             --latest=false "${args[@]}" \
             --notes 'Windows x64、macOS Apple Silicon 向け。macOS版はアドホック署名で、公証は行っていません。'

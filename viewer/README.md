@@ -1,4 +1,4 @@
-﻿# ネイティブ地点ビューワ
+﻿# 山むき・データビューワ
 
 国土地理院の標準地図やOpenStreetMapに、山むきの地点JSONを重ねる。WindowsとmacOS（Apple Silicon）を対応対象とするRustアプリ。地図は現在の表示範囲のタイルをオンラインで取得する。地点ファイルはローカルで読む。
 
@@ -47,7 +47,7 @@ cargo run --locked --manifest-path viewer/Cargo.toml -- --check-map
 
 ## 配布版の公開
 
-GitHub Actions の「地点 / ネイティブビューワ：Release」を手動で実行する。Windows x64とmacOS Apple SiliconのZIPを作り、それぞれの実行ファイルで地点JSONを読み込んで確認する。
+GitHub Actions の「データビューワ：Release」を手動で実行する。Windows x64とmacOS Apple SiliconのZIPを作り、それぞれの実行ファイルで地点JSONを読み込んで確認する。
 
 - main では、Cargo.toml の版を使った `viewer-v<版>` のタグで公開する。次の正式版を作るときは Cargo.toml の版と Cargo.lock を更新する。
 - dev では、viewer-v<版>-dev.<実行ID> のタグでプレリリースを公開する。

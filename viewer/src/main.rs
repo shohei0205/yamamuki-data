@@ -394,7 +394,7 @@ impl eframe::App for Viewer {
                             .strong()
                             .size(22.),
                     );
-                    ui.label(egui::RichText::new("地点ビューワ").color(appearance::MUTED));
+                    ui.label(egui::RichText::new("データビューワ").color(appearance::MUTED));
                     ui.separator();
                     let map_group = if self.map_source.is_osm() {
                         "OSM"
@@ -809,7 +809,7 @@ fn run() -> Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "山むき・地点ビューワ",
+        "山むき・データビューワ",
         options,
         Box::new(move |cc| {
             #[cfg(windows)]
@@ -847,7 +847,7 @@ fn main() -> Result<()> {
             .is_some_and(|a| a == "--check-map" || a == "--check-points")
         {
             rfd::MessageDialog::new()
-                .set_title("地点ビューワ")
+                .set_title("データビューワ")
                 .set_description(format!("{error:#}"))
                 .show();
         }

@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDisplayName</key>
-    <string>山むき・地点ビューワ</string>
+    <string>山むき・データビューワ</string>
     <key>CFBundleExecutable</key>
     <string>yamamuki-viewer</string>
     <key>CFBundleIdentifier</key>
     <string>org.yamamuki.viewer</string>
     <key>CFBundleName</key>
-    <string>YamamukiViewer</string>
+    <string>データビューワ</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
