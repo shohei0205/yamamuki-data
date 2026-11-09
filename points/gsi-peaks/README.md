@@ -92,6 +92,7 @@
 | `manifest.json` | 地点データの取得先・サイズ・ハッシュ・件数・出典 |
 | `gsi-peaks.json` | 同じ地点配列の非圧縮 JSON。確認用 |
 | `snapshot.json` | コミット済みオリジナル JSON のハッシュと、元資料の取得日時・出典の要約 |
+| `LICENSE.txt` | 出典ごとの利用条件・帰属表示と作成者。manifest の `licenseUrl` から参照する |
 
 正式版は `gsi-peaks-<version>`、開発版は `gsi-peaks-dev-<version>` の Release に置く。利用する版を選び、その Release の `manifest.json` の URL を固定して取得する。リポジトリ全体の `releases/latest` は使わない。GSI の公開 Action は Pages の manifest・履歴・地点カタログを更新しない。
 

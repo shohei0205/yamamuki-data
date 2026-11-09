@@ -51,6 +51,12 @@ class PointReleaseTests(unittest.TestCase):
             directory, tag, manifest = self.fixture(dataset)
             self.assertEqual(manifest, target.validate(directory, dataset, tag, "dev")[0])
 
+    def test_license_url_is_optional_and_must_point_to_same_release(self):
+        directory, tag, manifest = self.fixture()
+        manifest["licenseUrl"] = manifest["downloadUrl"].rsplit("/", 1)[0] + "/LICENSE.txt"
+        (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        self.assertEqual(manifest, target.validate(directory, "gsi-peaks", tag, "dev")[0])
+
     def test_real_gsi_artifacts_and_separate_parts_are_accepted(self):
         from importlib import import_module
         gsi_peaks = import_module("points.gsi-peaks.scripts.release_snapshot")
@@ -68,7 +74,8 @@ class PointReleaseTests(unittest.TestCase):
                         {"fileName": "../file.json.gz"}, {"sizeBytes": 1}, {"sha256": "a" * 64},
                         {"uncompressedSizeBytes": 1}, {"dataSchemaFormat": "terrain"},
                         {"schemaVersion": True}, {"dataTimestamp": "invalid"},
-                        {"metadata": {**original["metadata"], "pointCount": 2}}):
+                        {"metadata": {**original["metadata"], "pointCount": 2}},
+                        {"licenseUrl": original["downloadUrl"].replace(original["fileName"], "OTHER.txt")}):
             with self.subTest(changes=changes):
                 (directory / "manifest.json").write_text(json.dumps({**original, **changes}), encoding="utf-8")
                 with self.assertRaises((ValueError, OSError)):

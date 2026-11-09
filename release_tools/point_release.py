@@ -24,6 +24,7 @@ from scripts.point_document import rows as document_rows
 from scripts.point_tags import validate_tags, validate_alias_readings
 from scripts.graphics import validate_graphics
 from document_metadata import validate_metadata, name_reading, metadata_maps
+from distribution_license import license_url
 
 
 def release_tag(dataset, version, channel):
@@ -58,6 +59,8 @@ def validate(directory, dataset, tag, channel):
     expected_url = f"https://github.com/{os.environ['GH_REPO']}/releases/download/{tag}/{filename}"
     if manifest.get("downloadUrl") != expected_url:
         raise ValueError("データの取得先が Release と一致しません")
+    if "licenseUrl" in manifest and manifest["licenseUrl"] != license_url(expected_url):
+        raise ValueError("利用条件のファイルの URL が Release と一致しません")
     if not isinstance(manifest.get("name"), str) or not manifest["name"].strip():
         raise ValueError("データセットの表示名がありません")
     if any(key in manifest for key in ("sources", "tags", "pointCount", "sourceUrl", "license", "attribution", "supplementSources", "sourceTimestamp", "latestPointTimestamp")):

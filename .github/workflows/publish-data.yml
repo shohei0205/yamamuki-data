@@ -87,7 +87,7 @@ jobs:
         id: far-eastern-fed-district-source
         timeout-minutes: 5
         env:
-          SOURCE_DATE: ${{ steps.source.outputs.source-date }}
+          SOURCE_DATE: ${{ inputs.source_date }}
         run: python -u scripts/download_source.py --region far-eastern-fed-district --resolve-only --max-seconds 240 --source-date "$SOURCE_DATE"
       - name: ロシア極東 PBF をキャッシュから復元
         id: far-eastern-fed-district-cache
@@ -101,7 +101,7 @@ jobs:
         id: far-eastern-fed-district-download
         timeout-minutes: 20
         env:
-          SOURCE_DATE: ${{ steps.source.outputs.source-date }}
+          SOURCE_DATE: ${{ steps.far-eastern-fed-district-source.outputs.source-date }}
         run: python -u scripts/download_source.py --region far-eastern-fed-district --output build/far-eastern-fed-district.osm.pbf --max-seconds 900 --source-date "$SOURCE_DATE"
       - name: 検証済みのロシア極東 PBF を次回用に保存
         if: steps.far-eastern-fed-district-cache.outputs.cache-hit != 'true' || steps.far-eastern-fed-district-source.outputs.cache-key != steps.far-eastern-fed-district-download.outputs.cache-key

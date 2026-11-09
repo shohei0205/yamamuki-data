@@ -2,6 +2,8 @@
 
 山の地点データなどを作り、誰でも使える形で配るリポジトリ。[山むきアプリ](https://github.com/shohei0205/yamamuki)もこのデータを使っている。
 
+地点データを地理院地図に重ねて表示する [データビューワ](viewer/README.md) を用意しています。
+
 ## データの種類
 
 | 種類 | 詳細 |
@@ -24,6 +26,7 @@ points/            地点データ（詳細は points/README.md）
 formats/           データ種別に共通する manifest の版別形式説明
 schemas/           データ種別に共通する manifest の版別スキーマ
 release_tools/     データ種別共通の公開入口
+LICENSES/          Release に添付するライセンスの本文
 .github/workflows/ GitHub Actions の定義
 ```
 
@@ -65,6 +68,7 @@ release_tools/     データ種別共通の公開入口
 | 共通：データ処理のテスト | 共通処理と各データのテスト |
 | 共通：文字形式の確認 | 改行コードとBOM |
 | 共通：確認済みデータを公開 | データ種別共通の手動公開 |
+| 地点 / ネイティブビューワ：Release | [Windows・macOSのビューワを手動公開](viewer/README.md#配布版の公開) |
 
 データ固有のActionと操作手順は各READMEを参照する。
 
@@ -154,7 +158,7 @@ GitHub のリポジトリ設定では、マージコミットとスカッシュ�
 python -m unittest discover -s release_tools/tests -v
 ```
 
-CI の「共通：文字形式の確認」はすべての PR で文字コード・改行を確認する。「共通：データ処理のテスト」（`.github/workflows/test.yml`）は push・PR 時に、共通の公開処理・地点の共通ビューア・OSM 山頂・国土地理院山頂・テスト用地点を別のジョブで確認する。データ種別を追加するときもこのActionにジョブを追加する。必須チェックの `test` ジョブは各テストの結果を集約し、すべて成功した場合だけ成功する。ジョブを追加するときは `test` の依存先と結果確認にも追加する。
+CI の「共通：文字形式の確認」はすべての PR で文字コード・改行を確認する。「共通：データ処理のテスト」（`.github/workflows/test.yml`）は push・PR 時に、共通の公開処理・地点の共通ビューア・データビューワ（Windows・macOS）・OSM 山頂・国土地理院山頂・テスト用地点を別のジョブで確認する。データ種別を追加するときもこのActionにジョブを追加する。必須チェックの `test` ジョブは各テストの結果を集約し、すべて成功した場合だけ成功する。ジョブを追加するときは `test` の依存先と結果確認にも追加する。
 
 データ固有のテストは各 README を参照する。
 
@@ -174,6 +178,18 @@ CI の「共通：文字形式の確認」はすべての PR で文字コード�
 | 動作確認用の架空の地点データ | このリポジトリで作成 | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | [テスト用地点](points/testdata/README.md)。内蔵画像と分類タグを含む |
 
 地点に追加する画像は、画像ごとの出典・利用条件を各データセットの文書で確認する。
+
+### 配布データの作成者と利用条件のファイル
+
+配布データは、上の表の元データを [The yamamuki Authors](AUTHORS.md) が選び、照合・補正して作っている。作成者は manifest の `metadata.authors` に記録し、元データの作者とは分けて扱う。元データの出典・利用条件・帰属表示は、これまでどおり `metadata.sources` に記録する。
+
+各 Release には、そのデータの利用条件をまとめた `LICENSE.txt` を添付し、manifest の `licenseUrl` から参照できるようにする。`LICENSE.txt` には、データ全体のライセンス、出典ごとの利用条件と帰属表示、作成者、表示のお願いを記載する。OpenStreetMap 由来のデータは ODbL 1.0 の派生データベースとして配るため、本文 `ODbL-1.0.txt`（[LICENSES/ODbL-1.0.txt](LICENSES/ODbL-1.0.txt) の写し）も添付する。国土地理院由来のデータは、データ全体に一つのライセンスを定めず、出典ごとの利用条件に従う。
+
+元データのライセンスが求める表示に加えて、できれば作成者も表示してほしい。表示の例は次のとおり。この表示はお願いで、義務ではない。
+
+```text
+山データ：yamamuki-data（The yamamuki Authors）
+```
 
 ### ビューアーが利用する外部データ
 

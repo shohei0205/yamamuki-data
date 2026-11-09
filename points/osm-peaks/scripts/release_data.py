@@ -144,8 +144,9 @@ def prepare(directory, channel="stable"):
         logging.info("%s を作成し、SVG を内蔵したデータと manifest をアップロードします: %s",
                      "下書き Release" if draft else "Release", tag)
         from scripts.distribution_parts import filenames
+        from distribution_license import LICENSE_FILE, ODBL_FILE
         url = shared.gh("release", "create", tag, str(Path(directory) / FILE_NAME), str(Path(directory) / "manifest.json"),
-           *[str(Path(directory) / name) for name in filenames("osm-peaks") if (Path(directory) / name).exists()],
+           *[str(Path(directory) / name) for name in (*filenames("osm-peaks"), LICENSE_FILE, ODBL_FILE) if (Path(directory) / name).exists()],
            *state, "--target", os.environ["GITHUB_SHA"], "--title", tag,
            "--notes-file", str(notes), f"--prerelease={str(not stable).lower()}").strip()
         if comparison_failed:

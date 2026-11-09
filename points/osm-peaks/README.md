@@ -87,6 +87,8 @@ Pages の初期設定、サイト全体の一覧・履歴の引き継ぎ、配�
 | `osm-peaks-source.json.gz` | `osm-peaks-source-manifest.json` | 補足適用前のオリジナル地点データ |
 | `supplements.json.gz` | `supplements-manifest.json` | タグ・名称・読み・別名の補正、配布除外を指定する補足データ |
 
+同じ Release に、利用条件のファイル `LICENSE.txt`（データ全体のライセンス・出典ごとの帰属表示・作成者）と ODbL 1.0 の本文 `ODbL-1.0.txt` も添付する。`manifest.json` の `licenseUrl` は `LICENSE.txt` を指す。
+
 各 manifest は [共通の manifest フォーマット](../../formats/manifest.md) に従い、それぞれが指す JSON の `metadata` をそのままコピーする。地点 JSON の形式は [地点データフォーマット](../formats/data.md)、補足 JSON の形式は [補足データフォーマット](../formats/supplements-data.md) を参照する。
 
 公開前に添付ファイルを再取得し、各 JSON と manifest の整合性、およびオリジナルに補足を適用して配布地点を再現できることを検証する。補足関連の添付がない過去の Release も検証できるが、一部だけそろっている場合は公開しない。
@@ -101,7 +103,7 @@ Pages に掲載した履歴は、正式版の [history.json](https://shohei0205.
 
 | 項目 | 内容 |
 |---|---|
-| 最新版の manifest | `https://shohei0205.github.io/yamamuki-data/peaks/manifest.json`（正式版）、`https://shohei0205.github.io/yamamuki-data/peaks-dev/manifest.json`（開発版） |
+| 最新版の manifest | `https://shohei0205.github.io/yamamuki-data/peaks/manifest.json`（正式版。2026-10-21 からは `{"schemaVersion": 999}`）。開発版の `peaks-dev/` は新しく作らない |
 | Release のタグ | `peaks-<version>`（正式版）、`peaks-dev-<version>`（開発版） |
 | データ本体のファイル名 | `japan-mountains.json.gz` |
 | 最後に作った正式版の Release | `peaks-20261007T084736Z-37595744056-1` |
@@ -109,13 +111,13 @@ Pages に掲載した履歴は、正式版の [history.json](https://shohei0205.
 | 元データ | Geofabrik の日本全国 PBF（2026-10-06 版） |
 | ライセンス | ODbL-1.0、© OpenStreetMap contributors |
 
-版4 は新しく生成しない。公開済みの Release は残すが、最新版の manifest（`peaks/manifest.json`）は `{"schemaVersion": 999}` に置き換えて公開を終える予定（Issue #48）。
+版4 は新しく生成しない。公開済みの Release は残す。最新版の manifest（`peaks/manifest.json`）は、2026-10-21 に `{"schemaVersion": 999}` に置き換えて公開を終えた（Issue #48）。
 
-置き換えは Actions の「山頂：0.5.0 向けの公開を終える」→「Run workflow」で `main` を選んで実行する（入力なし、1 回だけ）。今の Pages のカタログを引き継ぎ、`peaks/manifest.json` だけを置き換える。0.5.0 は形式の版を見て「アプリを更新してください」と表示する。ファイルを消すと通信の失敗と区別できないため、消さずに置き換える。配置の前後に今の Pages とファイルごとに比べ、`peaks/manifest.json` と `catalog.json` 以外が変わるときや、置き換え済みのときは配置しない。比べた結果はジョブのログと Summary に出る。置き換えたあとの公開でも、カタログから作り直すので `peaks/manifest.json` は置き換えたまま残る。
+版4 だけを読むアプリは、形式の版を見て読めないデータと判断できる。ファイルを消すと通信の失敗と区別できないため、消さずに置き換えた。このあとの公開でもカタログからサイトを作り直すので、置き換えた `peaks/manifest.json` は残る。置き換えに使ったワークフローは、1 回だけ使うものなので消した。
 
 収録するのは OSM の `natural=peak` または `natural=volcano` の名前付きノード。way・relation と名前のないノードは含めない。名前・標高・読み・別名・解説リンクの取り方は「配るもの」の OSM タグの説明を参照する。JSON 本体の制約は [地点データの変更履歴の版4](../formats/data.md#版42026-10-0326) にある。
 
-復元用ブランチから公開する `peaks/` と、存在する場合の `peaks-dev/` の manifest・履歴は、旧形式に対応する読み手のテスト用に保持する。main / dev からの公開、地点カタログからの削除、テストデータの公開でも、既存の互換データを引き継いで同じ内容を配置する。osm-peaks の更新で互換データを上書きしない。互換データは地点カタログには含めない。存在しない互換データを新たに作成することはない。
+Pages の `peaks/` の manifest・履歴は、版4 だけを読むアプリに更新を促すために残す。main / dev からの公開、地点カタログからの削除、テストデータの公開でも、既存の互換データを引き継いで同じ内容を配置する。osm-peaks の更新で互換データを上書きしない。互換データは地点カタログには含めない。存在しない互換データを新たに作成することはない。
 
 ## 作り方
 
@@ -210,7 +212,7 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 
 ### 取得対象日を指定する
 
-「地点 / OSM山頂：Release 生成・検査」の Run workflow で、`source_date` に `YYYY-MM-DD` を入力すると、`latest` の転送を使わず日付付き URL を直接取得する。例えば `2026-09-29` は `https://download.geofabrik.de/asia/japan-260929.osm.pbf` になる。空欄または月次実行では`latest` を使う。入力欄を表示するため、main 側の入口にも同じ入力項目が必要。
+「地点 / OSM山頂：Release 生成・検査」の Run workflow で、`source_date` に `YYYY-MM-DD` を入力すると、`latest` の転送を使わず日付付き URL を直接取得する。例えば `2026-09-29` は `https://download.geofabrik.de/asia/japan-260929.osm.pbf` になる。空欄または月次実行では、日本とロシア極東のそれぞれで `latest` から配布日を確定し、その日付の PBF を取得する。日付を指定した場合は、両地域とも指定日の PBF を取得する。入力欄を表示するため、main 側の入口にも同じ入力項目が必要。
 
 Actions の実行日はデータの配布日とは限らず、当日分はまだ存在しない場合がある。配布済みの日付を指定する。対象が404の場合は失敗とし、別の日付への自動切り替えはしない。サイズと日付付き URL の MD5 を照合し、別の版の途中ファイルを混ぜない。古い日付を指定しても、公開前の日時・件数・同一更新日時の検査はそのまま行う。
 
@@ -279,7 +281,7 @@ python scripts/build_data.py build/japan-latest.osm.pbf \
 
 ### 出典の管理
 
-補足の出典・ライセンス・帰属表示・加工内容は補足 JSON の `metadata.sources` に記録する。マージ済み地点 JSON には原本と補足の出典をまとめ、その `metadata` を配布 manifest にコピーする。出典は `note` に記載しない。項目と制約は [metadata フォーマット](../../formats/metadata.md) を参照する。
+補足の出典・ライセンス・帰属表示・加工内容は補足 JSON の `metadata.sources` に記録する。マージ済み地点 JSON には原本と補足の出典をまとめ、その `metadata` を配布 manifest にコピーする。出典は OpenStreetMap（日本、ロシア極東連邦管区）を先に並べ、そのあとに `supplements.json` の `metadata.sources` を入力順で並べる。出典は `note` に記載しない。項目と制約は [metadata フォーマット](../../formats/metadata.md) を参照する。
 
 ### タグごとの記録
 
@@ -325,7 +327,7 @@ Python 3.12 と osmium-tool を使い、単体テストと小さな PBF によ�
 python -m unittest discover -s tests -v
 ```
 
-追加 PBF の取得はそれぞれ全体15分、Actions の取得ステップ20分で打ち切る。日本 PBF の配布日を追加 PBF に指定し、その日の追加 PBF が未配布なら失敗とする。日付を自動でずらして生成しない。
+追加 PBF の取得はそれぞれ全体15分、Actions の取得ステップ20分で打ち切る。日付未指定時は地域ごとに `latest` から配布日を確定し、配布日が異なる PBF も統合する。日付指定時は両地域とも指定日を使い、その日の PBF が未配布なら失敗とする。各 PBF のサイズ・MD5 と、山頂の編集日時がその PBF の基準日時を超えないことを確認する。
 
 追加 PBF も取得元の地域・配布日・MD5 ごとにキャッシュし、復元後に照合する。2026-10-10 時点の配布ページの目安では、ロシア極東は約 371 MB。日本 PBF に加えて約 371 MB の取得・保存が必要になる。実際のサイズと取得時間はログで確認する。
 

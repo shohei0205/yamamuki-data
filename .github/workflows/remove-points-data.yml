@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       dataset:
-        description: '削除するデータセット名（例: osm-peaks）。main は正式版、dev は開発版を削除'
+        description: '削除するデータセット名（例: osm-peaks）。dev で実行し、開発版を削除'
         required: true
         type: string
 
@@ -13,7 +13,8 @@ permissions:
 
 jobs:
   remove:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
+    # main から Pages は書き換えない。正式版は Release までで、アプリが読む版は yamamuki 側で決める。
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -39,7 +40,7 @@ jobs:
       - name: 指定した地点データだけを一覧から削除
         env:
           DATASET: ${{ inputs.dataset }}
-          RELEASE_CHANNEL: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
+          RELEASE_CHANNEL: dev
           PAGES_DIRECTORY: ${{ github.workspace }}/build/pages
         run: python -m release_tools.release_data remove-dataset --dataset "$DATASET" --channel "$RELEASE_CHANNEL"
       - name: 更新した配布サイトを保存

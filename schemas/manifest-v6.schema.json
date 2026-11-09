@@ -35,6 +35,12 @@
       "format": "uri",
       "pattern": "^https://[^/?#\\s]+"
     },
+    "licenseUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://[^/?#\\s]+",
+      "description": "データ本体と同じ Release に添付した利用条件のファイル（LICENSE.txt）の URL。"
+    },
     "fileName": {
       "type": "string",
       "pattern": "^[^/\\\\\\s]+\\.gz$"
