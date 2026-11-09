@@ -1,9 +1,16 @@
+use crate::tile_cache;
 use anyhow::{Context, Result, ensure};
 use eframe::egui::{self, ColorImage, Pos2, Rect, TextureHandle};
+use image::ImageDecoder;
 use std::{
     collections::{HashMap, HashSet},
-    io::{Cursor, Read},
-    sync::{Arc, Mutex, mpsc},
+    io::Cursor,
+    path::PathBuf,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 
@@ -12,7 +19,153 @@ pub const MAX_ZOOM: f64 = 18.;
 pub const TILE_SIZE: usize = 256;
 const MAX_PENDING: usize = 6;
 const MAX_CACHE: usize = 160;
-const ATTRIBUTION: &str = "https://maps.gsi.go.jp/development/ichiran.html";
+const USER_AGENT: &str = concat!(
+    "yamamuki-viewer/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/shohei0205/yamamuki-data)"
+);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum Source {
+    #[default]
+    Gsi,
+    Pale,
+    Blank,
+    Photo,
+    Relief,
+    Hillshade,
+    Slope,
+    OpenStreetMap,
+    OpenTopoMap,
+    CyclOsm,
+    Humanitarian,
+}
+
+impl Source {
+    pub const GSI_LAYERS: [Self; 7] = [
+        Self::Gsi,
+        Self::Pale,
+        Self::Blank,
+        Self::Photo,
+        Self::Relief,
+        Self::Hillshade,
+        Self::Slope,
+    ];
+
+    pub const OSM_LAYERS: [Self; 4] = [
+        Self::OpenStreetMap,
+        Self::OpenTopoMap,
+        Self::CyclOsm,
+        Self::Humanitarian,
+    ];
+
+    pub fn is_osm(self) -> bool {
+        self.osm_cache_directory().is_some()
+    }
+
+    fn osm_cache_directory(self) -> Option<&'static str> {
+        match self {
+            Self::OpenStreetMap => Some("osm-tiles"),
+            Self::OpenTopoMap => Some("opentopomap-tiles"),
+            Self::CyclOsm => Some("cyclosm-tiles"),
+            Self::Humanitarian => Some("osm-humanitarian-tiles"),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Gsi => "標準地図",
+            Self::Pale => "淡色地図",
+            Self::Blank => "白地図",
+            Self::Photo => "写真",
+            Self::Relief => "色別標高図",
+            Self::Hillshade => "陰影起伏図",
+            Self::Slope => "傾斜量図",
+            Self::OpenStreetMap => "標準地図",
+            Self::OpenTopoMap => "地形図（OpenTopoMap）",
+            Self::CyclOsm => "自転車地図（CyclOSM）",
+            Self::Humanitarian => "人道支援地図（HOT）",
+        }
+    }
+
+    pub fn tile_zoom(self, zoom: f64) -> u32 {
+        let max = match self {
+            Self::Blank => 14,
+            Self::Relief | Self::Slope => 15,
+            Self::Hillshade => 16,
+            Self::OpenTopoMap => 17,
+            _ => MAX_ZOOM as u32,
+        };
+        (zoom as u32).min(max)
+    }
+
+    fn tile_endpoint(self) -> (&'static str, &'static str) {
+        let endpoint = match self {
+            Self::Gsi => "https://cyberjapandata.gsi.go.jp/xyz/std",
+            Self::Pale => "https://cyberjapandata.gsi.go.jp/xyz/pale",
+            Self::Blank => "https://cyberjapandata.gsi.go.jp/xyz/blank",
+            Self::Photo => "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto",
+            Self::Relief => "https://cyberjapandata.gsi.go.jp/xyz/relief",
+            Self::Hillshade => "https://cyberjapandata.gsi.go.jp/xyz/hillshademap",
+            Self::Slope => "https://cyberjapandata.gsi.go.jp/xyz/slopemap",
+            Self::OpenStreetMap => "https://tile.openstreetmap.org",
+            Self::OpenTopoMap => "https://a.tile.opentopomap.org",
+            Self::CyclOsm => "https://a.tile-cyclosm.openstreetmap.fr/cyclosm",
+            Self::Humanitarian => "https://tile-a.openstreetmap.fr/hot",
+        };
+        (endpoint, if self == Self::Photo { "jpg" } else { "png" })
+    }
+
+    pub fn attribution(self, ui: &mut egui::Ui, zoom: f64) {
+        if self.is_osm() {
+            ui.hyperlink_to(
+                "© OpenStreetMap contributors",
+                "https://www.openstreetmap.org/copyright",
+            );
+            match self {
+                Self::OpenTopoMap => {
+                    ui.hyperlink_to(
+                        "標高：SRTM・Sonny ／ © OpenTopoMap（CC BY-SA）",
+                        "https://opentopomap.org/about",
+                    );
+                }
+                Self::CyclOsm | Self::Humanitarian => {
+                    let (style, url) = match self {
+                        Self::CyclOsm => ("CyclOSM", "https://www.cyclosm.org/"),
+                        _ => ("Humanitarian OpenStreetMap Team", "https://www.hotosm.org/"),
+                    };
+                    ui.hyperlink_to(style, url);
+                    ui.hyperlink_to(
+                        "配信：OpenStreetMap France",
+                        "https://www.openstreetmap.fr/usage/",
+                    );
+                }
+                _ => {}
+            }
+            return;
+        }
+        ui.hyperlink_to(
+            format!("出典：国土地理院（{}）", self.label()),
+            "https://maps.gsi.go.jp/development/ichiran.html",
+        );
+        let detail = match (self, self.tile_zoom(zoom)) {
+            (Self::Pale, 0..=8) => {
+                "Shoreline data: U.S. National Imagery and Mapping Agency, Vector Map Level 0 (VMAP0), USGS Information Services, 1997"
+            }
+            (Self::Photo, 0..=8) => {
+                "世界衛星モザイク画像：NASA LP DAAC、USGS EROS Center, Sioux Falls, South Dakota（2015年公開）"
+            }
+            (Self::Photo, 9..=13) => {
+                "Landsat8画像（GSI, TSIC, GEO Grid/AIST・U.S. Geological Survey）、海底地形（GEBCO）"
+            }
+            (Self::Photo, _) => "GRUS画像（© Axelspace）",
+            (Self::Relief, _) => "海域部は海上保安庁海洋情報部の資料を使用して作成",
+            _ => return,
+        };
+        ui.label(egui::RichText::new(detail).small());
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Tile {
@@ -22,33 +175,75 @@ pub struct Tile {
 }
 
 impl Tile {
-    fn url(self) -> String {
-        format!(
-            "https://cyberjapandata.gsi.go.jp/xyz/std/{}/{}/{}.png",
-            self.z, self.x, self.y
+    fn url(self, source: Source) -> String {
+        let (base, extension) = source.tile_endpoint();
+        format!("{base}/{}/{}/{}.{extension}", self.z, self.x, self.y)
+    }
+
+    fn cache_path(self, directory: &str) -> Option<PathBuf> {
+        Some(
+            eframe::storage_dir(crate::APP_ID)?
+                .join(directory)
+                .join(self.z.to_string())
+                .join(self.x.to_string())
+                .join(format!("{}.tile", self.y)),
         )
     }
 }
 
 pub fn client() -> Result<reqwest::blocking::Client> {
     Ok(reqwest::blocking::Client::builder()
-        .user_agent(concat!("yamamuki-viewer/", env!("CARGO_PKG_VERSION")))
+        .user_agent(USER_AGENT)
         .connect_timeout(Duration::from_secs(4))
         .timeout(Duration::from_secs(10))
         .build()?)
 }
 
-fn fetch(client: &reqwest::blocking::Client, tile: Tile) -> Result<Option<ColorImage>> {
-    let response = client.get(tile.url()).send()?;
+type LoadedTile = (ColorImage, Option<Instant>);
+
+fn fetch(
+    client: &reqwest::blocking::Client,
+    tile: Tile,
+    source: Source,
+) -> Result<Option<LoadedTile>> {
+    let url = tile.url(source);
+    if let Some(directory) = source.osm_cache_directory() {
+        let path = tile
+            .cache_path(directory)
+            .context("OpenStreetMapのタイルキャッシュを利用できません")?;
+        return Ok(
+            tile_cache::load(client, &url, &path, USER_AGENT, decode_png)?.map(|(image, ttl)| {
+                (
+                    image,
+                    Instant::now().checked_add(ttl.max(Duration::from_secs(1))),
+                )
+            }),
+        );
+    }
+    let response = client.get(url).send()?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
-    let mut bytes = Vec::new();
-    response
-        .error_for_status()?
-        .take(1024 * 1024 + 1)
-        .read_to_end(&mut bytes)?;
-    ensure!(bytes.len() <= 1024 * 1024, "地図タイルが大きすぎます");
+    let body = tile_cache::read_body(response.error_for_status()?)?;
+    let image = if source == Source::Photo {
+        decode_jpeg(&body)?
+    } else {
+        decode_png(&body)?
+    };
+    Ok(Some((image, None)))
+}
+
+fn decode_jpeg(bytes: &[u8]) -> Result<ColorImage> {
+    let decoder = image::codecs::jpeg::JpegDecoder::new(Cursor::new(bytes))?;
+    ensure!(
+        decoder.dimensions() == (TILE_SIZE as u32, TILE_SIZE as u32),
+        "地図タイルの寸法が異なります"
+    );
+    let rgb = image::DynamicImage::from_decoder(decoder)?.into_rgb8();
+    Ok(ColorImage::from_rgb([TILE_SIZE; 2], rgb.as_raw()))
+}
+
+fn decode_png(bytes: &[u8]) -> Result<ColorImage> {
     let mut decoder = png::Decoder::new(Cursor::new(bytes));
     decoder.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = decoder.read_info()?;
@@ -78,7 +273,7 @@ fn fetch(client: &reqwest::blocking::Client, tile: Tile) -> Result<Option<ColorI
         ),
         png::ColorType::Indexed => anyhow::bail!("地図タイルの色形式に対応していません"),
     };
-    Ok(Some(image))
+    Ok(image)
 }
 
 pub fn check() -> Result<()> {
@@ -87,7 +282,8 @@ pub fn check() -> Result<()> {
         x: 226,
         y: 101,
     };
-    let image = fetch(&client()?, tile)?.context("確認用の地理院タイルが見つかりません")?;
+    let (image, _) =
+        fetch(&client()?, tile, Source::Gsi)?.context("確認用の地理院タイルが見つかりません")?;
     println!(
         "地理院タイル {}×{} を取得しました",
         image.size[0], image.size[1]
@@ -142,8 +338,8 @@ impl View {
         self.zoom = (scale / TILE_SIZE as f64).log2().clamp(MIN_ZOOM, 14.);
     }
 
-    fn tiles(&self, rect: Rect) -> Vec<Tile> {
-        let z = self.zoom.floor() as u32;
+    fn tiles(&self, rect: Rect, source: Source) -> Vec<Tile> {
+        let z = source.tile_zoom(self.zoom);
         let side = 1u32 << z;
         let index = |x: f64| (x * side as f64).floor().clamp(0., (side - 1) as f64) as u32;
         let [min, max] = self.area(rect);
@@ -176,14 +372,16 @@ impl View {
 }
 
 enum Cached {
-    Texture(TextureHandle),
+    Texture(TextureHandle, Option<Instant>),
     Missing,
     Failed(Instant),
 }
 
-type Reply = (Tile, Result<Option<ColorImage>>);
+type Reply = (Tile, Result<Option<LoadedTile>>);
 
 pub struct Tiles {
+    pub source: Source,
+    cancelled: Arc<AtomicBool>,
     queue: mpsc::Sender<Tile>,
     replies: mpsc::Receiver<Reply>,
     pending: HashSet<Tile>,
@@ -192,18 +390,23 @@ pub struct Tiles {
 }
 
 impl Tiles {
-    pub fn new(ctx: &egui::Context, client: reqwest::blocking::Client) -> Self {
+    pub fn new(ctx: &egui::Context, client: reqwest::blocking::Client, source: Source) -> Self {
         let (queue, jobs) = mpsc::channel();
         let (send, replies) = mpsc::channel();
         let jobs = Arc::new(Mutex::new(jobs));
+        let cancelled = Arc::new(AtomicBool::new(false));
         for _ in 0..4 {
             let (jobs, send, ctx, client) =
                 (jobs.clone(), send.clone(), ctx.clone(), client.clone());
+            let cancelled = Arc::clone(&cancelled);
             std::thread::spawn(move || {
                 loop {
                     let job = jobs.lock().expect("tile queue").recv();
                     let Ok(tile) = job else { break };
-                    if send.send((tile, fetch(&client, tile))).is_err() {
+                    if cancelled.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if send.send((tile, fetch(&client, tile, source))).is_err() {
                         break;
                     }
                     ctx.request_repaint();
@@ -211,6 +414,8 @@ impl Tiles {
             });
         }
         Self {
+            source,
+            cancelled,
             queue,
             replies,
             pending: HashSet::new(),
@@ -235,11 +440,14 @@ impl Tiles {
             processed += 1;
             self.pending.remove(&tile);
             let entry = match result {
-                Ok(Some(image)) => Cached::Texture(ui.ctx().load_texture(
-                    tile.url(),
-                    image,
-                    egui::TextureOptions::LINEAR,
-                )),
+                Ok(Some((image, expiry))) => Cached::Texture(
+                    ui.ctx().load_texture(
+                        tile.url(self.source),
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    ),
+                    expiry,
+                ),
                 Ok(None) => Cached::Missing,
                 Err(_) => Cached::Failed(Instant::now()),
             };
@@ -248,13 +456,15 @@ impl Tiles {
         if processed == limit && !self.pending.is_empty() {
             ui.ctx().request_repaint();
         }
-        let tiles = view.tiles(rect);
+        let tiles = view.tiles(rect, self.source);
         let mut failed = false;
         for tile in tiles {
             if let Some((entry, touched)) = self.cache.get_mut(&tile) {
                 *touched = self.frame;
                 match entry {
-                    Cached::Texture(texture) => {
+                    Cached::Texture(texture, expiry)
+                        if expiry.is_none_or(|until| Instant::now() < until) =>
+                    {
                         painter.image(
                             texture.id(),
                             view.tile_rect(rect, tile),
@@ -263,6 +473,7 @@ impl Tiles {
                         );
                         continue;
                     }
+                    Cached::Texture(_, _) => {}
                     Cached::Missing => continue,
                     Cached::Failed(at) => {
                         failed = true;
@@ -293,15 +504,108 @@ impl Tiles {
         }
         failed
     }
+}
 
-    pub fn attribution(ui: &mut egui::Ui) {
-        ui.hyperlink_to("出典：国土地理院（標準地図）", ATTRIBUTION);
+impl Drop for Tiles {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Relaxed);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overzoom_uses_the_highest_available_tile_without_changing_the_view() {
+        let view = View {
+            center: crate::points::project(35.36, 138.73),
+            zoom: 18.,
+        };
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.));
+        for (source, max) in [
+            (Source::Gsi, 18),
+            (Source::Pale, 18),
+            (Source::Blank, 14),
+            (Source::Photo, 18),
+            (Source::Relief, 15),
+            (Source::Hillshade, 16),
+            (Source::Slope, 15),
+            (Source::OpenStreetMap, 18),
+            (Source::OpenTopoMap, 17),
+            (Source::CyclOsm, 18),
+            (Source::Humanitarian, 18),
+        ] {
+            let tiles = view.tiles(rect, source);
+            assert!(!tiles.is_empty());
+            assert!(tiles.iter().all(|tile| tile.z == max));
+            assert!(view.tile_rect(rect, tiles[0]).contains(rect.center()));
+        }
+    }
+
+    #[test]
+    #[ignore = "requires one public tile from each GSI layer"]
+    fn reads_public_gsi_layers() {
+        let client = client().unwrap();
+        for source in Source::GSI_LAYERS {
+            let tile = Tile {
+                z: 8,
+                x: 226,
+                y: 101,
+            };
+            let (image, _) = fetch(&client, tile, source)
+                .unwrap_or_else(|error| panic!("{source:?}: {error:#}"))
+                .unwrap_or_else(|| panic!("{source:?}"));
+            assert_eq!(image.size, [TILE_SIZE; 2], "{source:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires one public tile from each OSM layer"]
+    fn reads_public_osm_layers() {
+        let tile = Tile {
+            z: 8,
+            x: 226,
+            y: 101,
+        };
+        let cache = tempfile::tempdir().unwrap();
+        let client = client().unwrap();
+        for source in Source::OSM_LAYERS {
+            let path = cache
+                .path()
+                .join(source.osm_cache_directory().unwrap())
+                .with_extension("tile");
+            let (image, _) =
+                tile_cache::load(&client, &tile.url(source), &path, USER_AGENT, decode_png)
+                    .unwrap_or_else(|error| panic!("{source:?}: {error:#}"))
+                    .unwrap_or_else(|| panic!("{source:?}"));
+            assert_eq!(image.size, [TILE_SIZE; 2], "{source:?}");
+        }
+    }
+
+    #[test]
+    fn osm_layers_have_separate_urls_and_caches() {
+        let tile = Tile {
+            z: 8,
+            x: 226,
+            y: 101,
+        };
+        let urls: HashSet<_> = Source::OSM_LAYERS
+            .iter()
+            .map(|&source| tile.url(source))
+            .collect();
+        let directories: HashSet<_> = Source::OSM_LAYERS
+            .iter()
+            .map(|&source| source.osm_cache_directory().unwrap())
+            .collect();
+        assert_eq!(urls.len(), Source::OSM_LAYERS.len());
+        assert_eq!(directories.len(), Source::OSM_LAYERS.len());
+        assert_eq!(
+            Source::OpenStreetMap.osm_cache_directory(),
+            Some("osm-tiles")
+        );
+        assert!(Source::GSI_LAYERS.iter().all(|source| !source.is_osm()));
+    }
 
     #[test]
     fn drag_spreads_ready_tile_uploads_over_frames() {
@@ -314,11 +618,16 @@ mod tests {
         for &tile in &pending {
             send.send((
                 tile,
-                Ok(Some(ColorImage::new([TILE_SIZE; 2], egui::Color32::WHITE))),
+                Ok(Some((
+                    ColorImage::new([TILE_SIZE; 2], egui::Color32::WHITE),
+                    None,
+                ))),
             ))
             .unwrap();
         }
         let mut tiles = Tiles {
+            source: Source::Gsi,
+            cancelled: Arc::default(),
             queue,
             replies,
             pending,
@@ -357,7 +666,7 @@ mod tests {
         };
         let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.));
         assert_eq!(
-            view.tiles(rect)[0],
+            view.tiles(rect, Source::Gsi)[0],
             Tile {
                 z: 8,
                 x: 226,

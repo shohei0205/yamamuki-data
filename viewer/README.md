@@ -1,6 +1,6 @@
 ﻿# ネイティブ地点ビューワ
 
-国土地理院の標準地図に、山むきの地点JSONを重ねる。WindowsとmacOS（Apple Silicon）を対応対象とするRustアプリ。地図は現在の表示範囲のタイルをオンラインで取得する。地点ファイルはローカルで読む。
+国土地理院の標準地図やOpenStreetMapに、山むきの地点JSONを重ねる。WindowsとmacOS（Apple Silicon）を対応対象とするRustアプリ。地図は現在の表示範囲のタイルをオンラインで取得する。地点ファイルはローカルで読む。
 
 ## 起動
 
@@ -17,7 +17,9 @@ Windowsでは `viewer\run.bat` からも起動できる。作成済みの `viewe
 
 「地点ファイルを開く」から `.json` または `.json.gz` を選ぶ。ファイルをウィンドウにドロップしても開ける。[地点データ版6](../points/schemas/data-v6.schema.json)と[版5の配列](../points/schemas/data-v5.schema.json)に対応する。左ドラッグで移動し、ホイールでカーソル位置を中心に拡大縮小する。マーカーをクリックすると名称・読み・座標・標高・IDを表示する。近接する地点もそれぞれの座標に表示する。
 
-地図の出典は [国土地理院（地理院タイル一覧）](https://maps.gsi.go.jp/development/ichiran.html)。
+上部の地図メニューで、地理院地図の標準地図・淡色地図・白地図・写真・色別標高図・陰影起伏図・傾斜量図と、OpenStreetMap系の標準地図・地形図（OpenTopoMap）・自転車地図（CyclOSM）・人道支援地図（HOT）を切り替えられる。地図の提供ズームより拡大したときは、取得できる最も細かいタイルを拡大表示する。選んだ地図は次回起動時も使う。出典は [国土地理院（地理院タイル一覧）](https://maps.gsi.go.jp/development/ichiran.html) と [© OpenStreetMap contributors](https://www.openstreetmap.org/copyright)。
+
+OpenStreetMap系では表示範囲のタイルを取得し、配信元のキャッシュ指定を使う。出典は各スタイルの表示中に画面下部に示す。[OSM標準地図の利用方針](https://operations.osmfoundation.org/policies/tiles/)、[OpenTopoMapのライセンス](https://opentopomap.org/about)、[CyclOSMとHOTの配信元の利用方針](https://www.openstreetmap.fr/usage/)を参照。
 
 ## 地点一覧と地図
 

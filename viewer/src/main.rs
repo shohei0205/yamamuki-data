@@ -10,6 +10,7 @@ mod markers;
 mod point_detail;
 mod point_list;
 mod points;
+mod tile_cache;
 #[cfg(windows)]
 mod window_move;
 
@@ -27,6 +28,8 @@ const _: () = assert!(
     "macOSのビューワにはMetalが必要です"
 );
 
+const APP_ID: &str = "yamamuki-viewer";
+const MAP_SOURCE_KEY: &str = "map_source";
 const DEFAULT_WINDOW_SIZE: egui::Vec2 = egui::vec2(1150., 800.);
 const NORMAL_WINDOW_SIZE_KEY: &str = "normal_window_size";
 const NORMAL_WINDOW_POSITION_KEY: &str = "normal_window_position";
@@ -37,7 +40,8 @@ struct Viewer {
     startup_expanded_rect: Option<Rect>,
     restore_normal_size: Option<bool>,
     view: map::View,
-    tiles: map::Tiles,
+    tiles: Vec<map::Tiles>,
+    map_source: map::Source,
     points: Option<Arc<Points>>,
     client: reqwest::blocking::Client,
     boundaries: Arc<boundaries::BoundaryCache>,
@@ -69,7 +73,8 @@ impl Viewer {
                 center: points::project(36.2, 138.3),
                 zoom: 5.,
             },
-            tiles: map::Tiles::new(ctx, client.clone()),
+            tiles: Vec::new(),
+            map_source: map::Source::Gsi,
             client,
             boundaries: Arc::default(),
             location_job: None,
@@ -332,6 +337,7 @@ impl Viewer {
 
 impl eframe::App for Viewer {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, MAP_SOURCE_KEY, &self.map_source);
         eframe::set_value(storage, NORMAL_WINDOW_SIZE_KEY, &self.normal_window_size);
         if let Some(position) = self.normal_window_position {
             eframe::set_value(storage, NORMAL_WINDOW_POSITION_KEY, &position);
@@ -376,6 +382,39 @@ impl eframe::App for Viewer {
                     );
                     ui.label(egui::RichText::new("地点ビューワ").color(appearance::MUTED));
                     ui.separator();
+                    let map_group = if self.map_source.is_osm() {
+                        "OSM"
+                    } else {
+                        "地理院"
+                    };
+                    ui.menu_button(
+                        format!("{map_group}：{} ▾", self.map_source.label()),
+                        |ui| {
+                            for (group, layers) in [
+                                ("地理院地図", map::Source::GSI_LAYERS.as_slice()),
+                                ("OpenStreetMap系", map::Source::OSM_LAYERS.as_slice()),
+                            ] {
+                                ui.strong(group);
+                                ui.indent(group, |ui| {
+                                    for &source in layers {
+                                        if ui
+                                            .selectable_value(
+                                                &mut self.map_source,
+                                                source,
+                                                source.label(),
+                                            )
+                                            .clicked()
+                                        {
+                                            ui.close_menu();
+                                        }
+                                    }
+                                });
+                                if group == "地理院地図" {
+                                    ui.separator();
+                                }
+                            }
+                        },
+                    );
                     if ui
                         .add_enabled(
                             self.loading.is_none(),
@@ -429,7 +468,7 @@ impl eframe::App for Viewer {
             .frame(appearance::panel(appearance::CANVAS, 14, 5))
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    map::Tiles::attribution(ui);
+                    self.map_source.attribution(ui, self.view.zoom);
                     if self.points.is_some() {
                         ui.hyperlink_to(
                             "行政区域：国土数値情報（共同通信社加工）",
@@ -531,7 +570,20 @@ impl eframe::App for Viewer {
                     }
                 }
                 painter.rect_filled(rect, 0., appearance::CANVAS);
-                let failed = self.tiles.paint(ui, &painter, rect, &self.view, dragging);
+                if let Some(index) = self
+                    .tiles
+                    .iter()
+                    .position(|tiles| tiles.source == self.map_source)
+                {
+                    self.tiles.swap(0, index);
+                } else {
+                    self.tiles.truncate(1);
+                    self.tiles.insert(
+                        0,
+                        map::Tiles::new(ctx, self.client.clone(), self.map_source),
+                    );
+                }
+                let failed = self.tiles[0].paint(ui, &painter, rect, &self.view, dragging);
                 let marker_pointer = pointer.filter(|_| !response.dragged());
                 self.paint_markers(&painter, rect, marker_pointer, response.clicked());
                 if failed {
@@ -550,7 +602,15 @@ impl eframe::App for Viewer {
                     egui::StrokeKind::Inside,
                 );
                 let zoom = painter.layout_no_wrap(
-                    format!("Z {:.1}", self.view.zoom),
+                    {
+                        let zoom = self.view.zoom;
+                        let tile_zoom = self.map_source.tile_zoom(zoom);
+                        if tile_zoom < zoom as u32 {
+                            format!("Z {zoom:.1} / z{tile_zoom}")
+                        } else {
+                            format!("Z {zoom:.1}")
+                        }
+                    },
                     egui::FontId::monospace(12.),
                     appearance::INK,
                 );
@@ -650,7 +710,7 @@ fn run() -> Result<()> {
         #[cfg(windows)]
         wgpu_options: windows_graphics(),
         viewport: egui::ViewportBuilder::default()
-            .with_app_id("yamamuki-viewer")
+            .with_app_id(APP_ID)
             .with_inner_size(DEFAULT_WINDOW_SIZE),
         ..Default::default()
     };
@@ -661,6 +721,10 @@ fn run() -> Result<()> {
             #[cfg(windows)]
             window_move::install(cc);
             let mut viewer = Viewer::new(&cc.egui_ctx, client, file);
+            viewer.map_source = cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, MAP_SOURCE_KEY))
+                .unwrap_or_default();
             if let Some(size) = cc
                 .storage
                 .and_then(|storage| {
