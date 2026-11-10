@@ -1,6 +1,8 @@
 ﻿# 山むき・データビューワ
 
-国土地理院の標準地図やOpenStreetMapに、山むきの地点JSONを重ねる。WindowsとmacOS（Apple Silicon）を対応対象とするRustアプリ。オンライン地図は現在の表示範囲のタイルを取得する。地点ファイルと地表SQLiteはローカルで読む。
+[リポジトリの README に戻る](../README.md)
+
+山むきの地点 JSON と、森林・水域・陰影などを収録した地表 SQLite を開いて重ねて表示できる、Windows と macOS（Apple Silicon）向けの Rust アプリ。地理院地図や OpenStreetMap 系のオンライン地図を下地に使える。地表データはオフラインでも表示できる。
 
 ## 起動
 
