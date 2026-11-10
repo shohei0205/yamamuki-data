@@ -94,7 +94,7 @@
 | `snapshot.json` | コミット済みオリジナル JSON のハッシュと、元資料の取得日時・出典の要約 |
 | `LICENSE.txt` | 出典ごとの利用条件・帰属表示と作成者。manifest の `licenseUrl` から参照する |
 
-下書き・試用公開・正式公開で `gsi-peaks-<version>` のタグを使う。正式版を使う場合は Pre-release を除いて選び、その Release の `manifest.json` の URL を固定して取得する。リポジトリ全体の `releases/latest` は使わない。Pages の manifest・履歴・地点カタログは、確認済みデータの公開時に更新する。
+下書き・試用公開・正式公開で `gsi-peaks-<version>` のタグを使う。正式版を使う場合は、Pre-release を除いた [正式 Release 一覧](https://github.com/shohei0205/yamamuki-data/releases?q=%22gsi-peaks-%22+draft%3Afalse+prerelease%3Afalse)から版を選び、その Release の `manifest.json` の URL を固定して取得する。リポジトリ全体の `releases/latest` は使わない。Pages の manifest・履歴・地点カタログは、確認済みデータの公開時に更新する。
 
 manifest の項目・型・取得と検証の共通手順は [manifest フォーマット](../../formats/manifest.md) を参照する。GSI 固有の元資料の取得・照合と加工方法は、この文書に記載する。
 

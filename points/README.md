@@ -16,8 +16,8 @@
 
 | データ | 取得する版の選び方 |
 |---|---|
-| OSM 山頂 | [OSM 山頂の取得先](osm-peaks/README.md)を参照する。利用する正式版の Release に添付された `manifest.json` を使う |
-| 国土地理院の山頂 | [国土地理院山頂の取得先](gsi-peaks/README.md)を参照し、利用する Release に添付された `manifest.json` を使う |
+| OSM 山頂 | [正式 Release 一覧](https://github.com/shohei0205/yamamuki-data/releases?q=%22osm-peaks-%22+draft%3Afalse+prerelease%3Afalse)から版を選び、添付の `manifest.json` を使う。[OSM 山頂の取得手順](osm-peaks/README.md) |
+| 国土地理院の山頂 | [正式 Release 一覧](https://github.com/shohei0205/yamamuki-data/releases?q=%22gsi-peaks-%22+draft%3Afalse+prerelease%3Afalse)から版を選び、添付の `manifest.json` を使う。[国土地理院山頂の取得手順](gsi-peaks/README.md) |
 
 1. manifest を取得する。カタログを使う場合は、対象項目の `manifest` に同じ情報が入っているため、別途取得する必要はない。
 2. manifest の `schemaVersion` とデータ本体の `dataSchemaVersion` に対応していることを、それぞれ確認する。項目の説明は [配布データの取得情報](../README.md#配布データの取得情報manifestjson)、カタログからの判定方法は [カタログの読み込みと検証](formats/catalog.md#読み込みと検証)を参照する。
