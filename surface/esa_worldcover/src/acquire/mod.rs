@@ -36,10 +36,15 @@ fn work_areas(keys: &[[u32; 2]]) -> BTreeMap<[u32; 2], u32> {
 pub fn plan_surface(database: &Path) -> Result<()> {
     let keys = tile_keys(database, 8)?;
     anyhow::ensure!(!keys.is_empty(), "標高の範囲が空です");
-    let areas: Vec<_> = work_areas(&keys)
+    let mut areas: Vec<_> = work_areas(&keys)
         .into_iter()
         .map(|([x, y], max_zoom)| serde_json::json!({ "x": x, "y": y, "maxZoom": max_zoom }))
         .collect();
+    areas.extend(
+        tile_keys(database, 9)?
+            .into_iter()
+            .map(|[x, y]| serde_json::json!({ "x": x, "y": y, "workZoom": 9, "maxZoom": 13 })),
+    );
     println!("{}", serde_json::to_string(&areas)?);
     Ok(())
 }

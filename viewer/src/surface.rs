@@ -1,5 +1,5 @@
 //! 共通SQLiteの地表を読み、可視タイルだけを背景で合成する。
-use crate::map::{Source as MapSource, Tile, View};
+use crate::map::{Lod, Source as MapSource, TILE_SIZE, Tile, View};
 use crate::surface_shade;
 use anyhow::{Result, bail, ensure};
 use eframe::{
@@ -8,7 +8,7 @@ use eframe::{
 };
 use serde::Deserialize;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, mpsc},
 };
@@ -193,14 +193,24 @@ impl Source {
     }
 }
 
-fn auto_level(levels: &[SurfaceLevel], scale: f64) -> Option<u32> {
-    let density = |level: &&SurfaceLevel| (u64::from(level.pixels)) << level.z;
-    levels
+fn equivalent_zoom(z: u32, pixels: u32) -> f64 {
+    f64::from(z) + (f64::from(pixels) / TILE_SIZE as f64).log2()
+}
+
+fn auto_level(levels: &[SurfaceLevel], zoom: f64, lod: Lod) -> Option<u32> {
+    let target = lod.target_zoom(zoom);
+    let by_density =
+        |a: &(u32, f64), b: &(u32, f64)| a.1.total_cmp(&b.1).then_with(|| b.0.cmp(&a.0));
+    let levels = levels
         .iter()
-        .filter(|level| density(level) as f64 >= scale)
-        .min_by_key(density)
-        .or_else(|| levels.iter().max_by_key(density))
-        .map(|level| level.z)
+        .filter(|level| lod.allows(level.z))
+        .map(|level| (level.z, equivalent_zoom(level.z, level.pixels)));
+    levels
+        .clone()
+        .filter(|&(_, equivalent)| equivalent <= target)
+        .max_by(by_density)
+        .or_else(|| levels.min_by(by_density))
+        .map(|(z, _)| z)
 }
 
 type Pixel = [f32; 4];
@@ -227,15 +237,57 @@ struct Sample {
 
 fn samples(index: u32, dst_z: u32, src_z: u32, pixels: usize) -> Vec<Sample> {
     let scale = 2f64.powi(src_z as i32 - dst_z as i32);
-    (0..pixels)
+    let edge = 0.5 / pixels as f64 * scale;
+    (-1..=pixels as i32)
         .map(|i| {
-            let position = (f64::from(index) + (i as f64 + 0.5) / pixels as f64) * scale;
+            let position = ((f64::from(index) + (f64::from(i) + 0.5) / pixels as f64) * scale)
+                .clamp(edge, f64::from(1u32 << src_z) - edge);
             Sample {
                 tile: position.floor() as u32,
                 local: position.fract(),
             }
         })
         .collect()
+}
+
+fn surface_uv(pixels: usize) -> Rect {
+    let inset = 1. / (pixels + 2) as f32;
+    Rect::from_min_max(egui::pos2(inset, inset), egui::pos2(1. - inset, 1. - inset))
+}
+
+// 描画タイルの1画素の余白で共有する、復号済み元タイルの作業キャッシュ。
+#[derive(Default)]
+struct DecodedTiles {
+    images: HashMap<(i64, i64, Tile), Option<Arc<image::RgbaImage>>>,
+    order: VecDeque<(i64, i64, Tile)>,
+}
+
+impl DecodedTiles {
+    fn get(
+        &mut self,
+        conn: &Connection,
+        dataset: i64,
+        layer: i64,
+        tile: Tile,
+    ) -> Result<Option<Arc<image::RgbaImage>>> {
+        let key = (dataset, layer, tile);
+        if let Some(image) = self.images.get(&key) {
+            return Ok(image.clone());
+        }
+        let image = db::surface_tile(conn, dataset, layer, tile.z, tile.x, tile.y)?
+            .map(|image| Arc::new(image.into_rgba8()));
+        // 大きな汎用タイルの復号結果は作業キャッシュに保持しない。
+        if image.as_ref().is_none_or(|image| image.width() <= 512) {
+            if self.order.len() == 32 {
+                if let Some(oldest) = self.order.pop_front() {
+                    self.images.remove(&oldest);
+                }
+            }
+            self.images.insert(key, image.clone());
+            self.order.push_back(key);
+        }
+        Ok(image)
+    }
 }
 
 struct ShadeImage {
@@ -259,6 +311,29 @@ fn composite(
     overlay: bool,
     auto_levels: &[bool],
 ) -> Result<ComposedTile> {
+    composite_cached(
+        conn,
+        set,
+        tile,
+        pixels,
+        levels,
+        overlay,
+        auto_levels,
+        &mut DecodedTiles::default(),
+    )
+}
+
+fn composite_cached(
+    conn: &Connection,
+    set: &Dataset,
+    tile: Tile,
+    pixels: usize,
+    levels: &[Option<u32>],
+    overlay: bool,
+    auto_levels: &[bool],
+    decoded: &mut DecodedTiles,
+) -> Result<ComposedTile> {
+    let side = pixels + 2;
     let mut tile_images = ComposedTile::default();
     let work_areas = set.work_areas.as_ref();
     if let Some(areas) = work_areas
@@ -269,7 +344,7 @@ fn composite(
             return Ok(tile_images);
         }
     }
-    let mut colors = vec![[0.; 4]; pixels * pixels];
+    let mut colors = vec![[0.; 4]; side * side];
     let mut has_base = false;
     for (index, (layer, &z)) in set.layers.iter().zip(levels).enumerate() {
         let Some(z) = z else { continue };
@@ -297,17 +372,19 @@ fn composite(
                 let x = xs[0].tile;
                 let y = ys[0].tile;
                 let mut source_z = z;
-                let mut image = db::surface_tile(conn, set.key, layer.key, z, x, y)?;
+                let mut image = decoded.get(conn, set.key, layer.key, Tile { z, x, y })?;
                 if fallback && image.is_none() {
                     for level in layer.levels.iter().rev().filter(|level| level.z < z) {
                         let shift = z - level.z;
-                        image = db::surface_tile(
+                        image = decoded.get(
                             conn,
                             set.key,
                             layer.key,
-                            level.z,
-                            x >> shift,
-                            y >> shift,
+                            Tile {
+                                z: level.z,
+                                x: x >> shift,
+                                y: y >> shift,
+                            },
                         )?;
                         if image.is_some() {
                             source_z = level.z;
@@ -319,20 +396,92 @@ fn composite(
                     let mut shade_pixels = shade_online.then(|| {
                         &mut shade_image
                             .get_or_insert_with(|| ShadeImage {
-                                image: ColorImage::new(
-                                    [pixels, pixels],
-                                    egui::Color32::TRANSPARENT,
-                                ),
+                                image: ColorImage::new([side, side], egui::Color32::TRANSPARENT),
                                 neutral: layer.settings.neutral.expect("hillshade neutral"),
                                 strength: layer.settings.strength.expect("hillshade strength"),
                             })
                             .image
                             .pixels
                     });
-                    let rgba = image.into_rgba8();
-                    let size = rgba.width();
-                    let sample = |ix, iy| {
-                        let v = rgba.get_pixel(ix, iy).0;
+                    let size = image.width() as i32;
+                    let factor = 1u32 << (z - source_z);
+                    let world_side = 1 << source_z;
+                    let aligned = source_z == tile.z && z == source_z && size as usize == pixels;
+                    let index = |s: &Sample| {
+                        let local = (f64::from(s.tile % factor) + s.local) / f64::from(factor);
+                        let coord = local * f64::from(size) - 0.5;
+                        let source_tile = s.tile / factor;
+                        let coord = if source_tile == 0 && coord < 0. {
+                            0.
+                        } else if source_tile + 1 == world_side {
+                            coord.min(f64::from(size - 1))
+                        } else {
+                            coord
+                        };
+                        if aligned {
+                            (coord.round() as i32, 0.)
+                        } else {
+                            let first = coord.floor() as i32;
+                            (first, (coord - f64::from(first)) as f32)
+                        }
+                    };
+                    let xs: Vec<_> = xs.iter().map(index).collect();
+                    let ys: Vec<_> = ys.iter().map(index).collect();
+                    let offsets = |axis: &[(i32, f32)]| {
+                        let (last, fraction) = axis[axis.len() - 1];
+                        [axis[0].0 < 0, true, last >= size - 1 && fraction > 0.]
+                    };
+                    let mut neighbors: [Option<Arc<image::RgbaImage>>; 9] = Default::default();
+                    if !aligned {
+                        let offsets_x = offsets(&xs);
+                        let offsets_y = offsets(&ys);
+                        for (iy, enabled_y) in offsets_y.into_iter().enumerate() {
+                            for (ix, enabled_x) in offsets_x.into_iter().enumerate() {
+                                if !(enabled_x && enabled_y) || (ix == 1 && iy == 1) {
+                                    continue;
+                                }
+                                let nx = (x / factor).checked_add_signed(ix as i32 - 1);
+                                let ny = (y / factor).checked_add_signed(iy as i32 - 1);
+                                if let (Some(nx), Some(ny)) = (nx, ny)
+                                    && nx < world_side
+                                    && ny < world_side
+                                {
+                                    neighbors[iy * 3 + ix] = decoded.get(
+                                        conn,
+                                        set.key,
+                                        layer.key,
+                                        Tile {
+                                            z: source_z,
+                                            x: nx,
+                                            y: ny,
+                                        },
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                    let sample = |ix: i32, iy: i32| {
+                        let v = if (0..size).contains(&ix) && (0..size).contains(&iy) {
+                            image.get_pixel(ix as u32, iy as u32).0
+                        } else {
+                            let nx = (ix.div_euclid(size) + 1) as usize;
+                            let ny = (iy.div_euclid(size) + 1) as usize;
+                            if let Some(neighbor) = &neighbors[ny * 3 + nx] {
+                                neighbor
+                                    .get_pixel(
+                                        ix.rem_euclid(size) as u32,
+                                        iy.rem_euclid(size) as u32,
+                                    )
+                                    .0
+                            } else {
+                                image
+                                    .get_pixel(
+                                        ix.clamp(0, size - 1) as u32,
+                                        iy.clamp(0, size - 1) as u32,
+                                    )
+                                    .0
+                            }
+                        };
                         match layer.role {
                             Role::Rgb => premultiply(v, 1.),
                             Role::Mask => over(
@@ -348,34 +497,26 @@ fn composite(
                             }
                         }
                     };
-                    let factor = 1u32 << (z - source_z);
-                    let index = |s: &Sample| {
-                        let local = (f64::from(s.tile % factor) + s.local) / f64::from(factor);
-                        let coord = (local * f64::from(size) - 0.5).clamp(0., f64::from(size - 1));
-                        let i = coord as u32;
-                        (i, (i + 1).min(size - 1), coord.fract() as f32)
-                    };
-                    for (j, sy) in ys.iter().enumerate() {
-                        let (y0, y1, fy) = index(sy);
-                        for (i, sx) in xs.iter().enumerate() {
-                            let (x0, x1, fx) = index(sx);
-                            let v =
-                                if source_z == tile.z && z == source_z && size as usize == pixels {
-                                    sample(i as u32, j as u32)
-                                } else {
-                                    let [a, b, c, d] = [
-                                        sample(x0, y0),
-                                        sample(x1, y0),
-                                        sample(x0, y1),
-                                        sample(x1, y1),
-                                    ];
-                                    std::array::from_fn(|k| {
-                                        let u = a[k] * (1. - fx) + b[k] * fx;
-                                        let l = c[k] * (1. - fx) + d[k] * fx;
-                                        u * (1. - fy) + l * fy
-                                    })
-                                };
-                            let index = (row + j) * pixels + col + i;
+                    for (j, &(y0, fy)) in ys.iter().enumerate() {
+                        for (i, &(x0, fx)) in xs.iter().enumerate() {
+                            let v = if aligned {
+                                sample(x0, y0)
+                            } else {
+                                let x1 = x0 + i32::from(fx > 0.);
+                                let y1 = y0 + i32::from(fy > 0.);
+                                let [a, b, c, d] = [
+                                    sample(x0, y0),
+                                    sample(x1, y0),
+                                    sample(x0, y1),
+                                    sample(x1, y1),
+                                ];
+                                std::array::from_fn(|k| {
+                                    let u = a[k] * (1. - fx) + b[k] * fx;
+                                    let l = c[k] * (1. - fx) + d[k] * fx;
+                                    u * (1. - fy) + l * fy
+                                })
+                            };
+                            let index = (row + j) * side + col + i;
                             if let Some(shade_pixels) = shade_pixels.as_deref_mut() {
                                 shade_pixels[index] = egui::Color32::from_gray(v[0].round() as u8);
                             }
@@ -403,9 +544,7 @@ fn composite(
         }
         tile_images.shades.extend(shade_image);
     }
-    if let Some(areas) = work_areas
-        && tile.z < ESA_WORK_ZOOM
-    {
+    if let Some(areas) = work_areas {
         let xs = samples(tile.x, tile.z, ESA_WORK_ZOOM, pixels);
         let ys = samples(tile.y, tile.z, ESA_WORK_ZOOM, pixels);
         let mut row = 0;
@@ -414,7 +553,7 @@ fn composite(
             for xs in xs.chunk_by(|a, b| a.tile == b.tile) {
                 if !areas.contains(&(xs[0].tile, ys[0].tile)) {
                     for y in row..row + ys.len() {
-                        let start = y * pixels + col;
+                        let start = y * side + col;
                         let span = start..start + xs.len();
                         colors[span.clone()].fill([0.; 4]);
                         for shade in &mut tile_images.shades {
@@ -427,7 +566,21 @@ fn composite(
             row += ys.len();
         }
     }
-    if colors.iter().all(|v| v[3] == 0.) {
+    tile_images.shades.retain(|shade| {
+        shade
+            .image
+            .pixels
+            .chunks_exact(side)
+            .skip(1)
+            .take(pixels)
+            .any(|row| row[1..=pixels].iter().any(|pixel| pixel.a() != 0))
+    });
+    if colors
+        .chunks_exact(side)
+        .skip(1)
+        .take(pixels)
+        .all(|row| row[1..=pixels].iter().all(|v| v[3] == 0.))
+    {
         return Ok(tile_images);
     }
     let rgba: Vec<_> = colors
@@ -441,7 +594,7 @@ fn composite(
             [rgb[0], rgb[1], rgb[2], (a * 255.).round() as u8]
         })
         .collect();
-    tile_images.image = Some(ColorImage::from_rgba_unmultiplied([pixels, pixels], &rgba));
+    tile_images.image = Some(ColorImage::from_rgba_unmultiplied([side, side], &rgba));
     Ok(tile_images)
 }
 
@@ -481,16 +634,17 @@ impl Cached {
         &self,
         view: &View,
         rect: Rect,
-        tile: Tile,
-        images: &mut Vec<(Tile, egui::TextureId)>,
-        shades: &mut Vec<([Pos2; 4], wgpu::BindGroup)>,
+        key: &Key,
+        images: &mut Vec<(Tile, Rect, egui::TextureId)>,
+        shades: &mut Vec<([Pos2; 4], Rect, wgpu::BindGroup)>,
     ) -> bool {
         if let Some(image) = &self.image {
-            images.push((tile, image.id()));
+            images.push((key.tile, surface_uv(key.pixels), image.id()));
         }
         if !self.shades.is_empty() {
-            let corners = view.tile_corners(rect, tile);
-            shades.extend(self.shades.iter().map(|shade| (corners, shade.clone())));
+            let corners = view.tile_corners(rect, key.tile);
+            let uv = surface_uv(key.pixels);
+            shades.extend(self.shades.iter().map(|shade| (corners, uv, shade.clone())));
         }
         self.image.is_some() || !self.shades.is_empty()
     }
@@ -578,7 +732,7 @@ impl LayerStats {
                 egui::Grid::new("surface-layer-stats")
                     .striped(true)
                     .show(ui, |ui| {
-                        for title in ["レベル", "タイル寸法", "タイル数", "圧縮データ"]
+                        for title in ["レベル", "タイル寸法", "地図換算", "タイル数", "圧縮データ"]
                         {
                             ui.strong(title);
                         }
@@ -586,11 +740,13 @@ impl LayerStats {
                         for level in levels.iter() {
                             ui.label(format!("z{}", level.z));
                             ui.label(format!("{} × {}", level.pixels, level.pixels));
+                            ui.label(format!("z{:.2}", equivalent_zoom(level.z, level.pixels)));
                             ui.label(level.tiles.to_string());
                             size(ui, level.bytes);
                             ui.end_row();
                         }
                         ui.strong("合計");
+                        ui.label("—");
                         ui.label("—");
                         ui.strong(
                             levels
@@ -602,7 +758,7 @@ impl LayerStats {
                         size(ui, levels.iter().map(|level| level.bytes).sum::<u64>());
                         ui.end_row();
                     });
-                ui.small("容量は画像BLOBの合計です。");
+                ui.small("地図換算は256画素タイルで同じ画素密度になるズームです。容量は画像BLOBの合計です。");
             }
         }
     }
@@ -639,11 +795,12 @@ impl Surface {
             let path = source.path.clone();
             std::thread::spawn(move || {
                 let conn = db::open(&path);
+                let mut decoded = DecodedTiles::default();
                 loop {
                     let job = incoming.lock().expect("surface queue").recv();
                     let Ok(job) = job else { break };
                     let result = match &conn {
-                        Ok(conn) => composite(
+                        Ok(conn) => composite_cached(
                             conn,
                             &datasets[job.dataset],
                             job.tile,
@@ -651,6 +808,7 @@ impl Surface {
                             &job.levels,
                             job.overlay,
                             &job.auto_levels,
+                            &mut decoded,
                         ),
                         Err(error) => Err(anyhow::anyhow!("{error:#}")),
                     };
@@ -809,6 +967,7 @@ impl Surface {
         dragging: bool,
         overlay: bool,
         render_state: Option<&RenderState>,
+        lod: Lod,
     ) {
         let set = &self.source.datasets[self.dataset];
         self.frame += 1;
@@ -866,7 +1025,7 @@ impl Surface {
             .zip(&self.options)
             .map(|(l, &(show, z))| {
                 if show {
-                    z.or_else(|| auto_level(&l.levels, scale))
+                    z.or_else(|| auto_level(&l.levels, view.zoom, lod))
                 } else {
                     None
                 }
@@ -935,7 +1094,7 @@ impl Surface {
                 for (key, entry) in &mut self.cache {
                     if key.same_grid(previous)
                         && Rect::from_points(&view.tile_corners(rect, key.tile)).intersects(rect)
-                        && entry.collect(view, rect, key.tile, &mut images, &mut shade_tiles)
+                        && entry.collect(view, rect, key, &mut images, &mut shade_tiles)
                     {
                         entry.touched = self.frame;
                         used_previous = true;
@@ -945,7 +1104,7 @@ impl Surface {
             if !used_previous {
                 for key in &visible {
                     if let Some(entry) = self.cache.get(key) {
-                        entry.collect(view, rect, key.tile, &mut images, &mut shade_tiles);
+                        entry.collect(view, rect, key, &mut images, &mut shade_tiles);
                     }
                 }
             }
@@ -956,8 +1115,8 @@ impl Surface {
         if let Some(renderer) = &self.shade_renderer {
             renderer.paint(painter, rect, shade_tiles);
         }
-        for (tile, image) in images {
-            view.paint_tile(painter, rect, tile, image);
+        for (tile, uv, image) in images {
+            view.paint_tile_uv(painter, rect, tile, image, uv);
         }
         while self.cache_bytes > CACHE_BYTES || self.cache.len() > 512 {
             let Some(key) = self
@@ -990,8 +1149,8 @@ pub fn layer_list(
     map_source: &mut MapSource,
     online_enabled: &mut bool,
     zoom: f64,
-    scale: f64,
     max_height: f32,
+    lod: Lod,
 ) -> Option<usize> {
     const HEADER_HEIGHT: f32 = 20.;
     const LAYER_INDENT: f32 = 14.;
@@ -1168,7 +1327,9 @@ pub fn layer_list(
                     });
                     row.col(|ui| {
                         info_clicked = ui
-                            .menu_button("i", |ui| source.show_info(ui, zoom))
+                            .menu_button("i", |ui| {
+                                source.show_info(ui, source.tile_zoom(zoom, lod))
+                            })
                             .response
                             .on_hover_text("オンライン地図の情報")
                             .clicked();
@@ -1176,7 +1337,7 @@ pub fn layer_list(
                             ui.disable();
                         }
                         ui.add(
-                            egui::Label::new(format!("自動 (z{})", source.tile_zoom(zoom)))
+                            egui::Label::new(format!("自動 (z{})", source.tile_zoom(zoom, lod)))
                                 .selectable(false),
                         );
                     });
@@ -1252,7 +1413,7 @@ pub fn layer_list(
                         if !surface.enabled {
                             ui.disable();
                         }
-                        let selected_z = level.or_else(|| auto_level(&layer.levels, scale));
+                        let selected_z = level.or_else(|| auto_level(&layer.levels, zoom, lod));
                         let label = selected_z.map_or_else(|| "—".to_owned(), |z| format!("z{z}"));
                         let current = if level.is_some() {
                             label
@@ -1343,7 +1504,13 @@ pub fn check(path: &Path) -> Result<()> {
             let levels: Vec<_> = set
                 .layers
                 .iter()
-                .map(|layer| auto_level(&layer.levels, f64::from(1u32 << tile.z) * 384.))
+                .map(|layer| {
+                    layer
+                        .levels
+                        .iter()
+                        .find(|level| level.z == tile.z)
+                        .map(|level| level.z)
+                })
                 .collect();
             let auto_levels = vec![true; levels.len()];
             if composite(&conn, &set, tile, 384, &levels, false, &auto_levels)?
@@ -1367,21 +1534,58 @@ mod tests {
     use super::*;
     use anyhow::Context;
     #[test]
-    fn lod_accounts_for_the_stored_pixel_dimensions() {
-        let levels = [
-            SurfaceLevel {
-                z: 8,
-                lod: "L4".into(),
-                pixels: 512,
-            },
-            SurfaceLevel {
-                z: 9,
-                lod: "L3".into(),
-                pixels: 384,
-            },
-        ];
-        assert_eq!(auto_level(&levels, 130000.), Some(8));
-        assert_eq!(auto_level(&levels, 140000.), Some(9));
+    fn surface_auto_lod_switches_at_the_equivalent_pixel_density() {
+        let levels =
+            [(8, 512), (9, 512), (10, 384), (11, 384), (12, 384)].map(|(z, pixels)| SurfaceLevel {
+                z,
+                lod: format!("z{z}"),
+                pixels,
+            });
+        let offset = 1.5_f64.log2();
+        for (zoom, expected) in [
+            (5., 8),
+            (9.99, 8),
+            (10., 9),
+            (10. + offset - 0.001, 9),
+            (10. + offset, 10),
+            (11., 10),
+            (11. + offset, 11),
+            (12. + offset, 12),
+            (18., 12),
+        ] {
+            assert_eq!(auto_level(&levels, zoom, Lod::default()), Some(expected));
+        }
+        assert_eq!(auto_level(&[], 9., Lod::default()), None);
+    }
+
+    #[test]
+    fn surface_auto_lod_uses_density_even_when_it_decreases_with_xyz_zoom() {
+        let levels = [(8, 512), (9, 128), (10, 128)].map(|(z, pixels)| SurfaceLevel {
+            z,
+            lod: format!("z{z}"),
+            pixels,
+        });
+        assert_eq!(auto_level(&levels, 7., Lod::default()), Some(9));
+        assert_eq!(auto_level(&levels, 8.99, Lod::default()), Some(9));
+        assert_eq!(auto_level(&levels, 9., Lod::default()), Some(8));
+    }
+
+    #[test]
+    fn surface_auto_lod_applies_bias_in_map_zoom_and_caps_xyz_level() {
+        let levels = [(8, 512), (9, 512), (10, 384)].map(|(z, pixels)| SurfaceLevel {
+            z,
+            lod: format!("z{z}"),
+            pixels,
+        });
+        let mut lod = Lod {
+            max_level: Some(9),
+            bias: 1.,
+        };
+        assert_eq!(auto_level(&levels, 8.99, lod), Some(8));
+        assert_eq!(auto_level(&levels, 9., lod), Some(9));
+        assert_eq!(auto_level(&levels, 18., lod), Some(9));
+        lod.max_level = Some(7);
+        assert_eq!(auto_level(&levels, 18., lod), None);
     }
 
     #[test]
@@ -1425,6 +1629,73 @@ mod tests {
         Ok(())
     }
 
+    fn interior(image: &ColorImage) -> Vec<egui::Color32> {
+        image
+            .pixels
+            .chunks_exact(image.size[0])
+            .skip(1)
+            .take(image.size[1] - 2)
+            .flat_map(|row| row[1..row.len() - 1].iter().copied())
+            .collect()
+    }
+
+    #[test]
+    fn ground_and_hillshade_sample_across_tile_boundaries() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("edges.sqlite3");
+        let conn = Connection::open(&path)?;
+        db::initialize(&conn)?;
+        conn.execute_batch(r#"
+            INSERT INTO datasets VALUES (1,'edges','surface','地表','1',1,'{}');
+            INSERT INTO surface_layers VALUES (1,1,'hillshade','hillshade',0,'[]','{"neutral":136,"strength":1}');
+            INSERT INTO surface_levels VALUES (1,1,1,'z1',2);
+        "#)?;
+        for (x, gray) in [(0, 40), (1, 200)] {
+            let mut png = Vec::new();
+            {
+                let mut encoder = png::Encoder::new(&mut png, 2, 2);
+                encoder.set_color(png::ColorType::Grayscale);
+                encoder.write_header()?.write_image_data(&[gray; 4])?;
+            }
+            conn.execute(
+                "INSERT INTO surface_tiles VALUES(1,1,1,?1,0,1,?2)",
+                (x, png),
+            )?;
+        }
+        let source = Source::open(path)?;
+        let dataset = &source.datasets[0];
+        for overlay in [false, true] {
+            let render = |z, x| -> Result<ColorImage> {
+                let mut result = composite(
+                    &conn,
+                    dataset,
+                    Tile { z, x, y: 0 },
+                    2,
+                    &[Some(1)],
+                    overlay,
+                    &[],
+                )?;
+                if overlay {
+                    Ok(result.shades.remove(0).image)
+                } else {
+                    result.image.context("陰影画像がありません")
+                }
+            };
+            let gray = egui::Color32::from_gray;
+            assert_eq!(
+                &render(1, 0)?.pixels[4..8],
+                &[gray(40), gray(40), gray(40), gray(200)]
+            );
+            assert_eq!(
+                &render(1, 1)?.pixels[4..8],
+                &[gray(40), gray(200), gray(200), gray(200)]
+            );
+            assert_eq!(&interior(&render(2, 1)?)[..2], &[gray(40), gray(80)]);
+            assert_eq!(&interior(&render(2, 2)?)[..2], &[gray(160), gray(200)]);
+        }
+        Ok(())
+    }
+
     #[test]
     fn esa_ground_color_stays_inside_generated_work_areas() -> Result<()> {
         let temp = tempfile::tempdir()?;
@@ -1459,7 +1730,7 @@ mod tests {
         let tile = Tile { z: 7, x: 0, y: 0 };
         let result = composite(&conn, dataset, tile, 2, &[Some(7), Some(7)], false, &[])?;
         assert_eq!(
-            result.image.context("描画タイル")?.pixels,
+            interior(&result.image.context("描画タイル")?),
             [
                 egui::Color32::from_gray(200),
                 egui::Color32::TRANSPARENT,
@@ -1488,7 +1759,7 @@ mod tests {
             &[],
         )?;
         assert_eq!(
-            result.image.context("生成済みの粗いタイル")?.pixels,
+            interior(&result.image.context("生成済みの粗いタイル")?),
             vec![egui::Color32::from_gray(200); 4]
         );
         let complete = &complete.datasets[0];
@@ -1505,10 +1776,11 @@ mod tests {
         };
         assert!(at(outside, &[])?.image.is_none());
         assert_eq!(
-            at(outside, &[true, true])?
-                .image
-                .context("粗いタイルにフォールバック")?
-                .pixels,
+            interior(
+                &at(outside, &[true, true])?
+                    .image
+                    .context("粗いタイルにフォールバック")?
+            ),
             vec![egui::Color32::from_gray(200); 4],
         );
         let beyond = Tile { z: 8, x: 2, y: 0 };
@@ -1583,7 +1855,7 @@ mod tests {
         .image
         .context("地表が透明です")?;
         assert_eq!(
-            image.pixels,
+            interior(&image),
             [
                 egui::Color32::from_rgb(30, 90, 150),
                 egui::Color32::from_rgb(100, 100, 100),
@@ -1602,11 +1874,11 @@ mod tests {
         )?;
         assert_eq!(overlay.shades.len(), 1);
         assert_eq!(
-            overlay.shades[0].image.pixels,
+            interior(&overlay.shades[0].image),
             [68, 68, 136, 136].map(egui::Color32::from_gray)
         );
         assert_eq!(
-            overlay.image.context("地表の重ね表示が透明です")?.pixels,
+            interior(&overlay.image.context("地表の重ね表示が透明です")?),
             [
                 egui::Color32::from_rgb(30, 90, 150),
                 egui::Color32::TRANSPARENT,
@@ -1625,7 +1897,7 @@ mod tests {
         )?;
         assert_eq!(water_overlay.shades.len(), 1);
         assert_eq!(
-            water_overlay.image.context("水域が透明です")?.pixels,
+            interior(&water_overlay.image.context("水域が透明です")?),
             [
                 egui::Color32::from_rgb(30, 90, 150),
                 egui::Color32::TRANSPARENT,
@@ -1645,7 +1917,7 @@ mod tests {
         .image
         .context("陰影単独表示が透明です")?;
         assert_eq!(
-            shade_only.pixels,
+            interior(&shade_only),
             [68, 68, 136, 136].map(egui::Color32::from_gray)
         );
 
@@ -1696,8 +1968,8 @@ mod tests {
                                 &mut map,
                                 &mut online_enabled,
                                 8.,
-                                65536.,
                                 f32::INFINITY,
+                                Lod::default(),
                             );
                         });
                     for surface in &mut surfaces {

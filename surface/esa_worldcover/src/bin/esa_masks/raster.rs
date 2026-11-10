@@ -156,6 +156,12 @@ struct Area {
     y: u32,
     #[serde(rename = "maxZoom")]
     max_zoom: Option<u32>,
+    #[serde(rename = "workZoom", default = "base_work_zoom")]
+    work_zoom: u32,
+}
+
+const fn base_work_zoom() -> u32 {
+    8
 }
 
 struct Tile {
@@ -1269,6 +1275,7 @@ fn lpf_levels(
     coastal_forest_median_radius: Option<u32>,
     full_inland_water: &[usize],
     zooms: &[u32],
+    work_zoom: u32,
 ) -> Vec<(u32, usize, Vec<u8>)> {
     let source_side = n;
     let halo = (n - CORE) / 2;
@@ -1339,17 +1346,24 @@ fn lpf_levels(
         });
     }
     let mut levels = Vec::new();
-    for step in 1..=6 {
-        src = lpf_half(&src, n);
-        if let Some(base) = &mut unfilled {
-            *base = lpf_half(base, n);
+    for step in 0..=6 {
+        if step != 0 {
+            src = lpf_half(&src, n);
+            if let Some(base) = &mut unfilled {
+                *base = lpf_half(base, n);
+            }
+            n /= 2;
         }
-        n /= 2;
-        let z = 12 - step as u32;
+        let z = work_zoom + 4 - step as u32;
         if !zooms.contains(&z) {
             continue;
         }
-        let scale = if z < 8 { 0 } else { 1 << (z - 8) };
+        let scale = if z < work_zoom {
+            0
+        } else {
+            1 << (z - work_zoom)
+        };
+        let center = if step == 0 { 0 } else { 1 << (step - 1) };
         let side = CORE >> step;
         let pad = halo >> step;
         let connected = unfilled.as_ref().map(|base| {
@@ -1358,8 +1372,8 @@ fn lpf_levels(
                 .zip(base)
                 .enumerate()
                 .map(|(i, (pixel, base))| {
-                    let x = ((i % n) << step) + (1 << (step - 1));
-                    let y = ((i / n) << step) + (1 << (step - 1));
+                    let x = ((i % n) << step) + center;
+                    let y = ((i / n) << step) + center;
                     let a = pixel[3];
                     if a == 0 || classes[y * source_side + x] == 4 {
                         return [0; 3];
@@ -1379,8 +1393,8 @@ fn lpf_levels(
         let mut rgba = Vec::with_capacity(side * side * 4);
         for y in pad..pad + side {
             for (x, &[r, g, b, a]) in src[y * n + pad..y * n + pad + side].iter().enumerate() {
-                let original_x = ((x + pad) << step) + (1 << (step - 1));
-                let original_y = (y << step) + (1 << (step - 1));
+                let original_x = ((x + pad) << step) + center;
+                let original_y = (y << step) + center;
                 if layer == Some("water") {
                     let [r, g, b, _] = PALETTE[3];
                     rgba.extend_from_slice(&[r, g, b, a]);
@@ -1953,19 +1967,22 @@ pub(super) fn run() -> Result<()> {
                 .is_none_or(|only| *only == format!("{}-{}", a.x, a.y))
     });
     ensure!(
-        !areas.is_empty() && areas.iter().all(|a| a.x < 256 && a.y < 256),
+        !areas.is_empty()
+            && areas.iter().all(|a| (8..=9).contains(&a.work_zoom)
+                && a.x < (1 << a.work_zoom)
+                && a.y < (1 << a.work_zoom)),
         "Invalid region list"
+    );
+    areas.sort_by_key(|area| area.work_zoom);
+    let has_fine = areas.iter().any(|area| area.work_zoom == 9);
+    ensure!(
+        !has_fine || args.include_l2,
+        "高精細区画には --include-l2 が必要です"
     );
     let complete_coarse_tiles =
         args.only_area.is_none() && args.lpf && areas.iter().all(|a| a.max_zoom.is_some());
     fs::create_dir(&args.output).context("Use a new output directory")?;
     fs::create_dir(args.output.join("scratch"))?;
-    let min_x = areas.iter().map(|a| a.x).min().unwrap();
-    let min_y = areas.iter().map(|a| a.y).min().unwrap();
-    let max_x = areas.iter().map(|a| a.x).max().unwrap() + 1;
-    let max_y = areas.iter().map(|a| a.y).max().unwrap() + 1;
-    let edge = |v: u32| WORLD * (f64::from(v) / 256. - 0.5);
-    let bounds = |x, y, right, bottom| [edge(x), -edge(bottom), edge(right), -edge(y)];
     let halo = if args.full_forested_inland_water {
         // 水域の全幅と、LPFおよび出力側の半径3画素の判定に必要な余白。
         (FULL_INLAND_MAX_SIDE + (2 + 3) * (CORE / (TILE / 4))).next_multiple_of(64)
@@ -1983,19 +2000,6 @@ pub(super) fn run() -> Result<()> {
         0
     };
     let sample_side = CORE + 2 * halo;
-    let padding = WORLD / 256. / CORE as f64 * halo as f64;
-    let expanded_bounds = |x, y, right, bottom| {
-        let [l, b, r, t] = bounds(x, y, right, bottom);
-        [l - padding, b - padding, r + padding, t + padding]
-    };
-    let extent = expanded_bounds(min_x, min_y, max_x, max_y);
-    let projected = gdal::project_worldcover(
-        &args.source,
-        &args.output,
-        extent,
-        (max_x - min_x) as usize * CORE + 2 * halo,
-        (max_y - min_y) as usize * CORE + 2 * halo,
-    )?;
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(args.jobs.max(1))
         .build()?;
@@ -2003,7 +2007,7 @@ pub(super) fn run() -> Result<()> {
     let relief_dem = args
         .urban_forest_relief_dem
         .as_deref()
-        .map(urban_relief::ReliefDem::open)
+        .map(|path| urban_relief::ReliefDem::open_for_zoom(path, 11))
         .transpose()?;
     let zero_land_dem = args
         .esa_zero_land_dem
@@ -2045,177 +2049,209 @@ pub(super) fn run() -> Result<()> {
         .remove_isolated_source_pixels
         .then(|| vec![0u8; classes.len()]);
     let mut land = vec![0u8; classes.len()];
-    for (i, area) in areas.iter().enumerate() {
-        let x = area.x;
-        let y = area.y;
-        projected
-            .read(
-                (x - min_x) as usize * CORE,
-                (y - min_y) as usize * CORE,
-                sample_side,
-                &mut classes,
-            )
-            .with_context(|| format!("Read z8/{x}/{y}"))?;
-        // ESAの分類済み画素をそのまま使い、欠損画素だけ標高で補う。
-        land.par_iter_mut().zip(&classes).for_each(|(land, &code)| {
-            *land = u8::from(code != 0);
-        });
-        if let Some(dem) = &zero_land_dem {
-            dem.mark_unclassified_land(x, y, CORE, halo, &classes, &mut land)
-                .with_context(|| format!("Confirm NoData land z8/{x}/{y}"))?;
-        }
-        if let Some(built) = &mut built {
-            built
-                .par_iter_mut()
-                .zip(&classes)
-                .for_each(|(built, &class)| *built = u8::from(class == 50));
-        }
-        for (code, land) in classes.iter_mut().zip(&mut land) {
-            if *code == 0 {
-                let confirmed = *land == 2;
-                *land = u8::from(confirmed);
-                *code = if confirmed { 0 } else { 3 };
-            } else {
-                *code = classify(*code);
+    let mut finished = 0;
+    for group in areas.chunk_by(|a, b| a.work_zoom == b.work_zoom) {
+        let work_zoom = group[0].work_zoom;
+        let min_x = group.iter().map(|a| a.x).min().unwrap();
+        let min_y = group.iter().map(|a| a.y).min().unwrap();
+        let max_x = group.iter().map(|a| a.x).max().unwrap() + 1;
+        let max_y = group.iter().map(|a| a.y).max().unwrap() + 1;
+        let world_tiles = f64::from(1u32 << work_zoom);
+        let edge = |v: u32| WORLD * (f64::from(v) / world_tiles - 0.5);
+        let padding = WORLD / world_tiles / CORE as f64 * halo as f64;
+        let extent = [
+            edge(min_x) - padding,
+            -edge(max_y) - padding,
+            edge(max_x) + padding,
+            -edge(min_y) + padding,
+        ];
+        let projection_dir = args.output.join(format!("source-z{work_zoom}"));
+        fs::create_dir(&projection_dir)?;
+        let projected = gdal::project_worldcover(
+            &args.source,
+            &projection_dir,
+            extent,
+            (max_x - min_x) as usize * CORE + 2 * halo,
+            (max_y - min_y) as usize * CORE + 2 * halo,
+        )?;
+        for area in group {
+            finished += 1;
+            let x = area.x;
+            let y = area.y;
+            projected
+                .read(
+                    (x - min_x) as usize * CORE,
+                    (y - min_y) as usize * CORE,
+                    sample_side,
+                    &mut classes,
+                )
+                .with_context(|| format!("Read z{work_zoom}/{x}/{y}"))?;
+            // ESAの分類済み画素をそのまま使い、欠損画素だけ標高で補う。
+            land.par_iter_mut().zip(&classes).for_each(|(land, &code)| {
+                *land = u8::from(code != 0);
+            });
+            if let Some(dem) = &zero_land_dem {
+                dem.mark_unclassified_land(x, y, CORE, halo, &classes, &mut land, work_zoom + 4)
+                    .with_context(|| format!("Confirm NoData land z{work_zoom}/{x}/{y}"))?;
             }
-        }
-        if let Some(cleaned) = &mut cleaned {
-            pool.install(|| remove_isolated_classes(&classes, &land, sample_side, cleaned));
-            std::mem::swap(&mut classes, cleaned);
-        }
-        let (automatic_full_water, full_water_count) = if args.full_forested_inland_water {
-            forested_inland_water(&classes, &land, sample_side)
-        } else {
-            (Vec::new(), 0)
-        };
-        if args.full_forested_inland_water {
-            println!(
-                "z8/{x}/{y}: full forest underlay for {full_water_count} inland bodies, {} source pixels including halo",
-                automatic_full_water.len()
-            );
-        }
-        if let Some(built) = &built {
-            let removed = suppress_urban_forest(&mut classes, built, sample_side);
-            println!(
-                "z8/{x}/{y}: suppressed {removed} urban forest source pixels (including halo)"
-            );
-        }
-        let forest_weights = match (&relief_dem, &built) {
-            (Some(dem), Some(built)) if built.contains(&1) => Some(
-                dem.forest_weights(x, y, CORE, halo, built, &classes)
-                    .with_context(|| format!("Evaluate urban relief z8/{x}/{y}"))?,
-            ),
-            _ => None,
-        };
-        let full_inland_water = if let Some(point) = &args.full_inland_forest_at {
-            let [lat, lon] = [point[0], point[1]];
-            ensure!(
-                lat.abs() <= 85.05 && lon.abs() <= 180.,
-                "緯度経度が範囲外です"
-            );
-            let gx = (lon / 360. + 0.5) * (256 * CORE) as f64;
-            let gy = (0.5 - lat.to_radians().tan().asinh() / std::f64::consts::TAU)
-                * (256 * CORE) as f64;
-            let sx = gx.floor() as i64 - i64::from(x) * CORE as i64 + halo as i64;
-            let sy = gy.floor() as i64 - i64::from(y) * CORE as i64 + halo as i64;
-            let core = halo as i64..(halo + CORE) as i64;
-            ensure!(
-                core.contains(&sx) && core.contains(&sy),
-                "指定点が対象区画の外にあります"
-            );
-            let (water, shore) = inland_water_component(
-                &classes,
-                &land,
-                sample_side,
-                sy as usize * sample_side + sx as usize,
-            )?;
-            println!(
-                "inland forest trial: {} source pixels, shore forest {}/{}",
-                water.len(),
-                shore[1],
-                shore[0] + shore[1]
-            );
-            water
-        } else {
-            automatic_full_water
-        };
-        let zooms = args.zooms();
-        let zooms = &zooms[zooms.partition_point(|&z| z > area.max_zoom.unwrap_or(11))..];
-        let mut levels = pool.install(|| {
-            if args.lpf {
-                return lpf_levels(
+            if let Some(built) = &mut built {
+                built
+                    .par_iter_mut()
+                    .zip(&classes)
+                    .for_each(|(built, &class)| *built = u8::from(class == 50));
+            }
+            for (code, land) in classes.iter_mut().zip(&mut land) {
+                if *code == 0 {
+                    let confirmed = *land == 2;
+                    *land = u8::from(confirmed);
+                    *code = if confirmed { 0 } else { 3 };
+                } else {
+                    *code = classify(*code);
+                }
+            }
+            if let Some(cleaned) = &mut cleaned {
+                pool.install(|| remove_isolated_classes(&classes, &land, sample_side, cleaned));
+                std::mem::swap(&mut classes, cleaned);
+            }
+            let (automatic_full_water, full_water_count) = if args.full_forested_inland_water {
+                forested_inland_water(&classes, &land, sample_side)
+            } else {
+                (Vec::new(), 0)
+            };
+            if args.full_forested_inland_water {
+                println!(
+                    "z{work_zoom}/{x}/{y}: full forest underlay for {full_water_count} inland bodies, {} source pixels including halo",
+                    automatic_full_water.len()
+                );
+            }
+            if let Some(built) = &built {
+                let removed = suppress_urban_forest(&mut classes, built, sample_side);
+                println!(
+                    "z{work_zoom}/{x}/{y}: suppressed {removed} urban forest source pixels (including halo)"
+                );
+            }
+            let forest_weights = match (&relief_dem, &built) {
+                (Some(dem), Some(built)) if built.contains(&1) => Some(
+                    dem.forest_weights(x, y, CORE, halo, built, &classes, work_zoom + 3)
+                        .with_context(|| format!("Evaluate urban relief z{work_zoom}/{x}/{y}"))?,
+                ),
+                _ => None,
+            };
+            let full_inland_water = if let Some(point) = &args.full_inland_forest_at {
+                let [lat, lon] = [point[0], point[1]];
+                ensure!(
+                    lat.abs() <= 85.05 && lon.abs() <= 180.,
+                    "緯度経度が範囲外です"
+                );
+                let gx = (lon / 360. + 0.5) * (world_tiles * CORE as f64);
+                let gy = (0.5 - lat.to_radians().tan().asinh() / std::f64::consts::TAU)
+                    * (world_tiles * CORE as f64);
+                let sx = gx.floor() as i64 - i64::from(x) * CORE as i64 + halo as i64;
+                let sy = gy.floor() as i64 - i64::from(y) * CORE as i64 + halo as i64;
+                let core = halo as i64..(halo + CORE) as i64;
+                ensure!(
+                    core.contains(&sx) && core.contains(&sy),
+                    "指定点が対象区画の外にあります"
+                );
+                let (water, shore) = inland_water_component(
                     &classes,
                     &land,
                     sample_side,
-                    args.layer.as_deref(),
-                    args.source_water_fill,
-                    args.indexed_land,
-                    args.forest_underlay_from.is_some(),
-                    args.categorical_water_fill,
-                    args.no_land_underlay,
-                    composite_order,
-                    forest_weights.as_deref(),
-                    args.coastal_forest_median_radius,
-                    &full_inland_water,
-                    zooms,
+                    sy as usize * sample_side + sx as usize,
+                )?;
+                println!(
+                    "inland forest trial: {} source pixels, shore forest {}/{}",
+                    water.len(),
+                    shore[1],
+                    shore[0] + shore[1]
                 );
-            }
-            [(11, 8), (9, 2), (8, 1)]
-                .into_par_iter()
-                .map(|(z, scale)| {
-                    (
-                        z,
-                        scale,
-                        downsample(&classes, TILE * scale, args.area_average),
-                    )
-                })
-                .collect::<Vec<_>>()
-        });
-        if !args.lpf {
-            levels.push((6, 0, downsample(&classes, TILE / 4, args.area_average)));
-        }
-        let mut tiles = Vec::new();
-        for (z, scale, rgba) in levels {
-            if z < 8 {
-                let factor = 1 << (8 - z);
-                let side = TILE / factor as usize;
-                let image = coarse
-                    .entry((z, x / factor, y / factor))
-                    .or_insert_with(|| vec![0; TILE * TILE * 4]);
-                for row in 0..side {
-                    let dst = (((y % factor) as usize * side + row) * TILE
-                        + (x % factor) as usize * side)
-                        * 4;
-                    image[dst..dst + side * 4]
-                        .copy_from_slice(&rgba[row * side * 4..(row + 1) * side * 4]);
+                water
+            } else {
+                automatic_full_water
+            };
+            let zooms = if work_zoom == 9 {
+                &[13, 12][..]
+            } else {
+                args.zooms()
+            };
+            let zooms = &zooms[zooms.partition_point(|&z| z > area.max_zoom.unwrap_or(11))..];
+            let mut levels = pool.install(|| {
+                if args.lpf {
+                    return lpf_levels(
+                        &classes,
+                        &land,
+                        sample_side,
+                        args.layer.as_deref(),
+                        args.source_water_fill,
+                        args.indexed_land,
+                        args.forest_underlay_from.is_some(),
+                        args.categorical_water_fill,
+                        args.no_land_underlay,
+                        composite_order,
+                        forest_weights.as_deref(),
+                        args.coastal_forest_median_radius,
+                        &full_inland_water,
+                        zooms,
+                        work_zoom,
+                    );
                 }
-                continue;
+                [(11, 8), (9, 2), (8, 1)]
+                    .into_par_iter()
+                    .map(|(z, scale)| {
+                        (
+                            z,
+                            scale,
+                            downsample(&classes, TILE * scale, args.area_average),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            });
+            if !args.lpf {
+                levels.push((6, 0, downsample(&classes, TILE / 4, args.area_average)));
             }
-            for dy in 0..scale {
-                for dx in 0..scale {
-                    let mut pixels = Vec::with_capacity(TILE * TILE * 4);
-                    for py in 0..TILE {
-                        let start = ((dy * TILE + py) * TILE * scale + dx * TILE) * 4;
-                        pixels.extend_from_slice(&rgba[start..start + TILE * 4]);
+            let mut tiles = Vec::new();
+            for (z, scale, rgba) in levels {
+                if z < 8 {
+                    let factor = 1 << (8 - z);
+                    let side = TILE / factor as usize;
+                    let image = coarse
+                        .entry((z, x / factor, y / factor))
+                        .or_insert_with(|| vec![0; TILE * TILE * 4]);
+                    for row in 0..side {
+                        let dst = (((y % factor) as usize * side + row) * TILE
+                            + (x % factor) as usize * side)
+                            * 4;
+                        image[dst..dst + side * 4]
+                            .copy_from_slice(&rgba[row * side * 4..(row + 1) * side * 4]);
                     }
-                    tiles.push(Tile {
-                        z,
-                        x: x * scale as u32 + dx as u32,
-                        y: y * scale as u32 + dy as u32,
-                        rgba: pixels,
-                    });
+                    continue;
+                }
+                for dy in 0..scale {
+                    for dx in 0..scale {
+                        let mut pixels = Vec::with_capacity(TILE * TILE * 4);
+                        for py in 0..TILE {
+                            let start = ((dy * TILE + py) * TILE * scale + dx * TILE) * 4;
+                            pixels.extend_from_slice(&rgba[start..start + TILE * 4]);
+                        }
+                        tiles.push(Tile {
+                            z,
+                            x: x * scale as u32 + dx as u32,
+                            y: y * scale as u32 + dy as u32,
+                            rgba: pixels,
+                        });
+                    }
                 }
             }
+            save(&args, &pool, &mut db, &tiles)
+                .with_context(|| format!("Encode z{work_zoom}/{x}/{y}"))?;
+            println!(
+                "region {}/{} z{work_zoom}/{x}/{y}: {} raster tiles",
+                finished,
+                areas.len(),
+                tiles.len()
+            );
         }
-        save(&args, &pool, &mut db, &tiles).with_context(|| format!("Encode z8/{x}/{y}"))?;
-        println!(
-            "region {}/{} z8/{x}/{y}: {} raster tiles",
-            i + 1,
-            areas.len(),
-            tiles.len()
-        );
     }
-    drop(projected);
     let roots: Vec<_> = coarse
         .into_iter()
         .map(|((z, x, y), rgba)| Tile { z, x, y, rgba })
@@ -2223,7 +2259,12 @@ pub(super) fn run() -> Result<()> {
     save(&args, &pool, &mut db, &roots)?;
     let mut levels = Vec::new();
     let first_level = if args.include_l2 { 2 } else { 3 };
-    for (level, &z) in (first_level..).zip(args.zooms()) {
+    let output_zooms = if has_fine {
+        &[13, 12, 11, 10, 9, 8, 7, 6][..]
+    } else {
+        args.zooms()
+    };
+    for (level, &z) in (first_level..).zip(output_zooms) {
         let (count, bytes): (u64, u64) = db.query_row(
             "SELECT count(*),sum(length(payload)) FROM tiles WHERE z=?",
             [z],

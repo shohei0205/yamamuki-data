@@ -64,15 +64,15 @@ pwsh -NoProfile -File surface/esa_worldcover/scripts/build_esa_worldcover.ps1 `
   -Version '0.1.0'
 ```
 
-実行スクリプトは、DEM10B PNGから作業用標高SQLiteを作り、GeoTIFFのモザイクを作り、標高SQLiteから作業区画を決める。次に、森林・水域の分類と穴埋め、LOD別の縮小、陰影生成、タイルのパック、PNG／WebP圧縮、共通SQLiteへの格納と検査を順に行う。森林と水域は4ビット相当、陰影は北西からの単方向で明暗の変化に応じて8〜3ビット相当。タイルの一辺はz10が384画素、z5〜z9が512画素。
+実行スクリプトは、DEM10B PNGから作業用標高SQLiteを作り、GeoTIFFのモザイクを作り、標高SQLiteから作業区画を決める。次に、森林・水域の分類と穴埋め、LOD別の縮小、陰影生成、タイルのパック、PNG／WebP圧縮、共通SQLiteへの格納と検査を順に行う。森林と水域は4ビット相当、陰影は北西からの単方向で明暗の変化に応じて8〜3ビット相当。タイルの一辺はz10〜z12が384画素、z5〜z9が512画素。森林は最も細かいz12からz5まで順に生成し、各レベルは直上のタイルの森林被覆率を面積平均する。z10からz9では384画素の子タイルを親の256画素四方に縮小する。直上のタイルがない区画は元のESAデータから生成した結果を使う。
 
-z5〜z7では、収録タイル全域を森林・水域・陰影の共通範囲として処理する。この範囲に入る日本国外の陸地もESA原本の分類で収録する。標高のない箇所の陰影は中立値。z8〜z10の収録範囲は作業用標高SQLiteから選ぶ。
+z5〜z7では、収録タイル全域を森林・水域・陰影の共通範囲として処理する。この範囲に入る日本国外の陸地もESA原本の分類で収録する。標高のない箇所の陰影は中立値。z8〜z12の収録範囲は作業用標高SQLiteから選ぶ。z11とz12では、z9の作業区画でESA原本を従来の2倍の細かさで読み取り、各レベルのタイルに縮小する。陰影はz13とz14のDEMを使う。
 
 完了すると、作業ディレクトリに `esa-worldcover.sqlite3` と `manifest.json` ができる。全国データと作業ファイルはGit管理外の `build/` に置く。配布ファイルは次の手順でそろえる。
 
 ## 配布準備
 
-[地表データの共通公開手順](../README.md#地表データの公開)に従い、`-Dataset esa_worldcover` を指定する。現行は `-Package all`（既定）で森林・陰影・水域を1つのSQLiteとして配布する。
+[地表データの共通公開手順](../README.md#地表データの公開)に従い、`-Dataset esa_worldcover` を指定する。`-Package all`（既定）に、森林・陰影・水域のz5〜z12を収録したSQLiteを渡す。
 
 ```powershell
 pwsh -NoProfile -File surface/scripts/prepare_release.ps1 `
@@ -82,18 +82,18 @@ pwsh -NoProfile -File surface/scripts/prepare_release.ps1 `
   -TargetCommit '<生成に使ったコミットの40桁のSHA>' -Publish
 ```
 
-### 将来のレイヤー別配布
+### 最大レベル別の配布
 
-分割時は[共通のレイヤー別配布の構造](../README.md#レイヤー別配布の構造)に従う。どのファイルもデータセットIDは `esa-worldcover-japan`。次はデータ版 `0.1.0` の場合のタグ例。
+各ファイルに森林・陰影・水域の3レイヤーを収録する。データ版 `0.1.0` の場合、すべてのファイルを同じ `esa-worldcover-japan-0.1.0` Release に添付する。各SQLiteのデータセットIDは `esa-worldcover-japan`。
 
-| 配布単位 | 収録レイヤー | SQLiteファイル | Releaseタグの例 |
-| --- | --- | --- | --- |
-| `all` | 森林・陰影・水域 | `esa-worldcover.sqlite3` | `esa-worldcover-japan-0.1.0` |
-| `forest` | 森林 | `esa-worldcover-forest.sqlite3` | `esa-worldcover-japan-forest-0.1.0` |
-| `hillshade` | 陰影 | `esa-worldcover-hillshade.sqlite3` | `esa-worldcover-japan-hillshade-0.1.0` |
-| `water` | 水域 | `esa-worldcover-water.sqlite3` | `esa-worldcover-japan-water-0.1.0` |
+| 収録レベル | SQLite ファイル | manifest |
+|---|---|---|
+| z5〜z9 | `esa-worldcover-z9.sqlite3` | `esa-worldcover-z9.manifest.json` |
+| z5〜z10 | `esa-worldcover-z10.sqlite3` | `esa-worldcover-z10.manifest.json` |
+| z5〜z11 | `esa-worldcover-z11.sqlite3` | `esa-worldcover-z11.manifest.json` |
+| z5〜z12 | `esa-worldcover-z12.sqlite3` | `manifest.json` |
 
-[配布単位の設定](release.json)
+全レベル版の配布ファイル名は[公開設定](release.json)の `packages.all.fileName` で指定する。公開準備では生成済みSQLiteをその名前でコピーする。公開Actionは全レベル版を検査し、`splitPackages` に従って最大レベル別の3ファイルを抽出する。
 
 ## 出典とライセンス
 
@@ -113,6 +113,12 @@ pwsh -NoProfile -File surface/scripts/prepare_release.ps1 `
 出典・帰属表示・利用条件・加工内容は、SQLiteの `datasets.metadata_json` 内の `sources` と、配布manifestの `metadata.sources` に記録する。利用・再配布時は出典ごとの利用条件を確認する。
 
 ## 検査
+
+GitHub に接続せずに公開 Action の分割と再実行を確認するには、生成済み SQLite を指定する。
+
+```powershell
+pwsh -NoProfile -File surface/tests/publish_release.ps1 -Database build/surface/japan-0.1.0/esa-worldcover.sqlite3
+```
 
 ```powershell
 cargo test --locked --manifest-path surface/Cargo.toml -p surface-esa-worldcover
@@ -134,6 +140,8 @@ cargo run --locked --release --manifest-path surface/Cargo.toml --bin surface-to
 
 | レベル（実XYZズーム） | タイル寸法 |
 | --- | ---: |
+| z12 | 384 |
+| z11 | 384 |
 | z10 | 384 |
 | z9 | 512 |
 | z8 | 512 |
@@ -141,11 +149,11 @@ cargo run --locked --release --manifest-path surface/Cargo.toml --bin surface-to
 | z6 | 512 |
 | z5 | 512 |
 
-| レイヤーID | タイル数 | 圧縮 | 欠損行の扱い |
-| --- | ---: | --- | --- |
-| forest | 2,110 | 可逆WebP | 地表の色を描画しない |
-| water | 2,110 | 可逆WebP | 水域を描画しない |
-| hillshade | 1,141 | WebP | 中立値136を使う |
+| レイヤーID | 圧縮 | 欠損行の扱い |
+| --- | --- | --- |
+| forest | 可逆WebPまたはPNG | 地表の色を描画しない |
+| water | 可逆WebPまたはPNG | 水域を描画しない |
+| hillshade | WebPまたはPNG | 中立値136を使う |
 
 この表は全国データの照合例。タイルごとの画像形式は `surface_tiles.encoding` を使う。
 

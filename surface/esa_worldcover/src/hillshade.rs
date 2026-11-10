@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use rayon::prelude::*;
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::json;
 use std::{collections::BTreeSet, fs, path::PathBuf};
 
@@ -201,6 +201,80 @@ fn resize_512_to_384(source: &[u8], bits: usize) -> Vec<u8> {
     output
 }
 
+// 4ビットの森林被覆率を面積平均し、親タイルの対応する1/4に格納する。
+fn replace_forest_quadrant(
+    parent: &mut [u8],
+    child: &[u8],
+    parent_side: usize,
+    child_side: usize,
+    dx: usize,
+    dy: usize,
+) {
+    let quadrant_side = parent_side / 2;
+    let parent_stride = parent_side / 2;
+    // 各出力画素が重なる入力画素は2個。入力画素の幅を units で表す。
+    let (step, units) = if parent_side == child_side {
+        (2, 1)
+    } else {
+        (3, 2)
+    };
+    debug_assert_eq!(child_side * units, quadrant_side * step);
+    let span = |i: usize| {
+        let position = i * step;
+        let first = units - position % units;
+        (position / units, first, step - first)
+    };
+    let read = |x: usize, y: usize| {
+        let i = y * child_side + x;
+        usize::from((child[i / 2] >> (4 * (1 - i % 2))) & 15)
+    };
+    let denominator = step * step;
+    for y in 0..quadrant_side {
+        let (sy, top, bottom) = span(y);
+        let start = (dy * quadrant_side + y) * parent_stride + dx * (quadrant_side / 2);
+        let average = |x| {
+            let (sx, left, right) = span(x);
+            let sum = top * (left * read(sx, sy) + right * read(sx + 1, sy))
+                + bottom * (left * read(sx, sy + 1) + right * read(sx + 1, sy + 1));
+            ((sum + denominator / 2) / denominator) as u8
+        };
+        for (x, byte) in parent[start..start + quadrant_side / 2]
+            .iter_mut()
+            .enumerate()
+        {
+            *byte = average(2 * x) << 4 | average(2 * x + 1);
+        }
+    }
+}
+
+#[test]
+fn forest_parent_averages_child_coverage_in_the_matching_quadrant() {
+    let child = [0xf0, 0x12, 0x00, 0x01, 0xff, 0x00, 0xff, 0x00];
+    let mut parent = [0xaa; 8];
+    replace_forest_quadrant(&mut parent, &child, 4, 4, 1, 1);
+    assert_eq!(parent, [0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0x41, 0xaa, 0xf0]);
+}
+
+#[test]
+fn forest_parent_uses_exact_weights_when_child_is_384_and_parent_is_512() {
+    let child_side = 384;
+    let mut child = vec![0; child_side * child_side / 2];
+    child[0] = 0xf0;
+    child[1] = 0xf0;
+    child[child_side / 2 + 1] = 0xf0;
+    let mut parent = vec![0xaa; 512 * 512 / 2];
+    replace_forest_quadrant(&mut parent, &child, 512, child_side, 0, 1);
+    let start = 256 * 256;
+    assert_eq!(parent[start], 0x7a);
+    assert_eq!(parent[start + 256], 0x03);
+    assert_eq!(parent[start + 128], 0xaa);
+    assert_eq!(parent[start - 256], 0xaa);
+}
+
+fn packed_side(z: u32, compact: bool) -> u32 {
+    if z >= 11 && compact { 384 } else { 512 }
+}
+
 pub(super) fn pack_ground() -> Result<()> {
     let args = PackArgs::parse();
     let source =
@@ -228,9 +302,10 @@ pub(super) fn pack_ground() -> Result<()> {
         "CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL) WITHOUT ROWID;",
     )?;
     let keys = source
-        .prepare("SELECT DISTINCT z,x/2,y/2 FROM tiles ORDER BY 1,2,3")?
+        .prepare("SELECT DISTINCT z,x/2,y/2 FROM tiles ORDER BY 1 DESC,2,3")?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<rusqlite::Result<Vec<Key>>>()?;
+    let finest_zoom = keys.first().map_or(0, |&(z, _, _)| z);
     let mut stats = std::collections::BTreeMap::new();
     for (table, bits, neutral) in [
         ("tiles", 4, 0),
@@ -242,13 +317,14 @@ pub(super) fn pack_ground() -> Result<()> {
             "SELECT payload FROM {table} WHERE z=?1 AND x=?2 AND y=?3"
         ))?;
         let mut write = tx.prepare(&format!("INSERT INTO {table} VALUES (?,?,?,?)"))?;
+        let mut read_packed_forest =
+            tx.prepare("SELECT payload FROM tiles WHERE z=?1 AND x=?2 AND y=?3")?;
         for &(z, x, y) in &keys {
             let stride = TILE * bits / 8;
             let mut image = vec![neutral; 4 * TILE * stride];
             for dy in 0..2 {
                 for dx in 0..2 {
                     let child = (z, 2 * x + dx, 2 * y + dy);
-                    use rusqlite::OptionalExtension;
                     let blob: Option<Vec<u8>> = read.query_row(child, |r| r.get(0)).optional()?;
                     let mut pixels = vec![neutral; TILE * stride];
                     if let Some(blob) = blob {
@@ -276,12 +352,37 @@ pub(super) fn pack_ground() -> Result<()> {
             {
                 continue;
             }
-            let side = if z == 11 && args.l2_384 {
+            let side = packed_side(z, args.l2_384);
+            if side == 384 {
                 image = resize_512_to_384(&image, bits);
-                384
-            } else {
-                512
-            };
+            }
+            // 森林は最も細かいレベルから順に縮小し、直上が欠ける区画は元画像で埋める。
+            if table == "tiles" && z < finest_zoom {
+                let child_side = packed_side(z + 1, args.l2_384) as usize;
+                let mut child = vec![0; child_side * child_side / 2];
+                for dy in 0..2 {
+                    for dx in 0..2 {
+                        let blob: Option<Vec<u8>> = read_packed_forest
+                            .query_row(params![z + 1, 2 * x + dx as u32, 2 * y + dy as u32], |r| {
+                                r.get(0)
+                            })
+                            .optional()?;
+                        if let Some(blob) = blob {
+                            let mut reader =
+                                png::Decoder::new(std::io::Cursor::new(blob)).read_info()?;
+                            reader.next_frame(&mut child)?;
+                            replace_forest_quadrant(
+                                &mut image,
+                                &child,
+                                side as usize,
+                                child_side,
+                                dx,
+                                dy,
+                            );
+                        }
+                    }
+                }
+            }
             let mut png = Vec::new();
             {
                 let mut encoder = png::Encoder::new(&mut png, side, side);
@@ -321,9 +422,9 @@ pub(super) fn pack_ground() -> Result<()> {
             let z = level["z"].as_u64().context("Missing zoom")? as u32;
             let [count, bytes] = stat(table, z);
             level["tiles"] = json!(count);
-            if args.l2_384 && z == 11 {
+            if args.l2_384 && z >= 11 {
                 level["tilePixels"] = json!(384);
-                level["projectedMetresPerPixel"] = json!(WORLD / f64::from(1u32 << 10) / 384.);
+                level["projectedMetresPerPixel"] = json!(WORLD / f64::from(1u32 << (z - 1)) / 384.);
             }
             if table == "tiles" {
                 level
@@ -349,7 +450,7 @@ pub(super) fn pack_ground() -> Result<()> {
             .remove("noDem");
         level["target"] = json!(stat("tiles", z)[0]);
         level["stored"] = json!(count);
-        if args.l2_384 && z == 11 {
+        if args.l2_384 && z >= 11 {
             level["tilePixels"] = json!(384);
         }
         level["pngBytes"] = json!(bytes);
@@ -651,13 +752,13 @@ fn run_national(
     );
     let coverage = Connection::open_with_flags(landcover, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let keys = coverage
-        .prepare("SELECT z,x,y FROM tiles WHERE z BETWEEN 6 AND 11 ORDER BY z,x,y")?
+        .prepare("SELECT z,x,y FROM tiles WHERE z BETWEEN 6 AND 13 ORDER BY z,x,y")?
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
         .collect::<rusqlite::Result<Vec<Key>>>()?;
     let zooms: BTreeSet<_> = keys.iter().map(|&(z, _, _)| z).collect();
     ensure!(
-        zooms == (6..=10).collect() || zooms == (6..=11).collect(),
-        "地表SQLiteのz6〜z11が連続していません（z11は任意）"
+        (10..=13).any(|max| zooms == (6..=max).collect()),
+        "地表SQLiteの処理用レベルz6〜z13が連続していません"
     );
 
     fs::create_dir(output).context("新しい出力フォルダーを指定してください")?;

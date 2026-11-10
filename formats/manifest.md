@@ -50,7 +50,7 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。�
 | `attribution` | string | 廃止 | 版5以前の出典表示（必須）。版6では `metadata.sources[].attribution` に記載する | [版1] 追加<br>[版6] 廃止 |
 | `supplementSources` | object | 廃止 | 版5の補足の出典一覧（任意）。版6では元データの出典とともに `metadata.sources` に統合する | [版5] 追加<br>[版6] 廃止 |
 
-地点データ版6では、地点 JSON の `metadata` を manifest の `metadata` にそのままコピーする。出典・タグ・件数・更新日時もこの object 内で保持する。地点文書の構造は [地点データフォーマット](../points/formats/data.md) を参照する。
+地点データ版6では、地点 JSON の `metadata` を manifest の `metadata` にそのままコピーする。出典・タグ・件数・更新日時もこの object 内で保持する。地点用スキーマ `#/$defs/pointManifest` は `metadata.pointCount` を必須とし、その型と最小値は [共通 metadata スキーマ](../schemas/metadata-v1.schema.json) の正の整数の定義を使う。地点文書の構造は [地点データフォーマット](../points/formats/data.md) を参照する。
 
 ### 補足ファイル単体の配布
 
@@ -58,7 +58,7 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。�
 
 ### SQLiteファイルの配布
 
-SQLiteも共通manifest版6を使う。データ本体はSQLiteファイルを直接配布し、`dataSchemaVersion` と `metadata` の対応は [山むきSQLiteコンテナ仕様](sqlite.md#配布manifest) を参照する。
+SQLiteも共通manifest版6を使う。データ本体はSQLiteファイルを直接配布し、`dataSchemaVersion` と `metadata` の対応は [山むきSQLiteコンテナ仕様](sqlite.md#配布manifest) を参照する。地表の収録レイヤーとズームはSQLiteのテーブルから取得する。
 
 ## 読み込みと検証
 
@@ -119,6 +119,36 @@ SQLiteも共通manifest版6を使う。データ本体はSQLiteファイルを�
       }
     ],
     "pointCount": 1
+  }
+}
+```
+
+### 版6の地表SQLite
+
+```json
+{
+  "schemaFormat": "yamamuki-manifest",
+  "schemaVersion": 6,
+  "dataSchemaFormat": "yamamuki-sqlite",
+  "dataSchemaVersion": 1,
+  "name": "見本の地表データ",
+  "version": "0.1.0",
+  "fileName": "sample-surface-z9.sqlite3",
+  "downloadUrl": "https://example.com/releases/sample-surface-0.1.0/sample-surface-z9.sqlite3",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "sizeBytes": 1000,
+  "uncompressedSizeBytes": 1000,
+  "dataTimestamp": "2026-11-10T00:00:00Z",
+  "metadata": {
+    "sources": [
+      {
+        "name": "元資料",
+        "source": "https://example.com/source",
+        "license": "CC BY 4.0",
+        "attribution": "見本資料の著作者",
+        "changes": "森林と水域のタイルを作成"
+      }
+    ]
   }
 }
 ```

@@ -39,7 +39,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
-      - name: 下書きの添付を再検査して公開
+      - name: 下書きを検査し、構成別SQLiteを添付して公開
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

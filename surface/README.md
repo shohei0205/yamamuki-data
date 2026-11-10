@@ -1,24 +1,48 @@
 ﻿# 地表データ
 
-地表データは、地図上に配置する画像タイルをレイヤーごとに収録する。配布ファイルとメタデータは [山むきSQLiteコンテナ仕様](../formats/sqlite.md) に従う。座標、レベル、画像の復号と合成は [地表画像のSQLite形式](formats/sqlite.md) を参照する。[データビューワ](../viewer/README.md) で開ける。
+[リポジトリの README に戻る](../README.md)
 
-## データセット
+地図上に配置する画像タイルを、レイヤーごとに収録する地表データの共通形式をまとめる。元データの取得・生成処理・配布手順は、取得元と対象ごとのフォルダに分ける。
 
-| データセット | 元データと生成手順 |
-| --- | --- |
-| 日本全国の地表 | [ESA WorldCover](esa_worldcover/README.md) |
+| 対象・取得元 | 状態 | 詳細 |
+|---|---|---|
+| ESA WorldCover による日本全国の地表 | 森林・水域・陰影を収録した全国 SQLite をローカルで生成・検査し、Release で配布できる | [esa_worldcover](esa_worldcover/README.md) |
 
-## フォルダー構成
+## データを取得して利用する
 
-| パス | 内容 |
-| --- | --- |
-| `formats/` | 地表画像の共通SQLite仕様 |
-| `common/` | データセット共通のRustコード。SQLiteの読み書き、画像の復号、検査、統合を含む |
-| `tools/` | 共通の検査、配布manifest作成、SQLite統合を行う `surface-tool` |
-| `scripts/` | 共通の配布準備・公開と、元データの取得スクリプト |
-| データセット別フォルダー | 元データの取得手順、生成器、配布内容 |
+公開済みの地表データは、次の手順で取得して利用できる。
 
-## 検査と統合
+1. [Releases 一覧](https://github.com/shohei0205/yamamuki-data/releases)で利用するデータセットと版を選び、Assets の `manifest.json` を取得する。タグと配布ファイル名は、各データセットの README を参照する。
+2. manifest の `schemaVersion` とデータ本体の `dataSchemaVersion` に対応していることを確認する。
+3. `downloadUrl` から SQLite を取得し、ファイルの `sizeBytes` と `sha256` を照合する。
+4. [地表 SQLite の形式](#地表-sqlite-の形式)に従ってデータを読む。地図上で確認する場合は、[データビューワ](../viewer/README.md)の「地表SQLiteを開く」でファイルを選ぶ。
+5. データセットの README と manifest の `metadata.sources` で、出典表示と利用条件を確認する。
+
+## フォルダ構成
+
+```text
+surface/
+  README.md         地表データの一覧・共通形式
+  formats/          地表画像の SQLite 形式
+  common/           SQLite の読み書き・画像の復号・検査・統合の共通コード
+  tools/            検査・manifest 作成・SQLite 統合を行う surface-tool
+  scripts/          共通の配布準備・公開と元データの取得スクリプト
+  esa_worldcover/   ESA WorldCover を使う地表データ
+```
+
+元データの取得方法・収録範囲・生成方法・出典は、データセットごとの README を参照する。元データと生成物は `build/` などの Git 管理外に置く。
+
+## 地表データの manifest
+
+共通項目は [manifest フォーマットの「項目」](../formats/manifest.md#項目)、地表データの形式識別子とレイヤー別配布に使う項目は [山むき SQLite コンテナ仕様の「配布manifest」](../formats/sqlite.md#配布manifest)を参照する。
+
+## 変更の確かめ方
+
+- [共通の確認](../README.md#変更の確かめ方)
+- [ESA WorldCover の確認](esa_worldcover/README.md#検査)
+- [データビューワの確認](../viewer/README.md#確認)
+
+### 検査と統合
 
 リポジトリのルートで実行する。生成したデータと元データは `build/` などのGit管理外に置く。生成手順と出典・利用条件はデータセットごとのREADMEを参照する。
 
@@ -33,7 +57,7 @@ cargo run --locked --release --manifest-path surface/Cargo.toml --bin surface-to
 
 ## 地表データの公開
 
-公開対象は1データセットを収録したSQLite。`surface/<データセットのフォルダー>/release.json` に、台帳の `datasetId`、`versionPattern`、配布単位 `packages` を記載する。各配布単位で `releaseId`、`fileName`、収録するレイヤーIDの配列 `layers` を指定する。タグは `<releaseId>-<データ版>`。同じデータ版の一式とレイヤー別ファイルを並行して公開できるよう、配布単位ごとに異なる `releaseId` を使う。
+公開対象は1データセットを収録したSQLite。`surface/<データセットのフォルダー>/release.json` に、台帳の `datasetId`、`versionPattern`、配布単位 `packages` を記載する。各配布単位で `releaseId`、`fileName`、収録するレイヤーIDの配列 `layers` を指定する。タグは `<releaseId>-<データ版>`。全レイヤー入りのSQLiteは `all` で指定する。配布単位に `levels` を指定すると、入力SQLiteのレイヤー別収録ズームをその定義と照合する。レイヤー別配布を行う場合は、同じ配布単位に `splitPackages` を記載する。
 
 ```powershell
 pwsh -NoProfile -File surface/scripts/prepare_release.ps1 `
@@ -44,23 +68,49 @@ pwsh -NoProfile -File surface/scripts/prepare_release.ps1 `
 
 `-Publish` は下書き作成、添付、公開Actionの起動を行う。GitHub CLIでログインし、生成に使ったコミットを先にpushして、公開Actionを `main` に配置する。`-CreateDraft` は下書き作成まで行う。どちらも省くと配布ファイルの準備だけを行う。出力先は新規ディレクトリを指定する。生成日時は同じ場所のmanifestから引き継ぐ。記録がないファイルや抽出したSQLiteには、元の生成日時を `-DataTimestamp` にUTCで指定する。
 
-Actionは添付したSQLite、manifest、ライセンスを取得し直し、収録画像、ハッシュ、データセットとレイヤーの構成、タグと対象コミットを照合してから同じ下書きを公開する。失敗時は下書きが残る。Actionの起動だけが失敗した場合は、表示された `gh workflow run` コマンドで再実行できる。
+Action は添付した SQLite、manifest、ライセンスを取得し直し、収録画像、ハッシュ、データセットとレイヤーの構成、タグと対象コミットを照合する。分割設定がある場合はレイヤー別の添付も作成・検査してから、同じ下書きを公開する。失敗時は下書きが残る。Actionの起動だけが失敗した場合は、表示された `gh workflow run` コマンドで再実行できる。
 
 ### レイヤー別配布の構造
 
-通常は全レイヤーを1つのSQLiteに収録する。分割配布を採用する場合は、次の構造を使う。
+入力には全レイヤーを 1 つの SQLite に収録する。レイヤー別に配布する場合も、**同じデータセット・データ版のファイルを 1 つの GitHub Release にまとめる**。Release タグは `<releaseId>-<データ版>` を使う。
 
 | 単位 | 構造 |
-| --- | --- |
-| SQLite | ファイルごとに、選んだレイヤーの設定・レベル・画像タイルを収録する。元のデータセットIDとデータ版を引き継ぐ。タイル画像のBLOBはそのままコピーする |
-| manifest | ファイルごとに作る。`surfaceLayerIds` で収録レイヤーを示し、`downloadUrl`・サイズ・SHA-256はそのSQLiteを指す |
-| GitHub Release | 配布単位ごとに `releaseId` と版付きタグを分ける。各Releaseに対応するSQLite、manifest、ライセンスを添付する |
+|---|---|
+| SQLite | ファイルごとに、選んだレイヤーの設定・レベル・画像タイルを収録する。元のデータセット ID とデータ版を引き継ぎ、タイル画像の BLOB をそのままコピーする |
+| manifest | SQLite ごとに作る。分割版は `<SQLite の拡張子を除いた名前>.manifest.json`、全レイヤー版は `manifest.json` とする。`downloadUrl`・サイズ・SHA-256 に対応する SQLite の情報を記録する |
+| GitHub Release | 同じタグの Assets に、すべての SQLite と対応する manifest を添付する。共通のライセンス文書は Release に 1 点添付する |
 
-分割ファイルを同じデータセットとして扱う場合は、台帳のデータセットIDとデータ版を照合する。レイヤーは文字列の `id` で区別する。`dataset_key` と `layer_key` はファイル内の参照に使う。現行のビューワーには、分割ファイルを自動で集めて重ねる機能はない。
+分割ファイルを同じデータセットとして扱う場合は、台帳のデータセット ID とデータ版を照合する。レイヤーは文字列の `id` で区別する。`dataset_key` と `layer_key` はファイル内の参照に使う。
 
-分割配布を行うときは、次のコマンドで抽出し、そのレイヤー構成に対応する `-Package` を指定して公開する。
+#### 公開 Action での分割手順
 
-```powershell
-cargo run --locked --release --manifest-path surface/Cargo.toml --bin surface-tool -- `
-  select-layers 入力.sqlite3 出力.sqlite3 forest
+ローカルでは全レイヤー入りの SQLite、`manifest.json`、`LICENSE.txt` を下書き Release に添付する。
+
+`release.json` の `splitPackages` に、配布ファイルごとの `fileName` と `layers` を指定する。任意の `levels` はレイヤー ID から実 XYZ ズームの整数配列への対応表。省略したレイヤーは全レベルを収録する。ファイル名は重複させない。同じレイヤーを別ファイルにも収録でき、各ファイルで組み合わせやレベルを変えられる。
+
+```json
+{
+  "fileName": "esa-worldcover-overview.sqlite3",
+  "layers": ["forest", "water"],
+  "levels": {
+    "forest": [5, 6, 7],
+    "water": [5, 6, 7, 8]
+  }
+}
 ```
+
+設定がない場合は一式だけを公開する。設定がある場合、公開 Action は次の順に処理する。
+
+1. 下書きから全レイヤー版を取得し、SQLite、manifest、ライセンス、タグと対象コミットを検証する。
+2. 検証済みの SQLite から `surface-tool select-surface` で指定したレイヤーとレベルを抽出する。分割版ごとに同じタグを指す manifest を作り、収録レイヤー、レベル、サイズ、SHA-256 を検証する。
+3. 全レイヤー版と分割版を同じ下書きに揃え、添付ファイルの名前、サイズ、SHA-256 を再確認してから公開する。
+
+途中で失敗した場合は下書きを保持する。再実行時は、検証済みの全レイヤー版から分割版を作り直し、下書きにある分割版の添付を照合する。検証結果と異なる分割版の添付は下書きの間に差し替える。
+
+## 地表 SQLite の形式
+
+ファイルの識別、データセット台帳、メタデータ、統合の決まりは [山むき SQLite コンテナ仕様](../formats/sqlite.md)にまとめている。地表画像のタイル座標・レベル・復号・合成方法は [地表画像の SQLite 形式](formats/sqlite.md)を参照する。
+
+## データを追加するとき
+
+`surface/<取得元と対象>/` に、README、生成処理、配布設定をまとめる。実装時にこの一覧を更新し、README に元データの取得方法・生成手順・出典と利用条件を書く。SQLite の検査や配布 manifest の作成には共通の `surface-tool` を使う。

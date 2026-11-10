@@ -92,7 +92,7 @@
   "additionalProperties": true,
   "$defs": {
     "pointManifest": {
-      "description": "地点データ用。共通項目に加えて pointCount を必須とする。",
+      "description": "地点データ用。共通項目に加えて metadata.pointCount を必須とする。",
       "allOf": [
         {
           "$ref": "#"

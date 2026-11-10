@@ -3,7 +3,7 @@ use image::{DynamicImage, ImageFormat, ImageReader, Limits};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::Serialize;
 use serde_json::Value;
-use std::{io::Cursor, path::Path};
+use std::{collections::BTreeMap, io::Cursor, path::Path};
 
 pub use rusqlite;
 
@@ -257,13 +257,33 @@ pub fn copy_surface_layers(
     source: &Connection,
     layer_ids: &[String],
 ) -> Result<()> {
-    copy_from(db, source, Some(layer_ids))
+    let selection: SurfaceSelection = layer_ids.iter().map(|id| (id.clone(), None)).collect();
+    ensure!(
+        selection.len() == layer_ids.len(),
+        "レイヤーIDを重複なく指定してください"
+    );
+    copy_surface_selection(db, source, &selection)
 }
 
-fn copy_from(db: &mut Connection, source: &Connection, layer_ids: Option<&[String]>) -> Result<()> {
+/// レイヤーIDに対し、収録する実XYZズームを指定する。Noneは全レベル。
+pub type SurfaceSelection = BTreeMap<String, Option<Vec<u32>>>;
+
+pub fn copy_surface_selection(
+    db: &mut Connection,
+    source: &Connection,
+    selection: &SurfaceSelection,
+) -> Result<()> {
+    copy_from(db, source, Some(selection))
+}
+
+fn copy_from(
+    db: &mut Connection,
+    source: &Connection,
+    selection: Option<&SurfaceSelection>,
+) -> Result<()> {
     validate(source)?;
     let source_datasets = datasets(source)?;
-    if layer_ids.is_some() {
+    if selection.is_some() {
         ensure!(
             source_datasets.len() == 1 && source_datasets[0].kind == "surface",
             "レイヤーを抽出するには地表データセットを1件だけ収録したSQLiteを指定してください"
@@ -271,17 +291,21 @@ fn copy_from(db: &mut Connection, source: &Connection, layer_ids: Option<&[Strin
     }
     let tx = db.transaction()?;
     for mut dataset in source_datasets {
-        let layer_keys = if let Some(ids) = layer_ids {
+        let filters = if let Some(selection) = selection {
             let layers = surface_layers(source, dataset.key)?;
             let selected: Vec<_> = layers
                 .iter()
-                .filter(|layer| ids.contains(&layer.id))
+                .filter(|layer| selection.contains_key(&layer.id))
                 .collect();
             ensure!(
-                !selected.is_empty() && selected.len() == ids.len(),
+                !selected.is_empty() && selected.len() == selection.len(),
                 "存在するレイヤーIDを重複なく指定してください"
             );
-            if let Some(sources) = dataset.metadata["sources"].as_array_mut() {
+            if let Some(sources) = dataset
+                .metadata
+                .get_mut("sources")
+                .and_then(Value::as_array_mut)
+            {
                 sources.retain(|entry| {
                     entry["name"].as_str().is_some_and(|name| {
                         selected
@@ -290,9 +314,34 @@ fn copy_from(db: &mut Connection, source: &Connection, layer_ids: Option<&[Strin
                     })
                 });
             }
-            Some(serde_json::to_string(
-                &selected.iter().map(|layer| layer.key).collect::<Vec<_>>(),
-            )?)
+            let keys = selected.iter().map(|layer| layer.key).collect::<Vec<_>>();
+            let mut pairs = Vec::new();
+            for layer in selected {
+                let available = surface_levels(source, dataset.key, layer.key)?;
+                let zooms = if let Some(zooms) = &selection[&layer.id] {
+                    let unique = zooms
+                        .iter()
+                        .copied()
+                        .collect::<std::collections::BTreeSet<_>>();
+                    ensure!(
+                        !zooms.is_empty()
+                            && zooms.len() == unique.len()
+                            && zooms
+                                .iter()
+                                .all(|z| available.iter().any(|level| level.z == *z)),
+                        "レイヤー {} のズーム指定が空、重複、または未収録です",
+                        layer.id
+                    );
+                    zooms.clone()
+                } else {
+                    available.into_iter().map(|level| level.z).collect()
+                };
+                pairs.extend(zooms.into_iter().map(|z| (layer.key, z)));
+            }
+            Some((
+                serde_json::to_string(&keys)?,
+                serde_json::to_string(&pairs)?,
+            ))
         } else {
             None
         };
@@ -343,21 +392,30 @@ fn copy_from(db: &mut Connection, source: &Connection, layer_ids: Option<&[Strin
             ),
         ] {
             let filtered_select;
-            let select = if layer_keys.is_some() {
+            let filter = if let Some((keys, pairs)) = &filters {
                 if !is_surface {
                     continue;
                 }
-                filtered_select =
-                    format!("{select} AND layer_key IN (SELECT value FROM json_each(?2))");
-                &filtered_select
+                let (clause, filter) = if select.contains("FROM surface_layers") {
+                    ("layer_key IN (SELECT value FROM json_each(?2))", keys)
+                } else {
+                    (
+                        "(layer_key,z) IN (SELECT json_extract(value,'$[0]'),json_extract(value,'$[1]') FROM json_each(?2))",
+                        pairs,
+                    )
+                };
+                filtered_select = format!("{select} AND {clause}");
+                Some(filter)
             } else {
-                select
+                filtered_select = select.to_owned();
+                None
             };
+            let select = &filtered_select;
             let mut read = source.prepare(select)?;
             let mut write = tx.prepare(insert)?;
             let columns = read.column_count();
-            let mut rows = if let Some(keys) = &layer_keys {
-                read.query(params![dataset.key, keys])?
+            let mut rows = if let Some(filter) = filter {
+                read.query(params![dataset.key, filter])?
             } else {
                 read.query([dataset.key])?
             };

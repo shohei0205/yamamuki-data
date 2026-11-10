@@ -178,7 +178,7 @@ impl Renderer {
         &self,
         painter: &egui::Painter,
         rect: Rect,
-        tiles: Vec<([Pos2; 4], wgpu::BindGroup)>,
+        tiles: Vec<([Pos2; 4], Rect, wgpu::BindGroup)>,
     ) {
         if tiles.is_empty() {
             return;
@@ -189,16 +189,21 @@ impl Renderer {
         ));
     }
 
-    fn draw(&self, rect: Rect, tiles: Vec<([Pos2; 4], wgpu::BindGroup)>) -> Draw {
+    fn draw(&self, rect: Rect, tiles: Vec<([Pos2; 4], Rect, wgpu::BindGroup)>) -> Draw {
         let mut vertices = Vec::with_capacity(tiles.len() * 96);
         let mut textures = Vec::with_capacity(tiles.len());
-        for (corners, texture) in tiles {
-            let uv = [[0., 0.], [1., 0.], [1., 1.], [0., 1.]];
+        for (corners, uv, texture) in tiles {
+            let uv = [
+                uv.left_top(),
+                uv.right_top(),
+                uv.right_bottom(),
+                uv.left_bottom(),
+            ];
             for i in [0, 1, 2, 0, 2, 3] {
                 let x = 2. * (corners[i].x - rect.left()) / rect.width() - 1.;
                 let y = 1. - 2. * (corners[i].y - rect.top()) / rect.height();
                 vertices.extend(
-                    [x, y, uv[i][0], uv[i][1]]
+                    [x, y, uv[i].x, uv[i].y]
                         .into_iter()
                         .flat_map(f32::to_le_bytes),
                 );
@@ -288,6 +293,7 @@ mod tests {
                     rect.right_bottom(),
                     rect.left_bottom(),
                 ],
+                Rect::from_min_max(Pos2::ZERO, egui::pos2(1., 1.)),
                 shade,
             )],
         );

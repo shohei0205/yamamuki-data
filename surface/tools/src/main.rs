@@ -1,12 +1,30 @@
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     fs::File,
     io::Read,
     path::{Path, PathBuf},
 };
 use surface_tool::write_database;
 use yamamuki_data_sqlite as db;
+
+fn surface_level_map<'a>(
+    connection: &db::rusqlite::Connection,
+    dataset: i64,
+    layers: &'a [db::SurfaceLayer],
+) -> Result<BTreeMap<&'a str, Vec<u32>>> {
+    layers
+        .iter()
+        .map(|layer| {
+            let zooms = db::surface_levels(connection, dataset, layer.key)?
+                .into_iter()
+                .map(|level| level.z)
+                .collect();
+            Ok((layer.id.as_str(), zooms))
+        })
+        .collect()
+}
 
 fn manifest(
     path: &Path,
@@ -56,7 +74,7 @@ fn manifest(
     );
     let container_version: u32 =
         connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    let mut manifest = serde_json::json!({
+    let manifest = serde_json::json!({
         "schemaFormat": "yamamuki-manifest",
         "schemaVersion": 6,
         "dataSchemaFormat": "yamamuki-sqlite",
@@ -72,13 +90,6 @@ fn manifest(
         "metadata": dataset.metadata,
         "datasets": datasets,
     });
-    if dataset.kind == "surface" {
-        let layers: Vec<_> = db::surface_layers(&connection, dataset.key)?
-            .into_iter()
-            .map(|layer| layer.id)
-            .collect();
-        manifest["surfaceLayerIds"] = serde_json::json!(layers);
-    }
     println!("{}", serde_json::to_string_pretty(&manifest)?);
     Ok(())
 }
@@ -112,6 +123,31 @@ fn main() -> Result<()> {
                 db::copy_surface_layers(destination, &db::open(Path::new(input))?, &ids)
             })
         }
+        ("select-surface", [input, output, selection]) => {
+            let selection: db::SurfaceSelection = serde_json::from_str(
+                selection
+                    .to_str()
+                    .context("レイヤーとズームをJSONで指定してください")?,
+            )?;
+            write_database(Path::new(output), true, |destination| {
+                db::copy_surface_selection(destination, &db::open(Path::new(input))?, &selection)
+            })
+        }
+        ("surface-levels", [path]) => {
+            let connection = db::open(Path::new(path))?;
+            let datasets = db::datasets(&connection)?;
+            let [dataset] = datasets.as_slice() else {
+                anyhow::bail!("地表データセットを1件だけ指定してください");
+            };
+            ensure!(
+                dataset.kind == "surface",
+                "地表データセットを指定してください"
+            );
+            let layers = db::surface_layers(&connection, dataset.key)?;
+            let levels = surface_level_map(&connection, dataset.key, &layers)?;
+            println!("{}", serde_json::to_string(&levels)?);
+            Ok(())
+        }
         ("validate", [path]) => {
             let db = db::open(Path::new(path))?;
             db::validate(&db)?;
@@ -141,6 +177,6 @@ fn main() -> Result<()> {
 
 fn usage() -> Result<()> {
     anyhow::bail!(
-        "使い方: surface-tool merge <出力> <入力>... | select-layers <入力> <出力> <レイヤーID>... | validate <入力> | manifest <入力> <ReleaseのdownloadルートURL> <生成日時UTC> [公開ID]"
+        "使い方: surface-tool merge <出力> <入力>... | select-layers <入力> <出力> <レイヤーID>... | select-surface <入力> <出力> <レイヤー別ズームJSON> | surface-levels <入力> | validate <入力> | manifest <入力> <ReleaseのdownloadルートURL> <生成日時UTC> [公開ID]"
     );
 }

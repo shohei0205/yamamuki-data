@@ -62,7 +62,8 @@ try {
     if ($generationManifest -and $generationManifest.sha256 -cne $manifest.sha256) {
         throw '生成時のmanifestとSQLiteのSHA-256が一致しません。'
     }
-    $tag = Get-SurfaceReleaseTag $config $manifest
+    $levels = & $tool surface-levels $stagedDatabase | ConvertFrom-Json -AsHashtable
+    $tag = Get-SurfaceReleaseTag $config $manifest $levels
     $entry = $manifest.datasets[0]
     $version = $entry.dataVersion
     $releaseBase = "$releaseRoot/$tag"
@@ -109,6 +110,9 @@ try {
 Write-Output "タグ: $tag"
 Write-Output "配布ファイル: $output"
 Write-Output "公開後のmanifest: $releaseBase/manifest.json"
+foreach ($split in $config.splitPackages) {
+    Write-Output "公開Actionが作る分割版manifest: $releaseBase/$($split.manifestName)"
+}
 
 if ($uploadDraft) {
     $workflow = 'publish-surface.yml'

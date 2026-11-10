@@ -38,7 +38,7 @@ ORDER BY id;
 
 [共通manifest版6](manifest.md) に従う。 `dataSchemaFormat` は `yamamuki-sqlite`、`dataSchemaVersion` はコンテナの `PRAGMA user_version`。SQLiteをそのまま配布するので `sizeBytes` と `uncompressedSizeBytes` は同じ値。 `sha256` はSQLite全体のハッシュ。
 
-単一データセットの配布では `version` に台帳の `data_version`、`name` に `title`、`metadata` に `metadata_json` を使う。追加項目の `datasets[]` に台帳の `id`・`kind`・`title`・`dataVersion`・`formatVersion`・`metadata` を載せられる。地表では、配布ファイルが収録するレイヤーIDを追加項目 `surfaceLayerIds` に配列で記載できる。複数データセットを統合したファイルの公開用メタデータと配布版の決め方は今後定める。
+単一データセットの配布では `version` に台帳の `data_version`、`name` に `title`、`metadata` に `metadata_json` を使う。追加項目の `datasets[]` に台帳の `id`・`kind`・`title`・`dataVersion`・`formatVersion`・`metadata` を載せられる。地表の収録レイヤーとズームはSQLiteの `surface_layers` と `surface_levels` を参照する。複数データセットを統合したファイルの公開用メタデータと配布版の決め方は今後定める。
 
 ## 地表の収録形式
 

@@ -25,6 +25,28 @@ const USER_AGENT: &str = concat!(
     " (+https://github.com/shohei0205/yamamuki-data)"
 );
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct Lod {
+    pub max_level: Option<u32>,
+    pub bias: f64,
+}
+
+impl Lod {
+    pub const BIAS_RANGE: std::ops::RangeInclusive<f64> = -4. ..=2.;
+    pub const MAX_LEVEL: u32 = 30;
+
+    pub fn target_zoom(self, view_zoom: f64) -> f64 {
+        view_zoom
+            + self
+                .bias
+                .clamp(*Self::BIAS_RANGE.start(), *Self::BIAS_RANGE.end())
+    }
+
+    pub fn allows(self, z: u32) -> bool {
+        self.max_level.is_none_or(|max| z <= max)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Source {
     #[default]
@@ -89,15 +111,21 @@ impl Source {
         }
     }
 
-    pub fn tile_zoom(self, zoom: f64) -> u32 {
-        let max = match self {
+    fn max_tile_zoom(self) -> u32 {
+        match self {
             Self::Blank => 14,
             Self::Relief | Self::Slope => 15,
             Self::Hillshade => 16,
             Self::OpenTopoMap => 17,
             _ => MAX_ZOOM as u32,
-        };
-        (zoom as u32).min(max)
+        }
+    }
+
+    pub fn tile_zoom(self, zoom: f64, lod: Lod) -> u32 {
+        let target = lod.target_zoom(zoom).floor() as u32;
+        target
+            .min(self.max_tile_zoom())
+            .min(lod.max_level.unwrap_or(Lod::MAX_LEVEL))
     }
 
     fn tile_endpoint(self) -> (&'static str, &'static str) {
@@ -117,21 +145,18 @@ impl Source {
         (endpoint, if self == Self::Photo { "jpg" } else { "png" })
     }
 
-    pub fn show_info(self, ui: &mut egui::Ui, zoom: f64) {
+    pub fn show_info(self, ui: &mut egui::Ui, tile_zoom: u32) {
         let (_, extension) = self.tile_endpoint();
         let format = if extension == "jpg" { "JPEG" } else { "PNG" };
         ui.set_max_width(360.);
         ui.strong(self.label());
-        ui.label(format!(
-            "ビューワでの取得上限 z{}",
-            self.tile_zoom(MAX_ZOOM)
-        ));
+        ui.label(format!("ビューワでの取得上限 z{}", self.max_tile_zoom()));
         ui.label(format!("画像形式 {format}"));
         ui.separator();
-        self.attribution(ui, zoom);
+        self.attribution(ui, tile_zoom);
     }
 
-    pub fn attribution(self, ui: &mut egui::Ui, zoom: f64) {
+    pub fn attribution(self, ui: &mut egui::Ui, tile_zoom: u32) {
         if self.is_osm() {
             ui.hyperlink_to(
                 "© OpenStreetMap contributors",
@@ -163,7 +188,7 @@ impl Source {
             format!("出典：国土地理院（{}）", self.label()),
             "https://maps.gsi.go.jp/development/ichiran.html",
         );
-        let detail = match (self, self.tile_zoom(zoom)) {
+        let detail = match (self, tile_zoom) {
             (Self::Pale, 0..=8) => {
                 "Shoreline data: U.S. National Imagery and Mapping Agency, Vector Map Level 0 (VMAP0), USGS Information Services, 1997"
             }
@@ -417,10 +442,6 @@ impl View {
         self.zoom = (scale / TILE_SIZE as f64).log2().clamp(MIN_ZOOM, 14.);
     }
 
-    fn tiles(&self, rect: Rect, source: Source) -> Vec<Tile> {
-        self.tiles_at(rect, source.tile_zoom(self.zoom))
-    }
-
     pub fn tiles_at(&self, rect: Rect, z: u32) -> Vec<Tile> {
         let side = 1u32 << z;
         let index = |x: f64| (x * side as f64).floor().clamp(0., (side - 1) as f64) as u32;
@@ -461,21 +482,38 @@ impl View {
         tile: Tile,
         texture: egui::TextureId,
     ) {
+        self.paint_tile_uv(
+            painter,
+            rect,
+            tile,
+            texture,
+            Rect::from_min_max(Pos2::ZERO, egui::pos2(1., 1.)),
+        );
+    }
+
+    pub fn paint_tile_uv(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        tile: Tile,
+        texture: egui::TextureId,
+        uv: Rect,
+    ) {
         let corners = self.tile_corners(rect, tile);
         if self.orientation == Orientation::default() {
             painter.image(
                 texture,
                 Rect::from_min_max(corners[0], corners[2]),
-                Rect::from_min_max(Pos2::ZERO, egui::pos2(1., 1.)),
+                uv,
                 egui::Color32::WHITE,
             );
         } else {
             let mut mesh = egui::Mesh::with_texture(texture);
             for (pos, uv) in corners.into_iter().zip([
-                Pos2::ZERO,
-                egui::pos2(1., 0.),
-                egui::pos2(1., 1.),
-                egui::pos2(0., 1.),
+                uv.left_top(),
+                uv.right_top(),
+                uv.right_bottom(),
+                uv.left_bottom(),
             ]) {
                 mesh.vertices.push(egui::epaint::Vertex {
                     pos,
@@ -550,6 +588,7 @@ impl Tiles {
         rect: Rect,
         view: &View,
         dragging: bool,
+        tile_zoom: u32,
     ) -> bool {
         self.frame += 1;
         let limit = if dragging { 1 } else { MAX_PENDING };
@@ -575,7 +614,7 @@ impl Tiles {
         if processed == limit && !self.pending.is_empty() {
             ui.ctx().request_repaint();
         }
-        let tiles = view.tiles(rect, self.source);
+        let tiles = view.tiles_at(rect, tile_zoom);
         // 傾斜で可視範囲が広がっても、表示中のタイルはキャッシュに収める。
         let cache_limit = MAX_CACHE.max(tiles.len() + MAX_PENDING);
         let mut failed = false;
@@ -653,11 +692,27 @@ mod tests {
             (Source::CyclOsm, 18),
             (Source::Humanitarian, 18),
         ] {
-            let tiles = view.tiles(rect, source);
+            let tiles = view.tiles_at(rect, source.tile_zoom(view.zoom, Lod::default()));
             assert!(!tiles.is_empty());
             assert!(tiles.iter().all(|tile| tile.z == max));
             assert!(Rect::from_points(&view.tile_corners(rect, tiles[0])).contains(rect.center()));
         }
+    }
+
+    #[test]
+    fn online_lod_respects_bias_and_both_zoom_limits() {
+        let mut lod = Lod {
+            max_level: None,
+            bias: 0.75,
+        };
+        assert_eq!(Source::Gsi.tile_zoom(9.24, lod), 9);
+        assert_eq!(Source::Gsi.tile_zoom(9.25, lod), 10);
+        lod.max_level = Some(9);
+        assert_eq!(Source::Gsi.tile_zoom(15., lod), 9);
+        lod.max_level = Some(17);
+        assert_eq!(Source::Blank.tile_zoom(16., lod), 14);
+        lod.bias = -4.;
+        assert_eq!(Source::Gsi.tile_zoom(2., lod), 0);
     }
 
     #[test]
@@ -765,6 +820,7 @@ mod tests {
                         ui.available_rect_before_wrap(),
                         &view,
                         dragging,
+                        Source::Gsi.tile_zoom(view.zoom, Lod::default()),
                     );
                 });
             });
@@ -818,7 +874,7 @@ mod tests {
         view.orientation.orbit(egui::vec2(380., -400.));
         assert!((view.orientation.vertical_scale.acos().to_degrees() - 80.).abs() < 0.001);
         let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(820., 620.));
-        let tiles = view.tiles(rect, Source::Gsi);
+        let tiles = view.tiles_at(rect, Source::Gsi.tile_zoom(view.zoom, Lod::default()));
         for pos in [
             rect.left_top(),
             rect.right_top(),
@@ -860,7 +916,7 @@ mod tests {
         };
         let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.));
         assert_eq!(
-            view.tiles(rect, Source::Gsi)[0],
+            view.tiles_at(rect, Source::Gsi.tile_zoom(view.zoom, Lod::default()))[0],
             Tile {
                 z: 8,
                 x: 226,

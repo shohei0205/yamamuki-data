@@ -121,3 +121,59 @@ fn combines_three_dataset_types_without_changing_payloads() {
     assert!(db::merge_from(&mut merged, &points).is_err());
     assert_eq!(db::datasets(&merged).unwrap().len(), 3);
 }
+
+#[test]
+fn recomposes_surface_with_different_zoom_sets_per_layer() {
+    let source = container();
+    source
+        .execute_batch(
+            "INSERT INTO datasets VALUES(1,'test','surface','地表','1',1,'{}');
+         INSERT INTO surface_layers VALUES
+             (1,1,'forest','mask',0,'[]','{}'),
+             (1,2,'water','mask',1,'[]','{}'),
+             (1,3,'hillshade','hillshade',2,'[]','{}');
+         INSERT INTO surface_levels VALUES
+             (1,1,5,'z5',2),(1,1,7,'z7',2),(1,1,8,'z8',2),
+             (1,2,5,'z5',2),(1,2,9,'z9',2),(1,3,5,'z5',2);
+         INSERT INTO surface_tiles VALUES
+             (1,1,5,0,0,1,x'01'),(1,1,7,0,0,1,x'02'),(1,1,8,0,0,1,x'03'),
+             (1,2,5,0,0,1,x'04'),(1,2,9,0,0,1,x'05'),(1,3,5,0,0,1,x'06');",
+        )
+        .unwrap();
+
+    let mut target = container();
+    let selection = [
+        ("forest".to_owned(), Some(vec![8, 5])),
+        ("water".to_owned(), Some(vec![9])),
+    ]
+    .into();
+    db::copy_surface_selection(&mut target, &source, &selection).unwrap();
+    let mut query = target.prepare(
+        "SELECT l.id,t.z,t.payload FROM surface_tiles t JOIN surface_layers l USING(dataset_key,layer_key)
+         ORDER BY t.layer_key,t.z",
+    ).unwrap();
+    let rows: Vec<(String, u32, Vec<u8>)> = query
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        [
+            ("forest".into(), 5, vec![1]),
+            ("forest".into(), 8, vec![3]),
+            ("water".into(), 9, vec![5])
+        ]
+    );
+    assert_eq!(db::surface_layers(&target, 1).unwrap().len(), 2);
+    assert_eq!(db::surface_levels(&target, 1, 1).unwrap().len(), 2);
+    assert_eq!(db::surface_levels(&target, 1, 2).unwrap().len(), 1);
+    db::validate(&target).unwrap();
+
+    for invalid in [vec![], vec![5, 5], vec![9]] {
+        let mut rejected = container();
+        let selection = [("forest".to_owned(), Some(invalid))].into();
+        assert!(db::copy_surface_selection(&mut rejected, &source, &selection).is_err());
+        assert!(db::datasets(&rejected).unwrap().is_empty());
+    }
+}

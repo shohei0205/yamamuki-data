@@ -23,7 +23,7 @@ OSM 山頂とテスト用地点は、次の手順で取得して利用できる�
 1. manifest を取得する。カタログを使う場合は、対象項目の `manifest` に同じ情報が入っているため、別途取得する必要はない。
 2. manifest の `schemaVersion` とデータ本体の `dataSchemaVersion` に対応していることを、それぞれ確認する。項目の説明は [配布データの取得情報](../README.md#配布データの取得情報manifestjson)、カタログからの判定方法は [カタログの読み込みと検証](formats/catalog.md#読み込みと検証)を参照する。
 3. `downloadUrl` から gzip ファイルを取得し、展開前に `sizeBytes` と `sha256` を照合する。
-4. gzip を展開し、JSON のバイト数を `uncompressedSizeBytes`、`points` 配列の件数を `pointCount` と照合する。
+4. gzip を展開し、JSON のバイト数を `uncompressedSizeBytes`、`points` 配列の件数を `metadata.pointCount` と照合する（manifest版6）。
 5. [地点 JSON の形式](#地点-json-の形式)に従って文書内の `points` 配列を読む。山頂だけを使う場合は `type` が `peak` の地点を選ぶ。地図上で確認したい場合は [地点データビューアの操作手順](#地点データをブラウザで確認する)を参照する。
 6. [出典・利用条件](../README.md#ライセンス)を確認し、利用するデータに必要な出典表示を行う。
 

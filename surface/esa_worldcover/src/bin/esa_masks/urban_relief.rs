@@ -4,7 +4,6 @@ use rayon::prelude::*;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use std::path::Path;
 
-const Z: u32 = 11;
 const TILE: i64 = 256;
 const BUILT_RADIUS: usize = 12;
 const RELIEF_RADIUS: usize = 4;
@@ -12,10 +11,6 @@ const RELIEF_RADIUS: usize = 4;
 pub(super) struct ReliefDem(Connection);
 
 impl ReliefDem {
-    pub(super) fn open(path: &Path) -> Result<Self> {
-        Self::open_for_zoom(path, Z)
-    }
-
     pub(super) fn open_for_zoom(path: &Path, zoom: u32) -> Result<Self> {
         let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         ensure!(
@@ -29,7 +24,7 @@ impl ReliefDem {
         Ok(Self(db))
     }
 
-    // 地表の元標本と同じz12のXYZ画素を参照する。
+    // 地表の元標本と同じ解像度のXYZ画素を参照する。
     pub(super) fn mark_unclassified_land(
         &self,
         x: u32,
@@ -38,14 +33,15 @@ impl ReliefDem {
         halo: usize,
         classes: &[u8],
         land: &mut [u8],
+        zoom: u32,
     ) -> Result<()> {
         let side = (core + 2 * halo) as i64;
         let first_x = x as i64 * core as i64 - halo as i64;
         let first_y = y as i64 * core as i64 - halo as i64;
-        let max_tile = (1 << 12) - 1;
+        let max_tile = (1 << zoom) - 1;
         let mut read = self
             .0
-            .prepare_cached("SELECT data FROM tiles WHERE z=12 AND x=? AND y=?")?;
+            .prepare_cached("SELECT data FROM tiles WHERE z=?1 AND x=?2 AND y=?3")?;
         for ty in first_y.div_euclid(TILE).max(0)..=((first_y + side - 1) / TILE).min(max_tile) {
             for tx in first_x.div_euclid(TILE).max(0)..=((first_x + side - 1) / TILE).min(max_tile)
             {
@@ -58,7 +54,8 @@ impl ReliefDem {
                 if !(top..bottom).any(|row| classes[dst(row)..dst(row) + width].contains(&0)) {
                     continue;
                 }
-                let data: Option<Vec<u8>> = read.query_row((tx, ty), |r| r.get(0)).optional()?;
+                let data: Option<Vec<u8>> =
+                    read.query_row((zoom, tx, ty), |r| r.get(0)).optional()?;
                 let Some(data) = data else { continue };
                 let grid = crate::codec::decode_grid(&data)?;
                 ensure!(
@@ -87,6 +84,7 @@ impl ReliefDem {
         halo: usize,
         built: &[u8],
         classes: &[u8],
+        zoom: u32,
     ) -> Result<Vec<u8>> {
         let side = (core + 2 * halo) / 2;
         let first_x = (x as i64 * core as i64 - halo as i64) / 2;
@@ -97,12 +95,13 @@ impl ReliefDem {
             .0
             .prepare_cached("SELECT data FROM tiles WHERE z=?1 AND x=?2 AND y=?3")?;
         for ty in
-            (first_y.div_euclid(TILE)).max(0)..=((first_y + side - 1) / TILE).min((1 << Z) - 1)
+            (first_y.div_euclid(TILE)).max(0)..=((first_y + side - 1) / TILE).min((1 << zoom) - 1)
         {
-            for tx in
-                (first_x.div_euclid(TILE)).max(0)..=((first_x + side - 1) / TILE).min((1 << Z) - 1)
+            for tx in (first_x.div_euclid(TILE)).max(0)
+                ..=((first_x + side - 1) / TILE).min((1 << zoom) - 1)
             {
-                let data: Option<Vec<u8>> = read.query_row((Z, tx, ty), |r| r.get(0)).optional()?;
+                let data: Option<Vec<u8>> =
+                    read.query_row((zoom, tx, ty), |r| r.get(0)).optional()?;
                 let Some(data) = data else { continue };
                 let grid = crate::codec::decode_grid(&data)?;
                 ensure!(

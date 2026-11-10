@@ -4,32 +4,57 @@
   "packages": {
     "all": {
       "releaseId": "esa-worldcover-japan",
-      "fileName": "esa-worldcover.sqlite3",
+      "fileName": "esa-worldcover-z12.sqlite3",
       "layers": [
         "forest",
         "hillshade",
         "water"
-      ]
-    },
-    "forest": {
-      "releaseId": "esa-worldcover-japan-forest",
-      "fileName": "esa-worldcover-forest.sqlite3",
-      "layers": [
-        "forest"
-      ]
-    },
-    "hillshade": {
-      "releaseId": "esa-worldcover-japan-hillshade",
-      "fileName": "esa-worldcover-hillshade.sqlite3",
-      "layers": [
-        "hillshade"
-      ]
-    },
-    "water": {
-      "releaseId": "esa-worldcover-japan-water",
-      "fileName": "esa-worldcover-water.sqlite3",
-      "layers": [
-        "water"
+      ],
+      "levels": {
+        "forest": [5, 6, 7, 8, 9, 10, 11, 12],
+        "hillshade": [5, 6, 7, 8, 9, 10, 11, 12],
+        "water": [5, 6, 7, 8, 9, 10, 11, 12]
+      },
+      "splitPackages": [
+        {
+          "fileName": "esa-worldcover-z9.sqlite3",
+          "layers": [
+            "forest",
+            "hillshade",
+            "water"
+          ],
+          "levels": {
+            "forest": [5, 6, 7, 8, 9],
+            "hillshade": [5, 6, 7, 8, 9],
+            "water": [5, 6, 7, 8, 9]
+          }
+        },
+        {
+          "fileName": "esa-worldcover-z10.sqlite3",
+          "layers": [
+            "forest",
+            "hillshade",
+            "water"
+          ],
+          "levels": {
+            "forest": [5, 6, 7, 8, 9, 10],
+            "hillshade": [5, 6, 7, 8, 9, 10],
+            "water": [5, 6, 7, 8, 9, 10]
+          }
+        },
+        {
+          "fileName": "esa-worldcover-z11.sqlite3",
+          "layers": [
+            "forest",
+            "hillshade",
+            "water"
+          ],
+          "levels": {
+            "forest": [5, 6, 7, 8, 9, 10, 11],
+            "hillshade": [5, 6, 7, 8, 9, 10, 11],
+            "water": [5, 6, 7, 8, 9, 10, 11]
+          }
+        }
       ]
     }
   }

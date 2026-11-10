@@ -32,6 +32,7 @@ const _: () = assert!(
 
 const APP_ID: &str = "yamamuki-viewer";
 const MAP_SOURCE_KEY: &str = "map_source";
+const LOD_KEY: &str = "auto_lod";
 const DEFAULT_WINDOW_SIZE: egui::Vec2 = egui::vec2(1150., 800.);
 const NORMAL_WINDOW_SIZE_KEY: &str = "normal_window_size";
 const NORMAL_WINDOW_POSITION_KEY: &str = "normal_window_position";
@@ -49,6 +50,7 @@ struct Viewer {
     view: map::View,
     tiles: Vec<map::Tiles>,
     map_source: map::Source,
+    lod: map::Lod,
     show_online_map: bool,
     points: Option<Arc<Points>>,
     show_point_markers: bool,
@@ -90,6 +92,7 @@ impl Viewer {
             },
             tiles: Vec::new(),
             map_source: map::Source::Gsi,
+            lod: map::Lod::default(),
             show_online_map: true,
             client,
             boundaries: Arc::default(),
@@ -416,16 +419,22 @@ impl Viewer {
         position: Pos2,
         text: String,
         popup: bool,
-        close_ui: Option<&egui::Ui>,
+        pin_controls: Option<(&egui::Ui, [f64; 2])>,
     ) -> bool {
-        let close_width = if close_ui.is_some() { 24. } else { 0. };
+        const CLOSE_WIDTH: f32 = 24.;
+        const COPY_WIDTH: f32 = 46.;
+        let controls_width = if pin_controls.is_some() {
+            CLOSE_WIDTH + COPY_WIDTH
+        } else {
+            0.
+        };
         let label = painter.layout(
             text,
             egui::FontId::proportional(14.),
             appearance::INK,
-            (rect.width() - 16. - close_width).max(1.),
+            (rect.width() - 16. - controls_width).max(1.),
         );
-        let size = label.size() + egui::vec2(close_width, 0.);
+        let size = label.size() + egui::vec2(controls_width, 0.);
         let x = if popup {
             position.x - size.x / 2.
         } else {
@@ -437,26 +446,38 @@ impl Viewer {
             y.max(rect.top() + 5.),
         );
         let card = Rect::from_min_size(box_pos, size).expand(4.);
-        let close = close_ui.map(|ui| {
-            let close_rect = Rect::from_min_max(
-                egui::pos2(card.right() - close_width, card.top()),
-                card.right_bottom(),
+        let controls = if let Some((ui, [latitude, longitude])) = pin_controls {
+            let button = |left, right, id, hint| {
+                let rect = Rect::from_min_max(
+                    egui::pos2(left, card.top()),
+                    egui::pos2(right, card.bottom()),
+                );
+                let response = ui
+                    .interact(rect, ui.id().with(id), egui::Sense::click())
+                    .on_hover_text(hint);
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, hint)
+                });
+                response
+            };
+            let split = card.right() - CLOSE_WIDTH;
+            let close = button(split, card.right(), "map-pin-close", "座標を閉じる");
+            if close.clicked() {
+                return true;
+            }
+            let copy = button(
+                split - COPY_WIDTH,
+                split,
+                "map-pin-copy",
+                "緯度・経度をコピー",
             );
-            let response = ui
-                .interact(
-                    close_rect,
-                    ui.id().with("map-pin-close"),
-                    egui::Sense::click(),
-                )
-                .on_hover_text("座標を閉じる");
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "座標を閉じる")
-            });
-            response
-        });
-        if close.as_ref().is_some_and(egui::Response::clicked) {
-            return true;
-        }
+            if copy.clicked() {
+                ui.ctx().copy_text(format!("{latitude:.6}, {longitude:.6}"));
+            }
+            Some([(copy, "コピー", 12.), (close, "×", 16.)])
+        } else {
+            None
+        };
         painter.rect_filled(card, 6, appearance::PAPER);
         painter.rect_stroke(
             card,
@@ -465,19 +486,21 @@ impl Viewer {
             egui::StrokeKind::Inside,
         );
         painter.galley(box_pos, label, appearance::INK);
-        if let Some(close) = close {
-            let color = if close.hovered() || close.has_focus() {
-                appearance::ACCENT
-            } else {
-                appearance::MUTED
-            };
-            painter.text(
-                close.rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "×",
-                egui::FontId::proportional(16.),
-                color,
-            );
+        if let Some(controls) = controls {
+            for (response, text, font_size) in controls {
+                let color = if response.hovered() || response.has_focus() {
+                    appearance::ACCENT
+                } else {
+                    appearance::MUTED
+                };
+                painter.text(
+                    response.rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    text,
+                    egui::FontId::proportional(font_size),
+                    color,
+                );
+            }
         }
         false
     }
@@ -486,6 +509,7 @@ impl Viewer {
 impl eframe::App for Viewer {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, MAP_SOURCE_KEY, &self.map_source);
+        eframe::set_value(storage, LOD_KEY, &self.lod);
         eframe::set_value(storage, NORMAL_WINDOW_SIZE_KEY, &self.normal_window_size);
         if let Some(position) = self.normal_window_position {
             eframe::set_value(storage, NORMAL_WINDOW_POSITION_KEY, &position);
@@ -570,6 +594,29 @@ impl eframe::App for Viewer {
                         ui.spinner();
                         ui.label("データを読み込み中");
                     }
+                    ui.menu_button("自動LOD", |ui| {
+                        let mut max = self.lod.max_level.unwrap_or(map::Lod::MAX_LEVEL);
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut max, 0..=map::Lod::MAX_LEVEL)
+                                    .prefix("z")
+                                    .text("レベル上限"),
+                            )
+                            .on_hover_text("取得するタイルの実XYZレベルの上限。数値をクリックして直接入力できます。")
+                            .changed()
+                        {
+                            self.lod.max_level = (max < map::Lod::MAX_LEVEL).then_some(max);
+                        }
+                        ui.add(
+                            egui::Slider::new(&mut self.lod.bias, map::Lod::BIAS_RANGE)
+                                .step_by(0.25)
+                                .text("選択基準（ズーム補正）"),
+                        )
+                        .on_hover_text("＋で細かめ、−で粗め。＋1で目標の画素密度が2倍になります。");
+                        if ui.button("既定値に戻す").clicked() {
+                            self.lod = map::Lod::default();
+                        }
+                    });
                 });
                 if let Some(error) = &self.error {
                     ui.colored_label(ui.visuals().error_fg_color, error);
@@ -580,7 +627,7 @@ impl eframe::App for Viewer {
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     if self.show_online_map {
-                        self.map_source.attribution(ui, self.view.zoom);
+                        self.map_source.attribution(ui, self.map_source.tile_zoom(self.view.zoom, self.lod));
                     }
                     let mut shown = std::collections::HashSet::new();
                     for surface in self.surfaces.iter().filter(|surface| surface.enabled) {
@@ -644,12 +691,12 @@ impl eframe::App for Viewer {
                             &mut self.map_source,
                             &mut self.show_online_map,
                             self.view.zoom,
-                            self.view.scale() * f64::from(ctx.pixels_per_point()),
                             if has_points {
                                 layer_height
                             } else {
                                 f32::INFINITY
                             },
+                            self.lod,
                         );
                         if has_points {
                             let remaining = layer_height - ui.min_rect().height();
@@ -836,7 +883,14 @@ impl eframe::App for Viewer {
                             map::Tiles::new(ctx, self.client.clone(), self.map_source),
                         );
                     }
-                    self.tiles[0].paint(ui, &painter, rect, &self.view, dragging)
+                    self.tiles[0].paint(
+                        ui,
+                        &painter,
+                        rect,
+                        &self.view,
+                        dragging,
+                        self.map_source.tile_zoom(self.view.zoom, self.lod),
+                    )
                 } else {
                     false
                 };
@@ -850,6 +904,7 @@ impl eframe::App for Viewer {
                         dragging,
                         has_base,
                         frame.wgpu_render_state(),
+                        self.lod,
                     );
                     has_base |= surface.has_enabled_layers();
                 }
@@ -869,13 +924,14 @@ impl eframe::App for Viewer {
                 if let Some(world) = self.map_pin {
                     let position = self.view.screen(rect, world);
                     if rect.contains(position) {
+                        let coordinates = points::unproject(world);
                         if Self::paint_marker_label(
                             &painter,
                             rect,
                             position,
-                            coordinate_label(points::unproject(world)),
+                            coordinate_label(coordinates),
                             true,
-                            Some(ui),
+                            Some((ui, coordinates)),
                         ) {
                             self.map_pin = None;
                         } else {
@@ -906,8 +962,8 @@ impl eframe::App for Viewer {
                 let zoom = painter.layout_no_wrap(
                     {
                         let zoom = self.view.zoom;
-                        let tile_zoom = self.map_source.tile_zoom(zoom);
-                        if tile_zoom < zoom as u32 {
+                        let tile_zoom = self.map_source.tile_zoom(zoom, self.lod);
+                        if self.show_online_map && tile_zoom != zoom as u32 {
                             format!("Z {zoom:.1} / z{tile_zoom}")
                         } else {
                             format!("Z {zoom:.1}")
@@ -1076,6 +1132,10 @@ fn run() -> Result<()> {
             viewer.map_source = cc
                 .storage
                 .and_then(|storage| eframe::get_value(storage, MAP_SOURCE_KEY))
+                .unwrap_or_default();
+            viewer.lod = cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, LOD_KEY))
                 .unwrap_or_default();
             if let Some(size) = cc
                 .storage
@@ -1438,7 +1498,7 @@ mod tests {
     }
 
     #[test]
-    fn map_coordinates_can_be_displayed_and_cleared_without_a_points_file() {
+    fn map_coordinates_can_be_copied_and_cleared_without_a_points_file() {
         use eframe::App as _;
 
         let ctx = egui::Context::default();
@@ -1469,10 +1529,29 @@ mod tests {
         frame(&mut viewer, vec![button(pos, true)]);
         let output = frame(&mut viewer, vec![button(pos, false)]);
 
-        let label = coordinate_label(points::unproject(viewer.map_pin.expect("地図にピンを表示")));
+        let pin = viewer.map_pin.expect("地図にピンを表示");
+        let [latitude, longitude] = points::unproject(pin);
+        let label = coordinate_label([latitude, longitude]);
         assert!(output.shapes.iter().any(|clipped| {
             matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text() == label)
         }));
+        let copy_button = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == "コピー" => {
+                    Some(text.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .expect("座標ラベルのコピーボタン");
+        frame(&mut viewer, vec![egui::Event::PointerMoved(copy_button)]);
+        frame(&mut viewer, vec![button(copy_button, true)]);
+        let copied = frame(&mut viewer, vec![button(copy_button, false)]);
+        assert!(copied.platform_output.commands.iter().any(|command| {
+            matches!(command, egui::OutputCommand::CopyText(text) if text == &format!("{latitude:.6}, {longitude:.6}"))
+        }));
+        assert_eq!(viewer.map_pin, Some(pin));
         let clear_button = output
             .shapes
             .iter()

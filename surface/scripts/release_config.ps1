@@ -1,3 +1,31 @@
+function Read-SurfaceLevelSelection($Layers, $Levels) {
+    $selection = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+    foreach ($id in $Layers) {
+        if ($id -isnot [string] -or !$selection.TryAdd($id, $null)) {
+            throw "SQLiteのレイヤー指定が不正または重複しています: $id"
+        }
+    }
+    if ($null -ne $Levels) {
+        if ($Levels -isnot [Collections.IDictionary]) {
+            throw 'levelsにはレイヤーID別のズーム配列を指定してください。'
+        }
+        foreach ($id in $Levels.Keys) {
+            $zooms = $Levels[$id]
+            if (!$selection.ContainsKey($id) -or $zooms -isnot [array] -or !$zooms.Count) {
+                throw "SQLiteのレベル指定が不正です: $id"
+            }
+            $unique = [Collections.Generic.HashSet[int]]::new()
+            foreach ($z in $zooms) {
+                if (($z -isnot [int] -and $z -isnot [long]) -or $z -lt 0 -or $z -gt 30 -or !$unique.Add($z)) {
+                    throw "SQLiteのズームが不正または重複しています: $id"
+                }
+            }
+            $selection[$id] = @($zooms | Sort-Object)
+        }
+    }
+    return ,$selection
+}
+
 function Read-SurfaceReleaseConfig([string]$Dataset, [string]$Package) {
     if ($Dataset -cnotmatch '^[a-z][a-z0-9_]*$' -or $Package -cnotmatch '^[a-z][a-z0-9_-]*$') {
         throw 'データセットまたは配布単位の名前が不正です。'
@@ -14,23 +42,58 @@ function Read-SurfaceReleaseConfig([string]$Dataset, [string]$Package) {
         [string]::IsNullOrWhiteSpace($settings.versionPattern)) {
         throw "地表データの公開設定が不正です: $path ($Package)"
     }
+    $splits = @()
+    if ($config.Contains('splitPackages')) {
+        if ($config.splitPackages -isnot [array] -or !$config.splitPackages.Count -or !$config.layers.Count) {
+            throw '分割配布には収録レイヤーと分割単位の配列が必要です。'
+        }
+        $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        [void]$names.Add($config.fileName)
+        foreach ($split in $config.splitPackages) {
+            if ($split -isnot [Collections.IDictionary] -or
+                $split.fileName -isnot [string] -or $split.fileName -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]*\.sqlite3$' -or
+                !$names.Add($split.fileName) -or $split.layers -isnot [array] -or !$split.layers.Count) {
+                throw '分割SQLiteのファイル名またはレイヤー指定が不正です。'
+            }
+            foreach ($id in $split.layers) {
+                if ($config.layers -cnotcontains $id) {
+                    throw "分割SQLiteのレイヤーが未定義です: $id"
+                }
+            }
+            $selection = Read-SurfaceLevelSelection $split.layers $split.levels
+            $splits += @{
+                fileName = $split.fileName
+                manifestName = [IO.Path]::GetFileNameWithoutExtension($split.fileName) + '.manifest.json'
+                layers = $split.layers
+                selection = $selection
+            }
+        }
+    }
     @{
         datasetId = $settings.datasetId
         versionPattern = $settings.versionPattern
         releaseId = $config.releaseId
         fileName = $config.fileName
         layers = $config.layers
+        selection = Read-SurfaceLevelSelection $config.layers $config.levels
+        splitPackages = $splits
     }
 }
 
-function Get-SurfaceReleaseTag($Config, $Manifest) {
+function Get-SurfaceReleaseTag($Config, $Manifest, $Levels) {
     $datasets = @($Manifest.datasets)
     if ($datasets.Count -ne 1 -or $datasets[0].id -cne $Config.datasetId -or $datasets[0].kind -cne 'surface') {
         throw "公開設定に対応する地表データセットだけを収録したSQLiteを指定してください: $($Config.datasetId)"
     }
     if ($null -ne $Config.layers -and
-        (Compare-Object -ReferenceObject @($Config.layers) -DifferenceObject @($Manifest.surfaceLayerIds) -CaseSensitive)) {
+        (Compare-Object -ReferenceObject @($Config.layers) -DifferenceObject @($Levels.Keys) -CaseSensitive)) {
         throw 'SQLiteの収録レイヤーが配布単位の設定と一致しません。'
+    }
+    foreach ($id in $Config.selection.Keys) {
+        $wanted = $Config.selection[$id]
+        if ($null -ne $wanted -and (($Levels[$id] -join ',') -cne ($wanted -join ','))) {
+            throw "SQLiteの収録レベルが配布単位の設定と一致しません: $id"
+        }
     }
     $version = $datasets[0].dataVersion
     if ($version -cnotmatch $Config.versionPattern) {

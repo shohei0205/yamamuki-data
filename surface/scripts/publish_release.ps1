@@ -24,6 +24,11 @@ if (!$Tag.StartsWith($tagPrefix, [StringComparison]::Ordinal) -or
     throw "タグが公開設定と一致しません: $Tag"
 }
 $files = @($config.fileName, 'manifest.json', 'LICENSE.txt')
+$splitFiles = @(foreach ($split in $config.splitPackages) {
+    $split.fileName
+    $split.manifestName
+})
+$allFiles = $files + $splitFiles
 $releasePages = gh api --paginate --slurp "$prefix/releases?per_page=100" | ConvertFrom-Json -AsHashtable -NoEnumerate
 $candidates = @(foreach ($page in $releasePages) {
     $page | Where-Object { $_.tag_name -ceq $Tag }
@@ -39,11 +44,44 @@ function Read-DraftAssets {
     if ($draft.target_commitish -ne $TargetCommit) {
         throw '下書きの対象コミットが実行時の指定と一致しません。'
     }
-    if ($draft.assets.Count -ne $files.Count) { throw '下書きの添付数が一致しません。' }
+    $byName = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+    foreach ($asset in $draft.assets) {
+        if ($allFiles -cnotcontains $asset.name -or !$byName.TryAdd($asset.name, $asset)) {
+            throw "予定外または重複した添付です: $($asset.name)"
+        }
+    }
     foreach ($name in $files) {
-        $found = @($draft.assets | Where-Object { $_.name -ceq $name -and $_.state -ceq 'uploaded' })
-        if ($found.Count -ne 1 -or $found[0].size -le 0) { throw "添付が不正です: $name" }
-        $found[0] | Select-Object id, name, size, digest
+        $asset = $byName[$name]
+        if (!$asset -or $asset.state -cne 'uploaded' -or $asset.size -le 0) {
+            throw "元の添付が不正です: $name"
+        }
+    }
+    return $byName
+}
+
+function Confirm-SourceAssets($Current) {
+    foreach ($name in $files) {
+        $before = $assets[$name]
+        $after = $Current[$name]
+        if ($before.id -ne $after.id -or $before.size -ne $after.size -or $before.digest -cne $after.digest) {
+            throw "検査中に元の添付が変更されました: $name"
+        }
+    }
+}
+
+function Test-SplitAsset($Asset, $LocalFile, [string]$Hash) {
+    if (!$Asset -or $Asset.state -cne 'uploaded' -or $Asset.size -ne $LocalFile.Length) {
+        return $false
+    }
+    if ($Asset.digest) {
+        return $Asset.digest -ieq "sha256:$Hash"
+    }
+    $check = Join-Path $download ('.verify-' + $LocalFile.Name)
+    try {
+        gh release download $Tag --repo $repo --pattern $LocalFile.Name --output $check | Out-Null
+        return (Get-FileHash -LiteralPath $check -Algorithm SHA256).Hash -ieq $Hash
+    } finally {
+        if (Test-Path -LiteralPath $check) { Remove-Item -LiteralPath $check }
     }
 }
 
@@ -55,7 +93,7 @@ function Confirm-TagCommit {
 }
 
 Confirm-TagCommit
-$assets = @(Read-DraftAssets)
+$assets = Read-DraftAssets
 $surface = Split-Path $PSScriptRoot -Parent
 $target = Join-Path $surface 'target'
 $suffix = if ($IsWindows) { '.exe' } else { '' }
@@ -67,8 +105,9 @@ New-Item -ItemType Directory -Path $download | Out-Null
 try {
     $patterns = foreach ($name in $files) { '--pattern'; $name }
     gh release download $Tag --repo $repo --dir $download @patterns
-    foreach ($asset in $assets) {
-        $path = Join-Path $download $asset.name
+    foreach ($name in $files) {
+        $asset = $assets[$name]
+        $path = Join-Path $download $name
         if ((Get-Item -LiteralPath $path).Length -ne $asset.size) { throw "添付サイズが一致しません: $($asset.name)" }
         $actualHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
         if ($asset.digest -and $asset.digest -ne "sha256:$actualHash") { throw "添付ハッシュが一致しません: $($asset.name)" }
@@ -88,10 +127,14 @@ try {
     $database = Join-Path $download $files[0]
     & $tool validate $database
     $expected = & $tool manifest $database $releaseRoot $timestamp $config.releaseId | ConvertFrom-Json -AsHashtable
-    if ((Get-SurfaceReleaseTag $config $expected) -cne $Tag) {
+    $sourceLevels = & $tool surface-levels $database | ConvertFrom-Json -AsHashtable
+    if ((Get-SurfaceReleaseTag $config $expected $sourceLevels) -cne $Tag) {
         throw 'SQLiteのデータセット・版がタグと一致しません。'
     }
     $expected.licenseUrl = "$releaseRoot/$Tag/LICENSE.txt"
+    if ($manifest.Contains('surface') -or $manifest.Contains('surfaceLayerIds') -or $manifest.Contains('surfaceLevels')) {
+        throw '公開準備をやり直し、現行形式のmanifestを作成してください。'
+    }
     foreach ($field in $expected.Keys) {
         if (!$manifest.Contains($field) -or
             (ConvertTo-Json -InputObject $manifest[$field] -Depth 32 -Compress) -cne
@@ -113,10 +156,51 @@ try {
         if (!$license.Contains($author.name)) { throw 'LICENSE.txtに作成者がありません。' }
     }
 
+    $splitHashes = @{}
+    foreach ($split in $config.splitPackages) {
+        $splitDb = Join-Path $download $split.fileName
+        $selection = ConvertTo-Json -InputObject $split.selection -Depth 6 -Compress
+        & $tool select-surface $database $splitDb $selection
+        & $tool validate $splitDb
+        $splitManifest = & $tool manifest $splitDb $releaseRoot $timestamp $config.releaseId | ConvertFrom-Json -AsHashtable
+        $actualLevels = & $tool surface-levels $splitDb | ConvertFrom-Json -AsHashtable
+        foreach ($id in $split.layers) {
+            $wanted = $split.selection[$id] ?? $sourceLevels[$id]
+            if (!$actualLevels.Contains($id) -or (($actualLevels[$id] -join ',') -cne ($wanted -join ','))) {
+                throw "分割SQLiteのレベルが設定と一致しません: $($split.fileName) / $id"
+            }
+        }
+        $splitConfig = $config.Clone()
+        $splitConfig.layers = $split.layers
+        $splitConfig.selection = $split.selection
+        if ((Get-SurfaceReleaseTag $splitConfig $splitManifest $actualLevels) -cne $Tag -or
+            $splitManifest.downloadUrl -cne "$releaseRoot/$Tag/$($split.fileName)") {
+            throw "分割SQLiteの配布情報が一致しません: $($split.fileName)"
+        }
+        $splitManifest.licenseUrl = $expected.licenseUrl
+        $splitManifest | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath (Join-Path $download $split.manifestName) -Encoding utf8NoBOM
+        $splitHashes[$split.fileName] = $splitManifest.sha256
+        $splitHashes[$split.manifestName] = (Get-FileHash -LiteralPath (Join-Path $download $split.manifestName) -Algorithm SHA256).Hash
+    }
+
     Confirm-TagCommit
-    $current = @(Read-DraftAssets)
-    if ((ConvertTo-Json -InputObject $assets -Compress) -cne (ConvertTo-Json -InputObject $current -Compress)) {
-        throw '検査中に下書きの添付が変更されました。'
+    $current = Read-DraftAssets
+    Confirm-SourceAssets $current
+    foreach ($name in $splitFiles) {
+        $localFile = Get-Item -LiteralPath (Join-Path $download $name)
+        if (!(Test-SplitAsset $current[$name] $localFile $splitHashes[$name])) {
+            gh release upload $Tag $localFile.FullName --repo $repo --clobber
+        }
+    }
+
+    Confirm-TagCommit
+    $current = Read-DraftAssets
+    Confirm-SourceAssets $current
+    foreach ($name in $splitFiles) {
+        $localFile = Get-Item -LiteralPath (Join-Path $download $name)
+        if (!(Test-SplitAsset $current[$name] $localFile $splitHashes[$name])) {
+            throw "分割版の添付が検証結果と一致しません: $name"
+        }
     }
     $published = gh api --method PATCH $releasePath -F draft=false -f make_latest=false | ConvertFrom-Json
     if ($published.draft -or $published.tag_name -cne $Tag) { throw '公開結果が一致しません。' }
@@ -126,9 +210,12 @@ try {
         "- Release: $($published.html_url)"
         "- Manifest: $releaseRoot/$Tag/manifest.json"
         "- SHA-256: $($expected.sha256)"
+        foreach ($split in $config.splitPackages) {
+            "- 分割版 manifest: $releaseRoot/$Tag/$($split.manifestName)"
+        }
     ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8NoBOM
 } finally {
-    foreach ($name in $files) {
+    foreach ($name in $allFiles) {
         $path = Join-Path $download $name
         if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path }
     }
