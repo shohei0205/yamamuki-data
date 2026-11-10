@@ -20,7 +20,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       PYTHONUNBUFFERED: '1'
-      RELEASE_CHANNEL: dev
+      RELEASE_CHANNEL: stable
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

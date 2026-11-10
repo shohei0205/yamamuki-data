@@ -19,7 +19,7 @@ defaults:
 
 env:
   PYTHONUNBUFFERED: '1'
-  RELEASE_CHANNEL: dev
+  RELEASE_CHANNEL: stable
 
 concurrency:
   group: publish-osm-peaks-${{ github.ref }}

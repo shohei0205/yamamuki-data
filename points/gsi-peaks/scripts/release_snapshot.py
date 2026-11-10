@@ -169,7 +169,7 @@ def create_draft(version, directory, source=DATA, *, channel):
     release_data.append_summary(f"\n## 国土地理院の山頂\n\n{manifest['metadata']['pointCount']:,} 地点を下書き Release に保存しました。\n\n"
                                 f"- [下書き Release を開く]({url})\n"
                                 f"- タグ: `{tag}`\n"
-                                "- 内容を確認してから「共通：確認済みデータを正式公開」を実行してください。\n")
+                                "- 内容を確認してから「共通：データを試用公開・正式公開」を実行してください。\n")
 
 
 def main():

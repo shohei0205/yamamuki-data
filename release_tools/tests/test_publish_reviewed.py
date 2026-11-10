@@ -40,13 +40,6 @@ class PublishReviewedTests(unittest.TestCase):
                     with self.subTest(dataset=dataset, channel=channel, target=target):
                         self.assertEqual((dataset, tag), self.resolve_with_manifest(target, release, manifest, channel))
 
-    def test_gsi_stable_tag_and_legacy_tag_resolve_to_the_same_dataset(self):
-        manifest = dict(version="v1")
-        for tag in ("gsi-peaks-stable-v1", "gsi-peaks-v1"):
-            with self.subTest(tag=tag):
-                release = dict(tag_name=tag, prerelease=False)
-                self.assertEqual(("gsi-peaks", tag), self.resolve_with_manifest(tag, release, manifest, "stable"))
-
     def test_missing_ambiguous_or_wrong_prerelease_stops(self):
         release = dict(tag_name="osm-peaks-v1", prerelease=True)
         for entries in ([], [release], [release, release]):

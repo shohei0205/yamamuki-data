@@ -57,7 +57,7 @@ manifest の項目・型は [リポジトリ共通の manifest.json](../../forma
 |---|---|
 | `version` | 生成時の UTC 日時・Actions 実行 ID・再実行番号を連結 |
 | `fileName` | `osm-peaks.json.gz` |
-| `downloadUrl` | 正式版は `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>` の Release の gzip ファイル |
+| `downloadUrl` | 新しい版は `osm-peaks-<version>`、公開済みの旧開発版は `osm-peaks-dev-<version>` の Release の gzip ファイル |
 | `pointCount` | 収録した名前付き山頂ノードの件数 |
 | `dataTimestamp` | 配布データを生成した UTC 日時。PBF の基準日時とは区別する |
 | `metadata.sources` の `OpenStreetMap（日本・Geofabrik 配布）` の `latestTimestamp` | 収録する山頂ノードの OSM 最終編集日時の最大値。収録対象外のノードは集計しない |
@@ -67,7 +67,7 @@ manifest の項目・型は [リポジトリ共通の manifest.json](../../forma
 
 元データと収録ノードの日時は必須とし、欠落・形式不正・収録ノードの日時が元データより新しい場合は生成・公開を止める。元データの日付はダウンロード日時ではない。同じ元データで再実行しても配布の `version` は変わる。
 
-Release のタイトルとタグは同じ値とし、正式版は `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>` とする。取得・検証の契約は [共通の読み込みと公開](../../formats/manifest.md#読み込みと検証) に従う。
+Release のタイトルとタグは同じ値とし、新しい版は下書きから正式公開まで `osm-peaks-<version>` を使う。取得・検証の契約は [共通の読み込みと公開](../../formats/manifest.md#読み込みと検証) に従う。
 
 山頂データは正式版と開発版の参照先を分ける。Pages に掲載された地点データの一覧は [地点カタログ](../README.md#公開データのカタログ) を参照する。リポジトリ全体の `releases/latest` は使わない。
 
@@ -136,7 +136,7 @@ osm-peaks/
 
 [地点 / OSM山頂：下書き Release 生成・検査](https://github.com/shohei0205/yamamuki-data/actions/workflows/publish-data.yml) は手動で実行する。
 
-生成 Action は `osm-peaks-dev-<version>` の下書きを作る。内容を確認したら「共通：確認済みデータを正式公開」で、同じ Release を `osm-peaks-<version>` として公開する。
+生成 Action は `osm-peaks-<version>` の下書きを作る。「共通：データを試用公開・正式公開」で同じ Release を試用公開し、アプリで確認したあとに正式公開する。
 
 手動で動かすときは Actions の「地点 / OSM山頂：下書き Release 生成・検査」→「Run workflow」で `main` を選ぶ。下書きの作成には `GITHUB_TOKEN` の `contents: write` を使う。
 
@@ -144,7 +144,7 @@ osm-peaks/
 2. Geofabrik の `japan-latest.osm.pbf` から日付付き URL を確定する。取得対象日を指定した場合は、その日付の URL を直接使い、全国データを取得する。途中で切れたら同じ版の続きから再開し、配布元の MD5 と照合する。Overpass API は使わない。
 3. `osmium tags-filter` で対象ノードだけを抽出し、配布ファイルと manifest を作る。
 4. 前回の版を取得・検証し、全国と地域別の件数、元データの日時、形式の版を比較する。比較対象は「要確認」でない最新の正式版 Release とする。件数・前回との差・検査結果・圧縮サイズ・元データの日時・SHA-256 を、Release の説明と Actions の実行概要に記録する。
-5. 配布ファイルを添付した下書き Release を作る。比較で警告やエラーが出た場合は、本文の先頭の「要確認」に理由を記載する。下書きには Pre-release を設定し、正式公開時に解除する。
+5. 配布ファイルを添付した下書き Release を作る。比較で警告やエラーが出た場合は、本文の先頭の「要確認」に理由を記載する。試用公開時に Pre-release を設定し、正式公開時に解除する。
 
 Actions の各ステップでは、時刻付きで処理の開始・完了をログに出す。Python の出力はためずに随時表示する。
 
@@ -196,7 +196,7 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 
 ### 生成と正式公開の実行方法
 
-`main` で下書きを生成し、確認後に[共通の公開手順](../../README.md#確認済みデータの公開)に従って正式公開する。作業ブランチで生成した場合は、配布ファイルを artifact に保存する。
+`main` で下書きを生成し、確認後に[共通の公開手順](../../README.md#確認済みデータの公開)に従って試用公開と正式公開を行う。作業ブランチで生成した場合は、配布ファイルを artifact に保存する。
 
 正式公開と Pages の復旧は共通のグループで直列化する。正式版カタログへの反映は、公開 Action の Summary で確認する。
 
@@ -228,7 +228,7 @@ Actions では取得前に配布元の日付付き URL・サイズ・MD5 を確�
 
 ### 確認済みの下書きを手動公開する
 
-[共通の手動公開手順](../../README.md#確認済みデータの公開) に従い、確認した山頂 Release の URL またはタグを指定する。正式版のタグは `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>` とする。
+[共通の手動公開手順](../../README.md#確認済みデータの公開) に従い、確認した山頂 Release の URL またはタグを指定する。試用公開と正式公開には同じ `osm-peaks-<version>` を指定する。
 
 公開 Action は下書きの添付ファイルを再取得し、データ本体が検査結果の SHA-256（明示した場合は入力値）と一致するかを確かめる。検査結果に SHA-256 がない場合は、確認した値を指定する。
 

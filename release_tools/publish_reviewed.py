@@ -25,8 +25,6 @@ def version_for_tag(dataset, tag, channel):
     if channel not in ("stable", "dev"):
         raise ValueError("配布先は stable または dev を指定してください")
     prefix = dataset + ("-dev-" if channel == "dev" else "-")
-    if dataset == "gsi-peaks" and channel == "stable" and isinstance(tag, str) and tag.startswith("gsi-peaks-stable-"):
-        prefix = "gsi-peaks-stable-"
     if isinstance(tag, str) and tag.startswith(prefix):
         version = tag[len(prefix):]
         if (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version)
@@ -43,8 +41,6 @@ def dataset_for_tag(tag, channel, version):
     if not isinstance(tag, str) or not tag.endswith(suffix):
         raise ValueError("タグと manifest の版が一致しません")
     dataset = tag[:-len(suffix)]
-    if channel == "stable" and dataset == "gsi-peaks-stable":
-        dataset = "gsi-peaks"
     if version_for_tag(dataset, tag, channel) != version:
         raise ValueError("タグと manifest の版が一致しません")
     return dataset
@@ -114,18 +110,18 @@ def publish(dataset, tag, channel, sha256, reason):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("resolve", "publish", "formalize"))
+    parser.add_argument("command", choices=("resolve", "publish", "preview", "formalize"))
     parser.add_argument("--channel", choices=("stable", "dev"))
     parser.add_argument("--tag", required=True)
     parser.add_argument("--dataset")
     parser.add_argument("--sha256", default="")
     parser.add_argument("--reason", default="")
     args = parser.parse_args()
-    if args.command == "formalize":
+    if args.command in ("preview", "formalize"):
         if args.channel is not None:
             parser.error("正式公開の配布先は stable に固定されています")
-        from release_tools.point_release import formalize
-        formalize(args.tag, args.sha256, args.reason)
+        from release_tools.point_release import publish_candidate
+        publish_candidate(args.tag, args.sha256, args.reason, preview=args.command == "preview")
         return
     if args.channel is None:
         parser.error("resolve と publish には --channel が必要です")

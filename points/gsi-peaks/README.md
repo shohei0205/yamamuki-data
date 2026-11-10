@@ -94,7 +94,7 @@
 | `snapshot.json` | コミット済みオリジナル JSON のハッシュと、元資料の取得日時・出典の要約 |
 | `LICENSE.txt` | 出典ごとの利用条件・帰属表示と作成者。manifest の `licenseUrl` から参照する |
 
-下書きは `gsi-peaks-dev-<version>` のタグで作り、確認後に同じ Release を `gsi-peaks-stable-<version>` として公開する。公開済みの旧タグ `gsi-peaks-<version>` も引き続き利用できる。利用する版を選び、その Release の `manifest.json` の URL を固定して取得する。リポジトリ全体の `releases/latest` は使わない。Pages の manifest・履歴・地点カタログは、確認済みデータの公開時に更新する。
+下書き・試用公開・正式公開で `gsi-peaks-<version>` のタグを使う。利用する版を選び、その Release の `manifest.json` の URL を固定して取得する。リポジトリ全体の `releases/latest` は使わない。Pages の manifest・履歴・地点カタログは、確認済みデータの公開時に更新する。
 
 manifest の項目・型・取得と検証の共通手順は [manifest フォーマット](../../formats/manifest.md) を参照する。GSI 固有の元資料の取得・照合と加工方法は、この文書に記載する。
 
@@ -199,9 +199,9 @@ git add points/gsi-peaks/gsi-peaks-source.json points/gsi-peaks/supplements.json
 
 オリジナルの地点 JSON と `snapshot.json` を同じコミットで更新する。地点 JSON だけを編集すると SHA-256 が一致せず、公開処理は停止する。元データは手元で保管し、JSON の取り込み後も削除しない。
 
-変更を `main` にマージしたあと、Actions の「地点 / 国土地理院山頂：下書き Release 生成・検査」→「Run workflow」で `main` を選ぶ。コミット済み JSON を検証して gzip を作り、`gsi-peaks-dev-<version>` の下書きに添付する。版には UTC 日時・実行番号・再実行番号を使う。
+変更を `main` にマージしたあと、Actions の「地点 / 国土地理院山頂：下書き Release 生成・検査」→「Run workflow」で `main` を選ぶ。コミット済み JSON を検証して gzip を作り、`gsi-peaks-<version>` の下書きに添付する。版には UTC 日時・実行番号・再実行番号を使う。
 
-Release には「[アプリ用データと確認・編集用の添付](#アプリ用データと確認編集用の添付)」のファイルを添付する。生成 Action は下書きにアップロードした全ファイルを取り直し、バイト列の一致を確認する。Summary のリンクから内容を確認したあと、[共通の公開手順](../../README.md#確認済みデータの公開) に従って同じ Release を公開する。正式公開後は正式版カタログで取得できる。
+Release には「[アプリ用データと確認・編集用の添付](#アプリ用データと確認編集用の添付)」のファイルを添付する。生成 Action は下書きにアップロードした全ファイルを取り直し、バイト列の一致を確認する。Summary のリンクから内容を確認したあと、[共通の公開手順](../../README.md#確認済みデータの公開) に従って同じ Release を試用公開し、アプリで確認してから正式公開する。正式公開後は正式版カタログで取得できる。
 
 公開用ファイルの準備だけを手元で確認する場合は、次を実行する。外部通信は行わない。
 

@@ -24,8 +24,7 @@ def check_channel(channel):
 
 
 def release_tag(version, channel="stable", *, dataset="osm-peaks"):
-    suffix = f"-{channel}-" if dataset == "gsi-peaks" or channel == "dev" else "-"
-    tag = dataset + suffix + version
+    tag = dataset + ("-dev-" if channel == "dev" else "-") + version
     version_for_tag(dataset, tag, channel)
     return tag
 
@@ -120,12 +119,6 @@ def history_entry(manifest, channel, *, snapshot=False, dataset=None):
     endpoint("")
     repo = os.environ["GH_REPO"]
     url = manifest.get("downloadUrl") or download_url(manifest["version"], channel, dataset=dataset or "osm-peaks")
-    prefix = f"https://github.com/{repo}/releases/download/"
-    if dataset == "gsi-peaks" and channel == "stable" and url.startswith(prefix):
-        # 旧タグで公開済みの版は、復旧や履歴の初期化でも元のタグを使う。
-        original = url[len(prefix):].split("/", 1)[0]
-        if original == f"gsi-peaks-{manifest['version']}":
-            tag = original
     run = os.environ.get("GITHUB_RUN_ID")
     attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
     return {

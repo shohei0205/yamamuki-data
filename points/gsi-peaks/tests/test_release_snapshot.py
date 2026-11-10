@@ -118,8 +118,8 @@ class GsiReleaseTests(unittest.TestCase):
             self.assertRegex(again.pop('dataTimestamp'), r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
             self.assertEqual({k:v for k,v in manifest.items() if k != 'dataTimestamp'}, again)
             stable_tag, stable = target.prepare('test-1', root, 'stable')
-            self.assertEqual(stable_tag, 'gsi-peaks-stable-test-1')
-            self.assertIn('/gsi-peaks-stable-test-1/', stable['downloadUrl'])
+            self.assertEqual(stable_tag, 'gsi-peaks-test-1')
+            self.assertIn('/gsi-peaks-test-1/', stable['downloadUrl'])
 
     def test_snapshot_and_mismatched_data(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -217,8 +217,8 @@ class GsiReleaseTests(unittest.TestCase):
                         self.assertIn('\n\n## 出典\n\n- 国土地理院（最適化ベクトルタイル）:', notes)
                         self.assertIn('- 日本百名山:', notes)
                         create = calls.call_args_list[0].args
-                        self.assertEqual(create[2], f'gsi-peaks-{channel}-test-1')
-                        self.assertEqual(create[create.index('--title') + 1], f'gsi-peaks-{channel}-test-1')
+                        self.assertEqual(create[2], 'gsi-peaks-' + ('dev-' if channel == 'dev' else '') + 'test-1')
+                        self.assertEqual(create[create.index('--title') + 1], 'gsi-peaks-' + ('dev-' if channel == 'dev' else '') + 'test-1')
                         self.assertEqual('--prerelease' in create, channel == 'dev')
                         self.assertIn('--draft', create)
                         self.assertIn('--latest=false', create)

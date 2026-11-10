@@ -51,117 +51,91 @@ class PointReleaseTests(unittest.TestCase):
             directory, tag, manifest = self.fixture(dataset)
             self.assertEqual(manifest, target.validate(directory, dataset, tag, "dev")[0])
 
-    def test_gsi_stable_accepts_new_and_legacy_tags(self):
-        directory, tag, manifest = self.fixture("gsi-peaks", "stable")
-        self.assertEqual(tag, "gsi-peaks-stable-test")
-        self.assertEqual(manifest, target.validate(directory, "gsi-peaks", tag, "stable")[0])
-        legacy_tag = "gsi-peaks-test"
-        manifest["downloadUrl"] = manifest["downloadUrl"].replace(tag, legacy_tag)
-        (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-        self.assertEqual(manifest, target.validate(directory, "gsi-peaks", legacy_tag, "stable")[0])
-
-    def test_gsi_previous_stable_release_compares_versions_across_tag_styles(self):
-        tags = ("gsi-peaks-20261110", "gsi-peaks-stable-20261109")
-        releases = [dict(tag_name=tag, draft=False, prerelease=False) for tag in tags]
-        with patch.object(target, "fetch") as fetch:
-            target.previous_release("gsi-peaks", "stable", self.root, releases)
-        fetch.assert_called_once_with("gsi-peaks", tags[0], self.root / "0", "stable")
-
-    def test_formalize_retries_manifest_upload_and_updates_only_stable_catalog(self):
+    def test_candidate_keeps_tag_and_assets_through_preview_and_formalization(self):
         from importlib import import_module
 
         gsi = import_module("points.gsi-peaks.scripts.release_snapshot")
         source = self.root / "draft"
-        tag, manifest = gsi.prepare("test", source, "dev")
-        files = {path.name: path.read_bytes() for path in source.iterdir() if path.is_file()}
-        assets = {index: (name, data) for index, (name, data) in enumerate(files.items(), 1)}
-        release = dict(id=101, tag_name=tag, draft=True, prerelease=True, target_commitish="a" * 40,
-                       body=f"- SHA-256: `{manifest['sha256']}`")
+        tag, manifest = gsi.prepare("test", source, "stable")
+        self.assertEqual("gsi-peaks-test", tag)
+        assets = {path.name: path.read_bytes() for path in source.iterdir() if path.is_file()}
+        release = dict(id=101, tag_name=tag, draft=True, prerelease=False, target_commitish="a" * 40,
+                       body=f"- SHA-256: `{manifest['sha256']}`",
+                       html_url="https://github.com/owner/repo/releases/tag/untagged-101")
         dev_path = "points/gsi-peaks-dev/manifest.json"
         catalog = target.site.Catalog({dev_path: {**manifest, "version": "old"}})
         expected_dev = target.site.points_catalog(catalog, "dev")
+        requests = []
         interrupted = True
-        publish_interrupted = True
-        uploads = []
-
-        def releases():
-            return [{**release, "assets": [{"id": key, "name": name} for key, (name, _) in assets.items()]}]
 
         def gh(*args):
-            nonlocal interrupted, publish_interrupted
+            nonlocal interrupted
             if args[:2] == ("release", "download"):
                 directory = Path(args[-1])
                 directory.mkdir(exist_ok=True)
-                by_name = dict(assets.values())
                 for name in args[4:-2:2]:
-                    (directory / name).write_bytes(by_name[name])
+                    (directory / name).write_bytes(assets[name])
                 return ""
-            if args[:2] == ("release", "upload"):
-                path = Path(args[-1])
-                if interrupted:
-                    interrupted = False
-                    raise RuntimeError("アップロード中断")
-                uploads.append(path.name)
-                assets[max(assets) + 1] = (path.name, path.read_bytes())
-                return ""
-            if args[:2] == ("api", "repos/owner/repo/git/matching-refs/tags/gsi-peaks-stable-test"):
-                return ""
-            if args[:3] == ("api", "--method", "DELETE"):
-                del assets[int(args[3].rsplit("/", 1)[1])]
-                return ""
-            if args[3].startswith("repos/owner/repo/releases/assets/"):
-                asset_id = int(args[3].rsplit("/", 1)[1])
-                assets[asset_id] = (args[-1].removeprefix("name="), assets[asset_id][1])
-                return ""
+            if args[:2] == ("release", "view"):
+                return json.dumps({"assets": [{"name": name} for name in assets]})
+            if args[:2] == ("api", "repos/owner/repo/git/matching-refs/tags/gsi-peaks-test"):
+                return "[]"
             self.assertEqual(args[:4], ("api", "--method", "PATCH", "repos/owner/repo/releases/101"))
             self.assertFalse((self.root / "pages").exists())
             body = json.loads(Path(args[-1]).read_bytes())
-            self.assertEqual("a" * 40, body["target_commitish"])
-            self.assertEqual("gsi-peaks-stable-test", body["tag_name"])
+            self.assertNotIn("tag_name", body)
             self.assertFalse(body["draft"])
-            self.assertFalse(body["prerelease"])
-            self.assertTrue(all(not name.startswith(target.BACKUP_PREFIX) for name, _ in assets.values()))
-            if publish_interrupted:
-                publish_interrupted = False
+            requests.append(body)
+            if not body["prerelease"] and interrupted:
+                interrupted = False
                 raise RuntimeError("正式公開中断")
-            release.update(body, html_url="https://github.com/owner/repo/releases/tag/gsi-peaks-stable-test")
+            release.update(body, html_url="https://github.com/owner/repo/releases/tag/gsi-peaks-test")
             return json.dumps(release)
 
-        with patch.object(target.site, "releases", side_effect=releases), \
-                patch.object(target.site, "read_catalog", return_value=catalog), \
-                patch.object(target.site, "gh", side_effect=gh):
+        with (patch.object(target.site, "releases", side_effect=lambda: [dict(release)]),
+              patch.object(target.site, "read_catalog", return_value=catalog),
+              patch.object(target.site, "gh", side_effect=gh)):
+            with self.assertRaisesRegex(ValueError, "先に試用向け"):
+                target.publish_candidate(tag)
             with self.assertRaisesRegex(ValueError, "SHA-256"):
-                target.formalize(tag, "0" * 64)
-            self.assertEqual(dict(assets.values()), files)
-            with self.assertRaisesRegex(RuntimeError, "アップロード中断"):
-                target.formalize(tag)
-            self.assertTrue(release["draft"])
-            self.assertFalse((self.root / "pages").exists())
-            with self.assertRaisesRegex(RuntimeError, "正式公開中断"):
-                target.formalize(tag)
-            self.assertTrue(release["draft"])
-            self.assertFalse((self.root / "pages").exists())
-            target.formalize(tag)
+                target.publish_candidate(tag, "0" * 64, preview=True)
+            self.assertEqual([], requests)
 
-        self.assertCountEqual(["manifest.json", "gsi-peaks-source-manifest.json", "supplements-manifest.json"], uploads)
-        uploaded = dict(assets.values())
-        self.assertEqual({name: data for name, data in files.items() if name not in uploads},
-                         {name: data for name, data in uploaded.items() if name not in uploads})
-        stable = json.loads(uploaded["manifest.json"])
-        self.assertIn("/gsi-peaks-stable-test/", stable["licenseUrl"])
-        self.assertEqual(manifest["sha256"], stable["sha256"])
+            target.publish_candidate(release["html_url"], preview=True)
+            self.assertFalse(release["draft"])
+            self.assertTrue(release["prerelease"])
+            self.assertEqual("a" * 40, requests[0]["target_commitish"])
+            target.publish_candidate(tag, preview=True)
+            self.assertEqual(1, len(requests))
+            self.assertFalse((self.root / "pages").exists())
+
+            with self.assertRaisesRegex(RuntimeError, "正式公開中断"):
+                target.publish_candidate(tag)
+            self.assertTrue(release["prerelease"])
+            self.assertFalse((self.root / "pages").exists())
+            target.publish_candidate(tag)
+            self.assertFalse(release["prerelease"])
+            with self.assertRaisesRegex(ValueError, "試用版に戻せません"):
+                target.publish_candidate(tag, preview=True)
+
+        self.assertEqual([True, False, False], [request["prerelease"] for request in requests])
+        self.assertEqual(tag, release["tag_name"])
         pages = self.root / "pages"
-        self.assertEqual(stable, json.loads((pages / "points/gsi-peaks/manifest.json").read_bytes()))
+        self.assertEqual(manifest, json.loads((pages / "points/gsi-peaks/manifest.json").read_bytes()))
         self.assertEqual(expected_dev, json.loads((pages / "points/catalog-dev.json").read_bytes()))
         self.assertFalse((pages / "points/gsi-peaks-dev/history.json").exists())
 
-    def test_formalize_refuses_published_dev(self):
-        release = dict(tag_name="gsi-peaks-dev-test", draft=False, prerelease=True)
-        with patch.object(target.site, "releases", return_value=[release]), \
-                patch.object(target.site, "gh") as gh:
-            with self.assertRaisesRegex(ValueError, "dev の下書き"):
-                target.formalize(release["tag_name"])
-            gh.assert_not_called()
+    def test_legacy_dev_tag_cannot_be_formalized(self):
+        directory, tag, _ = self.fixture()
+        release = dict(tag_name=tag, draft=False, prerelease=True)
+        def gh(*args):
+            self.assertEqual(("release", "download", tag), args[:3])
+            shutil.copy(directory / "manifest.json", Path(args[-1]) / "manifest.json")
+        with (patch.object(target.site, "releases", return_value=[release]),
+              patch.object(target.site, "gh", side_effect=gh) as calls):
+            with self.assertRaisesRegex(ValueError, "データ ID"):
+                target.publish_candidate(tag)
+            calls.assert_called_once()
 
     def test_license_url_is_optional_and_must_point_to_same_release(self):
         directory, tag, manifest = self.fixture()
