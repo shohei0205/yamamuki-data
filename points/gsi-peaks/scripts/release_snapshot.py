@@ -126,7 +126,7 @@ def prepare(version, directory, channel, source=DATA):
     body = document(points, tags, **common)
     common = body["metadata"]
     raw = point_document_json(body).encode("utf-8")
-    tag = f"gsi-peaks-{'dev-' if channel == 'dev' else ''}{version}"
+    tag = release_data.release_tag(version, channel, dataset="gsi-peaks")
     archive = gzip.compress(raw, mtime=0)
     manifest = {key: info[key] for key in PROVENANCE}
     if common.get("tags"):
@@ -152,11 +152,9 @@ def prepare(version, directory, channel, source=DATA):
     return tag, manifest
 
 
-def publish(version, directory, source=DATA):
-    ref = os.environ.get("GITHUB_REF")
-    if ref not in ("refs/heads/main", "refs/heads/dev"):
-        raise ValueError("Release の公開は main または dev ブランチ限定です")
-    channel = "dev" if ref == "refs/heads/dev" else "stable"
+def create_draft(version, directory, source=DATA, *, channel):
+    if os.environ.get("GITHUB_REF") != "refs/heads/main":
+        raise ValueError("下書き Release の作成は main ブランチ限定です")
     tag, manifest = prepare(version, directory, channel, source)
     notes = directory / "notes.md"
     notes.write_text("コミット済みの国土地理院の地点 JSON を配布します。\n\n"
@@ -167,17 +165,20 @@ def publish(version, directory, source=DATA):
     from scripts.distribution_parts import filenames
     from distribution_license import LICENSE_FILE
     names = (FILE, FILE + ".gz", "manifest.json", INFO, LICENSE_FILE, *filenames("gsi-peaks"))
-    release_data.create_verified_release(tag, directory, names, notes, tag, channel)
-    release_data.append_summary(f"\n## 国土地理院の山頂\n\n{manifest['metadata']['pointCount']:,} 地点を Release `{tag}` に公開しました。\n")
+    _, url = release_data.create_verified_release(tag, directory, names, notes, tag, channel, publish=False)
+    release_data.append_summary(f"\n## 国土地理院の山頂\n\n{manifest['metadata']['pointCount']:,} 地点を下書き Release に保存しました。\n\n"
+                                f"- [下書き Release を開く]({url})\n"
+                                f"- タグ: `{tag}`\n"
+                                "- 内容を確認してから「共通：確認済みデータを正式公開」を実行してください。\n")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("snapshot", "prepare", "publish"))
+    parser.add_argument("command", choices=("snapshot", "prepare", "draft"))
     parser.add_argument("--source", type=Path)
     parser.add_argument("--directory", type=Path, default=ROOT / "build/gsi-release")
     parser.add_argument("--version")
-    parser.add_argument("--channel", choices=("stable", "dev"), default="dev")
+    parser.add_argument("--channel", choices=("stable", "dev"))
     args = parser.parse_args()
     if args.command == "snapshot":
         if args.source is None:
@@ -187,10 +188,12 @@ def main():
         if args.version is None:
             parser.error("--version が必要です")
         source = args.source or DATA
-        if args.command == "publish":
-            publish(args.version, args.directory, source)
+        if args.command == "draft":
+            if args.channel is None:
+                parser.error("draft には --channel が必要です")
+            create_draft(args.version, args.directory, source, channel=args.channel)
         else:
-            prepare(args.version, args.directory, args.channel, source)
+            prepare(args.version, args.directory, args.channel or "dev", source)
 
 
 if __name__ == "__main__":

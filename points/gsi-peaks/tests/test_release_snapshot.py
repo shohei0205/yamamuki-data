@@ -118,8 +118,8 @@ class GsiReleaseTests(unittest.TestCase):
             self.assertRegex(again.pop('dataTimestamp'), r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
             self.assertEqual({k:v for k,v in manifest.items() if k != 'dataTimestamp'}, again)
             stable_tag, stable = target.prepare('test-1', root, 'stable')
-            self.assertEqual(stable_tag, 'gsi-peaks-test-1')
-            self.assertIn('/gsi-peaks-test-1/', stable['downloadUrl'])
+            self.assertEqual(stable_tag, 'gsi-peaks-stable-test-1')
+            self.assertIn('/gsi-peaks-stable-test-1/', stable['downloadUrl'])
 
     def test_snapshot_and_mismatched_data(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -158,21 +158,43 @@ class GsiReleaseTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 target.validate([invalid])
 
+    def test_shared_validation_accepts_optional_fields_and_checks_provenance(self):
+        point = {"id": "fixture:1", "name": "地点", "latitude": 35, "longitude": 138}
+        target.validate_rows([point])
+        target.validate_rows([{**point, "type": None, "graphic": None, "tags": None}])
+        for provenance in ({}, {"dataSource": "vector"}, {"classification": "661"},
+                           {"elevationSource": "osm"}, {"dataSource": "vector",
+                            "classification": "661", "elevationSource": "unassigned"}):
+            with self.subTest(provenance=provenance):
+                target.validate_rows([{**point, "provenance": provenance}])
+        for provenance in ([], {"extra": "vector"}, {"dataSource": None},
+                           {"elevationSource": ""}):
+            with self.subTest(provenance=provenance), self.assertRaisesRegex(ValueError, "出典情報"):
+                target.validate_rows([{**point, "provenance": provenance}])
+
+    def test_shared_validation_rejects_invalid_rows(self):
+        point = {"id": "fixture:1", "name": "地点", "type": "peak", "latitude": 35, "longitude": 138}
+        for rows in ([], [point, point], [{**point, "tags": ["重複", "重複"]}],
+                     [{**point, "latitude": True}], [{**point, "longitude": 181}],
+                     [{**point, "graphic": {"svg": "<script/>"}}]):
+            with self.subTest(rows=rows), self.assertRaises(ValueError):
+                target.validate_rows(rows)
+
     def test_invalid_version_or_branch_never_publishes(self):
         with tempfile.TemporaryDirectory() as folder:
             with self.assertRaises(ValueError):
                 target.prepare('../bad', Path(folder), 'dev')
             with patch.dict(os.environ, {'GITHUB_REF': 'refs/heads/topic'}), patch.object(target.release_data, 'gh') as gh:
                 with self.assertRaises(ValueError):
-                    target.publish('test-1', Path(folder))
+                    target.create_draft('test-1', Path(folder), channel='dev')
                 gh.assert_not_called()
 
-    def test_uploaded_files_are_checked_before_publishing(self):
-        for branch in ('main', 'dev'):
+    def test_uploaded_files_are_checked_without_publishing(self):
+        for channel in ('stable', 'dev'):
             for corrupt in (False, True):
-                with self.subTest(branch=branch, corrupt=corrupt), tempfile.TemporaryDirectory() as folder:
+                with self.subTest(channel=channel, corrupt=corrupt), tempfile.TemporaryDirectory() as folder:
                     root = Path(folder)
-                    environment = {'GH_REPO': 'owner/repo', 'GITHUB_REF': 'refs/heads/' + branch,
+                    environment = {'GH_REPO': 'owner/repo', 'GITHUB_REF': 'refs/heads/main',
                                    'GITHUB_SHA': 'abc', 'GITHUB_RUN_ID': '123'}
                     def gh(*args):
                         if args[:2] == ('release', 'download'):
@@ -183,21 +205,22 @@ class GsiReleaseTests(unittest.TestCase):
                                 shutil.copyfile(root / name, checked / name)
                             if corrupt:
                                 (checked / target.FILE).write_bytes(b'corrupt')
-                        return ''
-                    with patch.dict(os.environ, environment), patch.object(target.release_data, 'gh', side_effect=gh) as calls, patch.object(target.release_data, 'append_summary'):
+                        return 'https://github.com/owner/repo/releases/tag/untagged-123\n'
+                    with patch.dict(os.environ, environment), patch.object(target.release_data, 'gh', side_effect=gh) as calls, patch.object(target.release_data, 'append_summary') as summary:
                         if corrupt:
                             with self.assertRaisesRegex(ValueError, '一致しません'):
-                                target.publish('test-1', root)
+                                target.create_draft('test-1', root, channel=channel)
                         else:
-                            target.publish('test-1', root)
+                            target.create_draft('test-1', root, channel=channel)
                         notes = (root / 'notes.md').read_text(encoding='utf-8')
                         self.assertTrue(notes.startswith('コミット済みの国土地理院の地点 JSON を配布します。'))
                         self.assertIn('\n\n## 出典\n\n- 国土地理院（最適化ベクトルタイル）:', notes)
                         self.assertIn('- 日本百名山:', notes)
                         create = calls.call_args_list[0].args
-                        self.assertEqual(create[2], 'gsi-peaks-' + ('dev-' if branch == 'dev' else '') + 'test-1')
-                        self.assertEqual(create[create.index('--title') + 1], 'gsi-peaks-' + ('dev-' if branch == 'dev' else '') + 'test-1')
-                        self.assertEqual('--prerelease' in create, branch == 'dev')
+                        self.assertEqual(create[2], f'gsi-peaks-{channel}-test-1')
+                        self.assertEqual(create[create.index('--title') + 1], f'gsi-peaks-{channel}-test-1')
+                        self.assertEqual('--prerelease' in create, channel == 'dev')
+                        self.assertIn('--draft', create)
                         self.assertIn('--latest=false', create)
                         self.assertIn(str(root / 'LICENSE.txt'), create)
                         manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
@@ -209,7 +232,11 @@ class GsiReleaseTests(unittest.TestCase):
                         self.assertIn('この表示は義務ではありません', license_text)
                         self.assertFalse((root / 'ODbL-1.0.txt').exists())
                         edits = [call for call in calls.call_args_list if call.args[:2] == ('release', 'edit')]
-                        self.assertEqual(len(edits), 0 if corrupt else 1)
+                        self.assertEqual(edits, [])
+                        if corrupt:
+                            summary.assert_not_called()
+                        else:
+                            self.assertIn('https://github.com/owner/repo/releases/tag/untagged-123', summary.call_args.args[0])
 
 
 if __name__ == '__main__':

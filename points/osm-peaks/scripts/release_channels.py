@@ -26,13 +26,10 @@ def check_tag(tag, channel="stable"):
 
 
 def check_branch(channel):
-    """Actions では実行元ブランチと異なる配布先への書き込みを止める。"""
+    """Actions で配布できる実行元を main に限定する。"""
     prefix(channel)
-    if os.environ.get("GITHUB_ACTIONS") != "true":
-        return
-    expected = {"refs/heads/main": "stable", "refs/heads/dev": "dev"}.get(os.environ.get("GITHUB_REF"))
-    if expected != channel:
-        raise ValueError("正式版は main、開発版は dev ブランチから実行してください")
+    if os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("GITHUB_REF") != "refs/heads/main":
+        raise ValueError("公開は main ブランチから実行してください")
 
 
 def download_url(version, channel="stable"):

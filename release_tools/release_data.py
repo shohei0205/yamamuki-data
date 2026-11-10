@@ -24,7 +24,8 @@ def check_channel(channel):
 
 
 def release_tag(version, channel="stable", *, dataset="osm-peaks"):
-    tag = dataset + ("-dev-" if channel == "dev" else "-") + version
+    suffix = f"-{channel}-" if dataset == "gsi-peaks" or channel == "dev" else "-"
+    tag = dataset + suffix + version
     version_for_tag(dataset, tag, channel)
     return tag
 
@@ -48,7 +49,7 @@ def gh(*arguments):
 
 
 def create_verified_release(tag, directory, files, notes, title, channel, *, publish=True):
-    """下書きに添付し、取り直した全ファイルが同じ場合だけ公開する。"""
+    """下書きの添付を照合し、照合先と作成時の URL を返す。公開は指定時だけ行う。"""
     check_branch(channel)
     directory = Path(directory)
     names = tuple(files)
@@ -61,9 +62,9 @@ def create_verified_release(tag, directory, files, notes, title, channel, *, pub
             raise ValueError(f"添付ファイルがありません: {name}")
     options = ("--prerelease",) if channel == "dev" else ()
     # 既存タグは create が失敗する。公開済みのファイルを差し替えない。
-    gh("release", "create", tag, *(str(directory / name) for name in names),
-       "--draft", "--latest=false", "--target", os.environ["GITHUB_SHA"],
-       "--title", title, "--notes-file", str(notes), *options)
+    url = gh("release", "create", tag, *(str(directory / name) for name in names),
+             "--draft", "--latest=false", "--target", os.environ["GITHUB_SHA"],
+             "--title", title, "--notes-file", str(notes), *options).strip()
     checked = directory / "checked"
     gh("release", "download", tag, *(part for name in names for part in ("--pattern", name)),
        "--dir", str(checked))
@@ -72,7 +73,7 @@ def create_verified_release(tag, directory, files, notes, title, channel, *, pub
             raise ValueError(f"Release の添付ファイルが一致しません: {name}")
     if publish:
         publish_draft(tag)
-    return checked
+    return checked, url
 
 
 def publish_draft(tag):
@@ -118,6 +119,13 @@ def history_entry(manifest, channel, *, snapshot=False, dataset=None):
     tag = release_tag(manifest["version"], channel, dataset=dataset or "osm-peaks")
     endpoint("")
     repo = os.environ["GH_REPO"]
+    url = manifest.get("downloadUrl") or download_url(manifest["version"], channel, dataset=dataset or "osm-peaks")
+    prefix = f"https://github.com/{repo}/releases/download/"
+    if dataset == "gsi-peaks" and channel == "stable" and url.startswith(prefix):
+        # 旧タグで公開済みの版は、復旧や履歴の初期化でも元のタグを使う。
+        original = url[len(prefix):].split("/", 1)[0]
+        if original == f"gsi-peaks-{manifest['version']}":
+            tag = original
     run = os.environ.get("GITHUB_RUN_ID")
     attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
     return {
@@ -125,7 +133,7 @@ def history_entry(manifest, channel, *, snapshot=False, dataset=None):
         "publishedAt": None if snapshot else datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "version": manifest["version"],
         "releaseUrl": f"https://github.com/{repo}/releases/tag/{tag}",
-        "downloadUrl": manifest.get("downloadUrl") or download_url(manifest["version"], channel, dataset=dataset or "osm-peaks"),
+        "downloadUrl": url,
         "actionsRunUrl": None if snapshot or not run else f"https://github.com/{repo}/actions/runs/{run}/attempts/{attempt}",
     }
 
@@ -226,7 +234,7 @@ def update_latest(directory, manifest, channel="stable", *, dataset=None):
         catalog = {}
     histories = {key: list(entries) for key, entries in getattr(catalog, "histories", {}).items()}
     # 履歴機能の導入前の最新版も残す。分からない公開日時や実行 URL は補わない。
-    for previous_channel in ("stable", "dev"):
+    for previous_channel in (("stable",) if channel == "stable" else ("stable", "dev")):
         previous_path = target_path(previous_channel)
         history_path = previous_path.replace("manifest.json", "history.json")
         if previous_path in catalog and history_path not in histories:

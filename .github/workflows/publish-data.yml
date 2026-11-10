@@ -1,11 +1,7 @@
-name: 地点 / OSM山頂：Release 生成・検査
+name: 地点 / OSM山頂：下書き Release 生成・検査
 
-# 正式版（main）は Release を作るところまでで、Pages には公開しない。アプリがどの版を読むかは yamamuki の PR で決める。
-# 開発版（dev）は検査に通ったら Pages の points/osm-peaks-dev/ に公開する。
+# 生成したデータは下書き Release に保存し、確認後に別のワークフローで公開する。
 on:
-  schedule:
-    # 毎月 1 日の日本時間 12:23。main で正式版の Release を作る。
-    - cron: '23 3 1 * *'
   workflow_dispatch:
     inputs:
       source_date:
@@ -23,7 +19,7 @@ defaults:
 
 env:
   PYTHONUNBUFFERED: '1'
-  RELEASE_CHANNEL: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
+  RELEASE_CHANNEL: dev
 
 concurrency:
   group: publish-osm-peaks-${{ github.ref }}
@@ -33,10 +29,6 @@ jobs:
   generate:
     runs-on: ubuntu-24.04
     timeout-minutes: 150
-    outputs:
-      tag: ${{ steps.review.outputs.tag }}
-      sha256: ${{ steps.review.outputs.sha256 }}
-      auto_publish: ${{ steps.review.outputs.auto_publish }}
     permissions:
       contents: write
     steps:
@@ -118,67 +110,16 @@ jobs:
           python scripts/build_data.py build/japan-latest.osm.pbf --version "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: 作業ブランチの生成物を保存
-        if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev'
+        if: github.ref != 'refs/heads/main'
         uses: actions/upload-artifact@v7
         with:
           name: osm-peaks-test-${{ github.run_id }}-${{ github.run_attempt }}
           path: points/osm-peaks/dist/
           if-no-files-found: error
           retention-days: 7
-      - name: 前回と比較して Release を作成
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
-        id: review
+      - name: 前回と比較して下書き Release を作成
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: python -m scripts.release_data prepare --channel "$RELEASE_CHANNEL"
-
-  publish:
-    needs: generate
-    # Pages に公開するのは開発版だけ。正式版は生成ジョブで Release にして終わる。
-    if: needs.generate.outputs.auto_publish == 'true' && github.ref == 'refs/heads/dev'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: write
-      pages: write
-      id-token: write
-    # サイト全体を引き継ぐため、正式版・開発版の公開を直列にする。
-    concurrency:
-      group: publish-data-pages
-      cancel-in-progress: false
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-      - name: Pages の設定を確認
-        uses: actions/configure-pages@v6
-      - name: 下書きのファイルを再検証して公開
-        id: publication
-        env:
-          PAGES_DIRECTORY: ${{ github.workspace }}/build/pages
-          PAGES_INITIALIZE: 'false'
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.generate.outputs.tag }}
-          EXPECTED_SHA256: ${{ needs.generate.outputs.sha256 }}
-        run: python -m scripts.release_data publish --channel "$RELEASE_CHANNEL" --tag "$RELEASE_TAG" --sha256 "$EXPECTED_SHA256"
-      - name: manifest の配布サイトを保存
-        if: steps.publication.outputs.pages_ready == 'true'
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: build/pages
-      - name: manifest を Pages に配置
-        if: steps.publication.outputs.pages_ready == 'true'
-        id: deployment
-        uses: actions/deploy-pages@v5
-      - name: 配置した manifest 一覧を確認
-        working-directory: .
-        if: steps.publication.outputs.pages_ready == 'true'
-        env:
-          GH_REPO: ${{ github.repository }}
-        run: python -m release_tools.release_data verify-pages --directory "$GITHUB_WORKSPACE/build/pages"

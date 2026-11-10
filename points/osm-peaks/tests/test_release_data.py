@@ -19,8 +19,7 @@ class ReleaseDataTests(unittest.TestCase):
                     patch.object(release_data, "validate", return_value=self.current), \
                     patch.object(release_data, "previous_release", return_value=self.current), \
                     patch.object(release_data, "assess", side_effect=AttributeError("比較処理の失敗")), \
-                    patch.object(common, "gh", return_value="https://example.com/draft") as gh, \
-                    patch.object(common, "output") as output:
+                    patch.object(common, "gh", return_value="https://example.com/draft") as gh:
                 def check_notes(*args):
                     notes = Path(args[args.index("--notes-file") + 1]).read_text(encoding="utf-8-sig")
                     self.assertIn("AttributeError", notes)
@@ -29,7 +28,7 @@ class ReleaseDataTests(unittest.TestCase):
                 gh.side_effect = check_notes
                 release_data.prepare(directory, channel)
                 self.assertIn("--draft", gh.call_args.args)
-                self.assertEqual("false", output.call_args.kwargs["auto_publish"])
+                gh.assert_called_once()
 
     def setUp(self):
         self.current = dataset()
@@ -70,7 +69,8 @@ class ReleaseDataTests(unittest.TestCase):
                 summary = summary_path.read_text(encoding="utf-8")
                 self.assertIn("[生成したリリースを開く](https://github.com/owner/repo/releases/tag/untagged-123)", summary)
                 self.assertIn("osm-peaks-dev-test", summary)
-                self.assertIn("下書きで保留" if warnings else "自動公開の段階", summary)
+                self.assertIn("下書きで保存", summary)
+                self.assertIn("要確認" if warnings else "合格", summary)
 
     def test_release_title_matches_tag(self):
         for channel in ("stable", "dev"):
@@ -82,6 +82,8 @@ class ReleaseDataTests(unittest.TestCase):
                 release_data.prepare(directory, channel)
                 arguments = gh.call_args.args
                 self.assertEqual(arguments[arguments.index("--title") + 1], arguments[2])
+                self.assertIn("--draft", arguments)
+                gh.assert_called_once()
                 self.assertEqual(arguments[2], "osm-peaks-" + ("dev-" if channel == "dev" else "") + "test")
 
     def test_failed_creation_does_not_add_release_link(self):
@@ -160,17 +162,15 @@ class ReleaseDataTests(unittest.TestCase):
     def test_prepare_first_release_or_failed_comparison_keeps_draft(self):
         for failure in (False, True):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory, \
-                    patch.dict(os.environ, {"GITHUB_OUTPUT": str(Path(directory) / "output")}), \
                     patch.object(release_data, "validate", return_value=self.current), \
                     patch.object(release_data, "previous_release", return_value=None,
                                  side_effect=RuntimeError("通信失敗") if failure else None), \
                     patch.object(common, "gh", return_value="https://github.com/owner/repo/releases/tag/untagged-123\n") as gh:
                 release_data.prepare(directory, "dev")
-                self.assertIn("auto_publish=false", (Path(directory) / "output").read_text())
                 self.assertIn("--draft", gh.call_args.args)
                 self.assertNotIn("--draft=false", gh.call_args.args)
 
-    def test_stable_preparation_releases_without_draft_or_pages(self):
+    def test_stable_preparation_creates_only_draft(self):
         for warnings in ([], ["全国の件数が減りました", "比較不能"]):
             notes = []
 
@@ -178,18 +178,16 @@ class ReleaseDataTests(unittest.TestCase):
                 notes.append(Path(args[args.index("--notes-file") + 1]).read_text(encoding="utf-8-sig"))
                 return "https://github.com/owner/repo/releases/tag/osm-peaks-test\n"
             with self.subTest(warnings=warnings), tempfile.TemporaryDirectory() as directory, \
-                    patch.dict(os.environ, {"GITHUB_OUTPUT": str(Path(directory) / "output")}), \
                     patch.object(release_data, "validate", return_value=self.current), \
                     patch.object(release_data, "previous_release", return_value=self.current), \
                     patch.object(release_data, "assess", return_value=warnings), \
                     patch.object(common, "gh", side_effect=gh) as mock:
                 release_data.prepare(directory)
                 arguments = mock.call_args.args
-                self.assertNotIn("--draft", arguments)
+                self.assertIn("--draft", arguments)
+                mock.assert_called_once()
                 self.assertIn("--latest=false", arguments)
                 self.assertIn("--prerelease=false", arguments)
-                # 正式版は検査に通っても Pages の公開に進まない。
-                self.assertIn("auto_publish=false", (Path(directory) / "output").read_text())
                 if warnings:
                     self.assertTrue(notes[0].startswith("## 要確認\n\n- 全国の件数が減りました\n- 比較不能\n\n## データの検査結果（生成後）"))
                     self.assertTrue(common.needs_review(dict(body="\ufeff" + notes[0])))
@@ -243,7 +241,7 @@ class ReleaseDataTests(unittest.TestCase):
                 patch.object(release_data, "previous_release", return_value=None) as previous, \
                 patch.object(common, "gh", return_value="https://github.com/owner/repo/releases/tag/untagged-123\n") as gh:
             release_data.prepare(directory, "dev")
-            self.assertEqual("dev", previous.call_args.args[1])
+            self.assertEqual("stable", previous.call_args.args[1])
             self.assertEqual("osm-peaks-dev-test", gh.call_args.args[2])
             self.assertIn("--prerelease=true", gh.call_args.args)
             self.assertIn("--draft", gh.call_args.args)
@@ -283,8 +281,8 @@ class ReleaseDataTests(unittest.TestCase):
 
 
 
-    def test_actions_branch_channel_mismatch_stops_before_io(self):
-        for branch, channel in (("main", "dev"), ("dev", "stable"), ("feature", "stable"),
+    def test_actions_non_main_branches_stop_before_io(self):
+        for branch, channel in (("dev", "dev"), ("dev", "stable"), ("feature", "stable"),
                                 ("feature", "dev"), ("test", "dev"), ("test", "stable")):
             with self.subTest(branch=branch, channel=channel), \
                     patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_REF": "refs/heads/" + branch}), \
@@ -355,8 +353,8 @@ class ReleaseDataTests(unittest.TestCase):
             release_data.publish("osm-peaks-test")
         gh.assert_not_called()
 
-    def test_actions_branches_allow_only_their_channel(self):
-        for branch, channel in (("main", "stable"), ("dev", "dev")):
+    def test_actions_main_allows_both_channels(self):
+        for branch, channel in (("main", "stable"), ("main", "dev")):
             with self.subTest(branch=branch), \
                     patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_REF": "refs/heads/" + branch}):
                 release_data.check_branch(channel)

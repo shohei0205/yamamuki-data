@@ -244,7 +244,7 @@ def assess(current, previous=None):
     latest = osm_source(manifest_metadata(manifest).get("sources", {})).get("latestTimestamp") if manifest["schemaVersion"] >= 6 else manifest.get("latestPointTimestamp" if manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
     old_latest = osm_source(manifest_metadata(old_manifest).get("sources", {})).get("latestTimestamp") if old_manifest["schemaVersion"] >= 6 else old_manifest.get("latestPointTimestamp" if old_manifest["schemaVersion"] >= 5 else "latestMountainTimestamp")
     if latest is not None and old_latest is not None and source_time(latest) == source_time(old_latest):
-        warnings.append(f"収録山頂の最新編集日時が前回公開版と同じです: {latest}。自動公開せず下書きに残します")
+        warnings.append(f"収録山頂の最新編集日時が前回公開版と同じです: {latest}")
     if manifest["schemaVersion"] != old_manifest["schemaVersion"]:
         warnings.append("schemaVersion が前回公開版と異なります。アプリの対応を確認してください")
     if manifest.get("dataSchemaVersion", manifest["schemaVersion"]) != old_manifest.get("dataSchemaVersion", old_manifest["schemaVersion"]):
@@ -256,7 +256,7 @@ def report(current, previous, warnings):
     manifest, rows = current
     from document_metadata import manifest_metadata
     manifest = {**manifest, **manifest_metadata(manifest)}
-    lines = ["## データの検査結果", "", "判定: " + ("手動確認が必要" if warnings else "自動公開可能"), "",
+    lines = ["## データの検査結果", "", "判定: " + ("要確認" if warnings else "合格"), "",
              f"- 今回: {manifest['version']}、{len(rows):,} 件",
              f"- 前回: {previous[0]['version']}、{len(previous[1]):,} 件" if previous else "- 前回: 比較できず",
              f"- データの日時: {manifest.get('dataTimestamp', manifest.get('sourceTimestamp'))}",

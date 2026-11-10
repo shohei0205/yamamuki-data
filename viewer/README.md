@@ -49,8 +49,8 @@ cargo run --locked --manifest-path viewer/Cargo.toml -- --check-map
 
 GitHub Actions の「データビューワ：Release」を手動で実行する。Windows x64とmacOS Apple SiliconのZIPを作り、それぞれの実行ファイルで地点JSONを読み込んで確認する。
 
-- main では、Cargo.toml の版を使った `viewer-v<版>` のタグで公開する。次の正式版を作るときは Cargo.toml の版と Cargo.lock を更新する。
-- dev では、viewer-v<版>-dev.<実行ID> のタグでプレリリースを公開する。
+- `main` で `channel` に `stable` を選ぶと、Cargo.toml の版を使った `viewer-v<版>` のタグで公開する。次の正式版を作るときは Cargo.toml の版と Cargo.lock を更新する。
+- `main` で `channel` に `dev` を選ぶと、viewer-v<版>-dev.<実行ID> のタグでプレリリースを公開する。
 - 作業ブランチでは、2環境のZIPをActionsの実行結果から7日間ダウンロードできる。
 
 GitHub Releasesでは、ZIPと `SHA256SUMS.txt` を配布する。Windows版はZIPを展開して `yamamuki-viewer.exe` を起動する。macOS版はApple Silicon向けのZIPを展開して `YamamukiViewer.app` を開く。macOS版はアドホック署名で、Appleによる公証は行っていない。

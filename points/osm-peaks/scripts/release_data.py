@@ -122,43 +122,31 @@ def prepare(directory, channel="stable"):
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         previous = None
-        comparison_failed = False
         try:
-            previous = previous_release(root / "previous", channel)
+            previous = previous_release(root / "previous", "stable")
             warnings = assess(current, previous)
         except Exception as exc:
             # 比較の失敗で生成物を失わず、公開せずに人の確認へ回す。
-            comparison_failed = True
             logging.exception("前回公開版を比較できません")
             warnings = [f"前回公開版の取得・検証・比較に失敗したため、下書きに残します（{type(exc).__name__}: {exc}）"]
         notes = root / "notes.md"
         contents = report(current, previous, warnings).replace("## データの検査結果", "## データの検査結果（生成後）", 1)
         stable = channel == "stable"
-        if stable and warnings:
+        if warnings:
             # Release 一覧で目に入るよう、要確認の理由を本文の先頭に書く。
             contents = f"{shared.REVIEW_HEADING}\n\n" + "".join(f"- {warning}\n" for warning in warnings) + "\n" + contents
         shared.write_report(notes, contents)
-        # 正式版も比較が失敗したときは下書きに残す。Pages は更新しない。
-        draft = not stable or comparison_failed
-        state = ["--draft", "--latest=false"] if draft else ["--latest=false"]
-        logging.info("%s を作成し、SVG を内蔵したデータと manifest をアップロードします: %s",
-                     "下書き Release" if draft else "Release", tag)
+        logging.info("下書き Release を作成します: %s", tag)
         from scripts.distribution_parts import filenames
         from distribution_license import LICENSE_FILE, ODBL_FILE
         url = shared.gh("release", "create", tag, str(Path(directory) / FILE_NAME), str(Path(directory) / "manifest.json"),
            *[str(Path(directory) / name) for name in (*filenames("osm-peaks"), LICENSE_FILE, ODBL_FILE) if (Path(directory) / name).exists()],
-           *state, "--target", os.environ["GITHUB_SHA"], "--title", tag,
+           "--draft", "--latest=false", "--target", os.environ["GITHUB_SHA"], "--title", tag,
            "--notes-file", str(notes), f"--prerelease={str(not stable).lower()}").strip()
-        if comparison_failed:
-            handling = "下書きで保留（前回公開版の比較に失敗。手動確認が必要）"
-        elif stable:
-            handling = "Release に出しました（要確認。本文の先頭の理由を確認してください）" if warnings else "Release に出しました"
-        else:
-            handling = "下書きで保留（手動確認が必要）" if warnings else "自動公開の段階へ進みます"
         shared.append_summary(f"\n## 生成したリリース\n\n[生成したリリースを開く]({url})\n\n"
-                       f"- タグ: `{tag}`\n"
-                       f"- 生成後の扱い: {handling}\n")
-    shared.output(tag=tag, sha256=current[0]["sha256"], auto_publish=str(not stable and not warnings).lower())
+                              f"- タグ: `{tag}`\n"
+                              f"- 検査: {'要確認' if warnings else '合格'}\n"
+                              "- 生成後の扱い: 下書きで保存。内容を確認してから「共通：確認済みデータを正式公開」を実行してください。\n")
     logging.info("Release の保存完了: %s（%s）", tag, "要確認" if warnings else "検査合格")
 
 
