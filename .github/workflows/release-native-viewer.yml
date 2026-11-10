@@ -18,7 +18,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Cargo.tomlの版を読む
@@ -61,7 +61,7 @@ jobs:
       PLATFORM: ${{ matrix.platform }}
       CARGO_TARGET_DIR: ${{ github.workspace }}/viewer/target
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Rust stable を準備
@@ -98,7 +98,7 @@ jobs:
           "$app/Contents/MacOS/yamamuki-viewer" --check-points points/gsi-peaks/gsi-peaks-source.json
           ditto -c -k --keepParent "$app" "dist/$RELEASE_TAG-$PLATFORM.zip"
       - name: 配布用ZIPを保存
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: native-viewer-${{ matrix.platform }}
           path: dist/${{ needs.plan.outputs.tag }}-${{ matrix.platform }}.zip
@@ -118,7 +118,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ needs.plan.outputs.tag }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: native-viewer-*
           path: dist
