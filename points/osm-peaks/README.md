@@ -40,7 +40,7 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 
 | 配布先 | manifest の取得方法 |
 |---|---|
-| 正式版 | 利用する `osm-peaks-<version>` の Release を選び、`https://github.com/shohei0205/yamamuki-data/releases/download/<タグ>/manifest.json` を固定して取得する。本文の先頭に「## 要確認」がある Release は選ばない。 |
+| 正式版 | Pre-release を除いた `osm-peaks-<version>` の Release から利用する版を選び、`https://github.com/shohei0205/yamamuki-data/releases/download/<タグ>/manifest.json` を固定して取得する。本文の先頭に「## 要確認」がある Release は選ばない。 |
 | 開発版（Pre-release） | [公開済み開発版の manifest](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json) を取得する |
 
 データ本体（`osm-peaks.json.gz`）は manifest の `downloadUrl` から取得する。正式版を切り替えるときは、利用する側で固定した Release のタグを更新する。リポジトリ全体の `releases/latest` は使わない。
