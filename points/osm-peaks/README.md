@@ -41,13 +41,13 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 | 配布先 | manifest の取得方法 |
 |---|---|
 | 正式版 | [正式 Release 一覧](https://github.com/shohei0205/yamamuki-data/releases?q=%22osm-peaks-%22+draft%3Afalse+prerelease%3Afalse)（Pre-release を除く）から `osm-peaks-<version>` の版を選び、`https://github.com/shohei0205/yamamuki-data/releases/download/<タグ>/manifest.json` を固定して取得する。本文の先頭に「## 要確認」がある Release は選ばない。 |
-| 開発版（Pre-release） | [公開済み開発版の manifest](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json) を取得する |
+| 試用版（Pre-release） | 試用公開した Release に添付された `manifest.json` を使う。開発ビルドで試す場合は、[試用公開の手順](../../README.md#確認済みデータの公開)に従ってタグを指定する |
 
 データ本体（`osm-peaks.json.gz`）は manifest の `downloadUrl` から取得する。正式版を切り替えるときは、利用する側で固定した Release のタグを更新する。リポジトリ全体の `releases/latest` は使わない。
 
 正式版の [Pages manifest](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json) と公開履歴は、確認済みデータの公開・復旧で更新する。アプリは利用する正式版の Release を選び、添付の manifest を参照する。
 
-[Releases](https://github.com/shohei0205/yamamuki-data/releases) に `manifest.json` と `osm-peaks.json.gz` を添付する。公開済み開発版の manifest は冒頭の表、公開履歴は「公開履歴」の節から取得できる。正式版は Release の manifest を使う。
+[Releases](https://github.com/shohei0205/yamamuki-data/releases) に `manifest.json` と `osm-peaks.json.gz` を添付する。[旧開発版の manifest](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json) は、従来の取得先を直接読む開発ビルド向けに保持する。この参照先の更新は終了し、新しい試用版は Release に掲載する。過去の版は「公開履歴」を参照する。
 
 manifest の項目・型は [リポジトリ共通の manifest.json](../../formats/manifest.md) を、形式の版ごとの説明と変更履歴は [地点データフォーマット](../formats/data.md) を参照する。版4 のときの配り方（`peaks/`・`peaks-<version>`・`japan-mountains.json.gz`）は [版4の旧形式データ](#版4の旧形式データ) にある。
 
