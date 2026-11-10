@@ -1,4 +1,4 @@
-use crate::tile_cache;
+use crate::{lod_fade, tile_cache};
 use anyhow::{Context, Result, ensure};
 use eframe::egui::{self, ColorImage, Pos2, Rect, TextureHandle};
 use image::ImageDecoder;
@@ -544,6 +544,7 @@ pub struct Tiles {
     pending: HashSet<Tile>,
     cache: HashMap<Tile, (Cached, u64)>,
     frame: u64,
+    lod: lod_fade::State<u32>,
 }
 
 impl Tiles {
@@ -578,6 +579,7 @@ impl Tiles {
             pending: HashSet::new(),
             cache: HashMap::new(),
             frame: 0,
+            lod: lod_fade::State::default(),
         }
     }
 
@@ -589,6 +591,7 @@ impl Tiles {
         view: &View,
         dragging: bool,
         tile_zoom: u32,
+        fade_backend: lod_fade::Backend<'_>,
     ) -> bool {
         self.frame += 1;
         let limit = if dragging { 1 } else { MAX_PENDING };
@@ -618,14 +621,13 @@ impl Tiles {
         // 傾斜で可視範囲が広がっても、表示中のタイルはキャッシュに収める。
         let cache_limit = MAX_CACHE.max(tiles.len() + MAX_PENDING);
         let mut failed = false;
-        for tile in tiles {
+        for &tile in &tiles {
             if let Some((entry, touched)) = self.cache.get_mut(&tile) {
                 *touched = self.frame;
                 match entry {
-                    Cached::Texture(texture, expiry)
+                    Cached::Texture(_, expiry)
                         if expiry.is_none_or(|until| Instant::now() < until) =>
                     {
-                        view.paint_tile(painter, rect, tile, texture.id());
                         continue;
                     }
                     Cached::Texture(_, _) => {}
@@ -647,10 +649,76 @@ impl Tiles {
                 self.pending.insert(tile);
             }
         }
+        let now = ui.input(|input| input.time);
+        let ready = tiles.iter().all(|tile| self.cache.contains_key(tile));
+        if ready && processed != 0 {
+            ui.ctx().request_repaint();
+        }
+        let fade = fade_backend.is_some()
+            && self
+                .lod
+                .current
+                .is_some_and(|old| lod_fade::can_blend(old, tile_zoom, view.zoom));
+        self.lod
+            .update(tile_zoom, ready && processed == 0, fade, now);
+        let current = self.lod.current.unwrap_or(tile_zoom);
+        if let (Some((state, renderer)), Some((&old, amount))) =
+            (fade_backend, self.lod.blend(ui.ctx(), now))
+            && lod_fade::can_blend(old, current, view.zoom)
+        {
+            let textures = state.renderer.read();
+            let quads = view
+                .tiles_at(rect, old.max(current))
+                .into_iter()
+                .filter_map(|tile| {
+                    let [(old_tile, old_uv), (new_tile, new_uv)] =
+                        [old, current].map(|z| lod_fade::sample(tile, z, lod_fade::FULL_UV));
+                    let [(old, old_ready), (new, new_ready)] = [old_tile, new_tile].map(|tile| {
+                        let Some((cached, touched)) = self.cache.get_mut(&tile) else {
+                            return (None, false);
+                        };
+                        *touched = self.frame;
+                        match cached {
+                            Cached::Texture(handle, _) => {
+                                let texture = lod_fade::color_view(&textures, handle.id());
+                                let ready = texture.is_some();
+                                (texture, ready)
+                            }
+                            Cached::Missing => (None, true),
+                            Cached::Failed(_) => (None, false),
+                        }
+                    });
+                    lod_fade::Quad::new(tile, [old_uv, new_uv], [old, new], [old_ready, new_ready])
+                })
+                .collect();
+            renderer.paint(painter, rect, view, quads, Vec::new(), amount);
+        } else {
+            let mut drawn = false;
+            if current != tile_zoom {
+                for (&tile, (entry, touched)) in &mut self.cache {
+                    if tile.z == current
+                        && let Cached::Texture(texture, _) = entry
+                        && Rect::from_points(&view.tile_corners(rect, tile)).intersects(rect)
+                    {
+                        *touched = self.frame;
+                        view.paint_tile(painter, rect, tile, texture.id());
+                        drawn = true;
+                    }
+                }
+            }
+            if !drawn {
+                for tile in tiles {
+                    if let Some((Cached::Texture(texture, _), _)) = self.cache.get(&tile) {
+                        view.paint_tile(painter, rect, tile, texture.id());
+                    }
+                }
+            }
+        }
         while self.cache.len() > cache_limit {
             if let Some(key) = self
                 .cache
                 .iter()
+                .filter(|(_, (_, touched))| *touched != self.frame)
                 .min_by_key(|(_, (_, touched))| *touched)
                 .map(|(&key, _)| key)
             {
@@ -805,6 +873,7 @@ mod tests {
             pending,
             cache: HashMap::new(),
             frame: 0,
+            lod: lod_fade::State::default(),
         };
         let view = View {
             center: [0.5; 2],
@@ -821,6 +890,7 @@ mod tests {
                         &view,
                         dragging,
                         Source::Gsi.tile_zoom(view.zoom, Lod::default()),
+                        None,
                     );
                 });
             });

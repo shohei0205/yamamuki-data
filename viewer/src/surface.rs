@@ -1,10 +1,10 @@
 //! 共通SQLiteの地表を読み、可視タイルだけを背景で合成する。
 use crate::map::{Lod, Source as MapSource, TILE_SIZE, Tile, View};
-use crate::surface_shade;
+use crate::{lod_fade, surface_shade};
 use anyhow::{Result, bail, ensure};
 use eframe::{
     egui::{self, ColorImage, Pos2, Rect, TextureHandle},
-    egui_wgpu::{RenderState, wgpu},
+    egui_wgpu::wgpu,
 };
 use serde::Deserialize;
 use std::{
@@ -291,6 +291,7 @@ impl DecodedTiles {
 }
 
 struct ShadeImage {
+    layer: usize,
     image: ColorImage,
     neutral: u8,
     strength: f32,
@@ -396,6 +397,7 @@ fn composite_cached(
                     let mut shade_pixels = shade_online.then(|| {
                         &mut shade_image
                             .get_or_insert_with(|| ShadeImage {
+                                layer: index,
                                 image: ColorImage::new([side, side], egui::Color32::TRANSPARENT),
                                 neutral: layer.settings.neutral.expect("hillshade neutral"),
                                 strength: layer.settings.strength.expect("hillshade strength"),
@@ -623,7 +625,7 @@ type Reply = (Key, Result<ComposedTile>);
 
 struct Cached {
     image: Option<TextureHandle>,
-    shades: Vec<wgpu::BindGroup>,
+    shades: Vec<(usize, surface_shade::ShadeTexture)>,
     bytes: usize,
     touched: u64,
     failed: bool,
@@ -644,7 +646,11 @@ impl Cached {
         if !self.shades.is_empty() {
             let corners = view.tile_corners(rect, key.tile);
             let uv = surface_uv(key.pixels);
-            shades.extend(self.shades.iter().map(|shade| (corners, uv, shade.clone())));
+            shades.extend(
+                self.shades
+                    .iter()
+                    .map(|(_, shade)| (corners, uv, shade.bind_group.clone())),
+            );
         }
         self.image.is_some() || !self.shades.is_empty()
     }
@@ -779,7 +785,7 @@ pub struct Surface {
     cache: HashMap<Key, Cached>,
     cache_bytes: usize,
     frame: u64,
-    displayed: Option<Key>,
+    lod_fade: lod_fade::State<Key>,
     shade_renderer: Option<surface_shade::Renderer>,
     error: Option<String>,
 }
@@ -835,7 +841,7 @@ impl Surface {
             cache: HashMap::new(),
             cache_bytes: 0,
             frame: 0,
-            displayed: None,
+            lod_fade: lod_fade::State::default(),
             shade_renderer: None,
             error: None,
         }
@@ -966,7 +972,7 @@ impl Surface {
         view: &View,
         dragging: bool,
         overlay: bool,
-        render_state: Option<&RenderState>,
+        fade_backend: lod_fade::Backend<'_>,
         lod: Lod,
     ) {
         let set = &self.source.datasets[self.dataset];
@@ -993,16 +999,15 @@ impl Surface {
                             egui::TextureOptions::LINEAR,
                         ));
                     }
-                    if let Some(state) = render_state.filter(|_| !shades.is_empty()) {
+                    if let Some((state, _)) = fade_backend.filter(|_| !shades.is_empty()) {
                         let renderer = self
                             .shade_renderer
                             .get_or_insert_with(|| surface_shade::Renderer::new(state));
                         for shade in shades {
                             entry.bytes += shade.image.pixels.len() * 2;
-                            entry.shades.push(renderer.upload(
-                                &shade.image,
-                                shade.neutral,
-                                shade.strength,
+                            entry.shades.push((
+                                shade.layer,
+                                renderer.upload(&shade.image, shade.neutral, shade.strength),
                             ));
                         }
                     }
@@ -1084,33 +1089,114 @@ impl Surface {
                 }
             }
 
-            // 自動LODの読み込み中は、直前のテクスチャで覆える範囲を先に描く。
-            let mut used_previous = false;
-            if let Some((current, previous)) = visible.first().zip(self.displayed.as_ref())
-                && waiting
-                && current.overlay == previous.overlay
-                && !current.same_grid(previous)
-            {
-                for (key, entry) in &mut self.cache {
-                    if key.same_grid(previous)
-                        && Rect::from_points(&view.tile_corners(rect, key.tile)).intersects(rect)
-                        && entry.collect(view, rect, key, &mut images, &mut shade_tiles)
-                    {
-                        entry.touched = self.frame;
-                        used_previous = true;
+            if let Some(target) = visible.first() {
+                let mut target = target.clone();
+                target.tile.x = 0;
+                target.tile.y = 0;
+                if self
+                    .lod_fade
+                    .current
+                    .as_ref()
+                    .is_some_and(|old| old.overlay != target.overlay)
+                {
+                    self.lod_fade = lod_fade::State::default();
+                }
+                let now = ui.input(|input| input.time);
+                if !waiting && received != 0 {
+                    ui.ctx().request_repaint();
+                }
+                let fade = fade_backend.is_some()
+                    && self.lod_fade.current.as_ref().is_some_and(|old| {
+                        lod_fade::can_blend(old.tile.z, target.tile.z, view.zoom)
+                    });
+                self.lod_fade
+                    .update(target.clone(), !waiting && received == 0, fade, now);
+                let current = self.lod_fade.current.as_ref().unwrap_or(&target);
+                if let (Some((state, renderer)), Some((old, amount))) =
+                    (fade_backend, self.lod_fade.blend(ui.ctx(), now))
+                    && lod_fade::can_blend(old.tile.z, current.tile.z, view.zoom)
+                {
+                    let textures = state.renderer.read();
+                    let mut colors = Vec::new();
+                    let mut shades = Vec::new();
+                    for tile in view.tiles_at(rect, old.tile.z.max(current.tile.z)) {
+                        let [old, current] = [old, current].map(|key| {
+                            let (source, uv) =
+                                lod_fade::sample(tile, key.tile.z, surface_uv(key.pixels));
+                            (
+                                Key {
+                                    tile: source,
+                                    ..key.clone()
+                                },
+                                uv,
+                            )
+                        });
+                        let uv = [old.1, current.1];
+                        let mut fetch = |key| {
+                            let entry = self.cache.get_mut(key).filter(|entry| !entry.failed)?;
+                            entry.touched = self.frame;
+                            let color = entry
+                                .image
+                                .as_ref()
+                                .and_then(|image| lod_fade::color_view(&textures, image.id()));
+                            let color_ready = entry.image.is_none() || color.is_some();
+                            Some((
+                                color,
+                                color_ready,
+                                entry
+                                    .shades
+                                    .iter()
+                                    .map(|(layer, shade)| (*layer, shade.view.clone()))
+                                    .collect::<Vec<_>>(),
+                            ))
+                        };
+                        let mut entries = [fetch(&old.0), fetch(&current.0)];
+                        let color_ready = entries
+                            .each_ref()
+                            .map(|entry| entry.as_ref().is_some_and(|entry| entry.1));
+                        let color = entries
+                            .each_mut()
+                            .map(|entry| entry.as_mut().and_then(|entry| entry.0.take()));
+                        colors.extend(lod_fade::Quad::new(tile, uv, color, color_ready));
+                        let ready = entries.each_ref().map(Option::is_some);
+                        for layer in 0..set.layers.len() {
+                            let shade = entries.each_ref().map(|entry| {
+                                entry
+                                    .as_ref()?
+                                    .2
+                                    .iter()
+                                    .find(|(index, _)| *index == layer)
+                                    .map(|(_, texture)| texture.clone())
+                            });
+                            shades.extend(lod_fade::Quad::new(tile, uv, shade, ready));
+                        }
+                    }
+                    renderer.paint(painter, rect, view, colors, shades, amount);
+                } else {
+                    let mut used_previous = false;
+                    if !current.same_grid(&target) {
+                        for (key, entry) in &mut self.cache {
+                            if key.same_grid(current)
+                                && Rect::from_points(&view.tile_corners(rect, key.tile))
+                                    .intersects(rect)
+                                && entry.collect(view, rect, key, &mut images, &mut shade_tiles)
+                            {
+                                entry.touched = self.frame;
+                                used_previous = true;
+                            }
+                        }
+                    }
+                    if !used_previous {
+                        for key in &visible {
+                            if let Some(entry) = self.cache.get(key) {
+                                entry.collect(view, rect, key, &mut images, &mut shade_tiles);
+                            }
+                        }
                     }
                 }
             }
-            if !used_previous {
-                for key in &visible {
-                    if let Some(entry) = self.cache.get(key) {
-                        entry.collect(view, rect, key, &mut images, &mut shade_tiles);
-                    }
-                }
-            }
-            if !waiting {
-                self.displayed = visible.into_iter().next();
-            }
+        } else {
+            self.lod_fade = lod_fade::State::default();
         }
         if let Some(renderer) = &self.shade_renderer {
             renderer.paint(painter, rect, shade_tiles);
@@ -1445,8 +1531,8 @@ pub fn layer_list(
                     {
                         *shown = !*shown;
                     }
-                    if before != (*shown, *level) {
-                        surface.displayed = None;
+                    if before.0 != *shown {
+                        surface.lod_fade = lod_fade::State::default();
                     }
                 }
                 Row::Error(file) => {
@@ -1475,7 +1561,7 @@ pub fn layer_list(
         let surface = &mut surfaces[file];
         surface.dataset = dataset;
         surface.options = Surface::default_options(&surface.source.datasets[dataset]);
-        surface.displayed = None;
+        surface.lod_fade = lod_fade::State::default();
         surface.fit = true;
         surface.error = None;
     }

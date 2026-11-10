@@ -5,6 +5,11 @@ use eframe::{
 };
 use wgpu::util::DeviceExt;
 
+pub struct ShadeTexture {
+    pub view: wgpu::TextureView,
+    pub bind_group: wgpu::BindGroup,
+}
+
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -113,7 +118,7 @@ impl Renderer {
         }
     }
 
-    pub fn upload(&self, image: &ColorImage, neutral: u8, strength: f32) -> wgpu::BindGroup {
+    pub fn upload(&self, image: &ColorImage, neutral: u8, strength: f32) -> ShadeTexture {
         let bytes: Vec<_> = image
             .pixels
             .iter()
@@ -156,22 +161,22 @@ impl Renderer {
             },
             size,
         );
-        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let view = texture.create_view(&Default::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("hillshade tile"),
             layout: &self.layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ],
-        })
+        });
+        ShadeTexture { view, bind_group }
     }
 
     pub fn paint(
@@ -294,7 +299,7 @@ mod tests {
                     rect.left_bottom(),
                 ],
                 Rect::from_min_max(Pos2::ZERO, egui::pos2(1., 1.)),
-                shade,
+                shade.bind_group,
             )],
         );
         let size = wgpu::Extent3d {

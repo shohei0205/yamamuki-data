@@ -5,6 +5,7 @@
 
 mod appearance;
 mod boundaries;
+mod lod_fade;
 mod map;
 mod markers;
 mod point_detail;
@@ -51,6 +52,7 @@ struct Viewer {
     tiles: Vec<map::Tiles>,
     map_source: map::Source,
     lod: map::Lod,
+    lod_renderer: Option<lod_fade::Renderer>,
     show_online_map: bool,
     points: Option<Arc<Points>>,
     show_point_markers: bool,
@@ -93,6 +95,7 @@ impl Viewer {
             tiles: Vec::new(),
             map_source: map::Source::Gsi,
             lod: map::Lod::default(),
+            lod_renderer: None,
             show_online_map: true,
             client,
             boundaries: Arc::default(),
@@ -869,6 +872,12 @@ impl eframe::App for Viewer {
                     }
                 }
                 painter.rect_filled(rect, 0., appearance::CANVAS);
+                let fade_backend = frame.wgpu_render_state().map(|state| {
+                    let renderer = self
+                        .lod_renderer
+                        .get_or_insert_with(|| lod_fade::Renderer::new(state));
+                    (state, &*renderer)
+                });
                 let failed = if self.show_online_map {
                     if let Some(index) = self
                         .tiles
@@ -890,6 +899,7 @@ impl eframe::App for Viewer {
                         &self.view,
                         dragging,
                         self.map_source.tile_zoom(self.view.zoom, self.lod),
+                        fade_backend,
                     )
                 } else {
                     false
@@ -903,7 +913,7 @@ impl eframe::App for Viewer {
                         &self.view,
                         dragging,
                         has_base,
-                        frame.wgpu_render_state(),
+                        fade_backend,
                         self.lod,
                     );
                     has_base |= surface.has_enabled_layers();
