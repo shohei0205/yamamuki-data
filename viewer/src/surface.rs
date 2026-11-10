@@ -201,16 +201,17 @@ fn auto_level(levels: &[SurfaceLevel], zoom: f64, lod: Lod) -> Option<u32> {
     let target = lod.target_zoom(zoom);
     let by_density =
         |a: &(u32, f64), b: &(u32, f64)| a.1.total_cmp(&b.1).then_with(|| b.0.cmp(&a.0));
-    let levels = levels
+    let allowed = levels
         .iter()
         .filter(|level| lod.allows(level.z))
         .map(|level| (level.z, equivalent_zoom(level.z, level.pixels)));
-    levels
+    allowed
         .clone()
         .filter(|&(_, equivalent)| equivalent <= target)
         .max_by(by_density)
-        .or_else(|| levels.min_by(by_density))
+        .or_else(|| allowed.min_by(by_density))
         .map(|(z, _)| z)
+        .or_else(|| levels.iter().map(|level| level.z).min())
 }
 
 type Pixel = [f32; 4];
@@ -853,6 +854,19 @@ impl Surface {
 
     pub fn same_file(&self, source: &Source) -> bool {
         self.source.identity == source.identity
+    }
+
+    pub fn max_visible_level(&self) -> Option<u32> {
+        if !self.enabled {
+            return None;
+        }
+        self.source.datasets[self.dataset]
+            .layers
+            .iter()
+            .zip(&self.options)
+            .filter(|(_, (shown, _))| *shown)
+            .flat_map(|(layer, _)| layer.levels.iter().map(|level| level.z))
+            .max()
     }
 
     pub fn has_enabled_layers(&self) -> bool {
@@ -1670,8 +1684,8 @@ mod tests {
         assert_eq!(auto_level(&levels, 8.99, lod), Some(8));
         assert_eq!(auto_level(&levels, 9., lod), Some(9));
         assert_eq!(auto_level(&levels, 18., lod), Some(9));
-        lod.max_level = Some(7);
-        assert_eq!(auto_level(&levels, 18., lod), None);
+        lod.max_level = Some(4);
+        assert_eq!(auto_level(&levels, 18., lod), Some(8));
     }
 
     #[test]

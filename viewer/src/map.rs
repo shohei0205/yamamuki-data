@@ -33,7 +33,6 @@ pub struct Lod {
 
 impl Lod {
     pub const BIAS_RANGE: std::ops::RangeInclusive<f64> = -4. ..=2.;
-    pub const MAX_LEVEL: u32 = 30;
 
     pub fn target_zoom(self, view_zoom: f64) -> f64 {
         view_zoom
@@ -111,7 +110,7 @@ impl Source {
         }
     }
 
-    fn max_tile_zoom(self) -> u32 {
+    pub fn max_tile_zoom(self) -> u32 {
         match self {
             Self::Blank => 14,
             Self::Relief | Self::Slope => 15,
@@ -125,7 +124,7 @@ impl Source {
         let target = lod.target_zoom(zoom).floor() as u32;
         target
             .min(self.max_tile_zoom())
-            .min(lod.max_level.unwrap_or(Lod::MAX_LEVEL))
+            .min(lod.max_level.unwrap_or(u32::MAX))
     }
 
     fn tile_endpoint(self) -> (&'static str, &'static str) {

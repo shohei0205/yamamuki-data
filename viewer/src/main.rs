@@ -126,6 +126,18 @@ impl Viewer {
         viewer
     }
 
+    fn lod_slider_max(&self) -> u32 {
+        self.surfaces
+            .iter()
+            .filter_map(surface::Surface::max_visible_level)
+            .chain(
+                self.show_online_map
+                    .then(|| self.map_source.max_tile_zoom()),
+            )
+            .max()
+            .unwrap_or(map::MAX_ZOOM as u32)
+    }
+
     fn track_window_geometry(&mut self, ctx: &egui::Context) {
         let (expanded, minimized, size, outer_rect, monitor_size) = ctx.input(|input| {
             let window = input.viewport();
@@ -598,17 +610,18 @@ impl eframe::App for Viewer {
                         ui.label("データを読み込み中");
                     }
                     ui.menu_button("自動LOD", |ui| {
-                        let mut max = self.lod.max_level.unwrap_or(map::Lod::MAX_LEVEL);
+                        let slider_max = self.lod_slider_max();
+                        let mut max = self.lod.max_level.unwrap_or(slider_max).min(slider_max);
                         if ui
                             .add(
-                                egui::Slider::new(&mut max, 0..=map::Lod::MAX_LEVEL)
+                                egui::Slider::new(&mut max, 0..=slider_max)
                                     .prefix("z")
                                     .text("レベル上限"),
                             )
                             .on_hover_text("取得するタイルの実XYZレベルの上限。数値をクリックして直接入力できます。")
                             .changed()
                         {
-                            self.lod.max_level = (max < map::Lod::MAX_LEVEL).then_some(max);
+                            self.lod.max_level = (max < slider_max).then_some(max);
                         }
                         ui.add(
                             egui::Slider::new(&mut self.lod.bias, map::Lod::BIAS_RANGE)
@@ -1188,6 +1201,39 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lod_slider_follows_visible_map_and_surface_levels() {
+        use yamamuki_data_sqlite as db;
+
+        let ctx = egui::Context::default();
+        let mut viewer = Viewer::new(&ctx, map::client().unwrap(), None);
+        assert_eq!(viewer.lod_slider_max(), 18);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("surface.sqlite3");
+        let conn = db::rusqlite::Connection::open(&path).unwrap();
+        db::initialize(&conn).unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO datasets VALUES (1,'test','surface','地表','1',1,'{}');
+            INSERT INTO surface_layers VALUES (1,1,'photo','rgb',0,'[]','{}');
+            INSERT INTO surface_levels VALUES (1,1,12,'z12',256);
+            INSERT INTO surface_tiles VALUES (1,1,12,0,0,1,X'00');
+        "#,
+        )
+        .unwrap();
+        let source = surface::Source::open(path).unwrap();
+        viewer.surfaces.push(surface::Surface::new(&ctx, source));
+        assert_eq!(viewer.lod_slider_max(), 18);
+
+        viewer.map_source = map::Source::Blank;
+        assert_eq!(viewer.lod_slider_max(), 14);
+        viewer.show_online_map = false;
+        assert_eq!(viewer.lod_slider_max(), 12);
+        viewer.surfaces[0].enabled = false;
+        assert_eq!(viewer.lod_slider_max(), 18);
+    }
 
     #[test]
     fn restores_normal_window_geometry_after_starting_maximized() {
