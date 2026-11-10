@@ -34,6 +34,9 @@ LICENSES/          Release に添付するライセンスの本文
 
 ## データの配布
 
+- [正式版の Release 一覧](https://github.com/shohei0205/yamamuki-data/releases?q=draft%3Afalse+prerelease%3Afalse)
+- [下書き Release の一覧](https://github.com/shohei0205/yamamuki-data/releases?q=draft%3Atrue)（リポジトリへの書き込み権限が必要）
+
 ### 配布の方針
 
 生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データとデータ本体は原則として git に含めない。国土地理院版は補足適用前の地点 JSON と出典要約 JSON をコミットし、Action で補足を適用して Release を作る。正式公開後の `manifest.json` は GitHub Pages に掲載する。
