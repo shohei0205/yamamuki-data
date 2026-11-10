@@ -7,7 +7,7 @@
 | 対象・取得元 | 状態 | 詳細 |
 |---|---|---|
 | OpenStreetMap の山頂 | 全国 JSON を下書きに保存し、確認後に正式版を Release で配布 | [osm-peaks](osm-peaks/README.md) |
-| 国土地理院の山頂 | コミット済み JSON から Release を作成 | [gsi-peaks](gsi-peaks/README.md) |
+| 国土地理院の山頂 | コミット済み JSON から下書きを作り、確認後に正式版を Release で配布 | [gsi-peaks](gsi-peaks/README.md) |
 | ランドマークなど | 将来追加予定・未実装 | 追加時に専用フォルダを作る |
 
 ## データを取得して利用する
@@ -19,10 +19,12 @@
 | OSM 山頂 | [正式 Release 一覧](https://github.com/shohei0205/yamamuki-data/releases?q=%22osm-peaks-%22+draft%3Afalse+prerelease%3Afalse)から版を選び、添付の `manifest.json` を使う。[OSM 山頂の取得手順](osm-peaks/README.md) |
 | 国土地理院の山頂 | [正式 Release 一覧](https://github.com/shohei0205/yamamuki-data/releases?q=%22gsi-peaks-%22+draft%3Afalse+prerelease%3Afalse)から版を選び、添付の `manifest.json` を使う。[国土地理院山頂の取得手順](gsi-peaks/README.md) |
 
+試用版は試用公開した Release から取得する。開発ビルドで試す場合は、[試用公開の手順](../README.md#確認済みデータの公開)に従ってアプリ側カタログの `dev` にタグを指定する。
+
 1. manifest を取得する。カタログを使う場合は、対象項目の `manifest` に同じ情報が入っているため、別途取得する必要はない。
 2. manifest の `schemaVersion` とデータ本体の `dataSchemaVersion` に対応していることを、それぞれ確認する。項目の説明は [配布データの取得情報](../README.md#配布データの取得情報manifestjson)、カタログからの判定方法は [カタログの読み込みと検証](formats/catalog.md#読み込みと検証)を参照する。
 3. `downloadUrl` から gzip ファイルを取得し、展開前に `sizeBytes` と `sha256` を照合する。
-4. gzip を展開し、JSON のバイト数を `uncompressedSizeBytes`、`points` 配列の件数を `pointCount` と照合する。
+4. gzip を展開し、JSON のバイト数を `uncompressedSizeBytes`、`points` 配列の件数を manifest の地点数（版 6 は `metadata.pointCount`）と照合する。
 5. [地点 JSON の形式](#地点-json-の形式)に従って文書内の `points` 配列を読む。山頂だけを使う場合は `type` が `peak` の地点を選ぶ。地図上で確認したい場合は [地点データビューアの操作手順](#地点データをブラウザで確認する)を参照する。
 6. [出典・利用条件](../README.md#ライセンス)を確認し、利用するデータに必要な出典表示を行う。
 
@@ -45,16 +47,16 @@ points/
 
 ## 地点データの manifest
 
-manifest の共通項目は [manifest フォーマットの「項目」](../formats/manifest.md#項目)、地点データ固有の項目と検証ルールは [「地点データ用の項目」](../formats/manifest.md#地点データ用の項目) を参照する。
+manifest の項目と検証ルールは [manifest フォーマット](../formats/manifest.md#項目) を参照する。版 6 の地点データでは、地点 JSON の `metadata` を manifest にコピーする。
 
 ## 公開データのカタログ
 
-Pages に掲載されている地点データの取得・検証情報を、次のカタログから取得できる。カタログには、Pages に掲載された公開済みの版が載る。
+以下は yamamuki-data の配布用カタログ。山むきアプリがどの版を読むかは、[アプリ側のカタログ](https://shohei0205.github.io/yamamuki/data/catalog.json) で指定する。
 
 | 配布先 | カタログ | 現在の更新方法 |
 |---|---|---|
-| 正式版 | [正式版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog.json) | 確認済みデータの公開・復旧で更新する |
-| 開発版（Pre-release） | [開発版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) | 公開済みの版を掲載した状態で保持する |
+| 正式版 | [正式版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog.json) | 正式公開・復旧で更新する |
+| 旧開発版 | [旧開発版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) | 最後に掲載した版を保持する。新しい試用版は追加しない |
 
 項目・制約・読み込み方法・配布先ごとの収録範囲は [地点カタログフォーマット](formats/catalog.md) を参照する。機械検証用のスキーマは [地点カタログの版2](schemas/catalog-v2.schema.json)。
 
@@ -65,7 +67,8 @@ Pages に掲載されている地点データの取得・検証情報を、次�
 ## 変更の確かめ方
 
 - [共通の確認](../README.md#変更の確かめ方)
-- [山頂データのテスト](osm-peaks/README.md#テスト)
+- [OSM 山頂のテスト](osm-peaks/README.md#テスト)
+- [国土地理院山頂のテスト](gsi-peaks/README.md#テスト)
 
 ### 共通ビューアのテスト
 

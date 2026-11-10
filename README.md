@@ -45,7 +45,7 @@ OSM 山頂・国土地理院山頂の生成 Action は、最終タグの下書�
 
 データの種類ごとに公開時期と最新版の参照先を分ける。リポジトリ全体の `releases/latest` はアプリの参照先に使わない。具体的な URL とタグは各データの文書を参照する。
 
-生成・試用公開・正式公開の Action は `main` で手動実行する。試用公開から正式公開まで、タグと配布ファイルの URL は同じ。
+山頂データの下書き作成・試用公開・正式公開は `main` で手動実行する。作業ブランチでは生成・検査を行い、配布ファイルを Actions の Artifacts に保存する。試用公開から正式公開まで、タグと配布ファイルの URL は同じ。
 
 Actions とローカルのどちらで生成したデータも、配布ファイルは [Releases](https://github.com/shohei0205/yamamuki-data/releases) の **Assets** に添付する。データの種類と版は Release のタグで、試用公開と正式公開は Pre-release の設定で区別する。ローカル生成のデータは、添付するファイルと検証方法をデータごとの README に記載する。
 
@@ -66,7 +66,7 @@ Actions とローカルのどちらで生成したデータも、配布ファイ
 | 共通：データ処理のテスト | 共通処理と各データのテスト |
 | 共通：文字形式の確認 | 改行コードとBOM |
 | 共通：データを試用公開・正式公開 | データ種別共通の手動公開 |
-| 地点 / ネイティブビューワ：Release | [Windows・macOSのビューワを手動公開](viewer/README.md#配布版の公開) |
+| データビューワ：Release | [Windows・macOS のビューワを手動公開](viewer/README.md#配布版の公開) |
 
 データ固有のActionと操作手順は各READMEを参照する。
 
@@ -81,7 +81,6 @@ Actions の「共通：データを試用公開・正式公開」を `main` で�
 
 `sha256` は空欄なら Release の検査結果から取得する。確認内容と公開理由は任意で、正式公開時に Release の説明へ記録する。Pages に初めて配置する場合は `initialize_pages` を選ぶ。
 
-
 手動公開の検証は `release_tools/point_release.py`、Release の取得・Pages・公開履歴の共通処理は `release_tools/release_data.py` にまとめる。OSM の生成時の比較と下書き作成は `points/osm-peaks/scripts/release_data.py`、GSI の検証・snapshot・配布ファイルの生成は `points/gsi-peaks/scripts/release_snapshot.py` に置き、共通の公開処理を呼び出す。OSM・国土地理院の山頂は同じ処理を使い、manifest の形式・版・取得 URL、データ本体のサイズ・SHA-256、地点の ID・座標・出典・件数、添付されたオリジナルと補足から配布地点を再現できるかを確認する。生成時の出典固有の検査は、各データの生成処理で行う。旧形式の Release は従来の検証を使う。
 
 共通形式（manifest・地点 JSON とも版 6）の地点データは、`<データ ID>-<版>` と添付 manifest の `version` から対象を判定する。OSM 山頂は `osm-peaks-<version>`、国土地理院山頂は `gsi-peaks-<version>` を使う。試用公開から正式公開まで添付ファイルは同じものを使う。正式公開が成功したあとに `points/<データ ID>/manifest.json` と正式版カタログを更新する。地形など異なる形式のデータは、データごとの手順で検証して公開する。
@@ -92,7 +91,7 @@ Actions の「共通：データを試用公開・正式公開」を `main` で�
 
 確認済みデータの正式公開・復旧では、Actions で manifest のサイトを生成し、`upload-pages-artifact` と `deploy-pages` で GitHub Pages に直接配置する。ソースは `main` に置き、配布専用ブランチや生成物のコミットは作らない。
 
-サイト全体の更新には `/catalog.json` を使う。`schemaVersion: 1` とし、`manifests` にパスと manifest の対応、公開履歴も保存する。既存一覧からサイト全体を作り直し、対象のデータ・配布先だけを置き換える。他のデータ・配布先・履歴は引き継ぐ。これは [アプリが使う地点カタログ](points/README.md#公開データのカタログ) とは別の一覧である。
+サイト全体の更新には `/catalog.json` を使う。`schemaVersion: 1` とし、`manifests` にパスと manifest の対応、公開履歴も保存する。既存一覧からサイト全体を作り直し、対象のデータ・配布先だけを置き換える。他のデータ・配布先・履歴は引き継ぐ。これは [データ配布用の地点カタログ](points/README.md#公開データのカタログ) とは別の一覧である。
 
 Pages を更新するジョブは共通の `publish-data-pages` グループで直列化する。配置後は manifest 一覧・公開履歴・地点カタログが生成内容と一致するまで最大 55 秒待ち、反映を確認してからジョブを完了する。既存一覧の取得や検証に失敗した場合は配置しない。404 の場合も通常の公開では停止し、初期化を明示した初回の手動公開だけが一覧を新しく作る。
 
@@ -102,9 +101,9 @@ Pages を更新するジョブは共通の `publish-data-pages` グループで�
 
 ### 実行概要の確認
 
-生成・検査と確認済みデータの公開は、処理の冒頭に Summary へ実行パラメーターを表示する。ブランチ・イベント・実行者・実行回数・配布先に加え、手動公開では操作と入力 URL またはタグ・SHA-256・確認内容と公開理由・Pages 初期化の指定を表示する。空欄の場合の扱いも明記する。データ固有の入力項目と検査結果は各 README を参照する。
+OSM 山頂の生成と共通の公開 Action は、処理の冒頭に Summary へ実行パラメーターを表示する。ブランチ・イベント・実行者・実行回数・配布先に加え、手動公開では操作と入力 URL またはタグ・SHA-256・確認内容と公開理由・Pages 初期化の指定を表示する。空欄の場合の扱いも明記する。データ固有の入力項目と検査結果は各 README を参照する。
 
-Pages を更新する公開ジョブの Summary には、公開後の Release の URL、配置する manifest の固定 URL と Pages の配置結果を表示する。生成ジョブの Summary には下書き Release の URL とタグを表示する。Pages の参照先は公開ジョブで更新する。単体テストのダミーデータは Summary に出さない。過去の実行に保存された Summary は書き換わらない。
+Pages を更新する公開ジョブの Summary には、公開後の Release の URL、配置する manifest の固定 URL と Pages の配置結果を表示する。`main` で山頂データを生成したときは、Summary に下書き Release の URL とタグを表示する。試用公開では Release の URL とタグを表示し、Pages の参照先は正式公開・復旧時に更新する。単体テストのダミーデータは Summary に出さない。過去の実行に保存された Summary は書き換わらない。
 
 ## 公開履歴
 
@@ -145,7 +144,7 @@ Pages を更新する公開ジョブの Summary には、公開後の Release �
 python -m unittest discover -s release_tools/tests -v
 ```
 
-CI の「共通：文字形式の確認」はすべての PR で文字コード・改行を確認する。「共通：データ処理のテスト」（`.github/workflows/test.yml`）は push・PR 時に、共通の公開処理・地点の共通ビューア・データビューワ（Windows・macOS）・OSM 山頂・国土地理院山頂・テスト用地点を別のジョブで確認する。データ種別を追加するときもこのActionにジョブを追加する。必須チェックの `test` ジョブは各テストの結果を集約し、すべて成功した場合だけ成功する。ジョブを追加するときは `test` の依存先と結果確認にも追加する。
+CI の「共通：文字形式の確認」はすべての PR で文字コード・改行を確認する。「共通：データ処理のテスト」（`.github/workflows/test.yml`）は push・PR 時に、共通の公開処理・地点の共通ビューア・データビューワ（Windows・macOS）・OSM 山頂・国土地理院山頂を別のジョブで確認する。データ種別を追加するときもこのActionにジョブを追加する。必須チェックの `test` ジョブは各テストの結果を集約し、すべて成功した場合だけ成功する。ジョブを追加するときは `test` の依存先と結果確認にも追加する。
 
 データ固有のテストは各 README を参照する。
 

@@ -90,7 +90,7 @@
 |---|---|
 | `gsi-peaks.json.gz` | アプリが取得する地点データ。manifest の `downloadUrl` から取得する |
 | `manifest.json` | 地点データの取得先・サイズ・ハッシュ・件数・出典 |
-| `gsi-peaks.json` | 同じ地点配列の非圧縮 JSON。確認用 |
+| `gsi-peaks.json` | 同じ地点データの非圧縮 JSON。確認用 |
 | `snapshot.json` | コミット済みオリジナル JSON のハッシュと、元資料の取得日時・出典の要約 |
 | `LICENSE.txt` | 出典ごとの利用条件・帰属表示と作成者。manifest の `licenseUrl` から参照する |
 

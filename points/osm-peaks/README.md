@@ -226,17 +226,17 @@ Actions では取得前に配布元の日付付き URL・サイズ・MD5 を確�
 
 実際の件数などは「データの検査結果（生成後）」と「データの検査結果（公開前の再検査）」で区別する。生成が完了すると「生成したリリース」に、GitHub が返した実際の URL、タグ、検査結果を表示する。下書きの `untagged-...` URL もそのまま使う。
 
-### 確認済みの下書きを手動公開する
+### 試用公開と正式公開
 
 [共通の手動公開手順](../../README.md#確認済みデータの公開) に従い、確認した山頂 Release の URL またはタグを指定する。試用公開と正式公開には同じ `osm-peaks-<version>` を指定する。
 
-公開 Action は下書きの添付ファイルを再取得し、データ本体が検査結果の SHA-256（明示した場合は入力値）と一致するかを確かめる。検査結果に SHA-256 がない場合は、確認した値を指定する。
+公開 Action は指定した Release の添付ファイルを再取得し、データ本体が検査結果の SHA-256（明示した場合は入力値）と一致するかを確かめる。検査結果に SHA-256 がない場合は、確認した値を指定する。
 
-公開時は、検証した添付ファイルをそのまま使う。前回公開版の取得や検証に失敗した場合は公開を止める。形式変更時はアプリ側が新形式に対応しているかも確認する。
+試用公開から正式公開まで、同じタグと添付ファイルを使う。正式公開時に前回公開版の取得や検証に失敗した場合は公開を止める。形式変更時はアプリ側が新形式に対応しているかも確認する。
 
-#### Release を削除した後に公開を再開する
+#### 正式公開後に Pages の参照先を復旧する
 
-公開サイトの manifest が指す山頂 Release を削除した場合、手動公開で「Pages の配布サイトを初期化」を指定する。前回の Release が存在しない場合に限り、前回との比較を省いて確認済みデータの公開を再開する。新しいデータ本体のサイズ・ハッシュ・件数などの検査は行う。通信失敗やデータ破損は初期化を指定しても停止する。他のデータと配布先は引き継ぐ。
+正式公開後に Pages の更新に失敗したら、[共通の復旧手順](../../README.md#pages-への配置と参照先の復旧)に従って公開済みの正式版のタグを指定する。
 
 ### 手元での生成
 
@@ -249,10 +249,10 @@ python -u scripts/download_source.py --source-date YYYY-MM-DD
 python -u scripts/download_source.py --region far-eastern-fed-district \
   --source-date YYYY-MM-DD --output build/far-eastern-fed-district.osm.pbf
 python scripts/build_data.py build/japan-latest.osm.pbf \
-  --version local-20260930 --output-dir dist
+  --version local-20260930 --channel stable --output-dir dist
 ```
 
-開発版を手元で生成するときは、生成コマンドに `--channel dev` を指定する。省略時は `RELEASE_CHANNEL` の値、未設定なら正式版を使う。取得 URL のリポジトリは `GH_REPO`、未設定なら `GITHUB_REPOSITORY`、どちらも未設定なら `shohei0205/yamamuki-data` を使う。
+この例は下書きの生成 Action と同じタグ形式で配布ファイルを作る。取得 URL のリポジトリは `GH_REPO`、未設定なら `GITHUB_REPOSITORY`、どちらも未設定なら `shohei0205/yamamuki-data` を使う。
 
 取得時に PBF の隣へ `<PBF のファイル名>.source.json` を保存し、URL・サイズ・MD5 を記録する。取得済みファイルを再利用した場合も記録を作る。生成時に記録と PBF を照合し、日付付き URL を manifest の `metadata.sources` の `OpenStreetMap（日本・Geofabrik 配布）` の `source` に引き継ぐ。記録の欠落や不一致は生成を止める。既存の PBF に記録がない場合は、同じ対象日で取得コマンドを再実行すると、内容が一致すれば再ダウンロードせずに記録を作れる。
 
