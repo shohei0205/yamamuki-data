@@ -136,7 +136,7 @@ osm-peaks/
 
 [地点 / OSM山頂：下書き Release 生成・検査](https://github.com/shohei0205/yamamuki-data/actions/workflows/publish-data.yml) は手動で実行する。
 
-生成 Action は `osm-peaks-<version>` の下書きを作る。「共通：Draft を試用公開」で同じ Release を Pre-release にし、確認後に「共通：Pre-release を正式公開」を実行する。
+生成 Action は `osm-peaks-<version>` の下書きを作る。「共通：Draft-release を試用公開」で同じ Release を Pre-release にし、確認後に「共通：Pre-release を正式公開」を実行する。
 
 手動で動かすときは Actions の「地点 / OSM山頂：下書き Release 生成・検査」→「Run workflow」で `main` を選ぶ。下書きの作成には `GITHUB_TOKEN` の `contents: write` を使う。
 

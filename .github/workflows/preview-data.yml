@@ -1,4 +1,4 @@
-name: 共通：Draft を試用公開
+name: 共通：Draft-release を試用公開
 
 on:
   workflow_dispatch:
