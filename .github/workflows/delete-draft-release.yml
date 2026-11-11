@@ -28,7 +28,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - name: 参照先を再確認して指定した Release だけ削除
+      - name: 直前の状態を確認して指定した Draft だけ削除
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

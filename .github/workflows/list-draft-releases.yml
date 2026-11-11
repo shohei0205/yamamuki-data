@@ -19,7 +19,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - name: 参照先を照合して削除候補を表示
+      - name: 削除条件を満たす Draft の候補を表示
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
