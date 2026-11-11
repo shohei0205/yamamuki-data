@@ -120,8 +120,14 @@ def main():
     if args.command in ("preview", "formalize"):
         if args.channel is not None:
             parser.error("正式公開の配布先は stable に固定されています")
-        from release_tools.point_release import publish_candidate
-        publish_candidate(args.tag, args.sha256, args.reason, preview=args.command == "preview")
+        check_branch("stable")
+        release = find_release(args.tag)
+        if release["tag_name"].startswith("viewer-"):
+            from release_tools.viewer_release import publish_candidate
+            publish_candidate(release, args.sha256, preview=args.command == "preview")
+        else:
+            from release_tools.point_release import publish_candidate
+            publish_candidate(args.tag, args.sha256, args.reason, preview=args.command == "preview")
         return
     if args.channel is None:
         parser.error("resolve と publish には --channel が必要です")

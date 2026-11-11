@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       sha256:
-        description: '任意：確認した SHA-256（空欄なら Release の検査結果から自動取得）'
+        description: '任意：確認した SHA-256（ビューワは SHA256SUMS.txt、地点はデータ本体）'
         required: false
         type: string
       initialize_pages:
@@ -54,8 +54,6 @@ jobs:
           WORKFLOW_INPUTS: ${{ toJSON(inputs) }}
           RELEASE_OPERATION: formalize
         run: python -m release_tools.workflow_summary publish
-      - name: Pages の設定を確認
-        uses: actions/configure-pages@v6
       - name: 確認したデータを種別ごとに再検証して公開
         id: publication
         env:
@@ -69,6 +67,9 @@ jobs:
         run: >-
           python -m release_tools.publish_reviewed formalize
           --tag "$RELEASE_TAG" --sha256 "$EXPECTED_SHA256" --reason "$REVIEW_REASON"
+      - name: Pages の設定を確認
+        if: steps.publication.outputs.pages_ready == 'true'
+        uses: actions/configure-pages@v6
       - name: manifest の配布サイトを保存
         if: steps.publication.outputs.pages_ready == 'true'
         uses: actions/upload-pages-artifact@v5
