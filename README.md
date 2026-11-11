@@ -69,7 +69,7 @@ Actions とローカルのどちらで生成したデータも、配布ファイ
 | 共通：文字形式の確認 | 改行コードとBOM |
 | 共通：Draft-release を試用公開 | 下書きを Pre-release として公開 |
 | 共通：Pre-release を正式公開 | 試用版を正式公開し、配布カタログを更新 |
-| データビューワ：Release | [Windows・macOS のビューワの Draft を生成](viewer/README.md#配布版の公開) |
+| データビューワ：下書き Release 生成・検査 | [Windows・macOS のビューワの Draft を生成](viewer/README.md#配布版の公開) |
 
 データ固有のActionと操作手順は各READMEを参照する。
 
