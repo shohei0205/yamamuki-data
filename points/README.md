@@ -6,24 +6,25 @@
 
 | 対象・取得元 | 状態 | 詳細 |
 |---|---|---|
-| OpenStreetMap の山頂 | 全国 JSON を生成・検査し、正式版・開発版を Release で配布。開発版の最新版 manifest は Pages で公開 | [osm-peaks](osm-peaks/README.md) |
-| 国土地理院の山頂 | コミット済み JSON から Release を作成 | [gsi-peaks](gsi-peaks/README.md) |
-| 手動作成のテスト用地点 | 開発版限定 | [testdata](testdata/README.md) |
+| OpenStreetMap の山頂 | 全国 JSON を下書きに保存し、確認後に正式版を Release で配布 | [osm-peaks](osm-peaks/README.md) |
+| 国土地理院の山頂 | コミット済み JSON から下書きを作り、確認後に正式版を Release で配布 | [gsi-peaks](gsi-peaks/README.md) |
 | ランドマークなど | 将来追加予定・未実装 | 追加時に専用フォルダを作る |
 
 ## データを取得して利用する
 
-OSM 山頂とテスト用地点は、次の手順で取得して利用できる。
+山頂データは、次の手順で取得して利用できる。正式版を選ぶときは、GitHub Releases の Pre-release を除く。
 
 | データ | 取得する版の選び方 |
 |---|---|
-| OSM 山頂 | [OSM 山頂の取得先](osm-peaks/README.md)を参照する。開発版（Pre-release）は Pages の manifest から取得できる。正式版の新しい Release は Pages に反映しないため、[Releases 一覧](https://github.com/shohei0205/yamamuki-data/releases)で `osm-peaks-<version>` の版を選び、Assets の `manifest.json` を取得する |
-| テスト用地点 | [開発版カタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json)の `id` が `testdata` の項目を選ぶ。正式版は配布しない。データの内容は [テスト用地点の README](testdata/README.md)を参照する |
+| OSM 山頂 | [正式 Release 一覧](https://github.com/shohei0205/yamamuki-data/releases?q=%22osm-peaks-%22+draft%3Afalse+prerelease%3Afalse)から版を選び、添付の `manifest.json` を使う。[OSM 山頂の取得手順](osm-peaks/README.md) |
+| 国土地理院の山頂 | [正式 Release 一覧](https://github.com/shohei0205/yamamuki-data/releases?q=%22gsi-peaks-%22+draft%3Afalse+prerelease%3Afalse)から版を選び、添付の `manifest.json` を使う。[国土地理院山頂の取得手順](gsi-peaks/README.md) |
+
+試用版は Pre-release として公開した Release に添付された `manifest.json` から取得する。
 
 1. manifest を取得する。カタログを使う場合は、対象項目の `manifest` に同じ情報が入っているため、別途取得する必要はない。
 2. manifest の `schemaVersion` とデータ本体の `dataSchemaVersion` に対応していることを、それぞれ確認する。項目の説明は [配布データの取得情報](../README.md#配布データの取得情報manifestjson)、カタログからの判定方法は [カタログの読み込みと検証](formats/catalog.md#読み込みと検証)を参照する。
 3. `downloadUrl` から gzip ファイルを取得し、展開前に `sizeBytes` と `sha256` を照合する。
-4. gzip を展開し、JSON のバイト数を `uncompressedSizeBytes`、`points` 配列の件数を `pointCount` と照合する。
+4. gzip を展開し、JSON のバイト数を `uncompressedSizeBytes`、`points` 配列の件数を manifest の地点数（版 6 は `metadata.pointCount`）と照合する。
 5. [地点 JSON の形式](#地点-json-の形式)に従って文書内の `points` 配列を読む。山頂だけを使う場合は `type` が `peak` の地点を選ぶ。地図上で確認したい場合は [地点データビューアの操作手順](#地点データをブラウザで確認する)を参照する。
 6. [出典・利用条件](../README.md#ライセンス)を確認し、利用するデータに必要な出典表示を行う。
 
@@ -40,33 +41,24 @@ points/
   schemas/          地点データ・カタログ・補足の版ごとのスキーマ
   osm-peaks/        OpenStreetMap の山頂データ
   gsi-peaks/        国土地理院の山頂データ
-  testdata/         開発版限定の架空の地点データ
 ```
 
-取得元・対象ごとに専用フォルダを作る。フォルダ内の構成・収録条件・作成方法・配布先は、[OSM 山頂](osm-peaks/README.md)、[GSI 山頂](gsi-peaks/README.md)、[テストデータ](testdata/README.md) の各 README を参照する。スキーマのファイル名と対応する版は、各フォーマット文書に記載する。
+取得元・対象ごとに専用フォルダを作る。フォルダ内の構成・収録条件・作成方法・配布先は、[OSM 山頂](osm-peaks/README.md) と [GSI 山頂](gsi-peaks/README.md) の README を参照する。スキーマのファイル名と対応する版は、各フォーマット文書に記載する。
 
 ## 地点データの manifest
 
-manifest の共通項目は [manifest フォーマットの「項目」](../formats/manifest.md#項目)、地点データ固有の項目と検証ルールは [「地点データ用の項目」](../formats/manifest.md#地点データ用の項目) を参照する。
+manifest の項目と検証ルールは [manifest フォーマット](../formats/manifest.md#項目) を参照する。版 6 の地点データでは、地点 JSON の `metadata` を manifest にコピーする。
 
 ## 公開データのカタログ
 
-Pages に掲載されている地点データの取得・検証情報を、次のカタログから取得できる。正式版の通常生成はカタログを更新しないため、正式版の最新 Release をすべて含む一覧ではない。
+以下は yamamuki-data の配布用カタログ。正式公開時に対象のデータを更新する。
 
 | 配布先 | カタログ | 現在の更新方法 |
 |---|---|---|
-| 正式版 | [正式版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog.json) | 通常生成では更新しない。掲載済み情報を保持し、手動公開・復旧・削除時は更新する |
-| 開発版（Pre-release） | [開発版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) | 開発版の公開・削除時に更新する |
+| 正式版 | [正式版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog.json) | 正式公開・復旧で更新する |
+| 旧開発版 | [旧開発版のカタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) | 最後に掲載した版を保持する。新しい試用版は追加しない |
 
 項目・制約・読み込み方法・配布先ごとの収録範囲は [地点カタログフォーマット](formats/catalog.md) を参照する。機械検証用のスキーマは [地点カタログの版2](schemas/catalog-v2.schema.json)。
-
-### カタログから削除する
-
-Actions の「地点：カタログから削除」→「Run workflow」で `dev` を選び、`dataset` に `osm-peaks` などのデータセット名を入力する。削除できるのは開発版だけで、正式版の一覧は main から書き換えない。
-
-地点カタログとサイト全体の一覧から対象を除き、その manifest・公開履歴の Pages ファイルも削除する。他のデータ・配布先・公開履歴、Release とデータ本体は保持する。
-
-既存一覧の取得・検証に失敗した場合や対象がない場合は配置を中止する。公開と同じ `publish-data-pages` グループで直列化し、配置後にカタログと履歴の一致を確認する。削除済みデータを再度公開すれば一覧に戻る。Pages に公開するデータは次回の公開時に再掲載されるため、継続して配布を止める場合は生成・公開の運用も変更する。
 
 ### アプリで利用できるデータを判定する
 
@@ -75,8 +67,8 @@ Actions の「地点：カタログから削除」→「Run workflow」で `dev`
 ## 変更の確かめ方
 
 - [共通の確認](../README.md#変更の確かめ方)
-- [山頂データのテスト](osm-peaks/README.md#テスト)
-- [テスト用地点のテスト](testdata/README.md#テスト)
+- [OSM 山頂のテスト](osm-peaks/README.md#テスト)
+- [国土地理院山頂のテスト](gsi-peaks/README.md#テスト)
 
 ### 共通ビューアのテスト
 

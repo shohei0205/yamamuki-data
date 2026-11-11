@@ -19,10 +19,9 @@ class SharedReleaseDataTests(unittest.TestCase):
         # 他のテストで読み込まれたモジュールの影響を避け、新しいプロセスで確かめる。
         result = subprocess.run([sys.executable, "-c", "\n".join([
             "import sys",
-            "from release_tools import release_data, point_release, test_points",
+            "from release_tools import release_data, point_release",
             "assert 'scripts.release_data' not in sys.modules",
             "assert point_release.site is release_data",
-            "assert test_points.release_data is release_data",
             "from importlib import import_module",
             "assert import_module('points.gsi-peaks.scripts.release_snapshot').release_data is release_data",
         ])], cwd=ROOT, capture_output=True, text=True)

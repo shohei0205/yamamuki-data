@@ -45,7 +45,7 @@ class PublishReviewedTests(unittest.TestCase):
         for entries in ([], [release], [release, release]):
             with patch.object(entry.subprocess, "run", return_value=SimpleNamespace(stdout=json.dumps([entries]))):
                 with self.assertRaises(ValueError):
-                    entry.resolve("osm-peaks-v1", "stable")
+                    entry.resolve("osm-peaks-dev-v1", "dev")
 
     def test_foreign_url_and_injected_tag_stop_before_network(self):
         for target in ("https://github.com/other/repo/releases/tag/osm-peaks-v1", "osm-peaks-v1\ninjected=x"):
@@ -83,13 +83,19 @@ class PublishReviewedTests(unittest.TestCase):
                 entry.publish("osm-peaks", "osm-peaks-dev-v1", "dev", "", reason)
                 self.assertEqual(reason, run.call_args.args[0][-1])
 
+    def test_main_allows_both_channels(self):
+        with patch.dict(os.environ, GITHUB_ACTIONS="true", GITHUB_REF="refs/heads/main"):
+            for channel in ("stable", "dev"):
+                with self.subTest(channel=channel):
+                    entry.check_branch(channel)
+
     def test_branch_and_dataset_mismatch_stop_before_publish(self):
         with patch.object(entry.subprocess, "run") as run, self.assertRaises(ValueError):
             entry.publish("terrain", "osm-peaks-v1", "stable", "", "確認済み")
         run.assert_not_called()
         with patch.dict(os.environ, GITHUB_ACTIONS="true", GITHUB_REF="refs/heads/dev"), patch.object(entry.subprocess, "run") as run:
             with self.assertRaises(ValueError):
-                entry.resolve("osm-peaks-v1", "stable")
+                entry.resolve("osm-peaks-dev-v1", "dev")
             with self.assertRaises(ValueError):
-                entry.publish("osm-peaks", "osm-peaks-v1", "stable", "", "確認済み")
+                entry.publish("osm-peaks", "osm-peaks-dev-v1", "dev", "", "確認済み")
             run.assert_not_called()

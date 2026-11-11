@@ -1,0 +1,47 @@
+name: 共通：Draft-release を試用公開
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '確認した下書き Release の URL またはタグ'
+        required: true
+        type: string
+      sha256:
+        description: '任意：確認した SHA-256（空欄なら検査結果から取得）'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-data-pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: 実行パラメーターを Summary に表示
+        env:
+          WORKFLOW_INPUTS: ${{ toJSON(inputs) }}
+          RELEASE_OPERATION: preview
+          RELEASE_CHANNEL: stable
+        run: python -m release_tools.workflow_summary publish
+      - name: 下書きの添付ファイルを再検証して試用公開
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          EXPECTED_SHA256: ${{ inputs.sha256 }}
+        run: >-
+          python -m release_tools.publish_reviewed preview
+          --tag "$RELEASE_TAG" --sha256 "$EXPECTED_SHA256"

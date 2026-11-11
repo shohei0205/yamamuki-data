@@ -1,0 +1,36 @@
+name: 共通：古い Draft を削除する
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '一覧で確認した Draft のタグ（1 件）'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  delete:
+    if: github.repository == 'shohei0205/yamamuki-data' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-data-pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: 直前の状態を確認して指定した Draft だけ削除
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: python -m release_tools.draft_cleanup delete --tag="$RELEASE_TAG"
