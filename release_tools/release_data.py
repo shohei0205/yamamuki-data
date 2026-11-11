@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 from release_tools.publish_reviewed import ROOT, check_branch, check_dataset, version_for_tag
 
 REVIEW_HEADING = "## 要確認"
+TEMPORARY_DRAFT_MARKER = "<!-- yamamuki-data:temporary-draft:v1 -->"
 
 
 def check_channel(channel):

@@ -41,7 +41,7 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 | 配布先 | manifest の取得方法 |
 |---|---|
 | 正式版 | [正式 Release 一覧](https://github.com/shohei0205/yamamuki-data/releases?q=%22osm-peaks-%22+draft%3Afalse+prerelease%3Afalse)（Pre-release を除く）から `osm-peaks-<version>` の版を選び、`https://github.com/shohei0205/yamamuki-data/releases/download/<タグ>/manifest.json` を固定して取得する。本文の先頭に「## 要確認」がある Release は選ばない。 |
-| 試用版（Pre-release） | 試用公開した Release に添付された `manifest.json` を使う。開発ビルドで試す場合は、[試用公開の手順](../../README.md#確認済みデータの公開)に従ってタグを指定する |
+| 試用版（Pre-release） | Pre-release として公開した Release に添付された `manifest.json` を使う |
 
 データ本体（`osm-peaks.json.gz`）は manifest の `downloadUrl` から取得する。正式版を切り替えるときは、利用する側で固定した Release のタグを更新する。リポジトリ全体の `releases/latest` は使わない。
 
@@ -136,7 +136,7 @@ osm-peaks/
 
 [地点 / OSM山頂：下書き Release 生成・検査](https://github.com/shohei0205/yamamuki-data/actions/workflows/publish-data.yml) は手動で実行する。
 
-生成 Action は `osm-peaks-<version>` の下書きを作る。「共通：データを試用公開・正式公開」で同じ Release を試用公開し、アプリで確認したあとに正式公開する。
+生成 Action は `osm-peaks-<version>` の下書きを作る。「共通：Draft を試用公開」で同じ Release を Pre-release にし、確認後に「共通：Pre-release を正式公開」を実行する。
 
 手動で動かすときは Actions の「地点 / OSM山頂：下書き Release 生成・検査」→「Run workflow」で `main` を選ぶ。下書きの作成には `GITHUB_TOKEN` の `contents: write` を使う。
 

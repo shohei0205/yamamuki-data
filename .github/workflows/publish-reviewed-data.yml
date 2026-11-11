@@ -1,18 +1,10 @@
-name: 共通：データを試用公開・正式公開
+name: 共通：Pre-release を正式公開
 
 on:
   workflow_dispatch:
     inputs:
-      operation:
-        description: '操作（preview は試用公開、formalize は正式公開・参照先の復旧）'
-        required: true
-        type: choice
-        default: preview
-        options:
-          - preview
-          - formalize
       tag:
-        description: '下書き・試用版の Release URL またはタグ（正式公開済みなら参照先を復旧）'
+        description: '試用版の Release URL またはタグ（正式公開済みなら参照先を復旧）'
         required: true
         type: string
       sha256:
@@ -60,9 +52,9 @@ jobs:
       - name: 実行パラメーターを Summary に表示
         env:
           WORKFLOW_INPUTS: ${{ toJSON(inputs) }}
+          RELEASE_OPERATION: formalize
         run: python -m release_tools.workflow_summary publish
       - name: Pages の設定を確認
-        if: inputs.operation == 'formalize'
         uses: actions/configure-pages@v6
       - name: 確認したデータを種別ごとに再検証して公開
         id: publication
@@ -72,11 +64,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
-          OPERATION: ${{ inputs.operation }}
           EXPECTED_SHA256: ${{ inputs.sha256 }}
           REVIEW_REASON: ${{ inputs.reason }}
         run: >-
-          python -m release_tools.publish_reviewed "$OPERATION"
+          python -m release_tools.publish_reviewed formalize
           --tag "$RELEASE_TAG" --sha256 "$EXPECTED_SHA256" --reason "$REVIEW_REASON"
       - name: manifest の配布サイトを保存
         if: steps.publication.outputs.pages_ready == 'true'

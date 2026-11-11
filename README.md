@@ -41,7 +41,7 @@ LICENSES/          Release に添付するライセンスの本文
 
 生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データとデータ本体は原則として git に含めない。国土地理院版は補足適用前の地点 JSON と出典要約 JSON をコミットし、Action で補足を適用して Release を作る。正式公開後の `manifest.json` は GitHub Pages に掲載する。
 
-OSM 山頂・国土地理院山頂の生成 Action は、最終タグの下書きに配布ファイルを保存する。同じ Release を Pre-release として試用公開し、アプリで確認したあとに正式公開する。利用する側で Release の版を選び、その Release に添付された manifest の URL を固定して取得する。アプリが読んでいる版のデータが消えないよう、公開した Release とその添付ファイルは削除・差し替えしない。
+OSM 山頂・国土地理院山頂の生成 Action は、最終タグの下書きに配布ファイルを保存する。同じ Release を Pre-release として試用公開し、アプリで確認したあとに正式公開する。利用する側で Release の版を選び、その Release に添付された manifest の URL を固定して取得する。アプリが読んでいる版のデータが消えないよう、一般公開した Pre-release・正式版とその添付ファイルは保持する。生成 Action の Draft には整理用マーカーを付ける。マーカー付き Draft は、作成から 7 日以上経つと週 1 回の整理対象になる。
 
 データの種類ごとに公開時期と最新版の参照先を分ける。リポジトリ全体の `releases/latest` はアプリの参照先に使わない。具体的な URL とタグは各データの文書を参照する。
 
@@ -65,25 +65,38 @@ Actions とローカルのどちらで生成したデータも、配布ファイ
 |---|---|
 | 共通：データ処理のテスト | 共通処理と各データのテスト |
 | 共通：文字形式の確認 | 改行コードとBOM |
-| 共通：データを試用公開・正式公開 | データ種別共通の手動公開 |
+| 共通：Draft を試用公開 | 下書きを Pre-release として公開 |
+| 共通：Pre-release を正式公開 | 試用版を正式公開し、配布カタログを更新 |
 | データビューワ：Release | [Windows・macOS のビューワを手動公開](viewer/README.md#配布版の公開) |
 
 データ固有のActionと操作手順は各READMEを参照する。
 
 ## 確認済みデータの公開
 
-Actions の「共通：データを試用公開・正式公開」を `main` で手動実行する。
+下書きの生成、試用公開、正式公開は別の Action として `main` で手動実行する。
 
 1. 生成 Action の Summary から下書き Release を開き、検査結果とデータの差分を確認する。
-2. `operation` に `preview` を選び、`tag` に下書きの URL またはタグを指定する。Action が添付ファイルを再検証し、同じタグの Pre-release として一般公開する。
-3. アプリで試すには、yamamuki 側の「山データの差し替え PR を作る」で取得先 `dev` を選び、試用版のタグを明示する。既定設定の開発ビルドがこの参照先を使う。
-4. アプリで確認したら、`operation` に `formalize` を選び、同じタグを指定する。Action が再検証して Pre-release の指定を解除し、正式版カタログを更新する。
+2. 「共通：Draft を試用公開」で、`tag` に下書きの URL またはタグを指定する。Action が添付ファイルを再検証し、同じタグの Pre-release として一般公開する。
+3. 試用公開した Release を、利用するアプリの開発版で確認する。
+4. 確認が済んだら、「共通：Pre-release を正式公開」で同じタグを指定する。Action が再検証して Pre-release の指定を解除し、正式版カタログを更新する。
 
 `sha256` は空欄なら Release の検査結果から取得する。確認内容と公開理由は任意で、正式公開時に Release の説明へ記録する。Pages に初めて配置する場合は `initialize_pages` を選ぶ。
 
 手動公開の検証は `release_tools/point_release.py`、Release の取得・Pages・公開履歴の共通処理は `release_tools/release_data.py` にまとめる。OSM の生成時の比較と下書き作成は `points/osm-peaks/scripts/release_data.py`、GSI の検証・snapshot・配布ファイルの生成は `points/gsi-peaks/scripts/release_snapshot.py` に置き、共通の公開処理を呼び出す。OSM・国土地理院の山頂は同じ処理を使い、manifest の形式・版・取得 URL、データ本体のサイズ・SHA-256、地点の ID・座標・出典・件数、添付されたオリジナルと補足から配布地点を再現できるかを確認する。生成時の出典固有の検査は、各データの生成処理で行う。旧形式の Release は従来の検証を使う。
 
 共通形式（manifest・地点 JSON とも版 6）の地点データは、`<データ ID>-<版>` と添付 manifest の `version` から対象を判定する。OSM 山頂は `osm-peaks-<version>`、国土地理院山頂は `gsi-peaks-<version>` を使う。試用公開から正式公開まで添付ファイルは同じものを使う。正式公開が成功したあとに `points/<データ ID>/manifest.json` と正式版カタログを更新する。地形など異なる形式のデータは、データごとの手順で検証して公開する。
+
+生成 Action は Draft の本文に `<!-- yamamuki-data:temporary-draft:v1 -->` を付ける。作成から 7 日以上経ったマーカー付き Draft は、参照先を再確認する週次の整理 Action の対象になる。試用公開時にはマーカーを外し、以後は一般公開した版として保持する。
+
+### 公開前の Draft を整理する
+
+`main` で「地点：古い Draft を一覧にする」を実行し、Summary の候補を確認する。対象は作成から 7 日以上経ち、公開日時が記録されていない整理用マーカー付きの山頂 Draft。
+
+削除する場合は「地点：古い Draft を削除する」にタグを 1 件指定する。Action はアプリ側とデータ側の参照先、Release の状態を再確認し、参照されている版や Pre-release・正式版は保持する。取得・照合に失敗した場合は停止する。Git タグは削除しない。
+
+毎週月曜の日本時間 12:00 に「地点：古い Draft を定期整理」も同じ条件で実行する。整理用マーカーは `<!-- yamamuki-data:temporary-draft:v1 -->`。試用公開時にマーカーを外す。Draft を長く保持する場合は、本文からこのマーカーを取り除く。
+
+Pre-release として一般公開した版は、正式公開しない場合も添付ファイルと取得 URL を保持する。
 
 ### Pages への配置と参照先の復旧
 
@@ -97,7 +110,7 @@ Pages を更新するジョブは共通の `publish-data-pages` グループで�
 
 配置時にファイルを削除してから上げ直す時間は生じない。キャッシュにより更新前の manifest が返る場合はあるが、履歴版を残すため、その manifest でも対応するデータ本体を取得できる。アプリは通信や検証に失敗したら保存済みデータを維持して再試行する。
 
-参照先の更新に失敗した場合は、`operation` に `formalize` を選び、公開済みの正式版の URL またはタグを指定して復旧する。履歴版のデータ本体は再生成・再アップロードしない。公開済みの履歴 Release には不変化を適用できる。
+参照先の更新に失敗した場合は、「共通：Pre-release を正式公開」で、公開済みの正式版の URL またはタグを指定して復旧する。履歴版のデータ本体は再生成・再アップロードしない。公開済みの履歴 Release には不変化を適用できる。
 
 ### 実行概要の確認
 

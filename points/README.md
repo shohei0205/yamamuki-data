@@ -19,7 +19,7 @@
 | OSM 山頂 | [正式 Release 一覧](https://github.com/shohei0205/yamamuki-data/releases?q=%22osm-peaks-%22+draft%3Afalse+prerelease%3Afalse)から版を選び、添付の `manifest.json` を使う。[OSM 山頂の取得手順](osm-peaks/README.md) |
 | 国土地理院の山頂 | [正式 Release 一覧](https://github.com/shohei0205/yamamuki-data/releases?q=%22gsi-peaks-%22+draft%3Afalse+prerelease%3Afalse)から版を選び、添付の `manifest.json` を使う。[国土地理院山頂の取得手順](gsi-peaks/README.md) |
 
-試用版は試用公開した Release から取得する。開発ビルドで試す場合は、[試用公開の手順](../README.md#確認済みデータの公開)に従ってアプリ側カタログの `dev` にタグを指定する。
+試用版は Pre-release として公開した Release に添付された `manifest.json` から取得する。
 
 1. manifest を取得する。カタログを使う場合は、対象項目の `manifest` に同じ情報が入っているため、別途取得する必要はない。
 2. manifest の `schemaVersion` とデータ本体の `dataSchemaVersion` に対応していることを、それぞれ確認する。項目の説明は [配布データの取得情報](../README.md#配布データの取得情報manifestjson)、カタログからの判定方法は [カタログの読み込みと検証](formats/catalog.md#読み込みと検証)を参照する。
@@ -51,7 +51,7 @@ manifest の項目と検証ルールは [manifest フォーマット](../formats
 
 ## 公開データのカタログ
 
-以下は yamamuki-data の配布用カタログ。山むきアプリがどの版を読むかは、[アプリ側のカタログ](https://shohei0205.github.io/yamamuki/data/catalog.json) で指定する。
+以下は yamamuki-data の配布用カタログ。正式公開時に対象のデータを更新する。
 
 | 配布先 | カタログ | 現在の更新方法 |
 |---|---|---|

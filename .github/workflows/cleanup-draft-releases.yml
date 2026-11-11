@@ -1,0 +1,33 @@
+name: 地点：古い Draft を定期整理
+
+on:
+  schedule:
+    # 毎週月曜日の日本時間 12:00。
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    if: github.repository == 'shohei0205/yamamuki-data' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-data-pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: 参照先を照合してマーカー付きの古い Draft を整理
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python -m release_tools.draft_cleanup delete-old

@@ -214,6 +214,7 @@ class GsiReleaseTests(unittest.TestCase):
                             target.create_draft('test-1', root, channel=channel)
                         notes = (root / 'notes.md').read_text(encoding='utf-8')
                         self.assertTrue(notes.startswith('コミット済みの国土地理院の地点 JSON を配布します。'))
+                        self.assertIn(target.release_data.TEMPORARY_DRAFT_MARKER, notes.splitlines())
                         self.assertIn('\n\n## 出典\n\n- 国土地理院（最適化ベクトルタイル）:', notes)
                         self.assertIn('- 日本百名山:', notes)
                         create = calls.call_args_list[0].args

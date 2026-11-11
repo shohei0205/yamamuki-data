@@ -193,6 +193,7 @@ class ReleaseDataTests(unittest.TestCase):
                     self.assertTrue(common.needs_review(dict(body="\ufeff" + notes[0])))
                 else:
                     self.assertTrue(notes[0].startswith("## データの検査結果（生成後）"))
+                    self.assertIn(common.TEMPORARY_DRAFT_MARKER, notes[0].splitlines())
                     self.assertFalse(common.needs_review(dict(body=notes[0])))
 
 

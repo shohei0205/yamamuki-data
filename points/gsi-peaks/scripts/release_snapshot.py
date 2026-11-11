@@ -161,7 +161,8 @@ def create_draft(version, directory, source=DATA, *, channel):
                      + f"- 地点数: {manifest['metadata']['pointCount']}\n- SHA-256: `{manifest['sha256']}`\n"
                      + f"- 入力コミット: `{os.environ['GITHUB_SHA']}`\n"
                      + "\n## 出典\n\n"
-                     + "".join(f"- {key}: {value.get('attribution','')} / {value.get('license','')}\n" for key,value in metadata_maps(manifest["metadata"])["sources"].items()), encoding="utf-8", newline="\n")
+                     + "".join(f"- {key}: {value.get('attribution','')} / {value.get('license','')}\n" for key,value in metadata_maps(manifest["metadata"])["sources"].items())
+                     + f"\n{release_data.TEMPORARY_DRAFT_MARKER}\n", encoding="utf-8", newline="\n")
     from scripts.distribution_parts import filenames
     from distribution_license import LICENSE_FILE
     names = (FILE, FILE + ".gz", "manifest.json", INFO, LICENSE_FILE, *filenames("gsi-peaks"))
@@ -169,7 +170,7 @@ def create_draft(version, directory, source=DATA, *, channel):
     release_data.append_summary(f"\n## 国土地理院の山頂\n\n{manifest['metadata']['pointCount']:,} 地点を下書き Release に保存しました。\n\n"
                                 f"- [下書き Release を開く]({url})\n"
                                 f"- タグ: `{tag}`\n"
-                                "- 内容を確認してから「共通：データを試用公開・正式公開」を実行してください。\n")
+                                "- 内容を確認してから「共通：Draft を試用公開」を実行してください。\n")
 
 
 def main():

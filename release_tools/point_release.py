@@ -274,6 +274,8 @@ def publish_candidate(target, sha256="", reason="", *, preview=False):
             raise ValueError("確認したファイルと SHA-256 が異なります")
 
         fields = {"draft": False, "prerelease": preview, "make_latest": "false"}
+        if preview:
+            fields["body"] = (release.get("body") or "").replace(site.TEMPORARY_DRAFT_MARKER, "")
         if release["draft"]:
             commit = release["target_commitish"]
             if not re.fullmatch(r"[0-9a-f]{40}", commit):

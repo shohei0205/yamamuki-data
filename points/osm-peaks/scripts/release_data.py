@@ -135,6 +135,7 @@ def prepare(directory, channel="stable"):
         if warnings:
             # Release 一覧で目に入るよう、要確認の理由を本文の先頭に書く。
             contents = f"{shared.REVIEW_HEADING}\n\n" + "".join(f"- {warning}\n" for warning in warnings) + "\n" + contents
+        contents += f"\n{shared.TEMPORARY_DRAFT_MARKER}\n"
         shared.write_report(notes, contents)
         logging.info("下書き Release を作成します: %s", tag)
         from scripts.distribution_parts import filenames
@@ -146,7 +147,7 @@ def prepare(directory, channel="stable"):
         shared.append_summary(f"\n## 生成したリリース\n\n[生成したリリースを開く]({url})\n\n"
                               f"- タグ: `{tag}`\n"
                               f"- 検査: {'要確認' if warnings else '合格'}\n"
-                              "- 生成後の扱い: 下書きで保存。内容を確認してから「共通：データを試用公開・正式公開」を実行してください。\n")
+                              "- 生成後の扱い: 下書きで保存。内容を確認してから「共通：Draft を試用公開」を実行してください。\n")
     logging.info("Release の保存完了: %s（%s）", tag, "要確認" if warnings else "検査合格")
 
 
@@ -188,6 +189,7 @@ def publish(tag, expected_sha256="", *, manual=False, reason="", channel="stable
         if manual:
             contents += f"\n## 手動公開の確認\n\n確認者: {os.environ.get('GITHUB_ACTOR', '不明')}\n\n{reason.strip() or '理由の記入なし'}\n"
         notes = root / "notes.md"
+        contents += f"\n{shared.TEMPORARY_DRAFT_MARKER}\n"
         shared.write_report(notes, contents)
         if release["draft"]:
             shared.gh("release", "edit", tag, "--notes-file", str(notes))

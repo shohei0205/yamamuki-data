@@ -99,7 +99,7 @@
 | 配布先 | manifest の取得方法 |
 |---|---|
 | 正式版 | [正式 Release 一覧](https://github.com/shohei0205/yamamuki-data/releases?q=%22gsi-peaks-%22+draft%3Afalse+prerelease%3Afalse)（Pre-release を除く）から版を選び、添付の `manifest.json` の URL を固定して使う |
-| 試用版（Pre-release） | 試用公開した Release に添付された `manifest.json` を使う。開発ビルドで試す場合は、[試用公開の手順](../../README.md#確認済みデータの公開)に従ってアプリ側カタログの `dev` にタグを指定する |
+| 試用版（Pre-release） | Pre-release として公開した Release に添付された `manifest.json` を使う |
 
 Pages の正式版 manifest・履歴・地点カタログは正式公開後に更新する。リポジトリ全体の `releases/latest` は使わない。
 

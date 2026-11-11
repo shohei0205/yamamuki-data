@@ -60,7 +60,7 @@ class PointReleaseTests(unittest.TestCase):
         self.assertEqual("gsi-peaks-test", tag)
         assets = {path.name: path.read_bytes() for path in source.iterdir() if path.is_file()}
         release = dict(id=101, tag_name=tag, draft=True, prerelease=False, target_commitish="a" * 40,
-                       body=f"- SHA-256: `{manifest['sha256']}`",
+                       body=f"- SHA-256: `{manifest['sha256']}`\n{target.site.TEMPORARY_DRAFT_MARKER}",
                        html_url="https://github.com/owner/repo/releases/tag/untagged-101")
         dev_path = "points/gsi-peaks-dev/manifest.json"
         catalog = target.site.Catalog({dev_path: {**manifest, "version": "old"}})
@@ -104,6 +104,7 @@ class PointReleaseTests(unittest.TestCase):
             target.publish_candidate(release["html_url"], preview=True)
             self.assertFalse(release["draft"])
             self.assertTrue(release["prerelease"])
+            self.assertNotIn(target.site.TEMPORARY_DRAFT_MARKER, release["body"])
             self.assertEqual("a" * 40, requests[0]["target_commitish"])
             target.publish_candidate(tag, preview=True)
             self.assertEqual(1, len(requests))
