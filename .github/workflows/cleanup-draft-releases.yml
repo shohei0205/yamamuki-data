@@ -1,4 +1,4 @@
-name: 地点：古い Draft を定期整理
+name: 共通：古い Draft を定期整理
 
 on:
   schedule:

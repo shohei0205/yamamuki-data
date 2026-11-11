@@ -1,4 +1,4 @@
-name: 地点：古い Draft を削除する
+name: 共通：古い Draft を削除する
 
 on:
   workflow_dispatch:

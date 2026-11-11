@@ -1,4 +1,4 @@
-"""公開前の山頂 Draft について、削除直前の状態を確認して整理する。"""
+"""公開前の Draft について、削除直前の状態を確認して整理する。"""
 
 import argparse
 from datetime import datetime, timedelta, timezone
@@ -10,7 +10,7 @@ from release_tools import release_data as site
 
 
 DATA_REPO = "shohei0205/yamamuki-data"
-TAG = re.compile(r"(?:osm-peaks|gsi-peaks)-\d{8}T\d{6}Z-\d+-\d+")
+TAG = re.compile(r"\S+")
 JST = timezone(timedelta(hours=9))
 RETENTION = timedelta(days=7)
 
@@ -47,7 +47,7 @@ def delete_candidate(tag, now):
             or os.environ.get("GH_REPO") != DATA_REPO):
         raise ValueError("削除はデータリポジトリの main の Action から実行してください")
     if not TAG.fullmatch(tag):
-        raise ValueError("山頂データの Draft タグを 1 件指定してください")
+        raise ValueError("Draft のタグを 1 件指定してください")
     matches = [release for release in site.releases() if release.get("tag_name") == tag]
     if len(matches) != 1 or draft_date(matches[0], now) is None:
         raise ValueError("指定した Draft は削除条件を満たしていません")

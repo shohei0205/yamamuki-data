@@ -32,10 +32,22 @@ class DraftCleanupTests(unittest.TestCase):
                         {"created_at": "2026-11-04T00:00:00Z"},
                         {"created_at": "invalid"}, {"created_at": None},
                         {"created_at": "2026-09-30T00:00:00"},
-                        {"tag_name": TAG.replace("osm-peaks-", "osm-peaks-dev-")},
-                        {"tag_name": "viewer-v1.0.0-dev.123"}):
+                        {"tag_name": ""}, {"tag_name": TAG + "\n" + OTHER}):
             with self.subTest(changes=changes):
                 self.assertIsNone(cleanup.draft_date({**RELEASE, **changes}, NOW))
+
+    def test_marked_drafts_are_eligible_regardless_of_dataset_or_tag_format(self):
+        for tag in (TAG, OTHER, "surface-v1", "terrain/local-v1", "osm-peaks-dev-v1"):
+            with self.subTest(tag=tag):
+                release = {**RELEASE, "tag_name": tag}
+                self.assertIsNotNone(cleanup.draft_date(release, NOW))
+                self.assertIsNone(cleanup.draft_date({**release, "body": ""}, NOW))
+                with (patch.dict(os.environ, GITHUB_ACTIONS="true", GITHUB_REF="refs/heads/main", GH_REPO=cleanup.DATA_REPO),
+                      patch.object(cleanup.site, "releases", return_value=[release]),
+                      patch.object(cleanup.site, "gh", return_value=json.dumps(release)) as gh,
+                      patch.object(cleanup.site, "append_summary")):
+                    cleanup.delete_candidate(tag, NOW)
+                gh.assert_called_with("api", "--method", "DELETE", f"repos/{cleanup.DATA_REPO}/releases/123")
 
     def test_weekly_cleanup_selects_only_marked_old_drafts(self):
         releases = [RELEASE, {**RELEASE, "tag_name": OTHER, "body": ""},

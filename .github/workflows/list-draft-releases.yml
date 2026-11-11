@@ -1,4 +1,4 @@
-name: 地点：古い Draft を一覧にする
+name: 共通：古い Draft を一覧にする
 
 on:
   workflow_dispatch:
