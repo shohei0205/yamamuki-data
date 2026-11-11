@@ -41,7 +41,7 @@ jobs:
       matrix:
         os: [windows-latest, macos-15]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Rust stable を準備
         run: rustup update stable
       - name: 地点スキーマとデータビューワのテスト
