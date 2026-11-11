@@ -2,21 +2,9 @@ name: データビューワ：Release
 
 on:
   workflow_dispatch:
-    inputs:
-      channel:
-        description: '配布先（dev は開発版、stable は正式版）'
-        type: choice
-        required: true
-        default: dev
-        options:
-          - dev
-          - stable
 
 permissions:
   contents: read
-
-env:
-  RELEASE_CHANNEL: ${{ inputs.channel }}
 
 concurrency:
   group: release-native-viewer-${{ github.ref }}
@@ -47,9 +35,8 @@ jobs:
               raise SystemExit("ビューワの版は数字3つで指定してください")
           tag = f"viewer-v{version}"
           ref = os.environ["GITHUB_REF"]
-          channel = os.environ["RELEASE_CHANNEL"] if ref == "refs/heads/main" else "test"
-          if channel != "stable":
-              tag += f"-{channel}.{os.environ['GITHUB_RUN_ID']}"
+          if ref != "refs/heads/main":
+              tag += f"-test.{os.environ['GITHUB_RUN_ID']}"
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               print(f"version={version}\ntag={tag}", file=output)
           PY
@@ -119,7 +106,10 @@ jobs:
           retention-days: 7
 
   publish:
-    name: GitHub Releasesに公開
+    name: Draft Release に保存
+    concurrency:
+      group: publish-data-pages
+      cancel-in-progress: false
     if: github.ref == 'refs/heads/main'
     needs: [plan, build]
     runs-on: ubuntu-24.04
@@ -135,7 +125,7 @@ jobs:
           pattern: native-viewer-*
           path: dist
           merge-multiple: true
-      - name: 2環境のZIPを添付して公開
+      - name: 2環境のZIPを添付して下書きを作成
         shell: bash
         run: |
           refs="$(gh api "repos/$GH_REPO/git/matching-refs/tags/$RELEASE_TAG" --jq '.[].ref')"
@@ -151,11 +141,13 @@ jobs:
             assets+=("$asset")
           done
           (cd dist && sha256sum "$RELEASE_TAG"-*.zip > SHA256SUMS.txt)
-          args=()
-          if [[ "$RELEASE_CHANNEL" == "dev" ]]; then
-            args+=(--prerelease)
-          fi
           gh release create "$RELEASE_TAG" "${assets[@]}" dist/SHA256SUMS.txt \
             --target "$GITHUB_SHA" --title "山むき・データビューワ ${RELEASE_TAG#viewer-v}" \
-            --latest=false "${args[@]}" \
-            --notes 'Windows x64、macOS Apple Silicon 向け。macOS版はアドホック署名で、公証は行っていません。'
+            --draft --latest=false \
+            --notes $'Windows x64、macOS Apple Silicon 向け。macOS版はアドホック署名で、公証は行っていません。\n\n<!-- yamamuki-data:temporary-draft:v1 -->'
+          {
+            echo "## 作成した Draft Release"
+            echo ""
+            echo "- タグ: \`$RELEASE_TAG\`"
+            echo '内容を確認し、「共通：Draft-release を試用公開」でタグを指定してください。'
+          } >> "$GITHUB_STEP_SUMMARY"
