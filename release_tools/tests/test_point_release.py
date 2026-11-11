@@ -181,6 +181,17 @@ class PointReleaseTests(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 target.validate(directory, "gsi-peaks", tag, "dev")
 
+    def test_legacy_parts_use_legacy_asset_selection_and_validation(self):
+        names = {"manifest.json", "osm-peaks.json.gz", "osm-peaks-source.json.gz",
+                 "supplements.json", "supplement-manifest.json"}
+        manifest = dict(schemaVersion=5, fileName="osm-peaks.json.gz")
+        self.assertEqual({"osm-peaks.json.gz", "osm-peaks-source.json.gz",
+                          "supplements.json", "supplement-manifest.json"},
+                         set(target.data_assets(manifest, names)))
+        # 新形式では一部だけの添付を引き続き拒否する。
+        with self.assertRaisesRegex(ValueError, "そろって"):
+            target.data_assets({**manifest, "schemaVersion": 6}, names)
+
     def test_fetch_rejects_incomplete_parts(self):
         directory, tag, manifest = self.fixture()
         def gh(*args):
