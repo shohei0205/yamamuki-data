@@ -6,7 +6,7 @@ param(
     [Parameter(Mandatory)][string]$OutputDirectory,
     [string]$DataTimestamp,
     [switch]$CreateDraft,
-    [switch]$Publish,
+    [switch]$ProcessDraft,
     [ValidatePattern('^[0-9a-fA-F]{40}$')][string]$TargetCommit
 )
 
@@ -14,10 +14,10 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 . (Join-Path $PSScriptRoot 'release_config.ps1')
 $config = Read-SurfaceReleaseConfig $Dataset $Package
-if ($CreateDraft -and $Publish) { throw '-CreateDraft と -Publish は同時に指定できません。' }
-$uploadDraft = $CreateDraft -or $Publish
+if ($CreateDraft -and $ProcessDraft) { throw '-CreateDraft と -ProcessDraft は同時に指定できません。' }
+$uploadDraft = $CreateDraft -or $ProcessDraft
 if ($uploadDraft -and !$TargetCommit) { throw '下書きを作るには、生成に使ったコミットのSHAを指定してください。' }
-if ($TargetCommit -and !$uploadDraft) { throw '-TargetCommit は -CreateDraft または -Publish とともに指定してください。' }
+if ($TargetCommit -and !$uploadDraft) { throw '-TargetCommit は -CreateDraft または -ProcessDraft とともに指定してください。' }
 
 $repo = 'shohei0205/yamamuki-data'
 $releaseRoot = "https://github.com/$repo/releases/download"
@@ -111,18 +111,18 @@ Write-Output "タグ: $tag"
 Write-Output "配布ファイル: $output"
 Write-Output "公開後のmanifest: $releaseBase/manifest.json"
 foreach ($split in $config.splitPackages) {
-    Write-Output "公開Actionが作る分割版manifest: $releaseBase/$($split.manifestName)"
+    Write-Output "加工・検査Actionが作る分割版manifest: $releaseBase/$($split.manifestName)"
 }
 
 if ($uploadDraft) {
     $workflow = 'publish-surface.yml'
-    if ($Publish -and (gh api "repos/$repo/actions/workflows/$workflow" --jq .state) -cne 'active') {
-        throw '公開Actionを先にmainに配置して有効にしてください。'
+    if ($ProcessDraft -and (gh api "repos/$repo/actions/workflows/$workflow" --jq .state) -cne 'active') {
+        throw '加工・検査Actionを先にmainに配置して有効にしてください。'
     }
     $remoteSha = gh api "repos/$repo/commits/$TargetCommit" --jq .sha
     if ($remoteSha -ne $TargetCommit) { throw '生成に使ったコミットが公開先に見つかりません。' }
     $existingTag = git ls-remote --refs "https://github.com/$repo.git" "refs/tags/$tag"
-    if ($existingTag -and (!$Publish -or ($existingTag -split '\s+')[0] -ne $TargetCommit)) {
+    if ($existingTag -and (!$ProcessDraft -or ($existingTag -split '\s+')[0] -ne $TargetCommit)) {
         throw "公開先に同じタグがあります: $tag"
     }
 
@@ -135,17 +135,17 @@ if ($uploadDraft) {
     $releaseOptions = @(
         '--repo', $repo, '--target', $TargetCommit, '--draft', '--latest=false'
         '--title', "$($entry.title) $version"
-        '--notes', 'ローカルで生成・検査した地表SQLite。出典と利用条件は LICENSE.txt を参照してください。'
+        '--notes', "<!-- yamamuki-data:temporary-draft:v1 -->`nローカルで生成した地表SQLiteの受け渡し用Draftです。加工・検査Actionを実行してください。"
     )
-    if ($Publish) {
-        # Actionのトークンでも公開できるよう、利用者の認証でタグを先に確定する。
+    if ($uploadDraft) {
+        # Actionのトークンから試用公開できるよう、利用者の認証でタグを先に確定する。
         if (!$existingTag) {
             gh api --method POST "repos/$repo/git/refs" -f "ref=refs/tags/$tag" -f "sha=$TargetCommit" | Out-Null
         }
         $releaseOptions += '--verify-tag'
     }
     gh release create $tag @assets @releaseOptions
-    if ($Publish) {
+    if ($ProcessDraft) {
         $sha = $manifest.sha256
         Write-Output "Actionの再起動: gh workflow run $workflow --repo $repo --ref main -f dataset=$Dataset -f package=$Package -f tag=$tag -f sha256=$sha -f target_commit=$TargetCommit"
         gh workflow run $workflow --repo $repo --ref main -f "dataset=$Dataset" -f "package=$Package" -f "tag=$tag" -f "sha256=$sha" -f "target_commit=$TargetCommit"

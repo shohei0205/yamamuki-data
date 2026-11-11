@@ -1,0 +1,26 @@
+name: 共通：古い Draft を一覧にする
+
+on:
+  workflow_dispatch:
+
+permissions:
+  # Draft の一覧を読むために必要。実行する API は読み取りのみ。
+  contents: write
+
+jobs:
+  list:
+    if: github.repository == 'shohei0205/yamamuki-data' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: 削除条件を満たす Draft の候補を表示
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python -m release_tools.draft_cleanup list

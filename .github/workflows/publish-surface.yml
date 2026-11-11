@@ -1,4 +1,4 @@
-name: 地表：確認済みデータを公開
+name: 地表：Release 加工・検査
 
 on:
   workflow_dispatch:
@@ -35,11 +35,11 @@ jobs:
     permissions:
       contents: write
     concurrency:
-      group: publish-surface-${{ inputs.tag }}
+      group: publish-data-pages
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
-      - name: 下書きを検査し、構成別SQLiteを添付して公開
+      - name: 下書きを検査し、配布用Draftを作成
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -50,4 +50,4 @@ jobs:
           TARGET_COMMIT: ${{ inputs.target_commit }}
         run: >-
           ./surface/scripts/publish_release.ps1
-          -Dataset $env:DATASET -Package $env:PACKAGE -Tag $env:RELEASE_TAG -Sha256 $env:EXPECTED_SHA256 -TargetCommit $env:TARGET_COMMIT
+          -Dataset $env:DATASET -Package $env:PACKAGE -Operation Prepare -Tag $env:RELEASE_TAG -Sha256 $env:EXPECTED_SHA256 -TargetCommit $env:TARGET_COMMIT

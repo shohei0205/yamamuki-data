@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: 公開入口と実行概要のテスト
-        run: python -m unittest release_tools.tests.test_publish_reviewed release_tools.tests.test_point_release release_tools.tests.test_shared_release_data release_tools.tests.test_workflow_summary -v
+        run: python -m unittest release_tools.tests.test_publish_reviewed release_tools.tests.test_point_release release_tools.tests.test_shared_release_data release_tools.tests.test_workflow_summary release_tools.tests.test_draft_cleanup -v
 
   points-viewer:
     name: 地点 / 共通ビューア
@@ -41,7 +41,7 @@ jobs:
       matrix:
         os: [windows-latest, macos-15]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Rust stable を準備
         run: rustup update stable
       - name: 地点スキーマとデータビューワのテスト
@@ -92,21 +92,27 @@ jobs:
           python -m pip install -r points/gsi-peaks/requirements-vector.txt
           python -m unittest discover -s points/gsi-peaks/tests -v
 
-  test-points:
-    name: 地点 / テストデータ
+  surface:
+    name: 地表 / SQLiteと公開手順
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-      - name: 架空データの生成・公開処理のテスト
-        run: python -m unittest release_tools.tests.test_test_points -v
+      - name: Rust stable を準備
+        run: rustup update stable
+      - name: SQLiteと抽出のテスト
+        run: cargo +stable test --locked --release --manifest-path surface/Cargo.toml -p yamamuki-data-sqlite -p surface-tool
+      - name: 公開テスト用SQLiteを生成
+        run: |
+          mkdir -p build/surface/release-test
+          cargo +stable run --locked --release --manifest-path surface/Cargo.toml -p yamamuki-data-sqlite --example release_fixture -- build/surface/release-test/source.sqlite3
+      - name: Draftの受け渡し・加工・試用公開・正式公開を検証
+        shell: pwsh
+        run: ./surface/tests/publish_release.ps1 -Database build/surface/release-test/source.sqlite3 -DataTimestamp '2026-11-11T00:00:00Z'
 
   test:
-    # dev の保護設定が要求するチェック名を維持する。
+    # ブランチ保護で使うチェック名を維持する。
     name: test
-    needs: [common, points-viewer, native-viewer, osm-peaks, gsi-peaks, test-points]
+    needs: [common, points-viewer, native-viewer, osm-peaks, gsi-peaks, surface]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -116,12 +122,12 @@ jobs:
           POINTS_VIEWER_RESULT: ${{ needs.points-viewer.result }}
           NATIVE_VIEWER_RESULT: ${{ needs.native-viewer.result }}
           OSM_PEAKS_RESULT: ${{ needs.osm-peaks.result }}
+          SURFACE_RESULT: ${{ needs.surface.result }}
           GSI_PEAKS_RESULT: ${{ needs.gsi-peaks.result }}
-          TEST_POINTS_RESULT: ${{ needs.test-points.result }}
         run: |
           test "$COMMON_RESULT" = success
           test "$POINTS_VIEWER_RESULT" = success
           test "$NATIVE_VIEWER_RESULT" = success
           test "$OSM_PEAKS_RESULT" = success
           test "$GSI_PEAKS_RESULT" = success
-          test "$TEST_POINTS_RESULT" = success
+          test "$SURFACE_RESULT" = success

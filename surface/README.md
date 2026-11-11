@@ -63,12 +63,21 @@ cargo run --locked --release --manifest-path surface/Cargo.toml --bin surface-to
 pwsh -NoProfile -File surface/scripts/prepare_release.ps1 `
   -Dataset '<データセットのフォルダー>' -Package all `
   -Database '入力.sqlite3' -OutputDirectory 'build/surface/配布準備' `
-  -TargetCommit '<生成に使ったコミットの40桁のSHA>' -Publish
+  -TargetCommit '<生成に使ったコミットの40桁のSHA>' -ProcessDraft
 ```
 
-`-Publish` は下書き作成、添付、公開Actionの起動を行う。GitHub CLIでログインし、生成に使ったコミットを先にpushして、公開Actionを `main` に配置する。`-CreateDraft` は下書き作成まで行う。どちらも省くと配布ファイルの準備だけを行う。出力先は新規ディレクトリを指定する。生成日時は同じ場所のmanifestから引き継ぐ。記録がないファイルや抽出したSQLiteには、元の生成日時を `-DataTimestamp` にUTCで指定する。
+`-ProcessDraft` は受け渡し用Draftの作成・添付と「地表：Release 加工・検査」の起動を行う。GitHub CLIでログインし、生成に使ったコミットを先にpushして、Actionを `main` に配置する。`-CreateDraft` は受け渡し用Draftの作成まで行う。どちらも省くと配布ファイルの準備だけを行う。出力先は新規ディレクトリを指定する。生成日時は同じ場所のmanifestから引き継ぐ。記録がないファイルや抽出したSQLiteには、元の生成日時を `-DataTimestamp` にUTCで指定する。
 
-Action は添付した SQLite、manifest、ライセンスを取得し直し、収録画像、ハッシュ、データセットとレイヤーの構成、タグと対象コミットを照合する。分割設定がある場合はレイヤー別の添付も作成・検査してから、同じ下書きを公開する。失敗時は下書きが残る。Actionの起動だけが失敗した場合は、表示された `gh workflow run` コマンドで再実行できる。
+Actionは添付したSQLite、manifest、ライセンスを取得し直し、収録画像、ハッシュ、レイヤーとレベル、タグと対象コミットを照合する。構成別の添付を作成し、検査記録を本文に残して同じReleaseを配布用Draftに整える。失敗時はDraftが残る。起動だけが失敗した場合は、表示された `gh workflow run` コマンドで再実行できる。
+
+受け渡し用と配布用のDraftには整理マーカー `<!-- yamamuki-data:temporary-draft:v1 -->` を付ける。作成から7日以上経ったマーカー付きDraftは、共通の週次整理の対象になる。
+
+加工・検査が完了した後は、次の順に `main` から手動実行する。
+
+1. 「共通：Draft-release を試用公開」でDraftのURLまたはタグを指定する。検査記録と全添付を再検証し、同じReleaseをPre-releaseにする。このとき整理マーカーを外す。
+2. アプリで確認した後、「共通：Pre-release を正式公開」で同じタグを指定する。全添付を再検証し、Pre-releaseの指定を解除する。
+
+試用公開から正式公開まで、添付ファイル・タグ・取得URLを固定する。地表manifestはReleaseのAssetsから取得する。
 
 ### レイヤー別配布の構造
 
@@ -82,7 +91,7 @@ Action は添付した SQLite、manifest、ライセンスを取得し直し、�
 
 分割ファイルを同じデータセットとして扱う場合は、台帳のデータセット ID とデータ版を照合する。レイヤーは文字列の `id` で区別する。`dataset_key` と `layer_key` はファイル内の参照に使う。
 
-#### 公開 Action での分割手順
+#### 加工・検査Actionでの分割手順
 
 ローカルでは全レイヤー入りの SQLite、`manifest.json`、`LICENSE.txt` を下書き Release に添付する。
 
@@ -99,11 +108,11 @@ Action は添付した SQLite、manifest、ライセンスを取得し直し、�
 }
 ```
 
-設定がない場合は一式だけを公開する。設定がある場合、公開 Action は次の順に処理する。
+設定がない場合は一式だけを配布用Draftにする。設定がある場合、加工・検査Actionは次の順に処理する。
 
 1. 下書きから全レイヤー版を取得し、SQLite、manifest、ライセンス、タグと対象コミットを検証する。
 2. 検証済みの SQLite から `surface-tool select-surface` で指定したレイヤーとレベルを抽出する。分割版ごとに同じタグを指す manifest を作り、収録レイヤー、レベル、サイズ、SHA-256 を検証する。
-3. 全レイヤー版と分割版を同じ下書きに揃え、添付ファイルの名前、サイズ、SHA-256 を再確認してから公開する。
+3. 全レイヤー版と分割版を同じ下書きに揃え、添付ファイルの名前、サイズ、SHA-256を再確認し、検査記録を付けて配布用Draftにする。
 
 途中で失敗した場合は下書きを保持する。再実行時は、検証済みの全レイヤー版から分割版を作り直し、下書きにある分割版の添付を照合する。検証結果と異なる分割版の添付は下書きの間に差し替える。
 

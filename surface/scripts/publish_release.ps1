@@ -2,6 +2,8 @@
 param(
     [Parameter(Mandatory)][string]$Dataset,
     [string]$Package = "all",
+    [ValidateSet('Prepare','Preview','Formalize')][string]$Operation = 'Prepare',
+    [string]$Reason,
     [Parameter(Mandatory)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')][string]$Tag,
     [Parameter(Mandatory)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$Sha256,
     [Parameter(Mandatory)][ValidatePattern('^[a-fA-F0-9]{40}$')][string]$TargetCommit
@@ -13,7 +15,7 @@ $PSNativeCommandUseErrorActionPreference = $true
 $config = Read-SurfaceReleaseConfig $Dataset $Package
 $repo = $env:GITHUB_REPOSITORY
 if ($repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $env:GITHUB_REF -cne 'refs/heads/main') {
-    throw '正式版の公開は対象リポジトリのmainから実行してください。'
+    throw '地表Releaseの処理は対象リポジトリのmainから実行してください。'
 }
 
 $prefix = "repos/$repo"
@@ -36,11 +38,22 @@ $candidates = @(foreach ($page in $releasePages) {
 if ($candidates.Count -ne 1) { throw "下書きを一意に特定できません: $Tag" }
 $releasePath = "$prefix/releases/$($candidates[0].id)"
 
-function Read-DraftAssets {
+$temporaryMarker = '<!-- yamamuki-data:temporary-draft:v1 -->'
+$receiptPattern = '<!-- yamamuki-data:surface-draft:v1 (.+?) -->'
+
+function Read-Release {
     $draft = gh api $releasePath | ConvertFrom-Json -AsHashtable
-    if (!$draft.draft -or $draft.prerelease -or $draft.tag_name -cne $Tag) {
-        throw "対象は正式版の下書きではありません: $Tag"
+    if ($draft.tag_name -cne $Tag -or
+        ($Operation -eq 'Prepare' -and (!$draft.draft -or $draft.prerelease)) -or
+        ($Operation -eq 'Preview' -and !$draft.draft -and !$draft.prerelease) -or
+        ($Operation -eq 'Formalize' -and $draft.draft)) {
+        throw "Releaseの状態が指定操作に適合しません: $Operation / $Tag"
     }
+    return $draft
+}
+
+function Read-DraftAssets {
+    $draft = Read-Release
     if ($draft.target_commitish -ne $TargetCommit) {
         throw '下書きの対象コミットが実行時の指定と一致しません。'
     }
@@ -186,10 +199,12 @@ try {
     Confirm-TagCommit
     $current = Read-DraftAssets
     Confirm-SourceAssets $current
-    foreach ($name in $splitFiles) {
-        $localFile = Get-Item -LiteralPath (Join-Path $download $name)
-        if (!(Test-SplitAsset $current[$name] $localFile $splitHashes[$name])) {
-            gh release upload $Tag $localFile.FullName --repo $repo --clobber
+    if ($Operation -eq 'Prepare') {
+        foreach ($name in $splitFiles) {
+            $localFile = Get-Item -LiteralPath (Join-Path $download $name)
+            if (!(Test-SplitAsset $current[$name] $localFile $splitHashes[$name])) {
+                gh release upload $Tag $localFile.FullName --repo $repo --clobber
+            }
         }
     }
 
@@ -202,16 +217,74 @@ try {
             throw "分割版の添付が検証結果と一致しません: $name"
         }
     }
-    $published = gh api --method PATCH $releasePath -F draft=false -f make_latest=false | ConvertFrom-Json
-    if ($published.draft -or $published.tag_name -cne $Tag) { throw '公開結果が一致しません。' }
+    $release = Read-Release
+    $hashes = [ordered]@{}
+    foreach ($name in $allFiles) {
+        $hashes[$name] = (Get-FileHash -LiteralPath (Join-Path $download $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    $fields = @{ make_latest = 'false' }
+    if ($Operation -eq 'Prepare') {
+        $receipt = @{
+            dataset = $Dataset; package = $Package; targetCommit = $TargetCommit
+            sha256 = $expected.sha256; files = $hashes
+        } | ConvertTo-Json -Depth 6 -Compress
+        $fields.body = @(
+            $temporaryMarker
+            '<!-- yamamuki-data:surface-draft:v1 ' + $receipt + ' -->'
+            ''
+            '地表SQLiteの加工・検査が完了しました。共通Actionで試用公開できます。'
+            ''
+            ('- SHA-256: ' + [char]96 + $expected.sha256 + [char]96)
+        ) -join [Environment]::NewLine
+    } else {
+        $matches = [regex]::Matches($release.body, $receiptPattern)
+        if ($matches.Count -ne 1) { throw '地表の加工・検査記録がありません。' }
+        $receipt = $matches[0].Groups[1].Value | ConvertFrom-Json -AsHashtable
+        if ($receipt.dataset -cne $Dataset -or $receipt.package -cne $Package -or
+            $receipt.targetCommit -cne $TargetCommit -or $receipt.sha256 -cne $expected.sha256 -or
+            $receipt.files.Count -ne $hashes.Count) {
+            throw '地表の検査記録と公開対象が一致しません。'
+        }
+        foreach ($name in $hashes.Keys) {
+            if ($receipt.files[$name] -cne $hashes[$name]) { throw "検査後に添付が変更されています: $name" }
+        }
+        if ($Operation -eq 'Preview') {
+            $fields.draft = $false
+            $fields.prerelease = $true
+            $fields.body = $release.body.Replace($temporaryMarker, '').Trim()
+        } else {
+            $fields.prerelease = $false
+            $reasonText = if ([string]::IsNullOrWhiteSpace($Reason)) { '理由の記入なし' } else { $Reason.Trim() }
+            $fields.body = $release.body + [Environment]::NewLine + [Environment]::NewLine +
+                "正式公開の確認内容: $reasonText"
+        }
+    }
+    $patch = Join-Path $download 'release-update.json'
+    try {
+        $fields | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $patch -Encoding utf8NoBOM
+        if ($Operation -ne 'Formalize' -or $release.prerelease) {
+            $result = gh api --method PATCH $releasePath --input $patch | ConvertFrom-Json -AsHashtable
+        } else {
+            $result = $release
+        }
+    } finally {
+        if (Test-Path -LiteralPath $patch) { Remove-Item -LiteralPath $patch }
+    }
+    if ($result.id -ne $release.id -or $result.tag_name -cne $Tag -or
+        ($Operation -eq 'Prepare' -and (!$result.draft -or $result.prerelease)) -or
+        ($Operation -eq 'Preview' -and ($result.draft -or !$result.prerelease)) -or
+        ($Operation -eq 'Formalize' -and ($result.draft -or $result.prerelease))) {
+        throw 'Releaseの処理結果が指定操作と一致しません。'
+    }
     @(
-        '## 地表SQLiteの公開'
+        '## 地表SQLiteの処理結果'
         ''
-        "- Release: $($published.html_url)"
+        "- 操作: $Operation"
+        "- Release: $($result.html_url)"
         "- Manifest: $releaseRoot/$Tag/manifest.json"
         "- SHA-256: $($expected.sha256)"
         foreach ($split in $config.splitPackages) {
-            "- 分割版 manifest: $releaseRoot/$Tag/$($split.manifestName)"
+            "- 構成別 manifest: $releaseRoot/$Tag/$($split.manifestName)"
         }
     ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8NoBOM
 } finally {

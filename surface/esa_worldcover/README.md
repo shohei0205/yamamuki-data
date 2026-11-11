@@ -79,7 +79,7 @@ pwsh -NoProfile -File surface/scripts/prepare_release.ps1 `
   -Dataset esa_worldcover -Package all `
   -Database 'build/surface/japan-0.1.0/esa-worldcover.sqlite3' `
   -OutputDirectory 'build/surface/esa-worldcover-release-0.1.0' `
-  -TargetCommit '<生成に使ったコミットの40桁のSHA>' -Publish
+  -TargetCommit '<生成に使ったコミットの40桁のSHA>' -ProcessDraft
 ```
 
 ### 最大レベル別の配布
@@ -93,7 +93,7 @@ pwsh -NoProfile -File surface/scripts/prepare_release.ps1 `
 | z5〜z11 | `esa-worldcover-z11.sqlite3` | `esa-worldcover-z11.manifest.json` |
 | z5〜z12 | `esa-worldcover-z12.sqlite3` | `manifest.json` |
 
-全レベル版の配布ファイル名は[公開設定](release.json)の `packages.all.fileName` で指定する。公開準備では生成済みSQLiteをその名前でコピーする。公開Actionは全レベル版を検査し、`splitPackages` に従って最大レベル別の3ファイルを抽出する。
+全レベル版の配布ファイル名は[公開設定](release.json)の `packages.all.fileName` で指定する。公開準備では生成済みSQLiteをその名前でコピーする。加工・検査Actionは全レベル版を検査し、`splitPackages` に従って最大レベル別の3ファイルを抽出する。配布用Draftが整ったら、共通ActionでPre-release、正式版の順に公開する。
 
 ## 出典とライセンス
 
@@ -114,7 +114,17 @@ pwsh -NoProfile -File surface/scripts/prepare_release.ps1 `
 
 ## 検査
 
-GitHub に接続せずに公開 Action の分割と再実行を確認するには、生成済み SQLite を指定する。
+GitHubに接続せず、受け渡し用Draftへの整理マーカー付与、配布版の加工と再実行、試用公開・正式公開を確認するには、生成済みSQLiteを指定する。
+
+CIはRustの `release_fixture` で小さなSQLiteを作り、同じ公開フローを検査する。ローカルでも次のコマンドで実行できる。
+
+```powershell
+New-Item -ItemType Directory -Force build/surface/release-test
+cargo run --locked --release --manifest-path surface/Cargo.toml -p yamamuki-data-sqlite --example release_fixture -- build/surface/release-test/source.sqlite3
+pwsh -NoProfile -File surface/tests/publish_release.ps1 -Database build/surface/release-test/source.sqlite3 -DataTimestamp '2026-11-11T00:00:00Z'
+```
+
+全国データで検査するときは、次を実行する。
 
 ```powershell
 pwsh -NoProfile -File surface/tests/publish_release.ps1 -Database build/surface/japan-0.1.0/esa-worldcover.sqlite3

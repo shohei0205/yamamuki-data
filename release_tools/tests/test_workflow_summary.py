@@ -6,12 +6,12 @@ from release_tools.workflow_summary import render
 
 
 class WorkflowSummaryTests(unittest.TestCase):
-    def test_generation_date_and_scheduled_default(self):
+    def test_manual_generation_date_and_default(self):
         for inputs, expected in (({}, "未指定（latest を取得）"), ({"source_date": "2026-09-29"}, "2026-09-29")):
             with self.subTest(inputs=inputs):
-                summary = render("generate", inputs, {"GITHUB_EVENT_NAME": "schedule", "GITHUB_REF_NAME": "main", "RELEASE_CHANNEL": "stable"})
+                summary = render("generate", inputs, {"GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF_NAME": "main", "RELEASE_CHANNEL": "stable"})
                 self.assertIn(expected, summary)
-                self.assertIn("schedule", summary)
+                self.assertIn(r"workflow\_dispatch", summary)
                 self.assertIn("stable", summary)
                 self.assertNotIn("reason", summary)
 

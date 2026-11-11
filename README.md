@@ -30,24 +30,24 @@ LICENSES/          Release に添付するライセンスの本文
 
 ## データの配布
 
+- [正式版の Release 一覧](https://github.com/shohei0205/yamamuki-data/releases?q=draft%3Afalse+prerelease%3Afalse)
+- [下書き Release の一覧](https://github.com/shohei0205/yamamuki-data/releases?q=draft%3Atrue)（リポジトリへの書き込み権限が必要）
+
 ### 配布の方針
 
-生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データとデータ本体は原則として git に含めない。国土地理院版は補足適用前の地点 JSON と出典要約 JSON をコミットし、Action で補足を適用して Release を作る。開発版の最新版を示す小さな `manifest.json` は、Actions の生成物として GitHub Pages に公開する。
+生成したデータは [GitHub Releases](https://github.com/shohei0205/yamamuki-data/releases) に置く。元データとデータ本体は原則として git に含めない。国土地理院版は補足適用前の地点 JSON と出典要約 JSON をコミットし、Action で補足を適用して Release を作る。正式公開後の `manifest.json` は GitHub Pages に掲載する。
 
-正式版の通常生成は Release を作るところまでで、Pages は更新しない。利用する側で Release の版を選び、その Release に添付された manifest の URL を固定して取得する。アプリが読んでいる版のデータが消えないよう、公開した Release とその添付ファイルは削除・差し替えしない。
+OSM 山頂・国土地理院山頂の生成 Action は、タグを付けた下書きに配布ファイルを保存する。同じ Release を Pre-release として試用公開し、アプリで確認したあとに正式公開する。利用する側で Release の版を選び、その Release に添付された manifest の URL を固定して取得する。アプリが読んでいる版のデータが消えないよう、一般公開した Pre-release・正式版とその添付ファイルは保持する。生成 Action の Draft には整理用マーカーを付ける。マーカー付き Draft は、作成から 7 日以上経つと週 1 回の整理対象になる。
 
-データの種類ごとに公開時期と最新版の参照先を分ける。正式版と開発版も独立して扱い、リポジトリ全体の `releases/latest` はアプリの参照先に使わない。具体的な URL とタグは各データの文書を参照する。
+データの種類ごとに公開時期と最新版の参照先を分ける。リポジトリ全体の `releases/latest` はアプリの参照先に使わない。具体的な URL とタグは各データの文書を参照する。
 
-| ブランチ | 配布先 |
-|---|---|
-| `main` | 正式版 |
-| `dev` | 開発版（Pre-release） |
+山頂データの下書き作成・試用公開・正式公開は `main` で手動実行する。作業ブランチでは生成・検査を行い、配布ファイルを Actions の Artifacts に保存する。試用公開から正式公開まで、タグと配布ファイルの URL は同じ。
 
-開発中の処理は `dev` で確認し、正式版に採用するときは変更を `main` に取り込む。実行タイミングと確認方法はデータごとに定める。
+Actions とローカルのどちらで生成したデータも、配布ファイルは [Releases](https://github.com/shohei0205/yamamuki-data/releases) の **Assets** に添付する。データの種類と版は Release のタグで、試用公開と正式公開は Pre-release の設定で区別する。ローカル生成のデータは、添付するファイルと検証方法をデータごとの README に記載する。
 
-正式版も開発版も、このリポジトリの同じ [Releases 一覧](https://github.com/shohei0205/yamamuki-data/releases) に公開する。`main`・`dev` は生成処理の実行元で、配布ファイルは各 Release の **Assets** に添付する。データの種類と正式版・開発版の違いは、Release のタグで区別する。
+地表データでは、ローカルで生成したファイルを、整理マーカー付きの受け渡し用Draft Releaseにアップロードする。「地表：Release 加工・検査」がファイルを加工・検査し、同じReleaseを配布用Draftに整える。地形データも追加時にこの手順にそろえる。この配布用 Draft Release を、Pre-release → 正式 Release の順に公開する。Draft の間は添付ファイルを変更できる。Pre-release として公開するときから、タグ・添付ファイル・取得 URL を固定する。加工と検証の具体的な手順は、各データの追加時に用意する。
 
-開発版の最新版を示す manifest は GitHub Pages に置く。正式版の Pages の manifest・カタログ・履歴は通常生成では更新されず、最新 Release の一覧としては使わない。手動の公開・復旧・カタログ削除では、対象の Pages 情報を更新する。サイトは Actions から直接配置し、配布専用ブランチや生成物のコミットは作らない。
+正式公開・復旧で、正式版の manifest・カタログ・履歴を更新する。既存の開発版カタログとその参照先は公開当時の内容で残す。サイトは Actions から直接配置する。
 
 データごとの manifest と公開履歴の URL、データ本体の取得方法は、各データの文書にまとめる。
 
@@ -63,46 +63,59 @@ LICENSES/          Release に添付するライセンスの本文
 |---|---|
 | 共通：データ処理のテスト | 共通処理と各データのテスト |
 | 共通：文字形式の確認 | 改行コードとBOM |
-| 共通：確認済みデータを公開 | 地点データの手動公開 |
-| 地表：確認済みデータを公開 | [ローカルで添付した下書きを検査・公開](surface/README.md#地表データの公開) |
-| 地点 / ネイティブビューワ：Release | [Windows・macOSのビューワを手動公開](viewer/README.md#配布版の公開) |
+| 共通：Draft-release を試用公開 | 下書きを Pre-release として公開 |
+| 共通：Pre-release を正式公開 | 試用版を正式公開。地点データは配布カタログも更新 |
+| 地表：Release 加工・検査 | [ローカル生成物を加工・検査し、配布用Draftを作成](surface/README.md#地表データの公開) |
+| データビューワ：Release | [Windows・macOS のビューワを手動公開](viewer/README.md#配布版の公開) |
 
 データ固有のActionと操作手順は各READMEを参照する。
 
 ## 確認済みデータの公開
 
-Actions の「共通：確認済みデータを公開」を入口とする。正式版は `main`、開発版は `dev` を選ぶ。指定した Release のタグからデータ種別を判定し、その種別の検証・公開処理を実行する。対応する種別と固有の検査条件は各 README を参照する。
+山頂データの下書きの生成、試用公開、正式公開は別の Action として `main` で手動実行する。地表・地形データでは、上記の方針に沿ってローカルファイルのアップロードと Draft 内での加工・検査を先に行う。
 
-1. 下書き Release の検査結果と、必要なデータの差分を確認する。
-2. Actions の「共通：確認済みデータを公開」→「Run workflow」で実行元ブランチを選ぶ。
-3. `tag` 欄に確認した Release ページの URL またはタグを指定する。`untagged-...` を含む下書きの URL も使える。確認内容・公開理由は任意で、`sha256` は空欄なら検査結果から取得する。
-4. 公開処理が添付ファイルを取得・再検証し、配布先・タグ・Pre-release の区分と SHA-256 を確認する。公開者と理由を Release の説明に残し、空欄なら「理由の記入なし」と記録する。
+1. 生成 Action の Summary から下書き Release を開き、検査結果とデータの差分を確認する。
+2. 「共通：Draft-release を試用公開」で、`tag` に下書きの URL またはタグを指定する。Action が添付ファイルを再検証し、同じタグの Pre-release として一般公開する。
+3. 試用公開した Release を、利用するアプリの開発版で確認する。
+4. 確認が済んだら、「共通：Pre-release を正式公開」で同じタグを指定する。Actionが再検証してPre-releaseの指定を解除する。地点データは正式版カタログも更新する。
 
-検証を通すため、下書きは GitHub の公開ボタンから直接公開せず、このワークフローを使う。Pages に初めて配置するときだけ `initialize_pages` を選ぶ。既存の参照先を復旧する場合の条件は、対象データの手順を確認する。
+`sha256` は空欄なら Release の検査結果から取得する。確認内容と公開理由は任意で、正式公開時に Release の説明へ記録する。Pages に初めて配置する場合は `initialize_pages` を選ぶ。
 
-手動公開の検証は `release_tools/point_release.py`、Release の取得・Pages・公開履歴の共通処理は `release_tools/release_data.py` にまとめる。OSM の生成・比較・自動公開は `points/osm-peaks/scripts/release_data.py`、GSI の検証・snapshot・配布ファイルの生成は `points/gsi-peaks/scripts/release_snapshot.py` に置き、共通の公開処理を呼び出す。OSM・国土地理院の山頂は同じ処理を使い、manifest の形式・版・取得 URL、データ本体のサイズ・SHA-256、地点の ID・座標・出典・件数、添付されたオリジナルと補足から配布地点を再現できるかを確認する。生成時の出典固有の検査は、各データの生成処理で行う。旧形式の Release は従来の検証を使う。
+公開入口の `release_tools/publish_reviewed.py` がmanifestの形式から地点・地表の処理を選ぶ。地表は検査記録に従って `surface/scripts/publish_release.ps1` を呼び、SQLiteの全添付を照合する。地点の手動公開の検証は `release_tools/point_release.py`、Release の取得・Pages・公開履歴の共通処理は `release_tools/release_data.py` にまとめる。OSM の生成時の比較と下書き作成は `points/osm-peaks/scripts/release_data.py`、GSI の検証・snapshot・配布ファイルの生成は `points/gsi-peaks/scripts/release_snapshot.py` に置き、共通の公開処理を呼び出す。OSM・国土地理院の山頂は同じ処理を使い、manifest の形式・版・取得 URL、データ本体のサイズ・SHA-256、地点の ID・座標・出典・件数、添付されたオリジナルと補足から配布地点を再現できるかを確認する。生成時の出典固有の検査は、各データの生成処理で行う。旧形式の Release は従来の検証を使う。
 
-共通形式（manifest・地点 JSON とも版 6）のデータは、Release の情報から公開対象を判定する。登録表やデータ別の公開用コードは追加しない。タグは `<データ ID>-<版>`、開発版は `<データ ID>-dev-<版>` とし、添付 manifest の `version` を使ってデータ ID を取り出す。ID・版名にハイフンを含めても判定できる。データ本体のファイル名・表示名は manifest から取得する。Release の Pre-release の区分を実行元ブランチと照合し、Pages には `points/<データ ID>/manifest.json`（開発版は `points/<データ ID>-dev/manifest.json`）を配置する。最新版参照タグ、不正な ID、タグ・版・配布先の不一致は受け付けない。地形など異なる形式のデータは、この地点用の公開処理では扱わない。
+共通形式（manifest・地点 JSON とも版 6）の地点データは、`<データ ID>-<版>` と添付 manifest の `version` から対象を判定する。OSM 山頂は `osm-peaks-<version>`、国土地理院山頂は `gsi-peaks-<version>` を使う。試用公開から正式公開まで添付ファイルは同じものを使う。正式公開が成功したあとに `points/<データ ID>/manifest.json` と正式版カタログを更新する。地表SQLiteも共通の試用公開・正式公開Actionを使い、manifestはReleaseのAssetsで提供する。地形データの検証は追加時に定める。
+
+生成 Action は Draft の本文に `<!-- yamamuki-data:temporary-draft:v1 -->` を付ける。作成から 7 日以上経ったマーカー付き Draft は、削除直前の状態を確認する週次の整理 Action の対象になる。試用公開時にはマーカーを外し、以後は一般公開した版として保持する。
+
+### 公開前の Draft を整理する
+
+`main` で「共通：古い Draft を一覧にする」を実行し、Summary の候補を確認する。対象は作成から 7 日以上経ち、公開日時が記録されていない整理用マーカー付きの Draft。山頂・地表・地形など、データの種類やタグの命名形式は問わない。
+
+削除する場合は「共通：古い Draft を削除する」にタグを 1 件指定する。Action は削除直前に、Release ID とタグ、整理用マーカー、作成から 7 日以上経過していること、Draft かつ公開日時が未記録であることを再確認する。状態の取得・確認に失敗した場合は停止する。Pre-release・正式版と Git タグは削除しない。公開 Action と同じグループで直列実行し、公開操作との競合を防ぐ。カタログやアプリ側の参照先は確認しない。
+
+毎週月曜の日本時間 12:00 に「共通：古い Draft を定期整理」も同じ条件で実行する。整理用マーカーは `<!-- yamamuki-data:temporary-draft:v1 -->`。試用公開時にマーカーを外す。Draft を長く保持する場合は、本文からこのマーカーを取り除く。
+
+Pre-release として一般公開した版は、正式公開しない場合も添付ファイルと取得 URL を保持する。
 
 ### Pages への配置と参照先の復旧
 
-利用開始時に、リポジトリの Settings → Pages → Build and deployment の Source を **GitHub Actions** にし、`github-pages` 環境の配置元として `main` と `dev` を許可する。
+利用開始時に、リポジトリの Settings → Pages → Build and deployment の Source を **GitHub Actions** にし、`github-pages` 環境の配置元として `main` を許可する。
 
-開発版の自動公開、確認済みデータの手動公開・復旧、カタログ削除では、Actions で manifest のサイトを生成し、`upload-pages-artifact` と `deploy-pages` で GitHub Pages に直接配置する。ソースは `main`・`dev` に置き、配布専用ブランチや生成物のコミットは作らない。
+確認済みデータの正式公開・復旧では、Actions で manifest のサイトを生成し、`upload-pages-artifact` と `deploy-pages` で GitHub Pages に直接配置する。ソースは `main` に置き、配布専用ブランチや生成物のコミットは作らない。
 
-サイト全体の更新には `/catalog.json` を使う。`schemaVersion: 1` とし、`manifests` にパスと manifest の対応、公開履歴も保存する。既存一覧からサイト全体を作り直し、対象のデータ・配布先だけを置き換える。他のデータ・配布先・履歴は引き継ぐ。これは [アプリが使う地点カタログ](points/README.md#公開データのカタログ) とは別の一覧である。
+サイト全体の更新には `/catalog.json` を使う。`schemaVersion: 1` とし、`manifests` にパスと manifest の対応、公開履歴も保存する。既存一覧からサイト全体を作り直し、対象のデータ・配布先だけを置き換える。他のデータ・配布先・履歴は引き継ぐ。これは [データ配布用の地点カタログ](points/README.md#公開データのカタログ) とは別の一覧である。
 
 Pages を更新するジョブは共通の `publish-data-pages` グループで直列化する。配置後は manifest 一覧・公開履歴・地点カタログが生成内容と一致するまで最大 55 秒待ち、反映を確認してからジョブを完了する。既存一覧の取得や検証に失敗した場合は配置しない。404 の場合も通常の公開では停止し、初期化を明示した初回の手動公開だけが一覧を新しく作る。
 
 配置時にファイルを削除してから上げ直す時間は生じない。キャッシュにより更新前の manifest が返る場合はあるが、履歴版を残すため、その manifest でも対応するデータ本体を取得できる。アプリは通信や検証に失敗したら保存済みデータを維持して再試行する。
 
-参照先の更新に失敗した場合は、公開済みの同じ Release の URL またはタグを手動公開ワークフローに指定して復旧する。履歴版のデータ本体は再生成・再アップロードしない。公開済みの履歴 Release には不変化を適用できる。
+参照先の更新に失敗した場合は、「共通：Pre-release を正式公開」で、公開済みの正式版の URL またはタグを指定して復旧する。履歴版のデータ本体は再生成・再アップロードしない。公開済みの履歴 Release には不変化を適用できる。
 
 ### 実行概要の確認
 
-生成・検査と確認済みデータの公開は、処理の冒頭に Summary へ実行パラメーターを表示する。ブランチ・イベント・実行者・実行回数・配布先に加え、手動公開では入力 URL またはタグ・SHA-256・確認内容と公開理由・Pages 初期化の指定を表示する。空欄の場合の扱いも明記する。データ固有の入力項目と検査結果は各 README を参照する。
+OSM 山頂の生成と共通の公開 Action は、処理の冒頭に Summary へ実行パラメーターを表示する。ブランチ・イベント・実行者・実行回数・配布先に加え、手動公開では操作と入力 URL またはタグ・SHA-256・確認内容と公開理由・Pages 初期化の指定を表示する。空欄の場合の扱いも明記する。データ固有の入力項目と検査結果は各 README を参照する。
 
-Pages を更新する公開ジョブの Summary には、公開後の Release の URL、配置する manifest の固定 URL と Pages の配置結果を表示する。正式版の通常生成は Release の作成までで、Pages 配置は行わない。下書きで保留された場合は参照先を更新しない。単体テストのダミーデータは Summary に出さない。過去の実行に保存された Summary は書き換わらない。
+Pages を更新する公開ジョブの Summary には、公開後の Release の URL、配置する manifest の固定 URL と Pages の配置結果を表示する。`main` で山頂データを生成したときは、Summary に下書き Release の URL とタグを表示する。試用公開では Release の URL とタグを表示し、Pages の参照先は正式公開・復旧時に更新する。単体テストのダミーデータは Summary に出さない。過去の実行に保存された Summary は書き換わらない。
 
 ## 公開履歴
 
@@ -127,21 +140,9 @@ Pages を更新する公開ジョブの Summary には、公開後の Release �
 
 ### ブランチのマージ方針
 
-開発版の `dev` と正式版の `main` は継続して使い、変更は PR を通して取り込む。取り込み先に応じて、次のマージ方法を選ぶ。
+作業ブランチから `main` に PR を作り、スカッシュマージで取り込む。GitHub のリポジトリ設定でスカッシュマージを許可し、`main` のブランチ保護で PR と必要な CI を要求する。
 
-| 取り込み元 → 取り込み先 | マージ方法 |
-|---|---|
-| 作業ブランチ → `dev` | スカッシュマージ（Squash and merge） |
-| `dev` → `main` | 通常のマージコミット（Create a merge commit） |
-| `main` → `dev`（正式版だけに入れた修正の反映） | 通常のマージコミット（Create a merge commit） |
-
-作業ブランチの変更は、1つの目的を1つのコミットにまとめて `dev` に取り込む。`dev` で確認した変更を正式版に採用するときは、取り込み先を `main`、取り込み元を `dev` とした PR を作る。
-
-`dev` → `main` は履歴を共有したまま取り込む。スカッシュすると、同じ変更が `main` では別のコミットになり、次の正式版への PR に取り込み済みのコミットが並んだり、競合が起きやすくなったりするため、この方向ではスカッシュやリベースでのマージを使わない。
-
-正式版だけに修正を入れた場合は、`main` → `dev` の PR を作り、マージコミットで取り込む。これにより、次の開発・正式版公開にも修正と履歴を引き継ぐ。`dev` → `main` のマージ後も `dev` ブランチは削除しない。
-
-GitHub のリポジトリ設定では、マージコミットとスカッシュマージの両方を許可する。マージはユーザーが行い、エージェントは行わない。
+`dev` ブランチを廃止するときは、先に移行の変更を `main` に取り込む。`dev` 宛ての PR があれば取り込み先を変更し、`github-pages` 環境の配置元を `main` にそろえる。`dev` の変更がすべて取り込まれ、実行中の公開ジョブが完了したことを確認する。`dev` を対象にする削除制限を解除してからブランチを削除する。公開済みの開発版には従来のタグと URL を使う。
 
 ### 変更の確かめ方
 
@@ -155,10 +156,11 @@ GitHub のリポジトリ設定では、マージコミットとスカッシュ�
 python -m unittest discover -s release_tools/tests -v
 ```
 
-CI の「共通：文字形式の確認」はすべての PR で文字コード・改行を確認する。「共通：データ処理のテスト」（`.github/workflows/test.yml`）は push・PR 時に、共通の公開処理・地点の共通ビューア・データビューワ（Windows・macOS）・OSM 山頂・国土地理院山頂・テスト用地点を別のジョブで確認する。データ種別を追加するときもこのActionにジョブを追加する。必須チェックの `test` ジョブは各テストの結果を集約し、すべて成功した場合だけ成功する。ジョブを追加するときは `test` の依存先と結果確認にも追加する。
+CI の「共通：文字形式の確認」はすべての PR で文字コード・改行を確認する。「共通：データ処理のテスト」（`.github/workflows/test.yml`）は push・PR 時に、共通の公開処理・地点の共通ビューア・データビューワ（Windows・macOS）・OSM 山頂・国土地理院山頂・地表SQLiteの公開手順を別のジョブで確認する。データ種別を追加するときもこのActionにジョブを追加する。必須チェックの `test` ジョブは各テストの結果を集約し、すべて成功した場合だけ成功する。ジョブを追加するときは `test` の依存先と結果確認にも追加する。
 
 データ固有のテストは各 README を参照する。
 
+- [地表データの公開テスト](surface/esa_worldcover/README.md#テスト)
 - [地点データのテスト](points/README.md#変更の確かめ方)
 
 ## ライセンス
@@ -172,7 +174,7 @@ CI の「共通：文字形式の確認」はすべての PR で文字コード�
 | OpenStreetMap 由来の地点データ | © OpenStreetMap contributors | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) | [OSM 山頂の出典とライセンス](points/osm-peaks/README.md#出典とライセンス)。補足適用前の原本と旧形式のデータも含む |
 | 国土地理院由来の地点データ・OSM版の地点照合と補正に用いた情報 | 出典：国土地理院。資料名と加工内容を記録する | [公共データ利用規約（第1.0版）](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（PDL-1.0） | [GSI 山頂](points/gsi-peaks/README.md#出典とライセンス)・[OSM 山頂](points/osm-peaks/README.md#出典とライセンス) の出典とライセンス |
 | 日本百名山の山名一覧 | Wikipedia「日本百名山」の投稿者 | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) | [GSI 山頂](points/gsi-peaks/README.md#出典とライセンス)・[OSM 山頂](points/osm-peaks/README.md#出典とライセンス) |
-| 動作確認用の架空の地点データ | このリポジトリで作成 | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | [テスト用地点](points/testdata/README.md)。内蔵画像と分類タグを含む |
+| 公開済みの動作確認用地点データ | このリポジトリで作成 | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | [開発版カタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) の `testdata` |
 
 地点に追加する画像は、画像ごとの出典・利用条件を各データセットの文書で確認する。
 

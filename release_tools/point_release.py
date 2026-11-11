@@ -12,7 +12,7 @@ import sys
 import tempfile
 import zlib
 
-from release_tools.publish_reviewed import ROOT, check_branch, dataset_for_tag, version_for_tag
+from release_tools.publish_reviewed import ROOT, check_branch, dataset_for_tag, find_release, version_for_tag
 
 # 地点の形式検証と Pages の処理は既存の共通実装を使う。
 sys.path.insert(0, str(ROOT / "points/osm-peaks"))
@@ -51,7 +51,7 @@ def validate(directory, dataset, tag, channel):
             or type(manifest.get("dataSchemaVersion")) is not int
             or manifest["dataSchemaVersion"] != 6):
         raise ValueError("未対応の地点 manifest の形式です")
-    if tag != release_tag(dataset, manifest.get("version", ""), channel):
+    if dataset_for_tag(tag, channel, manifest.get("version")) != dataset:
         raise ValueError("Release のタグと manifest の版が一致しません")
     filename = manifest.get("fileName")
     if not isinstance(filename, str) or not re.fullmatch(r"[a-z][a-z0-9_-]*\.json\.gz", filename):
@@ -135,12 +135,17 @@ def fetch(dataset, tag, directory, channel):
         raise ValueError("manifest がオブジェクトではありません")
     if dataset_for_tag(tag, channel, manifest.get("version")) != dataset:
         raise DifferentDataset("Release のデータ ID が一致しません")
+    assets = json.loads(site.gh("release", "view", tag, "--json", "assets"))["assets"]
+    selected = data_assets(manifest, {asset["name"] for asset in assets})
+    site.gh("release", "download", tag, *[part for name in selected for part in ("--pattern", name)], "--dir", str(directory))
+    return validate(directory, dataset, tag, channel)
+
+
+def data_assets(manifest, names):
     filename = manifest.get("fileName", "")
     if not isinstance(filename, str) or not re.fullmatch(r"[a-z][a-z0-9_-]*\.json\.gz", filename):
         raise ValueError("配布ファイル名が不正です")
     parts = filenames(filename.removesuffix(".json.gz"))
-    assets = json.loads(site.gh("release", "view", tag, "--json", "assets"))["assets"]
-    names = {asset["name"] for asset in assets}
     selected = [filename]
     if any(name in names for name in parts):
         if not all(name in names for name in parts):
@@ -150,8 +155,7 @@ def fetch(dataset, tag, directory, channel):
         # 旧版の添付ファイルも既存の検証処理で確かめる。
         from scripts.supplements import COMPANION_FILES, LEGACY_COMPANION_FILE
         selected.extend(name for name in (*COMPANION_FILES, LEGACY_COMPANION_FILE) if name in names and name not in selected)
-    site.gh("release", "download", tag, *[part for name in selected for part in ("--pattern", name)], "--dir", str(directory))
-    return validate(directory, dataset, tag, channel)
+    return selected
 
 
 def previous_release(dataset, channel, directory, releases):
@@ -161,11 +165,11 @@ def previous_release(dataset, channel, directory, releases):
             if release["draft"] or release["prerelease"] or site.needs_review(release):
                 continue
             try:
-                version_for_tag(dataset, release["tag_name"], channel)
-                candidates.append(release["tag_name"])
+                tag = release["tag_name"]
+                candidates.append((version_for_tag(dataset, tag, channel), tag))
             except ValueError:
                 continue
-        for index, tag in enumerate(sorted(candidates, reverse=True)):
+        for index, (_, tag) in enumerate(sorted(candidates, reverse=True)):
             try:
                 return fetch(dataset, tag, directory / str(index), channel)
             except DifferentDataset:
@@ -216,16 +220,7 @@ def publish(dataset, tag, channel, sha256="", reason=""):
                 raise
             previous = None
             warning = "前回の参照先を取得できないため、確認した公開済みの版で参照先を復旧します"
-        original_notes = release.get("body") or ""
-        if site.needs_review(release):
-            original_notes = original_notes.replace(site.REVIEW_HEADING, "## 生成時の要確認事項（手動確認済み）", 1)
-        contents = original_notes + "\n\n## データの検査結果（公開前の再検査）\n\n"
-        contents += f"- 地点数: {len(current[1]):,}\n- 再検証した SHA-256: `{checksum}`\n"
-        if previous is not None:
-            contents += f"- 前回からの地点数の増減: {len(current[1]) - len(previous[1]):+,}\n"
-        if warning:
-            contents += f"- {warning}\n"
-        contents += f"\n## 手動公開の確認\n\n確認者: {os.environ.get('GITHUB_ACTOR', '不明')}\n\n{reason.strip() or '理由の記入なし'}\n"
+        contents = review_notes(release, current, checksum, previous, warning, reason)
         notes = root / "notes.md"
         site.write_report(notes, contents)
         if release["draft"]:
@@ -233,6 +228,80 @@ def publish(dataset, tag, channel, sha256="", reason=""):
             site.gh("release", "edit", tag, "--draft=false", "--latest=false")
         site.update_latest(root, current[0], channel, dataset=dataset)
         site.append_summary(f"\n## 公開したリリース\n\n[公開したリリースを開く](https://github.com/{os.environ['GH_REPO']}/releases/tag/{tag})\n")
+
+
+def review_notes(release, current, checksum, previous, warning, reason):
+    original_notes = release.get("body") or ""
+    if site.needs_review(release):
+        original_notes = original_notes.replace(site.REVIEW_HEADING, "## 生成時の要確認事項（手動確認済み）", 1)
+    contents = original_notes + "\n\n## データの検査結果（公開前の再検査）\n\n"
+    contents += f"- 地点数: {len(current[1]):,}\n- 再検証した SHA-256: `{checksum}`\n"
+    if previous is not None:
+        contents += f"- 前回からの地点数の増減: {len(current[1]) - len(previous[1]):+,}\n"
+    if warning:
+        contents += f"- {warning}\n"
+    contents += f"\n## 手動公開の確認\n\n確認者: {os.environ.get('GITHUB_ACTOR', '不明')}\n\n{reason.strip() or '理由の記入なし'}\n"
+    return contents
+
+
+def publish_candidate(target, sha256="", reason="", *, preview=False):
+    check_branch("stable")
+    releases = site.releases()
+    release = find_release(target, releases)
+    tag = release["tag_name"]
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", tag):
+        raise ValueError("タグの形式が不正です")
+    if release["draft"] and not preview:
+        raise ValueError("下書きを先に試用向けに公開してください")
+    if preview and not (release["draft"] or release["prerelease"]):
+        raise ValueError("正式公開済みの Release は試用版に戻せません")
+
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        site.gh("release", "download", tag, "--pattern", "manifest.json", "--dir", str(directory))
+        manifest = json.loads((directory / "manifest.json").read_bytes())
+        if not isinstance(manifest, dict):
+            raise ValueError("manifest がオブジェクトではありません")
+        dataset = dataset_for_tag(tag, "stable", manifest.get("version"))
+        if not release["draft"] and not release["prerelease"]:
+            publish(dataset, tag, "stable", sha256, reason)
+            return
+        if manifest.get("schemaVersion") != 6:
+            raise ValueError("試用・正式公開には共通形式の地点 manifest が必要です")
+        current = fetch(dataset, tag, directory / "current", "stable")
+        checksum = sha256.strip() or site.reviewed_checksum(release)
+        if checksum != current[0]["sha256"]:
+            raise ValueError("確認したファイルと SHA-256 が異なります")
+
+        fields = {"draft": False, "prerelease": preview, "make_latest": "false"}
+        if preview:
+            fields["body"] = (release.get("body") or "").replace(site.TEMPORARY_DRAFT_MARKER, "")
+        if release["draft"]:
+            commit = release["target_commitish"]
+            if not re.fullmatch(r"[0-9a-f]{40}", commit):
+                raise ValueError("下書きの作成元コミットが SHA で固定されていません")
+            refs = json.loads(site.gh("api", site.endpoint(f"git/matching-refs/tags/{tag}")))
+            if any(ref["ref"] == f"refs/tags/{tag}" and ref["object"]["sha"] != commit for ref in refs):
+                raise ValueError(f"タグが下書きの作成元と異なるコミットを指しています: {tag}")
+            fields["target_commitish"] = commit
+        if not preview:
+            previous = previous_release(dataset, "stable", directory / "previous", releases)
+            fields["body"] = review_notes(release, current, checksum, previous, "", reason)
+
+        published = release
+        if release["draft"] or not preview:
+            request = directory / "publish.json"
+            request.write_text(json.dumps(fields), encoding="utf-8")
+            published = json.loads(site.gh("api", "--method", "PATCH", site.endpoint(f"releases/{release['id']}"),
+                                           "--input", str(request)))
+        if (published["id"] != release["id"] or published["tag_name"] != tag
+                or published["draft"] or published["prerelease"] != preview):
+            raise ValueError("同じ Release が指定した状態で公開されたことを確認できません")
+
+        kind = "試用向けに公開した" if preview else "正式公開した"
+        site.append_summary(f"\n## {kind} Release\n\n[Release を開く]({published['html_url']})\n\n- タグ: `{tag}`\n")
+        if not preview:
+            site.update_latest(directory, current[0], "stable", dataset=dataset)
 
 
 def main():

@@ -1,4 +1,4 @@
-name: 地点 / 国土地理院山頂：Release 生成・検査
+name: 地点 / 国土地理院山頂：下書き Release 生成・検査
 
 on:
   workflow_dispatch:
@@ -20,6 +20,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       PYTHONUNBUFFERED: '1'
+      RELEASE_CHANNEL: stable
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -30,20 +31,20 @@ jobs:
           python -m unittest discover -s release_tools/tests -v
           python -m unittest discover -s points/gsi-peaks/tests -p test_release_snapshot.py -v
       - name: 作業ブランチの配布ファイルを生成
-        if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev'
+        if: github.ref != 'refs/heads/main'
         run: |
           version="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          python points/gsi-peaks/scripts/release_snapshot.py prepare --version "$version" --channel dev
+          python points/gsi-peaks/scripts/release_snapshot.py prepare --version "$version" --channel "$RELEASE_CHANNEL"
       - name: 作業ブランチの生成物を保存
-        if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev'
+        if: github.ref != 'refs/heads/main'
         uses: actions/upload-artifact@v7
         with:
           name: gsi-peaks-test-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/gsi-release/
           if-no-files-found: error
           retention-days: 7
-      - name: コミット済み JSON を検証・圧縮して Release に公開
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
+      - name: コミット済み JSON を検証・圧縮して下書き Release を作成
+        if: github.ref == 'refs/heads/main'
         run: |
           version="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          python points/gsi-peaks/scripts/release_snapshot.py publish --version "$version"
+          python points/gsi-peaks/scripts/release_snapshot.py draft --version "$version" --channel "$RELEASE_CHANNEL"

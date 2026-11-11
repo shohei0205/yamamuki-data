@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Database)
+param([Parameter(Mandatory)][string]$Database, [string]$DataTimestamp)
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Path $testRoot | Out-Null
 $inputDir = Join-Path $testRoot 'input'
 $commit = '1' * 40
 $repo = 'shohei0205/yamamuki-data'
-$state = @{ draft = $true; assets = @{}; nextId = 1; uploaded = @(); failUpload = $true }
+$state = @{ draft = $true; prerelease = $false; body = '<!-- yamamuki-data:temporary-draft:v1 -->'; assets = @{}; nextId = 1; uploaded = @(); failUpload = $true; created = $false; started = $false; pendingCommit = $null }
 $previousEnv = @{}
 foreach ($key in @('GITHUB_REPOSITORY', 'GITHUB_REF', 'GITHUB_STEP_SUMMARY')) {
     $previousEnv[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
@@ -25,21 +25,52 @@ function Add-TestAsset([IO.FileInfo]$File) {
     }
 }
 
+function git {
+    if ($args[0] -eq 'ls-remote') { return }
+    throw "未定義のgit呼び出しです: $args"
+}
+
 function gh {
     if ($args[0] -eq 'api') {
+        if ($args[1] -like '*/actions/workflows/publish-surface.yml') { return 'active' }
+        if ($args[1] -like '*/commits/*') { return $commit }
+        if ($args[1] -eq '--paginate' -and !$state.created) { return '[[]]' }
         if ($args[1] -eq '--paginate') {
             return '[[{"id":42,"tag_name":"' + $tag + '"}]]'
         }
         if ($args[1] -like '*/git/ref/tags/*') {
             return @{object=@{type='commit';sha=$commit}} | ConvertTo-Json -Compress
         }
+        if ($args[1] -eq '--method' -and $args[2] -eq 'POST') {
+            if ($args[3] -notlike '*/git/refs' -or $args[-1] -cne "sha=$commit") { throw 'タグの事前作成が不正です。' }
+            $state.pendingCommit = $commit
+            return '{}'
+        }
         if ($args[1] -eq '--method') {
             if ($args[2] -ne 'PATCH' -or $state.assets.Count -ne 9) { throw '不完全なReleaseを公開しようとしました。' }
-            $state.draft = $false
-            return @{draft=$false;tag_name=$tag;html_url="https://github.com/$repo/releases/tag/$tag"} | ConvertTo-Json -Compress
+            $patch = Get-Content -LiteralPath $args[5] -Raw | ConvertFrom-Json -AsHashtable
+            foreach ($key in @('draft','prerelease','body')) {
+                if ($patch.Contains($key)) { $state[$key] = $patch[$key] }
+            }
+            return @{id=42;draft=$state.draft;prerelease=$state.prerelease;body=$state.body;tag_name=$tag;html_url="https://github.com/$repo/releases/tag/$tag"} | ConvertTo-Json -Compress
         }
-        return @{draft=$state.draft;prerelease=$false;tag_name=$tag;target_commitish=$commit;assets=@($state.assets.Values)} |
+        return @{id=42;draft=$state.draft;prerelease=$state.prerelease;body=$state.body;tag_name=$tag;target_commitish=$commit;assets=@($state.assets.Values);html_url="https://github.com/$repo/releases/tag/$tag"} |
             ConvertTo-Json -Compress -Depth 4
+    }
+    if ($args[0] -eq 'release' -and $args[1] -eq 'create') {
+        $notes = $args[[array]::IndexOf($args, '--notes') + 1]
+        if (!$notes.Contains('<!-- yamamuki-data:temporary-draft:v1 -->') -or
+            $args -notcontains '--draft' -or $args -notcontains '--verify-tag' -or
+            $state.pendingCommit -cne $commit) { throw '受け渡しDraftの設定が不正です。' }
+        $state.created = $true
+        $state.body = $notes
+        return
+    }
+    if ($args[0] -eq 'workflow' -and $args[1] -eq 'run') {
+        if (!$state.created -or $args[2] -cne 'publish-surface.yml' -or
+            $args[[array]::IndexOf($args, '--ref') + 1] -cne 'main') { throw '加工Actionの起動が不正です。' }
+        $state.started = $true
+        return
     }
     if ($args[0] -eq 'release' -and $args[1] -eq 'download') {
         $dir = [array]::IndexOf($args, '--dir')
@@ -65,7 +96,10 @@ function gh {
 }
 
 try {
-    & (Join-Path $scripts 'prepare_release.ps1') -Dataset esa_worldcover -Database $Database -OutputDirectory $inputDir
+    $timestamp = @{}
+    if ($DataTimestamp) { $timestamp.DataTimestamp = $DataTimestamp }
+    & (Join-Path $scripts 'prepare_release.ps1') -Dataset esa_worldcover -Database $Database -OutputDirectory $inputDir -TargetCommit $commit -ProcessDraft @timestamp
+    if (!$state.created -or !$state.started) { throw '受け渡しDraftまたは加工Actionが作成されませんでした。' }
     Get-ChildItem -LiteralPath $inputDir -File | ForEach-Object { Add-TestAsset $_ }
     $manifest = Get-Content -LiteralPath (Join-Path $inputDir 'manifest.json') -Raw | ConvertFrom-Json
     $suffix = if ($IsWindows) { ".exe" } else { "" }
@@ -92,10 +126,39 @@ try {
     $state.failUpload = $false
     $state.uploaded = @()
     & (Join-Path $scripts 'publish_release.ps1') @publish
-    if ($state.draft -or $state.assets.Count -ne 9 -or $state.uploaded.Count -ne 5 -or
+    if (!$state.draft -or $state.prerelease -or $state.assets.Count -ne 9 -or $state.uploaded.Count -ne 5 -or
         $state.uploaded -notcontains 'esa-worldcover-z9.manifest.json' -or
         $state.uploaded -contains 'esa-worldcover-z9.sqlite3') {
         throw '再実行時の添付・公開結果が不正です。'
+    }
+    if (!$state.body.Contains('<!-- yamamuki-data:temporary-draft:v1 -->') -or
+        !$state.body.Contains('<!-- yamamuki-data:surface-draft:v1 ')) {
+        throw '加工後のDraftに整理マーカーまたは検査記録がありません。'
+    }
+    try {
+        & (Join-Path $scripts 'publish_release.ps1') @publish -Operation Formalize
+        throw 'Draftからの正式公開を拒否できませんでした。'
+    } catch {
+        if ($_.Exception.Message -notmatch 'Releaseの状態が指定操作に適合しません') { throw }
+    }
+    $state.uploaded = @()
+    & (Join-Path $scripts 'publish_release.ps1') @publish -Operation Preview
+    if ($state.draft -or !$state.prerelease -or $state.uploaded.Count -ne 0 -or
+        $state.body.Contains('<!-- yamamuki-data:temporary-draft:v1 -->')) {
+        throw '試用公開の状態、整理マーカーまたは添付の不変性が不正です。'
+    }
+    & (Join-Path $scripts 'publish_release.ps1') @publish -Operation Formalize -Reason 'アプリで確認'
+    if ($state.draft -or $state.prerelease -or $state.uploaded.Count -ne 0 -or
+        !$state.body.Contains('アプリで確認')) {
+        throw '正式公開の状態または添付の不変性が不正です。'
+    }
+    foreach ($operation in @('Prepare','Preview')) {
+        try {
+            & (Join-Path $scripts 'publish_release.ps1') @publish -Operation $operation
+            throw '正式公開済みのReleaseに不正な操作が通りました。'
+        } catch {
+            if ($_.Exception.Message -notmatch 'Releaseの状態が指定操作に適合しません') { throw }
+        }
     }
     foreach ($z in 9..12) {
         $name = "esa-worldcover-z$z"
@@ -117,7 +180,7 @@ try {
             }
         }
     }
-    Write-Output '公開Actionの分割、転送失敗、再実行を確認しました。'
+    Write-Output 'Draftの加工、転送失敗と再実行、試用・正式公開、マーカーと添付の不変性を確認しました。'
 } finally {
     foreach ($key in $previousEnv.Keys) { [Environment]::SetEnvironmentVariable($key, $previousEnv[$key], 'Process') }
     if (Test-Path -LiteralPath $inputDir -PathType Container) {

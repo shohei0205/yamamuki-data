@@ -40,14 +40,14 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 
 | 配布先 | manifest の取得方法 |
 |---|---|
-| 正式版 | 利用する `osm-peaks-<version>` の Release を選び、`https://github.com/shohei0205/yamamuki-data/releases/download/<タグ>/manifest.json` を固定して取得する。本文の先頭に「## 要確認」がある Release は選ばない。 |
-| 開発版（Pre-release） | [開発版の最新版 manifest](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json) を取得する |
+| 正式版 | [正式 Release 一覧](https://github.com/shohei0205/yamamuki-data/releases?q=%22osm-peaks-%22+draft%3Afalse+prerelease%3Afalse)（Pre-release を除く）から `osm-peaks-<version>` の版を選び、`https://github.com/shohei0205/yamamuki-data/releases/download/<タグ>/manifest.json` を固定して取得する。本文の先頭に「## 要確認」がある Release は選ばない。 |
+| 試用版（Pre-release） | Pre-release として公開した Release に添付された `manifest.json` を使う |
 
 データ本体（`osm-peaks.json.gz`）は manifest の `downloadUrl` から取得する。正式版を切り替えるときは、利用する側で固定した Release のタグを更新する。リポジトリ全体の `releases/latest` は使わない。
 
-正式版の通常生成は Pages を更新しない。正式版の [Pages manifest](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json) と公開履歴には、以前掲載した情報が残る。手動公開・復旧・カタログ削除では更新されることがあるが、正式版の最新 Release の取得先としては使わない。
+正式版の [Pages manifest](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/manifest.json) と公開履歴は、確認済みデータの公開・復旧で更新する。アプリは利用する正式版の Release を選び、添付の manifest を参照する。
 
-[Releases](https://github.com/shohei0205/yamamuki-data/releases) に `manifest.json` と `osm-peaks.json.gz` を添付する。開発版の最新版 manifest は冒頭の表、公開履歴は「公開履歴」の節から取得できる。正式版は Release の manifest を使う。
+[Releases](https://github.com/shohei0205/yamamuki-data/releases) に `manifest.json` と `osm-peaks.json.gz` を添付する。[旧開発版の manifest](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/manifest.json) は、従来の取得先を直接読む開発ビルド向けに保持する。この参照先の更新は終了し、新しい試用版は Release に掲載する。過去の版は「公開履歴」を参照する。
 
 manifest の項目・型は [リポジトリ共通の manifest.json](../../formats/manifest.md) を、形式の版ごとの説明と変更履歴は [地点データフォーマット](../formats/data.md) を参照する。版4 のときの配り方（`peaks/`・`peaks-<version>`・`japan-mountains.json.gz`）は [版4の旧形式データ](#版4の旧形式データ) にある。
 
@@ -57,7 +57,7 @@ manifest の項目・型は [リポジトリ共通の manifest.json](../../forma
 |---|---|
 | `version` | 生成時の UTC 日時・Actions 実行 ID・再実行番号を連結 |
 | `fileName` | `osm-peaks.json.gz` |
-| `downloadUrl` | 正式版は `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>` の Release の gzip ファイル |
+| `downloadUrl` | 新しい版は `osm-peaks-<version>`、公開済みの旧開発版は `osm-peaks-dev-<version>` の Release の gzip ファイル |
 | `pointCount` | 収録した名前付き山頂ノードの件数 |
 | `dataTimestamp` | 配布データを生成した UTC 日時。PBF の基準日時とは区別する |
 | `metadata.sources` の `OpenStreetMap（日本・Geofabrik 配布）` の `latestTimestamp` | 収録する山頂ノードの OSM 最終編集日時の最大値。収録対象外のノードは集計しない |
@@ -67,13 +67,13 @@ manifest の項目・型は [リポジトリ共通の manifest.json](../../forma
 
 元データと収録ノードの日時は必須とし、欠落・形式不正・収録ノードの日時が元データより新しい場合は生成・公開を止める。元データの日付はダウンロード日時ではない。同じ元データで再実行しても配布の `version` は変わる。
 
-Release のタイトルとタグは同じ値とし、正式版は `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>` とする。取得・検証の契約は [共通の読み込みと公開](../../formats/manifest.md#読み込みと検証) に従う。
+Release のタイトルとタグは同じ値とし、新しい版は下書きから正式公開まで `osm-peaks-<version>` を使う。取得・検証の契約は [共通の読み込みと公開](../../formats/manifest.md#読み込みと検証) に従う。
 
 山頂データは正式版と開発版の参照先を分ける。Pages に掲載された地点データの一覧は [地点カタログ](../README.md#公開データのカタログ) を参照する。リポジトリ全体の `releases/latest` は使わない。
 
-正式版と開発版で manifest の形式は共通とし、開発版の履歴 Release は Pre-release とする。アプリで配布先を選ぶときの扱いは [地点カタログの説明](../README.md#公開データのカタログ) を参照する。
+開発版として公開済みの Release は Pre-release のまま残す。アプリで配布先を選ぶときの扱いは [地点カタログの説明](../README.md#公開データのカタログ) を参照する。
 
-正式版・開発版の検査はそれぞれの配布先で行う。Pages の自動更新と下書きの自動公開は開発版だけで行い、確認済みデータの手動公開・参照先の復旧は対象の配布先に行う。開発版を正式版の比較基準にせず、開発版の公開で正式版の参照先を更新しない。タグの衝突を防ぐため、`latest` と `dev-` で始まる版名は予約する。
+下書きの内容は直近の正式版と比較する。正式公開が成功したら正式版の Pages を更新する。開発版の manifest とカタログには、従来の配布情報を残す。
 
 Pages の初期設定、サイト全体の一覧・履歴の引き継ぎ、配置確認、参照先の復旧は [共通の Pages 配置](../../README.md#pages-への配置と参照先の復旧) を参照する。
 
@@ -95,7 +95,7 @@ Pages の初期設定、サイト全体の一覧・履歴の引き継ぎ、配�
 
 ### 公開履歴
 
-Pages に掲載した履歴は、正式版の [history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/history.json) と開発版の [history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/history.json) に保存する。正式版の通常生成はこの履歴を更新しないため、正式版 Release の一覧ではない。項目と記録のタイミングは [共通の公開履歴](../../README.md#公開履歴) を参照する。
+Pages に掲載した履歴は、正式版の [history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks/history.json) と開発版の [history.json](https://shohei0205.github.io/yamamuki-data/points/osm-peaks-dev/history.json) に保存する。履歴には、Pages に掲載した版を記録する。項目と記録のタイミングは [共通の公開履歴](../../README.md#公開履歴) を参照する。
 
 ### 版4の旧形式データ
 
@@ -117,7 +117,7 @@ Pages に掲載した履歴は、正式版の [history.json](https://shohei0205.
 
 収録するのは OSM の `natural=peak` または `natural=volcano` の名前付きノード。way・relation と名前のないノードは含めない。名前・標高・読み・別名・解説リンクの取り方は「配るもの」の OSM タグの説明を参照する。JSON 本体の制約は [地点データの変更履歴の版4](../formats/data.md#版42026-10-0326) にある。
 
-Pages の `peaks/` の manifest・履歴は、版4 だけを読むアプリに更新を促すために残す。main / dev からの公開、地点カタログからの削除、テストデータの公開でも、既存の互換データを引き継いで同じ内容を配置する。osm-peaks の更新で互換データを上書きしない。互換データは地点カタログには含めない。存在しない互換データを新たに作成することはない。
+Pages の `peaks/` の manifest・履歴は、版4 だけを読むアプリに更新を促すために残す。新しい正式版の公開でも、既存の互換データを引き継いで同じ内容を配置する。osm-peaks の更新で互換データを上書きしない。互換データは地点カタログには含めない。存在しない互換データを新たに作成することはない。
 
 ## 作り方
 
@@ -132,20 +132,19 @@ osm-peaks/
   notes/            タグごとの採用方針と確認記録
 ```
 
-利用開始時に、リポジトリの Settings → Pages → Build and deployment の Source を **GitHub Actions** にし、`github-pages` 環境の配置元として `main` と `dev` を許可する。
+利用開始時に、リポジトリの Settings → Pages → Build and deployment の Source を **GitHub Actions** にし、`github-pages` 環境の配置元として `main` を許可する。
 
-[地点 / OSM山頂：Release 生成・検査](https://github.com/shohei0205/yamamuki-data/actions/workflows/publish-data.yml) は、毎月 1 日の UTC 03:23（日本時間 12:23）に `main` で正式版を生成する。手動でも実行できる。
+[地点 / OSM山頂：下書き Release 生成・検査](https://github.com/shohei0205/yamamuki-data/actions/workflows/publish-data.yml) は手動で実行する。
 
-正式版は Release を作るところまでで、Pages には公開しない。利用する側で取得する正式版の Release を選ぶ運用としている（[#44](https://github.com/shohei0205/yamamuki-data/issues/44)）。開発版（`dev`）は今までどおり、検査に通ったら Pages の `points/osm-peaks-dev/` に公開する。
+生成 Action は `osm-peaks-<version>` の下書きを作る。「共通：Draft-release を試用公開」で同じ Release を Pre-release にし、確認後に「共通：Pre-release を正式公開」を実行する。
 
-手動で動かすときは Actions の「地点 / OSM山頂：Release 生成・検査」→「Run workflow」で正式版なら `main`、開発版なら `dev` を選ぶ。この2つ以外のブランチでは公開しない。公開ジョブの `GITHUB_TOKEN` に `contents: write`・`pages: write`・`id-token: write` を付与し、追加のトークンは使わない。
+手動で動かすときは Actions の「地点 / OSM山頂：下書き Release 生成・検査」→「Run workflow」で `main` を選ぶ。下書きの作成には `GITHUB_TOKEN` の `contents: write` を使う。
 
 1. 単体テストと、小さな PBF による生成テストを行う。
 2. Geofabrik の `japan-latest.osm.pbf` から日付付き URL を確定する。取得対象日を指定した場合は、その日付の URL を直接使い、全国データを取得する。途中で切れたら同じ版の続きから再開し、配布元の MD5 と照合する。Overpass API は使わない。
 3. `osmium tags-filter` で対象ノードだけを抽出し、配布ファイルと manifest を作る。
-4. 前回の版を取得・検証し、全国と地域別の件数、元データの日時、形式の版を比較する。前回の版は、正式版では「要確認」でない最新の正式版 Release（下書きと Pre-release を除き、タグの版名が最も新しいもの）、開発版では Pages の `points/osm-peaks-dev/manifest.json` が指す Release とする。件数・前回との差・検査結果・圧縮サイズ・元データの日時・SHA-256 を、Release の説明と Actions の実行概要に記録する。
-5. 正式版は、両ファイルを添付した Release を作る。ただし、前回公開版の取得・検証・比較でエラーが起きた場合は、理由を記載した下書きに残し、手動確認を待つ。「最新」の印（Latest）は付けない。要確認の版も Release にし、本文の先頭の「要確認」の見出しの下に理由を書く。Pages は更新しない。
-6. 開発版は、両ファイルを下書きの Pre-release に添付する。検査に合格した場合だけ、別の公開ジョブが下書きのファイルをダウンロードし、再検証して公開する。履歴版を公開後、開発版の最新版 manifest を Pages で更新する。
+4. 前回の版を取得・検証し、全国と地域別の件数、元データの日時、形式の版を比較する。比較対象は「要確認」でない最新の正式版 Release とする。件数・前回との差・検査結果・圧縮サイズ・元データの日時・SHA-256 を、Release の説明と Actions の実行概要に記録する。
+5. 配布ファイルを添付した下書き Release を作る。比較で警告やエラーが出た場合は、本文の先頭の「要確認」に理由を記載する。試用公開時に Pre-release を設定し、正式公開時に解除する。
 
 Actions の各ステップでは、時刻付きで処理の開始・完了をログに出す。Python の出力はためずに随時表示する。
 
@@ -153,9 +152,9 @@ Actions の各ステップでは、時刻付きで処理の開始・完了をロ
 - 通信の診断：HTTP メソッド、要求 URL、各転送先と HTTP ステータス、最終応答 URL、Range、経過時間を記録する。応答ヘッダーは Location・Content-Length・Content-Range・Content-Type・Retry-After・Date・Age・Cache-Control・Cache-Status・Via・Server に限定し、本文は記録しない。
 - 取得失敗時：処理段階、試行回数、対象 URL、保存先、例外の種類・内容、残り時間と次の待ち時間を表示する。最後の試行でも失敗内容を残し、試行回数の上限・時間制限・再試行対象外のどれで終了したかを記録する。
 - 生成中：元データの日時、osmium の抽出進捗、読み取り5,000件ごとの件数、圧縮前後のサイズ、SHA-256 と manifest の作成、保存完了を表示する。
-- 公開時：Release（開発版は下書き）の作成・アップロード開始、アップロード完了、公開完了を表示する。
+- 下書きの作成時：下書きの作成と、ファイルの保存が完了したことを表示する。
 
-失敗した実行では、それ以前の公開済み Release を書き換えない。開発版でアップロード途中に失敗した下書きは公開されず、残った下書きは手動で削除できる。正式版でアップロード途中に失敗した Release は、検証済みの配布版として選ばない。再実行は新しいタグを作る。配布ファイルの再現性のため、gzip ヘッダーに生成日時やファイル名を含めない。
+失敗した実行では、それ以前の公開済み Release を書き換えない。アップロード途中に失敗した下書きは、内容を確認して削除できる。再実行は新しいタグを作る。配布ファイルの再現性のため、gzip ヘッダーに生成日時やファイル名を含めない。
 
 ダウンロードは通信待ち60秒、最大6回（15秒間隔）の試行、全体60分の制限を設ける。Actions は取得ステップ65分、生成ジョブ90分、公開ジョブ15分で打ち切る。途中ファイルは元データの MD5 ごとに保存し、別の版のデータをつなげない。Range に対応しない応答では先頭から取り直す。通信待ちや再試行で失敗した場合は、同じコマンドを再実行すれば途中ファイルを再利用できる（配布元が同じ版の場合）。Actions の別実行には途中ファイルを引き継がない。
 
@@ -176,9 +175,9 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 
 圧縮後のサイズが 5,000,000 バイトを超える場合は公開を止め、分割を検討する。データが空、ID が重複、座標が不正、元データの日付が取得できない場合も公開しない。
 
-### 自動公開と確認待ち
+### 生成時の検査
 
-次のいずれかに当たる版は「要確認」とする。正式版は Release にしたうえで本文の先頭に「## 要確認」と理由を書き、次の生成の比較基準にしない。開発版は下書きのまま残し、Pages の最新版参照を更新しない。確認待ちは通常の処理結果として扱い、通知用の処理は追加しない。
+次のいずれかに当たる場合は、下書きの本文の先頭に「要確認」と理由を書く。公開する前に内容を確認する。
 
 | 確認条件 | 初期の基準 |
 |---|---|
@@ -191,28 +190,19 @@ Geofabrik の日本全国の OSM データから、`natural=peak` または `nat
 | 形式の変更 | `schemaVersion` が前回公開版と異なる |
 | 比較不能 | 前回公開版の取得・検証ができない。通信失敗や権限不足を初回扱いしない |
 
-地域の判定は都道府県ではなく、緯度・経度をそれぞれ切り下げた1度区画で行う。例えば北緯35度・東経139度の区画は、北緯35度以上36度未満・東経139度以上140度未満。細かな境界付近の変化で保留が多ければ、実績を見て基準を調整する。比較対象は同じ配布先の公開済みの版とし、確認待ちの版（開発版の下書き、正式版の要確認の Release）は基準にしない。
+地域の判定は都道府県ではなく、緯度・経度をそれぞれ切り下げた1度区画で行う。例えば北緯35度・東経139度の区画は、北緯35度以上36度未満・東経139度以上140度未満。細かな境界付近の変化で保留が多ければ、実績を見て基準を調整する。比較対象は同じ配布先の公開済みの版とし、下書きと、旧運用で「要確認」のまま公開された正式版は比較対象から外す。
 
 件数の減少などは警告として手動で承認できる。ただしファイル破損、SHA-256・サイズ・件数の不一致、空データ、不正な ID・座標・データ形式は公開不可。手動でも同じ検証を行う。生成直後に不正が見つかった場合は下書きも作らない。
 
-### 正式版と開発版の実行方法
+### 生成と正式公開の実行方法
 
-月次実行は `main` から正式版（`stable`）の Release を作る。手動実行は Actions の「地点 / OSM山頂：Release 生成・検査」→「Run workflow」でブランチを選ぶ。
+`main` で下書きを生成し、確認後に[共通の公開手順](../../README.md#確認済みデータの公開)に従って試用公開と正式公開を行う。作業ブランチで生成した場合は、配布ファイルを artifact に保存する。
 
-| 実行元ブランチ | 配布先 | 生成・公開に使う処理 |
-|---|---|---|
-| `main` | 正式版（`stable`）。Release まで | `main` のコード |
-| `dev` | 開発版（`dev`、Pre-release）。Pages にも公開 | `dev` のコード |
-
-配布先の選択欄は設けず、ブランチから自動判定する。手動公開・参照先復旧も同じ規則で動く。その他のブランチやタグからは公開しない。ブランチへの push だけではデータを生成しない。`dev` の月次実行はなく、開発版が必要なときに手動実行する。
-
-利用開始には、このワークフローを `main` と `dev` の両方に配置する。開発中の生成処理は `dev` で確認し、正式版に採用するときは変更を `main` へ取り込む。
-
-生成は配布先ごとのグループで直列化する。公開・手動復旧・Pages の配置は正式版と開発版で共通のグループを使い、他の参照先の引き継ぎから配置まで順番に行う。開発版から正式版への自動昇格は行わず、正式版が必要なときは `main` を選んで生成する。開発版の初回は下書きに残るので、確認して手動公開する。
+正式公開と Pages の復旧は共通のグループで直列化する。正式版カタログへの反映は、公開 Action の Summary で確認する。
 
 ### 取得対象日を指定する
 
-「地点 / OSM山頂：Release 生成・検査」の Run workflow で、`source_date` に `YYYY-MM-DD` を入力すると、`latest` の転送を使わず日付付き URL を直接取得する。例えば `2026-09-29` は `https://download.geofabrik.de/asia/japan-260929.osm.pbf` になる。空欄または月次実行では、日本とロシア極東のそれぞれで `latest` から配布日を確定し、その日付の PBF を取得する。日付を指定した場合は、両地域とも指定日の PBF を取得する。入力欄を表示するため、main 側の入口にも同じ入力項目が必要。
+「地点 / OSM山頂：下書き Release 生成・検査」の Run workflow で、`source_date` に `YYYY-MM-DD` を入力すると、`latest` の転送を使わず日付付き URL を直接取得する。例えば `2026-09-29` は `https://download.geofabrik.de/asia/japan-260929.osm.pbf` になる。空欄の場合は、日本とロシア極東のそれぞれで `latest` から配布日を確定し、その日付の PBF を取得する。日付を指定した場合は、両地域とも指定日の PBF を取得する。
 
 Actions の実行日はデータの配布日とは限らず、当日分はまだ存在しない場合がある。配布済みの日付を指定する。対象が404の場合は失敗とし、別の日付への自動切り替えはしない。サイズと日付付き URL の MD5 を照合し、別の版の途中ファイルを混ぜない。古い日付を指定しても、公開前の日時・件数・同一更新日時の検査はそのまま行う。
 
@@ -234,19 +224,19 @@ Actions では取得前に配布元の日付付き URL・サイズ・MD5 を確�
 
 ブランチ・実行者・入力項目・公開先などの共通表示は [実行概要の確認](../../README.md#実行概要の確認) を参照する。山頂の生成では取得対象日を表示し、空欄なら latest を使うことを明記する。
 
-実際の件数などは「データの検査結果（生成後）」と「データの検査結果（公開前の再検査）」で区別する。生成が完了すると「生成したリリース」に、GitHub が返した実際の URL・タグ・下書き保留か自動公開へ進むかを表示する。下書きの `untagged-...` URL もそのまま使う。
+実際の件数などは「データの検査結果（生成後）」と「データの検査結果（公開前の再検査）」で区別する。生成が完了すると「生成したリリース」に、GitHub が返した実際の URL、タグ、検査結果を表示する。下書きの `untagged-...` URL もそのまま使う。
 
-### 確認済みの下書きを手動公開する
+### 試用公開と正式公開
 
-[共通の手動公開手順](../../README.md#確認済みデータの公開) に従い、確認した山頂 Release の URL またはタグを指定する。正式版のタグは `osm-peaks-<version>`、開発版は `osm-peaks-dev-<version>` とする。
+[共通の手動公開手順](../../README.md#確認済みデータの公開) に従い、確認した山頂 Release の URL またはタグを指定する。試用公開と正式公開には同じ `osm-peaks-<version>` を指定する。
 
-山頂の手動公開では下書きの 2 ファイルを取得・再検証し、検査結果に記録された SHA-256（明示した場合は入力値）と一致した場合に、件数の減少などの警告を承認して公開する。検査結果の SHA-256 が欠けている場合は、確認した値を明示する。自動公開では生成ジョブが渡す SHA-256 を必須とする。
+公開 Action は指定した Release の添付ファイルを再取得し、データ本体が検査結果の SHA-256（明示した場合は入力値）と一致するかを確かめる。検査結果に SHA-256 がない場合は、確認した値を指定する。
 
-再ダウンロード・再生成・アセットの差し替えは行わない。前回公開版との比較もやり直すため、通信失敗や前回ファイルの破損で比較できない場合は手動公開も停止する。形式変更時はアプリ側が新形式に対応しているかも確認する。
+試用公開から正式公開まで、同じタグと添付ファイルを使う。正式公開時に前回公開版の取得や検証に失敗した場合は公開を止める。形式変更時はアプリ側が新形式に対応しているかも確認する。
 
-#### Release を削除した後に公開を再開する
+#### 正式公開後に Pages の参照先を復旧する
 
-公開サイトの manifest が指す山頂 Release を削除した場合、手動公開で「Pages の配布サイトを初期化」を指定する。前回の Release が存在しない場合に限り、前回との比較を省いて確認済みデータの公開を再開する。新しいデータ本体のサイズ・ハッシュ・件数などの検査は行う。通信失敗やデータ破損は初期化を指定しても停止する。他のデータと配布先は引き継ぐ。
+正式公開後に Pages の更新に失敗したら、[共通の復旧手順](../../README.md#pages-への配置と参照先の復旧)に従って公開済みの正式版のタグを指定する。
 
 ### 手元での生成
 
@@ -259,10 +249,10 @@ python -u scripts/download_source.py --source-date YYYY-MM-DD
 python -u scripts/download_source.py --region far-eastern-fed-district \
   --source-date YYYY-MM-DD --output build/far-eastern-fed-district.osm.pbf
 python scripts/build_data.py build/japan-latest.osm.pbf \
-  --version local-20260930 --output-dir dist
+  --version local-20260930 --channel stable --output-dir dist
 ```
 
-開発版を手元で生成するときは、生成コマンドに `--channel dev` を指定する。省略時は `RELEASE_CHANNEL` の値、未設定なら正式版を使う。取得 URL のリポジトリは `GH_REPO`、未設定なら `GITHUB_REPOSITORY`、どちらも未設定なら `shohei0205/yamamuki-data` を使う。
+この例は下書きの生成 Action と同じタグ形式で配布ファイルを作る。取得 URL のリポジトリは `GH_REPO`、未設定なら `GITHUB_REPOSITORY`、どちらも未設定なら `shohei0205/yamamuki-data` を使う。
 
 取得時に PBF の隣へ `<PBF のファイル名>.source.json` を保存し、URL・サイズ・MD5 を記録する。取得済みファイルを再利用した場合も記録を作る。生成時に記録と PBF を照合し、日付付き URL を manifest の `metadata.sources` の `OpenStreetMap（日本・Geofabrik 配布）` の `source` に引き継ぐ。記録の欠落や不一致は生成を止める。既存の PBF に記録がない場合は、同じ対象日で取得コマンドを再実行すると、内容が一致すれば再ダウンロードせずに記録を作れる。
 
@@ -337,4 +327,4 @@ python -m unittest discover -s tests -v
 
 Actions の手動実行で作業ブランチを選ぶと、生成と検査まで実行し、配布ファイルを artifact に 7 日間保存する。Release の作成と Pages の更新は行わない。生成された manifest の URL は確認用で、配布先への公開を意味しない。
 
-比較に使う前回公開版を取得できない場合や、比較処理で例外が起きた場合も、生成物の検証に通っていれば理由付きの下書き Release に保存する。開発版の自動公開は行わない。作業ブランチでの生成確認では前回公開版との比較を行わない。
+比較に使う前回公開版を取得できない場合や、比較処理で例外が起きた場合も、生成物の検証に通っていれば理由付きの下書き Release に保存する。作業ブランチでの生成確認では前回公開版との比較を行わない。

@@ -49,14 +49,11 @@ def dataset_for_tag(tag, channel, version):
 def check_branch(channel):
     if channel not in ("stable", "dev"):
         raise ValueError("配布先は stable または dev を指定してください")
-    if os.environ.get("GITHUB_ACTIONS") == "true":
-        expected = {"refs/heads/dev": "dev", "refs/heads/main": "stable"}.get(os.environ.get("GITHUB_REF"))
-        if expected != channel:
-            raise ValueError("正式版は main、開発版は dev から実行してください")
+    if os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("GITHUB_REF") != "refs/heads/main":
+        raise ValueError("公開は main ブランチから実行してください")
 
 
-def resolve(target, channel):
-    check_branch(channel)
+def find_release(target, entries=None):
     repo = os.environ["GH_REPO"]
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise ValueError("リポジトリ名が不正です")
@@ -71,15 +68,22 @@ def resolve(target, channel):
             raise ValueError("このリポジトリの Release ページの URL を指定してください")
     elif not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", target):
         raise ValueError("タグの形式が不正です")
-    result = subprocess.run(
-        ["gh", "api", "--paginate", "--slurp", f"repos/{repo}/releases?per_page=100"],
-        check=True, capture_output=True, text=True, encoding="utf-8")
-    entries = [entry for page in json.loads(result.stdout) for entry in page]
+    if entries is None:
+        result = subprocess.run(
+            ["gh", "api", "--paginate", "--slurp", f"repos/{repo}/releases?per_page=100"],
+            check=True, capture_output=True, text=True, encoding="utf-8")
+        entries = [entry for page in json.loads(result.stdout) for entry in page]
     matches = [entry for entry in entries
                if (entry.get("html_url") == target if is_url else entry["tag_name"] == target)]
     if len(matches) != 1:
         raise ValueError("指定した Release を一意に取得できません")
-    release = matches[0]
+    return matches[0]
+
+
+def resolve(target, channel):
+    check_branch(channel)
+    release = find_release(target)
+    repo = os.environ["GH_REPO"]
     if release["prerelease"] != (channel == "dev"):
         raise ValueError("Release の正式版・開発版の区分が一致しません")
     with tempfile.TemporaryDirectory() as temporary:
@@ -104,15 +108,65 @@ def publish(dataset, tag, channel, sha256, reason):
                    cwd=ROOT, check=True)
 
 
+def publish_candidate(target, sha256="", reason="", *, preview=False):
+    check_branch("stable")
+    release = find_release(target)
+    repo = os.environ["GH_REPO"]
+    with tempfile.TemporaryDirectory() as temporary:
+        subprocess.run(["gh", "release", "download", release["tag_name"], "--repo", repo,
+                        "--pattern", "manifest.json", "--dir", temporary], check=True)
+        manifest = json.loads((Path(temporary) / "manifest.json").read_bytes())
+    if not isinstance(manifest, dict) or manifest.get("schemaFormat") != "yamamuki-manifest":
+        raise ValueError("未対応の manifest 形式です")
+    if manifest.get("dataSchemaFormat") == "yamamuki-points":
+        from release_tools.point_release import publish_candidate as publish_points
+        publish_points(target, sha256, reason, preview=preview)
+        return
+    if manifest.get("dataSchemaFormat") != "yamamuki-sqlite" or manifest.get("schemaVersion") != 6:
+        raise ValueError("未対応のデータ形式です")
+    matches = re.findall(r"<!-- yamamuki-data:surface-draft:v1 (.+?) -->", release.get("body") or "")
+    if len(matches) != 1:
+        raise ValueError("地表の加工・検査記録がありません")
+    receipt = json.loads(matches[0])
+    if not isinstance(receipt, dict):
+        raise ValueError("地表の加工・検査記録が不正です")
+    dataset, package = receipt.get("dataset"), receipt.get("package")
+    if (not isinstance(dataset, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", dataset)
+            or not isinstance(package, str) or not re.fullmatch(r"[a-z][a-z0-9_-]*", package)):
+        raise ValueError("地表の配布設定の名前が不正です")
+    checksum = sha256.strip() or receipt.get("sha256")
+    commit = receipt.get("targetCommit")
+    if (not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum)
+            or not isinstance(commit, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", commit)
+            or checksum != manifest.get("sha256")):
+        raise ValueError("地表のSHA-256またはコミットが一致しません")
+    environment = os.environ.copy()
+    environment["GITHUB_REPOSITORY"] = repo
+    subprocess.run([
+        "pwsh", "-NoProfile", "-File", str(ROOT / "surface/scripts/publish_release.ps1"),
+        "-Dataset", dataset, "-Package", package,
+        "-Operation", "Preview" if preview else "Formalize",
+        "-Tag", release["tag_name"], "-Sha256", checksum, "-TargetCommit", commit,
+        "-Reason", reason,
+    ], cwd=ROOT, env=environment, check=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("resolve", "publish"))
-    parser.add_argument("--channel", choices=("stable", "dev"), required=True)
+    parser.add_argument("command", choices=("resolve", "publish", "preview", "formalize"))
+    parser.add_argument("--channel", choices=("stable", "dev"))
     parser.add_argument("--tag", required=True)
     parser.add_argument("--dataset")
     parser.add_argument("--sha256", default="")
     parser.add_argument("--reason", default="")
     args = parser.parse_args()
+    if args.command in ("preview", "formalize"):
+        if args.channel is not None:
+            parser.error("正式公開の配布先は stable に固定されています")
+        publish_candidate(args.tag, args.sha256, args.reason, preview=args.command == "preview")
+        return
+    if args.channel is None:
+        parser.error("resolve と publish には --channel が必要です")
     if args.command == "resolve":
         dataset, tag = resolve(args.tag, args.channel)
         print(f"公開対象: {dataset} / {args.channel} / {tag}")

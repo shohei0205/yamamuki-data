@@ -2,9 +2,21 @@ name: データビューワ：Release
 
 on:
   workflow_dispatch:
+    inputs:
+      channel:
+        description: '配布先（dev は開発版、stable は正式版）'
+        type: choice
+        required: true
+        default: dev
+        options:
+          - dev
+          - stable
 
 permissions:
   contents: read
+
+env:
+  RELEASE_CHANNEL: ${{ inputs.channel }}
 
 concurrency:
   group: release-native-viewer-${{ github.ref }}
@@ -18,7 +30,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Cargo.tomlの版を読む
@@ -35,8 +47,8 @@ jobs:
               raise SystemExit("ビューワの版は数字3つで指定してください")
           tag = f"viewer-v{version}"
           ref = os.environ["GITHUB_REF"]
-          if ref != "refs/heads/main":
-              channel = "dev" if ref == "refs/heads/dev" else "test"
+          channel = os.environ["RELEASE_CHANNEL"] if ref == "refs/heads/main" else "test"
+          if channel != "stable":
               tag += f"-{channel}.{os.environ['GITHUB_RUN_ID']}"
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               print(f"version={version}\ntag={tag}", file=output)
@@ -61,7 +73,7 @@ jobs:
       PLATFORM: ${{ matrix.platform }}
       CARGO_TARGET_DIR: ${{ github.workspace }}/viewer/target
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Rust stable を準備
@@ -98,7 +110,7 @@ jobs:
           "$app/Contents/MacOS/yamamuki-viewer" --check-points points/gsi-peaks/gsi-peaks-source.json
           ditto -c -k --keepParent "$app" "dist/$RELEASE_TAG-$PLATFORM.zip"
       - name: 配布用ZIPを保存
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: native-viewer-${{ matrix.platform }}
           path: dist/${{ needs.plan.outputs.tag }}-${{ matrix.platform }}.zip
@@ -108,7 +120,7 @@ jobs:
 
   publish:
     name: GitHub Releasesに公開
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
+    if: github.ref == 'refs/heads/main'
     needs: [plan, build]
     runs-on: ubuntu-24.04
     permissions:
@@ -118,7 +130,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ needs.plan.outputs.tag }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: native-viewer-*
           path: dist
@@ -140,7 +152,7 @@ jobs:
           done
           (cd dist && sha256sum "$RELEASE_TAG"-*.zip > SHA256SUMS.txt)
           args=()
-          if [[ "$GITHUB_REF" == "refs/heads/dev" ]]; then
+          if [[ "$RELEASE_CHANNEL" == "dev" ]]; then
             args+=(--prerelease)
           fi
           gh release create "$RELEASE_TAG" "${assets[@]}" dist/SHA256SUMS.txt \

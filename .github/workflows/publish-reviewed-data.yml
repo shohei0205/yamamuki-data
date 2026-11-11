@@ -1,10 +1,10 @@
-name: 共通：確認済みデータを公開
+name: 共通：Pre-release を正式公開
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '確認した Release ページの URL またはデータのタグ（公開済みなら参照先を復旧）'
+        description: '試用版の Release URL またはタグ（正式公開済みなら参照先を復旧）'
         required: true
         type: string
       sha256:
@@ -26,48 +26,18 @@ permissions:
 
 env:
   PYTHONUNBUFFERED: '1'
-  RELEASE_CHANNEL: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
+  RELEASE_CHANNEL: stable
 
 jobs:
-  resolve:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    # 下書きも一覧から取得するために必要。
-    permissions:
-      contents: write
-    outputs:
-      dataset: ${{ steps.target.outputs.dataset }}
-      tag: ${{ steps.target.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-      - name: 実行パラメーターを Summary に表示
-        working-directory: .
-        env:
-          WORKFLOW_INPUTS: ${{ toJSON(inputs) }}
-        run: python -m release_tools.workflow_summary publish
-      - name: Release からデータ種別を判定
-        id: target
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: >-
-          python -m release_tools.publish_reviewed resolve
-          --channel "$RELEASE_CHANNEL" --tag "$RELEASE_TAG"
-
   publish:
-    needs: resolve
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write
       pages: write
       id-token: write
-    # サイト全体を引き継ぐため、正式版・開発版の公開を直列にする。
+    # 同じ Release の更新と Pages の引き継ぎを直列にする。
     concurrency:
       group: publish-data-pages
       cancel-in-progress: false
@@ -79,8 +49,13 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - name: Pages の設定を確認
-        uses: actions/configure-pages@v6
+      - name: 地表SQLiteの検査に使うRustを準備
+        run: rustup update stable
+      - name: 実行パラメーターを Summary に表示
+        env:
+          WORKFLOW_INPUTS: ${{ toJSON(inputs) }}
+          RELEASE_OPERATION: formalize
+        run: python -m release_tools.workflow_summary publish
       - name: 確認したデータを種別ごとに再検証して公開
         id: publication
         env:
@@ -88,14 +63,15 @@ jobs:
           PAGES_INITIALIZE: ${{ inputs.initialize_pages == true && 'true' || 'false' }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
-          DATASET: ${{ needs.resolve.outputs.dataset }}
+          RELEASE_TAG: ${{ inputs.tag }}
           EXPECTED_SHA256: ${{ inputs.sha256 }}
           REVIEW_REASON: ${{ inputs.reason }}
         run: >-
-          python -m release_tools.publish_reviewed publish
-          --dataset "$DATASET" --channel "$RELEASE_CHANNEL"
+          python -m release_tools.publish_reviewed formalize
           --tag "$RELEASE_TAG" --sha256 "$EXPECTED_SHA256" --reason "$REVIEW_REASON"
+      - name: Pages の設定を確認
+        if: steps.publication.outputs.pages_ready == 'true'
+        uses: actions/configure-pages@v6
       - name: manifest の配布サイトを保存
         if: steps.publication.outputs.pages_ready == 'true'
         uses: actions/upload-pages-artifact@v5
