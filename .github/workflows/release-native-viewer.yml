@@ -1,4 +1,4 @@
-name: データビューワ：Release
+name: データビューワ：下書き Release 生成・検査
 
 on:
   workflow_dispatch:

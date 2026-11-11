@@ -47,7 +47,7 @@ cargo run --locked --manifest-path viewer/Cargo.toml -- --check-map
 
 ## 配布版の公開
 
-GitHub Actions の「データビューワ：Release」を手動で実行する。Windows x64 と macOS Apple Silicon の ZIP を作り、それぞれの実行ファイルで地点 JSON を読み込んで確認する。
+GitHub Actions の「データビューワ：下書き Release 生成・検査」を手動で実行する。Windows x64 と macOS Apple Silicon の ZIP を作り、それぞれの実行ファイルで地点 JSON を読み込んで確認する。
 
 1. `main` で実行すると、Cargo.toml の版を使った `viewer-v<版>` のタグで Draft Release を作る。作業ブランチでは Release を作らず、2 環境の ZIP を Actions の実行結果から 7 日間ダウンロードできる。
 2. Draft の内容を確認し、「共通：Draft-release を試用公開」にそのタグまたは Release URL を指定する。2 環境の ZIP と `SHA256SUMS.txt` を検証し、同じ Release を Pre-release にする。
