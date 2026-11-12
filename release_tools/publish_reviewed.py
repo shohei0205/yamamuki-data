@@ -111,6 +111,10 @@ def publish(dataset, tag, channel, sha256, reason):
 def publish_candidate(target, sha256="", reason="", *, preview=False):
     check_branch("stable")
     release = find_release(target)
+    if release["tag_name"].startswith("viewer-"):
+        from release_tools.viewer_release import publish_candidate as publish_viewer
+        publish_viewer(release, sha256, preview=preview)
+        return
     repo = os.environ["GH_REPO"]
     with tempfile.TemporaryDirectory() as temporary:
         subprocess.run(["gh", "release", "download", release["tag_name"], "--repo", repo,

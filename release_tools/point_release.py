@@ -147,7 +147,7 @@ def data_assets(manifest, names):
         raise ValueError("配布ファイル名が不正です")
     parts = filenames(filename.removesuffix(".json.gz"))
     selected = [filename]
-    if any(name in names for name in parts):
+    if manifest.get("schemaVersion", 0) >= 6 and any(name in names for name in parts):
         if not all(name in names for name in parts):
             raise ValueError("オリジナル・補足と manifest がそろっていません")
         selected.extend(parts)

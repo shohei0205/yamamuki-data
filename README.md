@@ -66,11 +66,13 @@ Actions とローカルのどちらで生成したデータも、配布ファイ
 | 共通：Draft-release を試用公開 | 下書きを Pre-release として公開 |
 | 共通：Pre-release を正式公開 | 試用版を正式公開。地点データは配布カタログも更新 |
 | 地表：Release 加工・検査 | [ローカル生成物を加工・検査し、配布用Draftを作成](surface/README.md#地表データの公開) |
-| データビューワ：Release | [Windows・macOS のビューワを手動公開](viewer/README.md#配布版の公開) |
+| データビューワ：下書き Release 生成・検査 | [Windows・macOS のビューワのDraftを生成](viewer/README.md#配布版の公開) |
 
 データ固有のActionと操作手順は各READMEを参照する。
 
 ## 確認済みデータの公開
+
+データビューワも、生成した Draft を共通の試用公開・正式公開 Action で公開する。ビューワは ZIP と `SHA256SUMS.txt` を検証し、Pages やデータカタログは更新しない。操作と SHA-256 の指定方法は [ビューワの公開手順](viewer/README.md#配布版の公開) を参照する。
 
 山頂データの下書きの生成、試用公開、正式公開は別の Action として `main` で手動実行する。地表・地形データでは、上記の方針に沿ってローカルファイルのアップロードと Draft 内での加工・検査を先に行う。
 

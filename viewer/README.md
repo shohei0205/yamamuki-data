@@ -66,10 +66,18 @@ cargo run --locked --manifest-path viewer/Cargo.toml -- --check-map
 
 ## 配布版の公開
 
-GitHub Actions の「データビューワ：Release」を手動で実行する。Windows x64とmacOS Apple SiliconのZIPを作り、それぞれの実行ファイルで地点JSONを読み込んで確認する。
+GitHub Actions の「データビューワ：下書き Release 生成・検査」を手動で実行する。Windows x64 と macOS Apple Silicon の ZIP を作り、それぞれの実行ファイルで地点 JSON を読み込んで確認する。
 
-- `main` で `channel` に `stable` を選ぶと、Cargo.toml の版を使った `viewer-v<版>` のタグで公開する。次の正式版を作るときは Cargo.toml の版と Cargo.lock を更新する。
-- `main` で `channel` に `dev` を選ぶと、viewer-v<版>-dev.<実行ID> のタグでプレリリースを公開する。
-- 作業ブランチでは、2環境のZIPをActionsの実行結果から7日間ダウンロードできる。
+1. `main` で実行すると、生成日時から配布名とタグを自動で決め、Draft Release を作る。配布名は `YamamukiDataViewer-<UTC の生成日時>-<実行 ID>-<試行番号>`（例: `YamamukiDataViewer-20261112T000032Z-43123965055-1`）とし、日時以降の形式を地点データとそろえる。タグと ZIP 名の先頭には `viewer-` を付ける。バージョン番号の指定や更新は不要。作業ブランチでは Release を作らず、2 環境の ZIP を Actions の実行結果から 7 日間ダウンロードできる。
+2. Draft の内容を確認し、「共通：Draft-release を試用公開」にそのタグまたは Release URL を指定する。2 環境の ZIP と `SHA256SUMS.txt` を検証し、同じ Release を Pre-release にする。
+3. 試用して確認が済んだら、「共通：Pre-release を正式公開」に同じタグを指定する。添付ファイルを再検証して正式 Release にする。タグ・添付ファイル・取得 URL は変えない。ビューワの公開では Pages やデータカタログを更新しない。
+
+配布先を選ぶ `channel` 入力は廃止し、生成時は常に下書きにする。次の配布も同じ Action を実行するだけで作れる。既存のタグや公開済み Release は上書きしない。
+
+共通 Action の `sha256` は任意で、ビューワでは `SHA256SUMS.txt` 自体の SHA-256 を指定する。空欄でも、チェックサム一覧と両 ZIP の一致、ZIP 内の実行ファイルと破損の有無を検証する。公開時に ZIP の再生成・差し替えは行わない。
+
+生成した Draft には整理用マーカーを付け、7 日以上経過した未公開の下書きは共通の整理 Action の対象になる。試用公開するとマーカーを外し、公開済みの Pre-release・正式版を保持する。長く保持する Draft は本文からマーカーを取り除く。
 
 GitHub Releasesでは、ZIPと `SHA256SUMS.txt` を配布する。Windows版はZIPを展開して `yamamuki-viewer.exe` を起動する。macOS版はApple Silicon向けのZIPを展開して `YamamukiViewer.app` を開く。macOS版はアドホック署名で、Appleによる公証は行っていない。
+
+Cargo.toml の `version` は Rust の内部情報として固定し、配布の識別には使わない。macOS の内部の版は UTC の生成日から自動設定する。既存の `viewer-v<版>` の下書きも、引き続き試用公開・正式公開できる。

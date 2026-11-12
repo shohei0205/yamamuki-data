@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       sha256:
-        description: '任意：確認した SHA-256（空欄なら Release の検査結果から自動取得）'
+        description: '任意：確認した SHA-256（ビューワは SHA256SUMS.txt、地点はデータ本体）'
         required: false
         type: string
       initialize_pages:

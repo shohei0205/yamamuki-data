@@ -1,22 +1,10 @@
-name: データビューワ：Release
+name: データビューワ：下書き Release 生成・検査
 
 on:
   workflow_dispatch:
-    inputs:
-      channel:
-        description: '配布先（dev は開発版、stable は正式版）'
-        type: choice
-        required: true
-        default: dev
-        options:
-          - dev
-          - stable
 
 permissions:
   contents: read
-
-env:
-  RELEASE_CHANNEL: ${{ inputs.channel }}
 
 concurrency:
   group: release-native-viewer-${{ github.ref }}
@@ -24,35 +12,19 @@ concurrency:
 
 jobs:
   plan:
-    name: ビューワの版とタグを決める
+    name: ビューワの生成日時とタグを決める
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
+      title: ${{ steps.version.outputs.title }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Cargo.tomlの版を読む
+      - name: 生成日時から配布名を決める
         id: version
-        run: |
-          python3 - <<'PY'
-          import os
-          import re
-          import tomllib
-
-          with open("viewer/Cargo.toml", "rb") as manifest:
-              version = tomllib.load(manifest)["package"]["version"]
-          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
-              raise SystemExit("ビューワの版は数字3つで指定してください")
-          tag = f"viewer-v{version}"
-          ref = os.environ["GITHUB_REF"]
-          channel = os.environ["RELEASE_CHANNEL"] if ref == "refs/heads/main" else "test"
-          if channel != "stable":
-              tag += f"-{channel}.{os.environ['GITHUB_RUN_ID']}"
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              print(f"version={version}\ntag={tag}", file=output)
-          PY
+        run: python3 -m release_tools.viewer_build
 
   build:
     name: 配布用ビルド (${{ matrix.platform }})
@@ -119,7 +91,10 @@ jobs:
           retention-days: 7
 
   publish:
-    name: GitHub Releasesに公開
+    name: Draft Release に保存
+    concurrency:
+      group: publish-data-pages
+      cancel-in-progress: false
     if: github.ref == 'refs/heads/main'
     needs: [plan, build]
     runs-on: ubuntu-24.04
@@ -129,13 +104,14 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+      RELEASE_TITLE: ${{ needs.plan.outputs.title }}
     steps:
       - uses: actions/download-artifact@v8
         with:
           pattern: native-viewer-*
           path: dist
           merge-multiple: true
-      - name: 2環境のZIPを添付して公開
+      - name: 2環境のZIPを添付して下書きを作成
         shell: bash
         run: |
           refs="$(gh api "repos/$GH_REPO/git/matching-refs/tags/$RELEASE_TAG" --jq '.[].ref')"
@@ -151,11 +127,13 @@ jobs:
             assets+=("$asset")
           done
           (cd dist && sha256sum "$RELEASE_TAG"-*.zip > SHA256SUMS.txt)
-          args=()
-          if [[ "$RELEASE_CHANNEL" == "dev" ]]; then
-            args+=(--prerelease)
-          fi
           gh release create "$RELEASE_TAG" "${assets[@]}" dist/SHA256SUMS.txt \
-            --target "$GITHUB_SHA" --title "山むき・データビューワ ${RELEASE_TAG#viewer-v}" \
-            --latest=false "${args[@]}" \
-            --notes 'Windows x64、macOS Apple Silicon 向け。macOS版はアドホック署名で、公証は行っていません。'
+            --target "$GITHUB_SHA" --title "$RELEASE_TITLE" \
+            --draft --latest=false \
+            --notes $'Windows x64、macOS Apple Silicon 向け。macOS版はアドホック署名で、公証は行っていません。\n\n<!-- yamamuki-data:temporary-draft:v1 -->'
+          {
+            echo "## 作成した Draft Release"
+            echo ""
+            echo "- タグ: \`$RELEASE_TAG\`"
+            echo '内容を確認し、「共通：Draft-release を試用公開」でタグを指定してください。'
+          } >> "$GITHUB_STEP_SUMMARY"
