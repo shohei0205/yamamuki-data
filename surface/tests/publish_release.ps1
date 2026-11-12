@@ -10,7 +10,7 @@ $commit = '1' * 40
 $repo = 'shohei0205/yamamuki-data'
 $state = @{ draft = $true; prerelease = $false; body = '<!-- yamamuki-data:temporary-draft:v1 -->'; assets = @{}; nextId = 1; uploaded = @(); failUpload = $true; created = $false; started = $false; tagCommit = $null; hiddenVerifications = 0 }
 $previousEnv = @{}
-foreach ($key in @('GITHUB_REPOSITORY', 'GITHUB_REF', 'GITHUB_STEP_SUMMARY')) {
+foreach ($key in @('GITHUB_REPOSITORY', 'GITHUB_REF', 'GITHUB_STEP_SUMMARY', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT')) {
     $previousEnv[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
 }
 
@@ -50,12 +50,12 @@ function gh {
                 if ($patch.target_commitish -cne $commit) { throw '試用公開時の対象SHAが固定されていません。' }
                 $state.tagCommit = $commit
             }
-            foreach ($key in @('draft','prerelease','body')) {
+            foreach ($key in @('draft','prerelease','body','name')) {
                 if ($patch.Contains($key)) { $state[$key] = $patch[$key] }
             }
-            return @{id=42;draft=$state.draft;prerelease=$state.prerelease;body=$state.body;tag_name=$tag;html_url="https://github.com/$repo/releases/tag/$tag"} | ConvertTo-Json -Compress
+            return @{id=42;draft=$state.draft;prerelease=$state.prerelease;body=$state.body;name=$state.name;created_at="2026-11-12T00:00:00Z";tag_name=$tag;html_url="https://github.com/$repo/releases/tag/$tag"} | ConvertTo-Json -Compress
         }
-        return @{id=42;draft=$state.draft;prerelease=$state.prerelease;body=$state.body;tag_name=$tag;target_commitish=$commit;assets=@($state.assets.Values);html_url="https://github.com/$repo/releases/tag/$tag"} |
+        return @{id=42;draft=$state.draft;prerelease=$state.prerelease;body=$state.body;name=$state.name;created_at="2026-11-12T00:00:00Z";tag_name=$tag;target_commitish=$commit;assets=@($state.assets.Values);html_url="https://github.com/$repo/releases/tag/$tag"} |
             ConvertTo-Json -Compress -Depth 4
     }
     if ($args[0] -eq 'release' -and $args[1] -eq 'create') {
@@ -63,6 +63,8 @@ function gh {
         if (!$notes.Contains('<!-- yamamuki-data:temporary-draft:v1 -->') -or
             $args -notcontains '--draft' -or $args -contains '--verify-tag' -or
             $state.tagCommit) { throw '受け渡しDraftの設定が不正です。' }
+        $state.name = $args[[array]::IndexOf($args, '--title') + 1]
+        if (!$state.name.StartsWith('draft-esa-worldcover-')) { throw 'Draft名が不正です。' }
         $state.created = $true
         $state.body = $notes
         return
@@ -104,6 +106,8 @@ function gh {
 try {
     $timestamp = @{}
     if ($DataTimestamp) { $timestamp.DataTimestamp = $DataTimestamp }
+    $env:GITHUB_RUN_ID = '12345'
+    $env:GITHUB_RUN_ATTEMPT = '1'
     & (Join-Path $scripts 'prepare_release.ps1') -Dataset esa_worldcover -Database $Database -OutputDirectory $inputDir -TargetCommit $commit -ProcessDraft @timestamp
     if ($state.tagCommit) { throw 'Draft作成時にGitタグが作られました。' }
     if (!$state.created -or !$state.started) { throw '受け渡しDraftまたは加工Actionが作成されませんでした。' }
@@ -157,6 +161,7 @@ try {
         $state.body.Contains('<!-- yamamuki-data:temporary-draft:v1 -->')) {
         throw '試用公開の状態、整理マーカーまたは添付の不変性が不正です。'
     }
+    if ($state.name -cne 'esa-worldcover-20261112T000000Z-12345-1') { throw "試用公開時のRelease名が不正です: $($state.name)" }
     $state.tagCommit = $null
     try {
         & (Join-Path $scripts 'publish_release.ps1') @publish -Operation Formalize

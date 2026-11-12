@@ -137,7 +137,7 @@ if ($uploadDraft) {
     $assets = @($databaseName, $config.manifestName, 'LICENSE.txt') | ForEach-Object { Join-Path $output $_ }
     $releaseOptions = @(
         '--repo', $repo, '--target', $TargetCommit, '--draft', '--latest=false'
-        '--title', "$($entry.title) $version"
+        '--title', ('draft-' + $Dataset.Replace('_', '-') + '-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))
         '--notes', "<!-- yamamuki-data:temporary-draft:v1 -->`nローカルで生成した地表SQLiteの受け渡し用Draftです。加工・検査Actionを実行してください。"
     )
     # Draftではタグ名と対象SHAだけを記録し、Gitタグの実体は作らない。

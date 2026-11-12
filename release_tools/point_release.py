@@ -275,6 +275,8 @@ def publish_candidate(target, sha256="", reason="", *, preview=False):
 
         fields = {"draft": False, "prerelease": preview, "make_latest": "false"}
         if preview:
+            fields["name"] = (release.get("name") or tag).removeprefix("draft-")
+        if preview:
             fields["body"] = (release.get("body") or "").replace(site.TEMPORARY_DRAFT_MARKER, "")
         if release["draft"]:
             commit = release["target_commitish"]

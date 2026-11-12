@@ -59,7 +59,7 @@ class PointReleaseTests(unittest.TestCase):
         tag, manifest = gsi.prepare("test", source, "stable")
         self.assertEqual("gsi-peaks-test", tag)
         assets = {path.name: path.read_bytes() for path in source.iterdir() if path.is_file()}
-        release = dict(id=101, tag_name=tag, draft=True, prerelease=False, target_commitish="a" * 40,
+        release = dict(id=101, tag_name=tag, name="draft-" + tag, draft=True, prerelease=False, target_commitish="a" * 40,
                        body=f"- SHA-256: `{manifest['sha256']}`\n{target.site.TEMPORARY_DRAFT_MARKER}",
                        html_url="https://github.com/owner/repo/releases/tag/untagged-101")
         dev_path = "points/gsi-peaks-dev/manifest.json"
@@ -85,6 +85,8 @@ class PointReleaseTests(unittest.TestCase):
             body = json.loads(Path(args[-1]).read_bytes())
             self.assertNotIn("tag_name", body)
             self.assertFalse(body["draft"])
+            if body["prerelease"]:
+                self.assertEqual(tag, body["name"])
             requests.append(body)
             if not body["prerelease"] and interrupted:
                 interrupted = False

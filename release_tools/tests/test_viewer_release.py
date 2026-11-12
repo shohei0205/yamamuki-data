@@ -14,7 +14,7 @@ from release_tools import publish_reviewed as entry
 
 
 TAG = "viewer-20261112T012345Z-123456-1"
-RELEASE = dict(id=12, tag_name=TAG, draft=True, prerelease=False,
+RELEASE = dict(id=12, tag_name=TAG, name="draft-" + TAG, draft=True, prerelease=False,
                target_commitish="a" * 40, body=viewer.site.TEMPORARY_DRAFT_MARKER,
                html_url=f"https://github.com/owner/repo/releases/tag/{TAG}")
 
@@ -67,6 +67,8 @@ class ViewerReleaseTests(unittest.TestCase):
             viewer.publish_candidate(release)
             viewer.publish_candidate(release)
         self.assertEqual(2, len(patches))
+        self.assertEqual(TAG, patches[0]["name"])
+        self.assertEqual(TAG, release["name"])
         self.assertFalse(release["draft"])
         self.assertFalse(release["prerelease"])
         self.assertEqual((12, TAG), (release["id"], release["tag_name"]))

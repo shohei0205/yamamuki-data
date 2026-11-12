@@ -231,6 +231,15 @@ try {
     }
     $fields = @{ make_latest = 'false' }
     if ($Operation -eq 'Prepare') {
+        $publicName = ([string]$release.name) -creplace '^draft-', ''
+        if ($publicName -cnotmatch '^[a-z][a-z0-9-]*-\d{8}T\d{6}Z-\d+-\d+$') {
+            $created = if ($release.created_at -is [datetime]) { $release.created_at.ToUniversalTime() } elseif ($release.created_at) { [DateTimeOffset]::Parse($release.created_at, [Globalization.CultureInfo]::InvariantCulture).UtcDateTime } else { [DateTime]::UtcNow }
+            if ($env:GITHUB_RUN_ID -notmatch '^\d+$' -or $env:GITHUB_RUN_ATTEMPT -notmatch '^\d+$') {
+                throw 'Release名の確定にはActionsの実行IDと試行番号が必要です。'
+            }
+            $publicName = $Dataset.Replace('_', '-') + '-' + $created.ToString('yyyyMMddTHHmmssZ') + '-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT
+        }
+        $fields.name = 'draft-' + $publicName
         $receipt = @{
             dataset = $Dataset; package = $Package; targetCommit = $TargetCommit
             sha256 = $expected.sha256; manifestName = $config.manifestName; files = $hashes
@@ -257,6 +266,7 @@ try {
             if ($receipt.files[$name] -cne $hashes[$name]) { throw "検査後に添付が変更されています: $name" }
         }
         if ($Operation -eq 'Preview') {
+            $fields.name = ([string]$release.name) -creplace '^draft-', ''
             $fields.draft = $false
             $fields.prerelease = $true
             # GitHubがこの試用公開と同時に、固定したSHAからタグを作成する。
