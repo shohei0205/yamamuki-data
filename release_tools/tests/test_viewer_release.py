@@ -31,6 +31,11 @@ def assets(directory, *, missing_executable=False):
 
 
 class ViewerReleaseTests(unittest.TestCase):
+    def setUp(self):
+        environment = patch.dict(os.environ, GITHUB_ACTIONS="true", GITHUB_REF="refs/heads/main")
+        environment.start()
+        self.addCleanup(environment.stop)
+
     def test_existing_numbered_draft_still_accepts_preview(self):
         release = {**RELEASE, "tag_name": "viewer-v0.1.0"}
         with (patch.object(viewer.site, "gh", return_value="[]"),
