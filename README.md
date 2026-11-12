@@ -175,6 +175,8 @@ CI の「共通：文字形式の確認」はすべての PR で文字コード�
 |---|---|---|---|
 | OpenStreetMap 由来の地点データ | © OpenStreetMap contributors | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) | [OSM 山頂の出典とライセンス](points/osm-peaks/README.md#出典とライセンス)。補足適用前の原本と旧形式のデータも含む |
 | 国土地理院由来の地点データ・OSM版の地点照合と補正に用いた情報 | 出典：国土地理院。資料名と加工内容を記録する | [公共データ利用規約（第1.0版）](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（PDL-1.0） | [GSI 山頂](points/gsi-peaks/README.md#出典とライセンス)・[OSM 山頂](points/osm-peaks/README.md#出典とライセンス) の出典とライセンス |
+| ESA WorldCover 由来の地表データ（森林・水域） | © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [ESA WorldCover の出典とライセンス](surface/esa_worldcover/README.md#出典とライセンス)。分類・穴埋め・ノイズ除去・縮小を行って作成 |
+| 国土地理院の標高タイル由来の陰影・地表分類の補助情報 | 地理院タイル（標高タイル）を加工して作成 | [公共データ利用規約（第1.0版）](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（PDL-1.0） | [ESA WorldCover の出典とライセンス](surface/esa_worldcover/README.md#出典とライセンス)。DEM10Bから陰影を生成し、地表分類の補助判定にも使用 |
 | 日本百名山の山名一覧 | Wikipedia「日本百名山」の投稿者 | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) | [GSI 山頂](points/gsi-peaks/README.md#出典とライセンス)・[OSM 山頂](points/osm-peaks/README.md#出典とライセンス) |
 | 公開済みの動作確認用地点データ | このリポジトリで作成 | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | [開発版カタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) の `testdata` |
 
@@ -182,7 +184,7 @@ CI の「共通：文字形式の確認」はすべての PR で文字コード�
 
 ### 配布データの作成者と利用条件のファイル
 
-配布データは、上の表の元データを [The yamamuki Authors](AUTHORS.md) が選び、照合・補正して作っている。作成者は manifest の `metadata.authors` に記録し、元データの作者とは分けて扱う。元データの出典・利用条件・帰属表示は、これまでどおり `metadata.sources` に記録する。
+配布データは、上の表の元データを [The yamamuki Authors](AUTHORS.md) が選び、照合・補正・加工して作っている。作成者は manifest の `metadata.authors` に記録し、元データの作者とは分けて扱う。元データの出典・利用条件・帰属表示は、これまでどおり `metadata.sources` に記録する。
 
 各 Release には、そのデータの利用条件をまとめた `LICENSE.txt` を添付し、manifest の `licenseUrl` から参照できるようにする。`LICENSE.txt` には、データ全体のライセンス、出典ごとの利用条件と帰属表示、作成者、表示のお願いを記載する。OpenStreetMap 由来のデータは ODbL 1.0 の派生データベースとして配るため、本文 `ODbL-1.0.txt`（[LICENSES/ODbL-1.0.txt](LICENSES/ODbL-1.0.txt) の写し）も添付する。国土地理院由来のデータは、データ全体に一つのライセンスを定めず、出典ごとの利用条件に従う。
 
@@ -194,12 +196,29 @@ CI の「共通：文字形式の確認」はすべての PR で文字コード�
 
 ### ビューアーが利用する外部データ
 
-[地点データビューアー](points/viewer.html) は、背景地図と所在地判定用の境界データを取得する。これらは配布する地点データや補足には含めない。
+ビューアーが実行時に取得する背景地図・行政区域の境界データは、配布する地点データ・地表SQLite・補足には収録しない。ローカルで開くデータの出典と利用条件は、上の「配布データと補足」と各ファイルの出典メタデータを参照する。
+
+#### ブラウザー版
+
+[地点データビューアー](points/viewer.html) は、背景地図と所在地判定用の境界データを取得する。
 
 | 用途 | 出典 | 利用条件・詳細 |
 |---|---|---|
 | 背景地図 | 地理院タイル | [地理院タイルの案内](https://maps.gsi.go.jp/development/ichiran.html) |
 | 所在地判定 | 共同通信社の [japan-choropleth](https://github.com/kyodo-official/japan-choropleth) が加工した国土交通省「国土数値情報 行政区域データ 2025 年版」 | CC BY 4.0。[ビューアーの説明](points/README.md#地点データをブラウザで確認する) |
+
+#### ネイティブ版
+
+[データビューワ](viewer/README.md) は、選択したオンライン地図の表示範囲のタイルを取得する。地表SQLiteだけを表示する場合、背景地図の取得は不要。地点の所在地を座標から判定するときは、市区町村の行政区域を表す境界データを取得する。境界データは所在地の参考判定に使い、地形・地表や海岸線の描画には使わない。
+
+| 用途 | 出典 | 利用条件・詳細 |
+|---|---|---|
+| 背景地図（標準地図・淡色地図・白地図・写真・色別標高図・陰影起伏図・傾斜量図） | 地理院タイル | [地理院タイルの案内](https://maps.gsi.go.jp/development/ichiran.html)。種類やズームに応じた追加の出典も画面に表示する |
+| 背景地図（OpenStreetMap標準） | © OpenStreetMap contributors | [著作権・ライセンス](https://www.openstreetmap.org/copyright)・[タイル利用方針](https://operations.osmfoundation.org/policies/tiles/) |
+| 背景地図（OpenTopoMap） | OpenStreetMap、標高：SRTM・Sonny、© OpenTopoMap | [OpenTopoMapの出典とライセンス](https://opentopomap.org/about) |
+| 背景地図（CyclOSM） | OpenStreetMap・CyclOSM、配信：OpenStreetMap France | [CyclOSM](https://www.cyclosm.org/)・[配信元の利用方針](https://www.openstreetmap.fr/usage/) |
+| 背景地図（HOT） | OpenStreetMap・Humanitarian OpenStreetMap Team、配信：OpenStreetMap France | [HOT](https://www.hotosm.org/)・[配信元の利用方針](https://www.openstreetmap.fr/usage/) |
+| 所在地判定 | 共同通信社の [japan-choropleth](https://github.com/kyodo-official/japan-choropleth#行政区域) が加工した国土交通省の行政区域データ | CC BY 4.0。[ネイティブ版の説明](viewer/README.md#地点一覧と地図) |
 
 ### コード・文書
 

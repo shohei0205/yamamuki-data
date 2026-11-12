@@ -82,7 +82,8 @@ Co-authored-by: Codex GPT-6
 
 ## データの扱い
 
-- 配るデータは OpenStreetMap 由来で、ODbL で利用・再配布している。README の「© OpenStreetMap contributors」の表示を消さない。
+- 配布データの出典・利用条件はデータセットごとに異なる。OpenStreetMap 由来のデータは ODbL で利用・再配布しており、README の「© OpenStreetMap contributors」の表示を消さない。
+- ルートの README.md の「配布データと補足」は、リポジトリ内のすべてのデータの出典をまとめる一覧とする。地点・地表・補足・将来追加するデータを含め、出典・帰属表示・利用条件と、各データセットの詳細文書へのリンクを記載する。出典を追加・変更したら、この一覧も更新し、各データセットの「出典とライセンス」および配布物の出典メタデータと整合させる。
 - 生成したデータと元データ（`*.osm.pbf`）は git に入れず、Releases に置く。例外として、国土地理院版は補足適用前の `points/gsi-peaks/gsi-peaks-source.json` と出典要約 `points/gsi-peaks/snapshot.json` をコミットし、Action はオリジナルと補足 JSON からマージ済み地点 JSON を生成して Release を作る。SQLite と元データのキャッシュはコミットしない。
 - JSON の形式を変えるときは「スキーマの版を上げる基準」に従う。公開済みのアプリが読めなくなる変更は、yamamuki 側の対応と順番を決めてから出す。
 - 山頂と地形は公開時期が異なるため、最新版の参照先をデータ種別ごとに分ける。山頂の正式版は利用する Release に添付された manifest を選んで取得する。既存の開発版の manifest とカタログは公開当時の内容で残す。リポジトリ全体の `releases/latest` は使わない。Pages は Actions の生成物から直接配置し、配布専用ブランチや生成物のコミットは作らない。アプリへの組み込み時もこの契約に合わせる。公開後に URL やファイル名を変える場合は、yamamuki 側の対応と順番を決める。
