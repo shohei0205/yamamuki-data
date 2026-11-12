@@ -147,29 +147,29 @@ try {
         throw '再実行時の添付・公開結果が不正です。'
     }
     if ($state.body.Contains('共通Actionで試用公開できます') -or
-        !$state.body.Contains('## 配布ファイル') -or !$state.body.Contains('## 出典と利用条件')) {
+        !$state.body.Contains('## 配布ファイル') -or !$state.body.Contains('## 出典')) {
         throw '配布向け説明に置き換わっていません。'
     }
     $previousRowPosition = -1
     foreach ($z in 9..12) {
-        $rowPosition = $state.body.IndexOf("| [esa-worldcover-z$z.sqlite3]", [StringComparison]::Ordinal)
+        $rowPosition = $state.body.IndexOf("| " + [char]96 + "esa-worldcover-z$z.sqlite3", [StringComparison]::Ordinal)
         if ($rowPosition -le $previousRowPosition -or !$state.body.Contains(" | z5〜z$z | ")) {
             throw "配布順序または共通ズーム表記が不正です: z$z"
         }
         $previousRowPosition = $rowPosition
         foreach ($suffix in @('sqlite3','manifest.json')) {
             $assetName = "esa-worldcover-z$z.$suffix"
-            if (!$state.body.Contains("[$assetName](https://github.com/$repo/releases/download/$tag/$assetName)")) {
-                throw "配布本文に添付リンクがありません: $assetName"
+            if (!$state.body.Contains(([char]96 + $assetName + [char]96))) {
+                throw "Draft本文に添付ファイル名がありません: $assetName"
             }
         }
     }
     $descriptionManifest = Get-Content -LiteralPath (Join-Path $inputDir 'esa-worldcover-z12.manifest.json') -Raw | ConvertFrom-Json -AsHashtable
     foreach ($source in $descriptionManifest.metadata.sources) {
-        foreach ($field in @('name','source','license','attribution','changes')) {
-            if (!$state.body.Contains($source[$field])) { throw "配布本文に出典の$field がありません。" }
-        }
+        $line = "- $($source.name): $($source.attribution) / $($source.license)"
+        if (!$state.body.Contains($line)) { throw '配布本文の出典が共通の箇条書き形式ではありません。' }
     }
+    if ($state.body.Contains('## 利用方法') -or $state.body.Contains('### ')) { throw '不要な利用方法または出典の小見出しがあります。' }
     if ($state.body.Contains('データ版:')) { throw '配布本文にバージョン番号が表示されています。' }
     . (Join-Path $scripts 'release_description.ps1')
     if ((Format-SurfaceReleaseZooms @(5,7,8,9,12)) -cne 'z5, z7〜z9, z12') {
@@ -180,6 +180,9 @@ try {
         manifestName = 'test.manifest.json'; manifestUrl = 'https://example.com/test.manifest.json'
     })
     if (!$mixed.Contains('forest: z5〜z9<br>water: z5, z7')) { throw 'レイヤーごとのズームを表示できません。' }
+    if ($state.body.Contains('/releases/download/') -or !$state.body.Contains('ページ下部のAssets')) {
+        throw '配布本文に不要なダウンロードリンクがあります。'
+    }
     $preparedBody = $state.body.Replace('<!-- yamamuki-data:temporary-draft:v1 -->', '').Trim()
     if ($state.tagCommit) { throw 'Draft加工時にGitタグが作られました。' }
     if ($state.hiddenVerifications -eq 0) { throw '隠しファイルによる添付の再検証が実行されませんでした。' }
@@ -200,7 +203,10 @@ try {
         $state.body.Contains('<!-- yamamuki-data:temporary-draft:v1 -->')) {
         throw '試用公開の状態、整理マーカーまたは添付の不変性が不正です。'
     }
-    if ($state.body -cne $preparedBody) { throw '試用公開で配布説明が変化しました。' }
+    if ($state.body -cne $preparedBody -or $state.body.Contains('/releases/download/')) {
+        throw '試用公開でファイル名のみの説明が維持されていません。'
+    }
+    $preparedBody = $state.body
     if ($state.name -cne 'esa-worldcover-20261112T000000Z-12345-1') { throw "試用公開時のRelease名が不正です: $($state.name)" }
     $state.tagCommit = $null
     try {
