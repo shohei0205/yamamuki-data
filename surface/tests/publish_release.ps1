@@ -106,7 +106,7 @@ try {
     & (Join-Path $scripts 'prepare_release.ps1') -Dataset esa_worldcover -Database $Database -OutputDirectory $inputDir -TargetCommit $commit -ProcessDraft @timestamp
     if (!$state.created -or !$state.started) { throw '受け渡しDraftまたは加工Actionが作成されませんでした。' }
     Get-ChildItem -LiteralPath $inputDir -File | ForEach-Object { Add-TestAsset $_ }
-    $manifest = Get-Content -LiteralPath (Join-Path $inputDir 'manifest.json') -Raw | ConvertFrom-Json
+    $manifest = Get-Content -LiteralPath (Join-Path $inputDir 'esa-worldcover-z12.manifest.json') -Raw | ConvertFrom-Json
     $suffix = if ($IsWindows) { ".exe" } else { "" }
     $tool = Join-Path (Split-Path $PSScriptRoot -Parent) "target/release/surface-tool$suffix"
     $tag = "esa-worldcover-japan-$($manifest.version)"
@@ -168,7 +168,7 @@ try {
     }
     foreach ($z in 9..12) {
         $name = "esa-worldcover-z$z"
-        $manifestName = if ($z -eq 12) { 'manifest.json' } else { "$name.manifest.json" }
+        $manifestName = "$name.manifest.json"
         $variant = Get-Content -LiteralPath (Join-Path $inputDir $manifestName) -Raw | ConvertFrom-Json -AsHashtable
         $database = Join-Path $inputDir "$name.sqlite3"
         $hash = (Get-FileHash -LiteralPath $database).Hash

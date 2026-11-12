@@ -109,7 +109,7 @@ class PublishReviewedTests(unittest.TestCase):
             commands.append((arguments, kwargs))
             if arguments[:3] == ["gh", "release", "download"]:
                 directory = Path(arguments[-1])
-                (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+                (directory / arguments[arguments.index("--pattern") + 1]).write_text(json.dumps(manifest), encoding="utf-8")
 
         with patch.object(entry, "find_release", return_value=release), patch.object(entry.subprocess, "run", side_effect=run):
             entry.publish_candidate(release["tag_name"], checksum, "確認済み; $(command)", preview=preview)
@@ -128,6 +128,18 @@ class PublishReviewedTests(unittest.TestCase):
             self.assertEqual(arguments[-1], "確認済み; $(command)")
             self.assertEqual(options["env"]["GITHUB_REPOSITORY"], "owner/repo")
             self.assertNotIn("shell", options)
+
+    def test_surface_named_manifest_is_used_for_preview_and_formalize(self):
+        manifest = dict(schemaFormat="yamamuki-manifest", schemaVersion=6,
+                        dataSchemaFormat="yamamuki-sqlite", sha256="a" * 64)
+        receipt = dict(dataset="esa_worldcover", package="all", sha256="a" * 64,
+                       targetCommit="1" * 40, manifestName="esa-worldcover-z12.manifest.json")
+        for preview in (True, False):
+            commands = self.candidate_with_manifest(manifest, receipt, preview=preview)
+            self.assertEqual(commands[0][0][commands[0][0].index("--pattern") + 1], receipt["manifestName"])
+        for name in ("../manifest.json", "/manifest.json", "a/b.json", "a\\b.json", "a b.json", ""):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                self.candidate_with_manifest(manifest, {**receipt, "manifestName": name})
 
     def test_surface_candidate_rejects_invalid_checksum_and_config_paths(self):
         manifest = dict(schemaFormat="yamamuki-manifest", schemaVersion=6,

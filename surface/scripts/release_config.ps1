@@ -74,6 +74,7 @@ function Read-SurfaceReleaseConfig([string]$Dataset, [string]$Package) {
         versionPattern = $settings.versionPattern
         releaseId = $config.releaseId
         fileName = $config.fileName
+        manifestName = [IO.Path]::GetFileNameWithoutExtension($config.fileName) + '.manifest.json'
         layers = $config.layers
         selection = Read-SurfaceLevelSelection $config.layers $config.levels
         splitPackages = $splits

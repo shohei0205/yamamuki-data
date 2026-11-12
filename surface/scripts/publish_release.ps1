@@ -25,7 +25,7 @@ if (!$Tag.StartsWith($tagPrefix, [StringComparison]::Ordinal) -or
     $Tag.Substring($tagPrefix.Length) -cnotmatch $config.versionPattern) {
     throw "タグが公開設定と一致しません: $Tag"
 }
-$files = @($config.fileName, 'manifest.json', 'LICENSE.txt')
+$files = @($config.fileName, $config.manifestName, 'LICENSE.txt')
 $splitFiles = @(foreach ($split in $config.splitPackages) {
     $split.fileName
     $split.manifestName
@@ -128,7 +128,7 @@ try {
         if ($asset.name -ceq $files[0] -and $actualHash -ne $Sha256) { throw 'SQLiteのSHA-256が入力値と一致しません。' }
     }
 
-    $rawManifest = Get-Content -LiteralPath (Join-Path $download 'manifest.json') -Raw -Encoding utf8
+    $rawManifest = Get-Content -LiteralPath (Join-Path $download $config.manifestName) -Raw -Encoding utf8
     $manifest = ConvertFrom-Json -InputObject $rawManifest -AsHashtable
     $document = [System.Text.Json.JsonDocument]::Parse($rawManifest)
     try { $timestamp = $document.RootElement.GetProperty('dataTimestamp').GetString() }
@@ -227,7 +227,7 @@ try {
     if ($Operation -eq 'Prepare') {
         $receipt = @{
             dataset = $Dataset; package = $Package; targetCommit = $TargetCommit
-            sha256 = $expected.sha256; files = $hashes
+            sha256 = $expected.sha256; manifestName = $config.manifestName; files = $hashes
         } | ConvertTo-Json -Depth 6 -Compress
         $fields.body = @(
             $temporaryMarker
@@ -243,6 +243,7 @@ try {
         $receipt = $matches[0].Groups[1].Value | ConvertFrom-Json -AsHashtable
         if ($receipt.dataset -cne $Dataset -or $receipt.package -cne $Package -or
             $receipt.targetCommit -cne $TargetCommit -or $receipt.sha256 -cne $expected.sha256 -or
+            $receipt.manifestName -cne $config.manifestName -or
             $receipt.files.Count -ne $hashes.Count) {
             throw '地表の検査記録と公開対象が一致しません。'
         }
@@ -282,7 +283,7 @@ try {
         ''
         "- 操作: $Operation"
         "- Release: $($result.html_url)"
-        "- Manifest: $releaseRoot/$Tag/manifest.json"
+        "- Manifest: $releaseRoot/$Tag/$($config.manifestName)"
         "- SHA-256: $($expected.sha256)"
         foreach ($split in $config.splitPackages) {
             "- 構成別 manifest: $releaseRoot/$Tag/$($split.manifestName)"

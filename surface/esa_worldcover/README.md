@@ -91,7 +91,7 @@ pwsh -NoProfile -File surface/scripts/prepare_release.ps1 `
 | z5〜z9 | `esa-worldcover-z9.sqlite3` | `esa-worldcover-z9.manifest.json` |
 | z5〜z10 | `esa-worldcover-z10.sqlite3` | `esa-worldcover-z10.manifest.json` |
 | z5〜z11 | `esa-worldcover-z11.sqlite3` | `esa-worldcover-z11.manifest.json` |
-| z5〜z12 | `esa-worldcover-z12.sqlite3` | `manifest.json` |
+| z5〜z12 | `esa-worldcover-z12.sqlite3` | `esa-worldcover-z12.manifest.json` |
 
 全レベル版の配布ファイル名は[公開設定](release.json)の `packages.all.fileName` で指定する。公開準備では生成済みSQLiteをその名前でコピーする。加工・検査Actionは全レベル版を検査し、`splitPackages` に従って最大レベル別の3ファイルを抽出する。配布用Draftが整ったら、共通ActionでPre-release、正式版の順に公開する。
 

@@ -116,10 +116,21 @@ def publish_candidate(target, sha256="", reason="", *, preview=False):
         publish_viewer(release, sha256, preview=preview)
         return
     repo = os.environ["GH_REPO"]
+    manifest_name = "manifest.json"
+    receipts = re.findall(r"<!-- yamamuki-data:surface-draft:v1 (.+?) -->", release.get("body") or "")
+    if receipts:
+        if len(receipts) != 1:
+            raise ValueError("地表の加工・検査記録を一意に特定できません")
+        receipt_info = json.loads(receipts[0])
+        if not isinstance(receipt_info, dict):
+            raise ValueError("地表の加工・検査記録が不正です")
+        manifest_name = receipt_info.get("manifestName", "manifest.json")
+        if not isinstance(manifest_name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*\.json", manifest_name):
+            raise ValueError("地表のmanifestファイル名が不正です")
     with tempfile.TemporaryDirectory() as temporary:
         subprocess.run(["gh", "release", "download", release["tag_name"], "--repo", repo,
-                        "--pattern", "manifest.json", "--dir", temporary], check=True)
-        manifest = json.loads((Path(temporary) / "manifest.json").read_bytes())
+                        "--pattern", manifest_name, "--dir", temporary], check=True)
+        manifest = json.loads((Path(temporary) / manifest_name).read_bytes())
     if not isinstance(manifest, dict) or manifest.get("schemaFormat") != "yamamuki-manifest":
         raise ValueError("未対応の manifest 形式です")
     if manifest.get("dataSchemaFormat") == "yamamuki-points":

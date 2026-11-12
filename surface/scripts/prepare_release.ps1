@@ -25,7 +25,10 @@ $inputFile = Get-Item -LiteralPath $Database
 if ($inputFile.PSIsContainer) { throw '地表SQLiteのファイルを指定してください。' }
 $generationManifest = $null
 if (!$DataTimestamp) {
-    $manifestPath = Join-Path $inputFile.DirectoryName 'manifest.json'
+    $manifestPath = Join-Path $inputFile.DirectoryName ([IO.Path]::GetFileNameWithoutExtension($inputFile.Name) + '.manifest.json')
+    if (!(Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        $manifestPath = Join-Path $inputFile.DirectoryName 'manifest.json'
+    }
     if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
         $generationManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json -AsHashtable
         $recordedTimestamp = $generationManifest.dataTimestamp
@@ -53,7 +56,7 @@ $stage = Join-Path $parent ('.surface-release-' + [guid]::NewGuid())
 $databaseName = $config.fileName
 $stagedDatabase = Join-Path $stage $databaseName
 $stagedLicense = Join-Path $stage 'LICENSE.txt'
-$stagedManifest = Join-Path $stage 'manifest.json'
+$stagedManifest = Join-Path $stage $config.manifestName
 New-Item -ItemType Directory -Path $stage | Out-Null
 try {
     Copy-Item -LiteralPath $inputFile.FullName -Destination $stagedDatabase
@@ -109,7 +112,7 @@ try {
 
 Write-Output "タグ: $tag"
 Write-Output "配布ファイル: $output"
-Write-Output "公開後のmanifest: $releaseBase/manifest.json"
+Write-Output "公開後のmanifest: $releaseBase/$($config.manifestName)"
 foreach ($split in $config.splitPackages) {
     Write-Output "加工・検査Actionが作る分割版manifest: $releaseBase/$($split.manifestName)"
 }
@@ -131,7 +134,7 @@ if ($uploadDraft) {
         if ($page | Where-Object { $_.tag_name -ceq $tag }) { throw "同じタグのReleaseがすでにあります: $tag" }
     }
 
-    $assets = @($databaseName, 'manifest.json', 'LICENSE.txt') | ForEach-Object { Join-Path $output $_ }
+    $assets = @($databaseName, $config.manifestName, 'LICENSE.txt') | ForEach-Object { Join-Path $output $_ }
     $releaseOptions = @(
         '--repo', $repo, '--target', $TargetCommit, '--draft', '--latest=false'
         '--title', "$($entry.title) $version"

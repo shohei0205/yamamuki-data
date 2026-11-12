@@ -12,7 +12,7 @@
 
 公開済みの地表データは、次の手順で取得して利用できる。
 
-1. [Releases 一覧](https://github.com/shohei0205/yamamuki-data/releases)で利用するデータセットと版を選び、Assets の `manifest.json` を取得する。タグと配布ファイル名は、各データセットの README を参照する。
+1. [Releases 一覧](https://github.com/shohei0205/yamamuki-data/releases)で利用するデータセットと版を選び、Assets から、利用するSQLiteに対応する `<SQLite の拡張子を除いた名前>.manifest.json` を取得する。タグと配布ファイル名は、各データセットの README を参照する。
 2. manifest の `schemaVersion` とデータ本体の `dataSchemaVersion` に対応していることを確認する。
 3. `downloadUrl` から SQLite を取得し、ファイルの `sizeBytes` と `sha256` を照合する。
 4. [地表 SQLite の形式](#地表-sqlite-の形式)に従ってデータを読む。地図上で確認する場合は、[データビューワ](../viewer/README.md)の「地表SQLiteを開く」でファイルを選ぶ。
@@ -86,14 +86,14 @@ Actionは添付したSQLite、manifest、ライセンスを取得し直し、収
 | 単位 | 構造 |
 |---|---|
 | SQLite | ファイルごとに、選んだレイヤーの設定・レベル・画像タイルを収録する。元のデータセット ID とデータ版を引き継ぎ、タイル画像の BLOB をそのままコピーする |
-| manifest | SQLite ごとに作る。分割版は `<SQLite の拡張子を除いた名前>.manifest.json`、全レイヤー版は `manifest.json` とする。`downloadUrl`・サイズ・SHA-256 に対応する SQLite の情報を記録する |
+| manifest | SQLite ごとに作る。全レイヤー版・分割版とも `<SQLite の拡張子を除いた名前>.manifest.json` とする。`downloadUrl`・サイズ・SHA-256 に対応する SQLite の情報を記録する |
 | GitHub Release | 同じタグの Assets に、すべての SQLite と対応する manifest を添付する。共通のライセンス文書は Release に 1 点添付する |
 
 分割ファイルを同じデータセットとして扱う場合は、台帳のデータセット ID とデータ版を照合する。レイヤーは文字列の `id` で区別する。`dataset_key` と `layer_key` はファイル内の参照に使う。
 
 #### 加工・検査Actionでの分割手順
 
-ローカルでは全レイヤー入りの SQLite、`manifest.json`、`LICENSE.txt` を下書き Release に添付する。
+ローカルでは全レイヤー入りの SQLite、そのファイル名に対応する `.manifest.json`、`LICENSE.txt` を下書き Release に添付する。
 
 `release.json` の `splitPackages` に、配布ファイルごとの `fileName` と `layers` を指定する。任意の `levels` はレイヤー ID から実 XYZ ズームの整数配列への対応表。省略したレイヤーは全レベルを収録する。ファイル名は重複させない。同じレイヤーを別ファイルにも収録でき、各ファイルで組み合わせやレベルを変えられる。
 
