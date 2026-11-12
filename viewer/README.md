@@ -49,7 +49,7 @@ cargo run --locked --manifest-path viewer/Cargo.toml -- --check-map
 
 GitHub Actions の「データビューワ：下書き Release 生成・検査」を手動で実行する。Windows x64 と macOS Apple Silicon の ZIP を作り、それぞれの実行ファイルで地点 JSON を読み込んで確認する。
 
-1. `main` で実行すると、生成日時から配布名とタグを自動で決め、Draft Release を作る。配布名は地点データと同じ `<UTC の生成日時>-<実行 ID>-<試行番号>`（例: `20261112T000032Z-43123965055-1`）を使う。タグと ZIP 名の先頭には `viewer-` を付ける。バージョン番号の指定や更新は不要。作業ブランチでは Release を作らず、2 環境の ZIP を Actions の実行結果から 7 日間ダウンロードできる。
+1. `main` で実行すると、生成日時から配布名とタグを自動で決め、Draft Release を作る。配布名は `Yamamuki Data Viewer <UTC の生成日時>-<実行 ID>-<試行番号>`（例: `Yamamuki Data Viewer 20261112T000032Z-43123965055-1`）とし、日時以降の形式を地点データとそろえる。タグと ZIP 名の先頭には `viewer-` を付ける。バージョン番号の指定や更新は不要。作業ブランチでは Release を作らず、2 環境の ZIP を Actions の実行結果から 7 日間ダウンロードできる。
 2. Draft の内容を確認し、「共通：Draft-release を試用公開」にそのタグまたは Release URL を指定する。2 環境の ZIP と `SHA256SUMS.txt` を検証し、同じ Release を Pre-release にする。
 3. 試用して確認が済んだら、「共通：Pre-release を正式公開」に同じタグを指定する。添付ファイルを再検証して正式 Release にする。タグ・添付ファイル・取得 URL は変えない。ビューワの公開では Pages やデータカタログを更新しない。
 
