@@ -150,7 +150,13 @@ try {
         !$state.body.Contains('## 配布ファイル') -or !$state.body.Contains('## 出典と利用条件')) {
         throw '配布向け説明に置き換わっていません。'
     }
+    $previousRowPosition = -1
     foreach ($z in 9..12) {
+        $rowPosition = $state.body.IndexOf("| [esa-worldcover-z$z.sqlite3]", [StringComparison]::Ordinal)
+        if ($rowPosition -le $previousRowPosition -or !$state.body.Contains(" | z5〜z$z | ")) {
+            throw "配布順序または共通ズーム表記が不正です: z$z"
+        }
+        $previousRowPosition = $rowPosition
         foreach ($suffix in @('sqlite3','manifest.json')) {
             $assetName = "esa-worldcover-z$z.$suffix"
             if (!$state.body.Contains("[$assetName](https://github.com/$repo/releases/download/$tag/$assetName)")) {
@@ -165,6 +171,15 @@ try {
         }
     }
     if ($state.body.Contains('データ版:')) { throw '配布本文にバージョン番号が表示されています。' }
+    . (Join-Path $scripts 'release_description.ps1')
+    if ((Format-SurfaceReleaseZooms @(5,7,8,9,12)) -cne 'z5, z7〜z9, z12') {
+        throw '非連続ズームを欠落なしで表示できません。'
+    }
+    $mixed = New-SurfaceReleaseDescription $descriptionManifest @(@{
+        manifest = $descriptionManifest; levels = @{ forest = @(5..9); water = @(5,7) }
+        manifestName = 'test.manifest.json'; manifestUrl = 'https://example.com/test.manifest.json'
+    })
+    if (!$mixed.Contains('forest: z5〜z9<br>water: z5, z7')) { throw 'レイヤーごとのズームを表示できません。' }
     $preparedBody = $state.body.Replace('<!-- yamamuki-data:temporary-draft:v1 -->', '').Trim()
     if ($state.tagCommit) { throw 'Draft加工時にGitタグが作られました。' }
     if ($state.hiddenVerifications -eq 0) { throw '隠しファイルによる添付の再検証が実行されませんでした。' }
