@@ -43,7 +43,8 @@
     },
     "fileName": {
       "type": "string",
-      "pattern": "^[^/\\\\\\s]+\\.(?:gz|sqlite3)$"
+      "pattern": "^[^/\\\\\\s]+$",
+      "description": "パス区切りと空白を含まない配布ファイル名。拡張子は共通スキーマでは制限せず、データ形式ごとに定める。"
     },
     "sha256": {
       "type": "string",
@@ -113,29 +114,6 @@
     }
   },
   "allOf": [
-    {
-      "if": {
-        "properties": {
-          "dataSchemaFormat": {
-            "const": "yamamuki-sqlite"
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "fileName": {
-            "pattern": "^[^/\\\\\\s]+\\.sqlite3$"
-          }
-        }
-      },
-      "else": {
-        "properties": {
-          "fileName": {
-            "pattern": "^[^/\\\\\\s]+\\.gz$"
-          }
-        }
-      }
-    },
     {
       "not": {
         "required": [

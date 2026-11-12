@@ -36,7 +36,7 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。�
 | `version` | string | 必須 | データセットの配布版。英数字で始まり、英数字・ピリオド・ハイフン・下線で構成する | [版1] 追加 |
 | `downloadUrl` | string | 必須 | この版のデータ本体を取得する HTTPS URL | [版4] 追加 |
 | `licenseUrl` | string | 任意 | データ本体と同じ Release に添付した利用条件のファイル `LICENSE.txt` の HTTPS URL。データ全体のライセンス、出典ごとの帰属表示、作成者を記載する | [版6.1] 追加（#91） |
-| `fileName` | string | 必須 | 配布ファイル名。JSONのgzipは `.gz`、SQLiteは `.sqlite3` | [版1] 追加 |
+| `fileName` | string | 必須 | パス区切りと空白を含まない、空でない配布ファイル名。共通スキーマでは拡張子を制限しない。各データ形式で定める拡張子は、JSONのgzipが `.gz`、SQLiteが `.sqlite3` | [版1] 追加<br>[版6.2] 共通の拡張子制限を撤廃 |
 | `sha256` | string | 必須 | 配布ファイルそのものの SHA-256。小文字の16進数64文字 | [版1] 追加 |
 | `sizeBytes` | integer | 必須 | 配布ファイルのバイト数。正の整数 | [版1] 追加 |
 | `uncompressedSizeBytes` | integer | 必須 | 展開後のデータ本体のバイト数。正の整数。SQLiteは `sizeBytes` と同じ値 | [版1] 追加 |
@@ -55,6 +55,10 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。�
 ### 補足ファイル単体の配布
 
 補足ファイルを単体で配布するときも、この文書の共通 manifest 形式を使う。`dataSchemaVersion` は補足 JSON 本体の版とし、取得先・サイズ・ハッシュは配布する補足ファイルの値を記載する。`metadata` は補足 JSON の `metadata` をそのままコピーする。
+
+### データ形式の追加と識別
+
+`dataSchemaFormat` ごとのデータ形式の追加だけなら、manifest の `schemaVersion` は上げない。データ本体の形式と版は `dataSchemaFormat` と `dataSchemaVersion` で識別し、読み手は未対応の形式を扱わない。既存形式の項目・制約・意味は維持する。共通の `fileName` は拡張子を制限せず、拡張子や圧縮方法はデータ形式ごとに定める。
 
 ### SQLiteファイルの配布
 
@@ -278,6 +282,11 @@ SQLiteも共通manifest版6を使う。データ本体はSQLiteファイルを�
 ```
 
 ## 変更履歴
+
+### 版6.2（2026-11-12）
+
+- `dataSchemaFormat` でデータ形式を識別するため、形式の追加だけでは manifest の版を上げない方針を明記した。SQLite の配布も版6で扱う。
+- 共通の `fileName` から拡張子制限を外し、形式を追加するたびに共通スキーマを変えずに済むようにした。空文字・パス区切り・空白は禁止し、拡張子と圧縮方法はデータ形式ごとに定める。変更前の版6スキーマは `.gz` のみを許可していたため、SQLite などの新しい形式を検証する場合は更新後のスキーマを使う。
 
 ### 版6.1（2026-11-04）
 
