@@ -43,7 +43,8 @@
     },
     "fileName": {
       "type": "string",
-      "pattern": "^[^/\\\\\\s]+\\.gz$"
+      "pattern": "^[^/\\\\\\s]+$",
+      "description": "パス区切りと空白を含まない配布ファイル名。拡張子は共通スキーマでは制限せず、データ形式ごとに定める。"
     },
     "sha256": {
       "type": "string",
@@ -60,7 +61,7 @@
     "dataSchemaFormat": {
       "type": "string",
       "pattern": "^\\S(?:.*\\S)?$",
-      "description": "データ本体のschemaFormatと同じ値。manifest自身のschemaFormatとは独立。"
+      "description": "データ本体の形式識別子。SQLiteコンテナでは yamamuki-sqlite。manifest自身のschemaFormatとは独立。"
     },
     "dataSchemaVersion": {
       "type": "integer",
@@ -92,7 +93,7 @@
   "additionalProperties": true,
   "$defs": {
     "pointManifest": {
-      "description": "地点データ用。共通項目に加えて pointCount を必須とする。",
+      "description": "地点データ用。共通項目に加えて metadata.pointCount を必須とする。",
       "allOf": [
         {
           "$ref": "#"

@@ -2,28 +2,24 @@
 
 山の地点データなどを作り、誰でも使える形で配るリポジトリ。[山むきアプリ](https://github.com/shohei0205/yamamuki)もこのデータを使っている。
 
-地点データを地理院地図に重ねて表示する [データビューワ](viewer/README.md) を用意しています。
+[データビューワ](viewer/README.md) では、地点データを地理院地図などに重ねて表示できる。地表SQLiteは単独で表示することも、地図に重ねることもできる。
 
 ## データの種類
 
-| 種類 | 詳細 |
+| 種類 | 収録内容 |
 |---|---|
-| 地点データ | [データ一覧・共通形式・公開手順](points/README.md) |
-| 地形データ | 将来追加予定・未実装 |
+| [地点データ](points/README.md) | 山頂などの地点の名称・座標・標高 |
+| [地表データ](surface/README.md) | 森林・水域・陰影を表す地図画像タイル |
+| 地形データ | 標高から地形の起伏を再現するデータ（追加予定） |
 
 収録対象、データ本体の形式、ダウンロード先、生成・公開手順、検査基準は、種類ごとの文書にまとめる。
-
-## データを利用する
-
-1. [地点データの一覧](points/README.md)から、利用するデータを選ぶ。
-2. [地点データの取得・利用手順](points/README.md#データを取得して利用する)に従い、manifest とデータ本体を取得して検証する。
-3. JSON の項目は [地点 JSON の形式](points/README.md#地点-json-の形式)、出典・利用条件は [ライセンス](#ライセンス)を確認する。
 
 ## フォルダ構成
 
 ```text
 points/            地点データ（詳細は points/README.md）
-formats/           データ種別に共通する manifest の版別形式説明
+surface/           地表データの生成・SQLite読取
+formats/           データ種別に共通する metadata・manifest・SQLite の仕様
 schemas/           データ種別に共通する manifest の版別スキーマ
 release_tools/     データ種別共通の公開入口
 LICENSES/          Release に添付するライセンスの本文
@@ -49,7 +45,7 @@ OSM 山頂・国土地理院山頂の生成 Action は、タグを付けた下�
 
 Actions とローカルのどちらで生成したデータも、配布ファイルは [Releases](https://github.com/shohei0205/yamamuki-data/releases) の **Assets** に添付する。データの種類と版は Release のタグで、試用公開と正式公開は Pre-release の設定で区別する。ローカル生成のデータは、添付するファイルと検証方法をデータごとの README に記載する。
 
-今後追加する地表・地形データでは、ローカルで生成したファイルを、受け渡し用の Draft Release にアップロードする。データごとの Action がそのファイルを加工・検査し、添付ファイルを差し替えて、同じ Release を配布用の Draft Release に整える。この配布用 Draft Release を、Pre-release → 正式 Release の順に公開する。Draft の間は添付ファイルを変更できる。Pre-release として公開するときから、タグ・添付ファイル・取得 URL を固定する。加工と検証の具体的な手順は、各データの追加時に用意する。
+地表データでは、ローカルで生成したファイルを、整理マーカー付きの受け渡し用Draft Releaseにアップロードする。「地表：Release 加工・検査」がファイルを加工・検査し、同じReleaseを配布用Draftに整える。地形データも追加時にこの手順にそろえる。この配布用 Draft Release を、Pre-release → 正式 Release の順に公開する。Draft の間は添付ファイルを変更できる。Pre-release として公開するときから、タグ・添付ファイル・取得 URL を固定する。加工と検証の具体的な手順は、各データの追加時に用意する。
 
 正式公開・復旧で、正式版の manifest・カタログ・履歴を更新する。既存の開発版カタログとその参照先は公開当時の内容で残す。サイトは Actions から直接配置する。
 
@@ -68,8 +64,9 @@ Actions とローカルのどちらで生成したデータも、配布ファイ
 | 共通：データ処理のテスト | 共通処理と各データのテスト |
 | 共通：文字形式の確認 | 改行コードとBOM |
 | 共通：Draft-release を試用公開 | 下書きを Pre-release として公開 |
-| 共通：Pre-release を正式公開 | 試用版を正式公開し、配布カタログを更新 |
-| データビューワ：下書き Release 生成・検査 | [Windows・macOS のビューワの Draft を生成](viewer/README.md#配布版の公開) |
+| 共通：Pre-release を正式公開 | 試用版を正式公開。地点データは配布カタログも更新 |
+| 地表：Release 加工・検査 | [ローカル生成物を加工・検査し、配布用Draftを作成](surface/README.md#地表データの公開) |
+| データビューワ：下書き Release 生成・検査 | [Windows・macOS のビューワのDraftを生成](viewer/README.md#配布版の公開) |
 
 データ固有のActionと操作手順は各READMEを参照する。
 
@@ -82,13 +79,13 @@ Actions とローカルのどちらで生成したデータも、配布ファイ
 1. 生成 Action の Summary から下書き Release を開き、検査結果とデータの差分を確認する。
 2. 「共通：Draft-release を試用公開」で、`tag` に下書きの URL またはタグを指定する。Action が添付ファイルを再検証し、同じタグの Pre-release として一般公開する。
 3. 試用公開した Release を、利用するアプリの開発版で確認する。
-4. 確認が済んだら、「共通：Pre-release を正式公開」で同じタグを指定する。Action が再検証して Pre-release の指定を解除し、正式版カタログを更新する。
+4. 確認が済んだら、「共通：Pre-release を正式公開」で同じタグを指定する。Actionが再検証してPre-releaseの指定を解除する。地点データは正式版カタログも更新する。
 
 `sha256` は空欄なら Release の検査結果から取得する。確認内容と公開理由は任意で、正式公開時に Release の説明へ記録する。Pages に初めて配置する場合は `initialize_pages` を選ぶ。
 
-手動公開の検証は `release_tools/point_release.py`、Release の取得・Pages・公開履歴の共通処理は `release_tools/release_data.py` にまとめる。OSM の生成時の比較と下書き作成は `points/osm-peaks/scripts/release_data.py`、GSI の検証・snapshot・配布ファイルの生成は `points/gsi-peaks/scripts/release_snapshot.py` に置き、共通の公開処理を呼び出す。OSM・国土地理院の山頂は同じ処理を使い、manifest の形式・版・取得 URL、データ本体のサイズ・SHA-256、地点の ID・座標・出典・件数、添付されたオリジナルと補足から配布地点を再現できるかを確認する。生成時の出典固有の検査は、各データの生成処理で行う。旧形式の Release は従来の検証を使う。
+公開入口の `release_tools/publish_reviewed.py` がmanifestの形式から地点・地表の処理を選ぶ。地表は検査記録に従って `surface/scripts/publish_release.ps1` を呼び、SQLiteの全添付を照合する。地点の手動公開の検証は `release_tools/point_release.py`、Release の取得・Pages・公開履歴の共通処理は `release_tools/release_data.py` にまとめる。OSM の生成時の比較と下書き作成は `points/osm-peaks/scripts/release_data.py`、GSI の検証・snapshot・配布ファイルの生成は `points/gsi-peaks/scripts/release_snapshot.py` に置き、共通の公開処理を呼び出す。OSM・国土地理院の山頂は同じ処理を使い、manifest の形式・版・取得 URL、データ本体のサイズ・SHA-256、地点の ID・座標・出典・件数、添付されたオリジナルと補足から配布地点を再現できるかを確認する。生成時の出典固有の検査は、各データの生成処理で行う。旧形式の Release は従来の検証を使う。
 
-共通形式（manifest・地点 JSON とも版 6）の地点データは、`<データ ID>-<版>` と添付 manifest の `version` から対象を判定する。OSM 山頂は `osm-peaks-<version>`、国土地理院山頂は `gsi-peaks-<version>` を使う。試用公開から正式公開まで添付ファイルは同じものを使う。正式公開が成功したあとに `points/<データ ID>/manifest.json` と正式版カタログを更新する。地形など異なる形式のデータは、データごとの手順で検証して公開する。
+共通形式（manifest・地点 JSON とも版 6）の地点データは、`<データ ID>-<版>` と添付 manifest の `version` から対象を判定する。OSM 山頂は `osm-peaks-<version>`、国土地理院山頂は `gsi-peaks-<version>` を使う。試用公開から正式公開まで添付ファイルは同じものを使う。正式公開が成功したあとに `points/<データ ID>/manifest.json` と正式版カタログを更新する。地表SQLiteも共通の試用公開・正式公開Actionを使い、manifestはReleaseのAssetsで提供する。地形データの検証は追加時に定める。
 
 生成 Action は Draft の本文に `<!-- yamamuki-data:temporary-draft:v1 -->` を付ける。作成から 7 日以上経ったマーカー付き Draft は、削除直前の状態を確認する週次の整理 Action の対象になる。試用公開時にはマーカーを外し、以後は一般公開した版として保持する。
 
@@ -143,6 +140,8 @@ Pages を更新する公開ジョブの Summary には、公開後の Release �
 
 作業の進め方は [AGENTS.md](AGENTS.md) を参照する。データを追加するときは種類ごとのフォルダにスクリプト・テスト・README をまとめ、種類ごとの README のデータ一覧からリンクする。
 
+地点・地表・ビューワとも、Draft作成時にはGitタグを作らず、試用公開時に作成元SHAへ確定する。Draftを削除しても未使用のGitタグは残らない。公開後はタグと添付ファイルを維持する。
+
 ### ブランチのマージ方針
 
 作業ブランチから `main` に PR を作り、スカッシュマージで取り込む。GitHub のリポジトリ設定でスカッシュマージを許可し、`main` のブランチ保護で PR と必要な CI を要求する。
@@ -161,10 +160,11 @@ Pages を更新する公開ジョブの Summary には、公開後の Release �
 python -m unittest discover -s release_tools/tests -v
 ```
 
-CI の「共通：文字形式の確認」はすべての PR で文字コード・改行を確認する。「共通：データ処理のテスト」（`.github/workflows/test.yml`）は push・PR 時に、共通の公開処理・地点の共通ビューア・データビューワ（Windows・macOS）・OSM 山頂・国土地理院山頂を別のジョブで確認する。データ種別を追加するときもこのActionにジョブを追加する。必須チェックの `test` ジョブは各テストの結果を集約し、すべて成功した場合だけ成功する。ジョブを追加するときは `test` の依存先と結果確認にも追加する。
+CI の「共通：文字形式の確認」はすべての PR で文字コード・改行を確認する。「共通：データ処理のテスト」（`.github/workflows/test.yml`）は push・PR 時に、共通の公開処理・地点の共通ビューア・データビューワ（Windows・macOS）・OSM 山頂・国土地理院山頂・地表SQLiteの公開手順を別のジョブで確認する。データ種別を追加するときもこのActionにジョブを追加する。必須チェックの `test` ジョブは各テストの結果を集約し、すべて成功した場合だけ成功する。ジョブを追加するときは `test` の依存先と結果確認にも追加する。
 
 データ固有のテストは各 README を参照する。
 
+- [地表データの公開テスト](surface/esa_worldcover/README.md#テスト)
 - [地点データのテスト](points/README.md#変更の確かめ方)
 
 ## ライセンス
@@ -177,6 +177,8 @@ CI の「共通：文字形式の確認」はすべての PR で文字コード�
 |---|---|---|---|
 | OpenStreetMap 由来の地点データ | © OpenStreetMap contributors | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) | [OSM 山頂の出典とライセンス](points/osm-peaks/README.md#出典とライセンス)。補足適用前の原本と旧形式のデータも含む |
 | 国土地理院由来の地点データ・OSM版の地点照合と補正に用いた情報 | 出典：国土地理院。資料名と加工内容を記録する | [公共データ利用規約（第1.0版）](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（PDL-1.0） | [GSI 山頂](points/gsi-peaks/README.md#出典とライセンス)・[OSM 山頂](points/osm-peaks/README.md#出典とライセンス) の出典とライセンス |
+| ESA WorldCover 由来の地表データ（森林・水域） | © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [ESA WorldCover の出典とライセンス](surface/esa_worldcover/README.md#出典とライセンス)。分類・穴埋め・ノイズ除去・縮小を行って作成 |
+| 国土地理院の標高タイル由来の陰影・地表分類の補助情報 | 地理院タイル（標高タイル）を加工して作成 | [公共データ利用規約（第1.0版）](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（PDL-1.0） | [ESA WorldCover の出典とライセンス](surface/esa_worldcover/README.md#出典とライセンス)。DEM10Bから陰影を生成し、地表分類の補助判定にも使用 |
 | 日本百名山の山名一覧 | Wikipedia「日本百名山」の投稿者 | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) | [GSI 山頂](points/gsi-peaks/README.md#出典とライセンス)・[OSM 山頂](points/osm-peaks/README.md#出典とライセンス) |
 | 公開済みの動作確認用地点データ | このリポジトリで作成 | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | [開発版カタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) の `testdata` |
 
@@ -184,7 +186,7 @@ CI の「共通：文字形式の確認」はすべての PR で文字コード�
 
 ### 配布データの作成者と利用条件のファイル
 
-配布データは、上の表の元データを [The yamamuki Authors](AUTHORS.md) が選び、照合・補正して作っている。作成者は manifest の `metadata.authors` に記録し、元データの作者とは分けて扱う。元データの出典・利用条件・帰属表示は、これまでどおり `metadata.sources` に記録する。
+配布データは、上の表の元データを [The yamamuki Authors](AUTHORS.md) が選び、照合・補正・加工して作っている。作成者は manifest の `metadata.authors` に記録し、元データの作者とは分けて扱う。元データの出典・利用条件・帰属表示は、これまでどおり `metadata.sources` に記録する。
 
 各 Release には、そのデータの利用条件をまとめた `LICENSE.txt` を添付し、manifest の `licenseUrl` から参照できるようにする。`LICENSE.txt` には、データ全体のライセンス、出典ごとの利用条件と帰属表示、作成者、表示のお願いを記載する。OpenStreetMap 由来のデータは ODbL 1.0 の派生データベースとして配るため、本文 `ODbL-1.0.txt`（[LICENSES/ODbL-1.0.txt](LICENSES/ODbL-1.0.txt) の写し）も添付する。国土地理院由来のデータは、データ全体に一つのライセンスを定めず、出典ごとの利用条件に従う。
 
@@ -196,12 +198,29 @@ CI の「共通：文字形式の確認」はすべての PR で文字コード�
 
 ### ビューアーが利用する外部データ
 
-[地点データビューアー](points/viewer.html) は、背景地図と所在地判定用の境界データを取得する。これらは配布する地点データや補足には含めない。
+ビューアーが実行時に取得する背景地図・行政区域の境界データは、配布する地点データ・地表SQLite・補足には収録しない。ローカルで開くデータの出典と利用条件は、上の「配布データと補足」と各ファイルの出典メタデータを参照する。
+
+#### ブラウザー版
+
+[地点データビューアー](points/viewer.html) は、背景地図と所在地判定用の境界データを取得する。
 
 | 用途 | 出典 | 利用条件・詳細 |
 |---|---|---|
 | 背景地図 | 地理院タイル | [地理院タイルの案内](https://maps.gsi.go.jp/development/ichiran.html) |
 | 所在地判定 | 共同通信社の [japan-choropleth](https://github.com/kyodo-official/japan-choropleth) が加工した国土交通省「国土数値情報 行政区域データ 2025 年版」 | CC BY 4.0。[ビューアーの説明](points/README.md#地点データをブラウザで確認する) |
+
+#### ネイティブ版
+
+[データビューワ](viewer/README.md) は、選択したオンライン地図の表示範囲のタイルを取得する。地表SQLiteだけを表示する場合、背景地図の取得は不要。地点の所在地を座標から判定するときは、市区町村の行政区域を表す境界データを取得する。境界データは所在地の参考判定に使い、地形・地表や海岸線の描画には使わない。
+
+| 用途 | 出典 | 利用条件・詳細 |
+|---|---|---|
+| 背景地図（標準地図・淡色地図・白地図・写真・色別標高図・陰影起伏図・傾斜量図） | 地理院タイル | [地理院タイルの案内](https://maps.gsi.go.jp/development/ichiran.html)。種類やズームに応じた追加の出典も画面に表示する |
+| 背景地図（OpenStreetMap標準） | © OpenStreetMap contributors | [著作権・ライセンス](https://www.openstreetmap.org/copyright)・[タイル利用方針](https://operations.osmfoundation.org/policies/tiles/) |
+| 背景地図（OpenTopoMap） | OpenStreetMap、標高：SRTM・Sonny、© OpenTopoMap | [OpenTopoMapの出典とライセンス](https://opentopomap.org/about) |
+| 背景地図（CyclOSM） | OpenStreetMap・CyclOSM、配信：OpenStreetMap France | [CyclOSM](https://www.cyclosm.org/)・[配信元の利用方針](https://www.openstreetmap.fr/usage/) |
+| 背景地図（HOT） | OpenStreetMap・Humanitarian OpenStreetMap Team、配信：OpenStreetMap France | [HOT](https://www.hotosm.org/)・[配信元の利用方針](https://www.openstreetmap.fr/usage/) |
+| 所在地判定 | 共同通信社の [japan-choropleth](https://github.com/kyodo-official/japan-choropleth#行政区域) が加工した国土交通省の行政区域データ | CC BY 4.0。[ネイティブ版の説明](viewer/README.md#地点一覧と地図) |
 
 ### コード・文書
 

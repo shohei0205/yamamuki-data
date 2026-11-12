@@ -49,6 +49,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: 地表SQLiteの検査に使うRustを準備
+        run: rustup update stable
       - name: 実行パラメーターを Summary に表示
         env:
           WORKFLOW_INPUTS: ${{ toJSON(inputs) }}

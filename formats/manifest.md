@@ -30,18 +30,18 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。�
 |---|---|---|---|---|
 | `schemaFormat` | string | 必須 | JSON の形式の識別子。`yamamuki-manifest` 固定。他の形式と区別する | [版6] 追加 |
 | `schemaVersion` | integer | 必須 | JSON の形式の版。現行版は `6` | [版1] 追加 |
-| `dataSchemaFormat` | string | 必須 | データ本体の `schemaFormat` と同じ値。地点は `yamamuki-points`、補足は `yamamuki-point-supplements`。manifest 自身の `schemaFormat` とは独立 | [版6] 追加 |
+| `dataSchemaFormat` | string | 必須 | データ本体の形式識別子。地点は `yamamuki-points`、補足は `yamamuki-point-supplements`、SQLiteコンテナは `yamamuki-sqlite`。manifest 自身の `schemaFormat` とは独立 | [版6] 追加 |
 | `dataSchemaVersion` | integer | 必須 | データ本体のスキーマの版。正の整数。manifest の `schemaVersion` と独立して管理する | [版5] 追加<br>[版6] 必須化 |
 | `name` | string | 任意 | データセットの表示名 | [版5] 追加 |
 | `version` | string | 必須 | データセットの配布版。英数字で始まり、英数字・ピリオド・ハイフン・下線で構成する | [版1] 追加 |
-| `downloadUrl` | string | 必須 | この版の gzip データ本体を取得する HTTPS URL | [版4] 追加 |
+| `downloadUrl` | string | 必須 | この版のデータ本体を取得する HTTPS URL | [版4] 追加 |
 | `licenseUrl` | string | 任意 | データ本体と同じ Release に添付した利用条件のファイル `LICENSE.txt` の HTTPS URL。データ全体のライセンス、出典ごとの帰属表示、作成者を記載する | [版6.1] 追加（#91） |
-| `fileName` | string | 必須 | gzip データ本体のファイル名。データセットごとに定める | [版1] 追加 |
-| `sha256` | string | 必須 | gzip ファイルそのものの SHA-256。小文字の16進数64文字 | [版1] 追加 |
-| `sizeBytes` | integer | 必須 | gzip ファイルのバイト数。正の整数 | [版1] 追加 |
-| `uncompressedSizeBytes` | integer | 必須 | 展開後の JSON のバイト数。正の整数 | [版1] 追加 |
+| `fileName` | string | 必須 | パス区切りと空白を含まない、空でない配布ファイル名。共通スキーマでは拡張子を制限しない。各データ形式で定める拡張子は、JSONのgzipが `.gz`、SQLiteが `.sqlite3` | [版1] 追加<br>[版6.2] 共通の拡張子制限を撤廃 |
+| `sha256` | string | 必須 | 配布ファイルそのものの SHA-256。小文字の16進数64文字 | [版1] 追加 |
+| `sizeBytes` | integer | 必須 | 配布ファイルのバイト数。正の整数 | [版1] 追加 |
+| `uncompressedSizeBytes` | integer | 必須 | 展開後のデータ本体のバイト数。正の整数。SQLiteは `sizeBytes` と同じ値 | [版1] 追加 |
 | `dataTimestamp` | string | 必須 | manifest が指す配布データを生成した日時。UTC の ISO 8601（例: `2026-10-14T03:00:00Z`）。元データの編集日時・取得日時・Release の公開日時ではない | [版6] 追加 |
-| `metadata` | object | 必須 | 指し示すデータ JSON の `metadata` をそのままコピーする。型・構造・制約は [metadata フォーマット](metadata.md) を参照。 | [版6] 追加 |
+| `metadata` | object | 必須 | データ本体の共通メタデータ。JSONは `metadata` をそのままコピーする。SQLiteはコンテナ仕様に従う。型・構造・制約は [metadata フォーマット](metadata.md) を参照。 | [版6] 追加 |
 | `pointCount` | integer | 廃止 | 版5の地点件数（必須）。版6では `metadata.pointCount` に移動する | [版1] 元の項目を追加<br>[版5] `mountainCount` から改名<br>[版6] 直下の項目を廃止 |
 | `latestPointTimestamp` | string または null | 廃止 | 版5の収録地点の最終編集日時の最大値（任意）。版6では `metadata.sources[].latestTimestamp` に移動する | [版3] 元の項目を追加<br>[版5] `latestMountainTimestamp` から改名し任意化<br>[版6] 直下の項目を廃止 |
 | `sourceTimestamp` | string | 廃止 | 版5以前の元データ全体の基準日時。版6では廃止。配布データの生成日時は `dataTimestamp` に記載する | [版1] 追加<br>[版5] 必須から任意に変更<br>[版6] 直下の項目を廃止 |
@@ -50,17 +50,25 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。�
 | `attribution` | string | 廃止 | 版5以前の出典表示（必須）。版6では `metadata.sources[].attribution` に記載する | [版1] 追加<br>[版6] 廃止 |
 | `supplementSources` | object | 廃止 | 版5の補足の出典一覧（任意）。版6では元データの出典とともに `metadata.sources` に統合する | [版5] 追加<br>[版6] 廃止 |
 
-地点データ版6では、地点 JSON の `metadata` を manifest の `metadata` にそのままコピーする。出典・タグ・件数・更新日時もこの object 内で保持する。地点文書の構造は [地点データフォーマット](../points/formats/data.md) を参照する。
+地点データ版6では、地点 JSON の `metadata` を manifest の `metadata` にそのままコピーする。出典・タグ・件数・更新日時もこの object 内で保持する。地点用スキーマ `#/$defs/pointManifest` は `metadata.pointCount` を必須とし、その型と最小値は [共通 metadata スキーマ](../schemas/metadata-v1.schema.json) の正の整数の定義を使う。地点文書の構造は [地点データフォーマット](../points/formats/data.md) を参照する。
 
 ### 補足ファイル単体の配布
 
 補足ファイルを単体で配布するときも、この文書の共通 manifest 形式を使う。`dataSchemaVersion` は補足 JSON 本体の版とし、取得先・サイズ・ハッシュは配布する補足ファイルの値を記載する。`metadata` は補足 JSON の `metadata` をそのままコピーする。
 
+### データ形式の追加と識別
+
+`dataSchemaFormat` ごとのデータ形式の追加だけなら、manifest の `schemaVersion` は上げない。データ本体の形式と版は `dataSchemaFormat` と `dataSchemaVersion` で識別し、読み手は未対応の形式を扱わない。既存形式の項目・制約・意味は維持する。共通の `fileName` は拡張子を制限せず、拡張子や圧縮方法はデータ形式ごとに定める。
+
+### SQLiteファイルの配布
+
+SQLiteも共通manifest版6を使う。データ本体はSQLiteファイルを直接配布し、`dataSchemaVersion` と `metadata` の対応は [山むきSQLiteコンテナ仕様](sqlite.md#配布manifest) を参照する。地表の収録レイヤーとズームはSQLiteのテーブルから取得する。
+
 ## 読み込みと検証
 
 現行形式では、各 object に未知の項目を許可し、読み手はそれを解釈しない。既知の項目の型・必須条件・重複などの制約は維持する。
 
-利用するアプリは対応する `schemaVersion` を確認し、`downloadUrl` から本体を取得する。展開前に `sizeBytes` と `sha256`、展開後に `uncompressedSizeBytes` を照合する。データ種別ごとの件数なども各仕様に従って照合する。地点データの件数は、manifest 版4では `mountainCount`、版5では `pointCount`、版6では `metadata.pointCount` を使う。通信や検証に失敗した場合は保存済みデータを維持する。
+利用するアプリは対応する `schemaVersion` を確認し、`downloadUrl` から本体を取得する。取得したファイルの `sizeBytes` と `sha256` を照合し、gzipの場合は展開後の `uncompressedSizeBytes` も照合する。SQLiteの場合は両サイズが一致することを確認する。データ種別ごとの件数なども各仕様に従って照合する。地点データの件数は、manifest 版4では `mountainCount`、版5では `pointCount`、版6では `metadata.pointCount` を使う。通信や検証に失敗した場合は保存済みデータを維持する。
 
 データセットと正式版・開発版ごとに最新版の manifest の URL を分ける。Release に添付する manifest と最新版として配置する manifest は同じ内容を使い、公開済みの版の本体は差し替えない。公開先の URL・Release タグ・ファイル名は各データセットの資料に記載する。
 
@@ -115,6 +123,36 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。�
       }
     ],
     "pointCount": 1
+  }
+}
+```
+
+### 版6の地表SQLite
+
+```json
+{
+  "schemaFormat": "yamamuki-manifest",
+  "schemaVersion": 6,
+  "dataSchemaFormat": "yamamuki-sqlite",
+  "dataSchemaVersion": 1,
+  "name": "見本の地表データ",
+  "version": "0.1.0",
+  "fileName": "sample-surface-z9.sqlite3",
+  "downloadUrl": "https://example.com/releases/sample-surface-0.1.0/sample-surface-z9.sqlite3",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "sizeBytes": 1000,
+  "uncompressedSizeBytes": 1000,
+  "dataTimestamp": "2026-11-10T00:00:00Z",
+  "metadata": {
+    "sources": [
+      {
+        "name": "元資料",
+        "source": "https://example.com/source",
+        "license": "CC BY 4.0",
+        "attribution": "見本資料の著作者",
+        "changes": "森林と水域のタイルを作成"
+      }
+    ]
   }
 }
 ```
@@ -244,6 +282,11 @@ manifest 自体の版は `schemaVersion` で確認する。現行版は `6`。�
 ```
 
 ## 変更履歴
+
+### 版6.2（2026-11-12）
+
+- `dataSchemaFormat` でデータ形式を識別するため、形式の追加だけでは manifest の版を上げない方針を明記した。SQLite の配布も版6で扱う。
+- 共通の `fileName` から拡張子制限を外し、形式を追加するたびに共通スキーマを変えずに済むようにした。空文字・パス区切り・空白は禁止し、拡張子と圧縮方法はデータ形式ごとに定める。変更前の版6スキーマは `.gz` のみを許可していたため、SQLite などの新しい形式を検証する場合は更新後のスキーマを使う。
 
 ### 版6.1（2026-11-04）
 

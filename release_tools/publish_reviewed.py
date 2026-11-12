@@ -108,6 +108,64 @@ def publish(dataset, tag, channel, sha256, reason):
                    cwd=ROOT, check=True)
 
 
+def publish_candidate(target, sha256="", reason="", *, preview=False):
+    check_branch("stable")
+    release = find_release(target)
+    if release["tag_name"].startswith("viewer-"):
+        from release_tools.viewer_release import publish_candidate as publish_viewer
+        publish_viewer(release, sha256, preview=preview)
+        return
+    repo = os.environ["GH_REPO"]
+    manifest_name = "manifest.json"
+    receipts = re.findall(r"<!-- yamamuki-data:surface-draft:v1 (.+?) -->", release.get("body") or "")
+    if receipts:
+        if len(receipts) != 1:
+            raise ValueError("地表の加工・検査記録を一意に特定できません")
+        receipt_info = json.loads(receipts[0])
+        if not isinstance(receipt_info, dict):
+            raise ValueError("地表の加工・検査記録が不正です")
+        manifest_name = receipt_info.get("manifestName", "manifest.json")
+        if not isinstance(manifest_name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*\.json", manifest_name):
+            raise ValueError("地表のmanifestファイル名が不正です")
+    with tempfile.TemporaryDirectory() as temporary:
+        subprocess.run(["gh", "release", "download", release["tag_name"], "--repo", repo,
+                        "--pattern", manifest_name, "--dir", temporary], check=True)
+        manifest = json.loads((Path(temporary) / manifest_name).read_bytes())
+    if not isinstance(manifest, dict) or manifest.get("schemaFormat") != "yamamuki-manifest":
+        raise ValueError("未対応の manifest 形式です")
+    if manifest.get("dataSchemaFormat") == "yamamuki-points":
+        from release_tools.point_release import publish_candidate as publish_points
+        publish_points(target, sha256, reason, preview=preview)
+        return
+    if manifest.get("dataSchemaFormat") != "yamamuki-sqlite" or manifest.get("schemaVersion") != 6:
+        raise ValueError("未対応のデータ形式です")
+    matches = re.findall(r"<!-- yamamuki-data:surface-draft:v1 (.+?) -->", release.get("body") or "")
+    if len(matches) != 1:
+        raise ValueError("地表の加工・検査記録がありません")
+    receipt = json.loads(matches[0])
+    if not isinstance(receipt, dict):
+        raise ValueError("地表の加工・検査記録が不正です")
+    dataset, package = receipt.get("dataset"), receipt.get("package")
+    if (not isinstance(dataset, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", dataset)
+            or not isinstance(package, str) or not re.fullmatch(r"[a-z][a-z0-9_-]*", package)):
+        raise ValueError("地表の配布設定の名前が不正です")
+    checksum = sha256.strip() or receipt.get("sha256")
+    commit = receipt.get("targetCommit")
+    if (not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum)
+            or not isinstance(commit, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", commit)
+            or checksum != manifest.get("sha256")):
+        raise ValueError("地表のSHA-256またはコミットが一致しません")
+    environment = os.environ.copy()
+    environment["GITHUB_REPOSITORY"] = repo
+    subprocess.run([
+        "pwsh", "-NoProfile", "-File", str(ROOT / "surface/scripts/publish_release.ps1"),
+        "-Dataset", dataset, "-Package", package,
+        "-Operation", "Preview" if preview else "Formalize",
+        "-Tag", release["tag_name"], "-Sha256", checksum, "-TargetCommit", commit,
+        "-Reason", reason,
+    ], cwd=ROOT, env=environment, check=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("resolve", "publish", "preview", "formalize"))
@@ -120,14 +178,7 @@ def main():
     if args.command in ("preview", "formalize"):
         if args.channel is not None:
             parser.error("正式公開の配布先は stable に固定されています")
-        check_branch("stable")
-        release = find_release(args.tag)
-        if release["tag_name"].startswith("viewer-"):
-            from release_tools.viewer_release import publish_candidate
-            publish_candidate(release, args.sha256, preview=args.command == "preview")
-        else:
-            from release_tools.point_release import publish_candidate
-            publish_candidate(args.tag, args.sha256, args.reason, preview=args.command == "preview")
+        publish_candidate(args.tag, args.sha256, args.reason, preview=args.command == "preview")
         return
     if args.channel is None:
         parser.error("resolve と publish には --channel が必要です")

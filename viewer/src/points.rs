@@ -107,6 +107,7 @@ impl NameReading {
 struct Document {
     schema_format: String,
     schema_version: f64,
+    metadata: Option<serde_json::Value>,
     points: Vec<Box<RawValue>>,
 }
 
@@ -148,19 +149,82 @@ pub struct Mark {
     pub matched: bool,
 }
 
+pub fn is_sqlite(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            ["sqlite3", "sqlite", "db"]
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(ext))
+        })
+}
+
+pub struct FileInfo {
+    pub format: &'static str,
+    pub size_bytes: Option<u64>,
+    pub dataset: Option<yamamuki_data_sqlite::Dataset>,
+    pub metadata_json: Option<String>,
+}
+
 pub struct Points {
+    pub info: FileInfo,
     entries: Vec<Entry>,
     pub bounds: [[f64; 2]; 2],
 }
 
 impl Points {
     pub fn open(path: &Path) -> Result<Self> {
-        Self::read(File::open(path)?).with_context(|| format!("地点ファイル {}", path.display()))
+        if is_sqlite(path) {
+            return Self::try_open_sqlite(path)?.context("地点データセットがありません");
+        }
+        let file = File::open(path)?;
+        let size_bytes = file.metadata().ok().map(|metadata| metadata.len());
+        let mut points =
+            Self::read(file).with_context(|| format!("地点ファイル {}", path.display()))?;
+        points.info.size_bytes = size_bytes;
+        Ok(points)
+    }
+
+    pub fn try_open_sqlite(path: &Path) -> Result<Option<Self>> {
+        use yamamuki_data_sqlite as sqlite;
+        let db = sqlite::open(path)?;
+        let mut datasets = sqlite::datasets(&db)?;
+        datasets.retain(|dataset| dataset.kind == "points");
+        if datasets.is_empty() {
+            return Ok(None);
+        }
+        let dataset = datasets
+            .into_iter()
+            .find(|dataset| dataset.format_version == 6)
+            .context("地点SQLiteの格納形式の版に対応していません")?;
+        let mut statement = db.prepare(
+            "SELECT point_id, payload_json FROM point_records WHERE dataset_key = ?1 ORDER BY ordinal",
+        )?;
+        let mut rows = statement.query([dataset.key])?;
+        let mut entries = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let original = RawValue::from_string(row.get(1)?)?;
+            let point = Self::decode_point(original)?;
+            ensure!(point.id == id, "地点SQLiteの地点IDが一致しません");
+            entries.push(point);
+        }
+        let metadata_json = Some(serde_json::to_string_pretty(&dataset.metadata)?);
+        Ok(Some(Self::from_points(
+            entries,
+            FileInfo {
+                format: "SQLite コンテナ版1",
+                size_bytes: std::fs::metadata(path).ok().map(|metadata| metadata.len()),
+                dataset: Some(dataset),
+                metadata_json,
+            },
+        )?))
     }
 
     pub(crate) fn read(input: impl Read) -> Result<Self> {
         let mut file = BufReader::new(input);
-        let input: Box<dyn Read> = if file.fill_buf()?.starts_with(&[0x1f, 0x8b]) {
+        let compressed = file.fill_buf()?.starts_with(&[0x1f, 0x8b]);
+        let input: Box<dyn Read> = if compressed {
             Box::new(MultiGzDecoder::new(file))
         } else {
             Box::new(file)
@@ -181,31 +245,63 @@ impl Points {
             let len = buf.len();
             input.consume(len);
         };
-        let points: Vec<Box<RawValue>> = match first {
-            b'[' => serde_json::from_reader(input)?,
+        let (points, metadata) = match first {
+            b'[' => (
+                serde_json::from_reader::<_, Vec<Box<RawValue>>>(input)?,
+                None,
+            ),
             b'{' => {
                 let doc: Document = serde_json::from_reader(input)?;
                 ensure!(
                     doc.schema_format == "yamamuki-points" && doc.schema_version == 6.,
                     "地点JSONの形式または版に対応していません"
                 );
-                doc.points
+                (doc.points, doc.metadata)
             }
             _ => anyhow::bail!("地点JSONの配列または版6のオブジェクトが必要です"),
         };
+        let metadata_json = metadata
+            .as_ref()
+            .map(serde_json::to_string_pretty)
+            .transpose()?;
+        let entries = points
+            .into_iter()
+            .map(Self::decode_point)
+            .collect::<Result<_>>()?;
+        Self::from_points(
+            entries,
+            FileInfo {
+                format: match (first == b'[', compressed) {
+                    (true, true) => "地点JSON 配列形式 (gzip)",
+                    (true, false) => "地点JSON 配列形式",
+                    (false, true) => "地点JSON 版6 (gzip)",
+                    (false, false) => "地点JSON 版6",
+                },
+                size_bytes: None,
+                dataset: None,
+                metadata_json,
+            },
+        )
+    }
+
+    fn decode_point(original: Box<RawValue>) -> Result<Point> {
+        let mut point: Point = serde_json::from_str(original.get())?;
+        point.original = Some(original);
+        ensure!(
+            !point.id.trim().is_empty()
+                && !point.name.trim().is_empty()
+                && (-90.0..=90.0).contains(&point.latitude)
+                && (-180.0..=180.0).contains(&point.longitude),
+            "地点ID、名称、緯度、経度を確認してください"
+        );
+        Ok(point)
+    }
+
+    fn from_points(points: Vec<Point>, info: FileInfo) -> Result<Self> {
         ensure!(!points.is_empty(), "地点がありません");
         let mut bounds = [[1., 1.], [0., 0.]];
         let mut entries = Vec::with_capacity(points.len());
-        for (source_index, original) in points.into_iter().enumerate() {
-            let mut point: Point = serde_json::from_str(original.get())?;
-            point.original = Some(original);
-            ensure!(
-                !point.id.trim().is_empty()
-                    && !point.name.trim().is_empty()
-                    && (-90.0..=90.0).contains(&point.latitude)
-                    && (-180.0..=180.0).contains(&point.longitude),
-                "地点ID、名称、緯度、経度を確認してください"
-            );
+        for (source_index, point) in points.into_iter().enumerate() {
             let world = project(point.latitude, point.longitude);
             for (axis, value) in world.into_iter().enumerate() {
                 bounds[0][axis] = f64::min(bounds[0][axis], value);
@@ -219,7 +315,11 @@ impl Points {
             });
         }
         entries.sort_unstable_by_key(|entry| entry.key);
-        Ok(Self { entries, bounds })
+        Ok(Self {
+            entries,
+            bounds,
+            info,
+        })
     }
 
     pub fn len(&self) -> usize {
