@@ -219,7 +219,7 @@ class GsiReleaseTests(unittest.TestCase):
                         self.assertIn('- 日本百名山:', notes)
                         create = calls.call_args_list[0].args
                         self.assertEqual(create[2], 'gsi-peaks-' + ('dev-' if channel == 'dev' else '') + 'test-1')
-                        self.assertEqual(create[create.index('--title') + 1], 'draft-gsi-peaks-' + ('dev-' if channel == 'dev' else '') + 'test-1')
+                        self.assertEqual(create[create.index('--title') + 1], '[draft] gsi-peaks-' + ('dev-' if channel == 'dev' else '') + 'test-1')
                         self.assertEqual('--prerelease' in create, channel == 'dev')
                         self.assertIn('--draft', create)
                         self.assertIn('--latest=false', create)

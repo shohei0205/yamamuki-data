@@ -14,7 +14,7 @@ from release_tools import publish_reviewed as entry
 
 
 TAG = "viewer-20261112T012345Z-123456-1"
-RELEASE = dict(id=12, tag_name=TAG, name="draft-" + TAG, draft=True, prerelease=False,
+RELEASE = dict(id=12, tag_name=TAG, name="[draft] " + TAG, draft=True, prerelease=False,
                target_commitish="a" * 40, body=viewer.site.TEMPORARY_DRAFT_MARKER,
                html_url=f"https://github.com/owner/repo/releases/tag/{TAG}")
 
@@ -53,6 +53,11 @@ class ViewerReleaseTests(unittest.TestCase):
                 return ""
             if args[:3] == ("api", "--method", "PATCH"):
                 fields = json.loads(Path(args[-1]).read_text("utf-8"))
+                if release["draft"]:
+                    self.assertEqual(TAG, fields["tag_name"])
+                    self.assertEqual("a" * 40, fields["target_commitish"])
+                else:
+                    self.assertNotIn("tag_name", fields)
                 patches.append(fields)
                 release.update({key: value for key, value in fields.items() if key != "make_latest"})
                 return json.dumps(release)
@@ -122,3 +127,7 @@ class ViewerReleaseTests(unittest.TestCase):
                   patch.object(viewer, "publish_candidate") as publish):
                 entry.main()
             publish.assert_called_once_with(RELEASE, "", preview=command == "preview")
+
+    def test_existing_hyphen_draft_title_still_accepts_preview(self):
+        with patch.dict(RELEASE, name="draft-" + TAG):
+            self.test_preview_then_formalize_preserves_release_and_assets_without_pages()

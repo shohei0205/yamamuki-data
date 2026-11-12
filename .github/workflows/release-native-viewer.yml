@@ -129,7 +129,7 @@ jobs:
           (cd dist && sha256sum "$RELEASE_TAG"-*.zip > SHA256SUMS.txt)
           # DraftではGitタグを作らず、試用公開時に対象SHAで確定する。
           gh release create "$RELEASE_TAG" "${assets[@]}" dist/SHA256SUMS.txt \
-            --target "$GITHUB_SHA" --title "draft-$RELEASE_TAG" \
+            --target "$GITHUB_SHA" --title "[draft] $RELEASE_TAG" \
             --draft --latest=false \
             --notes $'Windows x64、macOS Apple Silicon 向け。macOS版はアドホック署名で、公証は行っていません。\n\n<!-- yamamuki-data:temporary-draft:v1 -->'
           {

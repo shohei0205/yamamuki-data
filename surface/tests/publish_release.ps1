@@ -46,6 +46,9 @@ function gh {
         if ($args[1] -eq '--method') {
             if ($args[2] -ne 'PATCH' -or $state.assets.Count -ne 9) { throw '不完全なReleaseを公開しようとしました。' }
             $patch = Get-Content -LiteralPath $args[5] -Raw | ConvertFrom-Json -AsHashtable
+            if ($state.draft -and ($patch.tag_name -cne $tag -or $patch.target_commitish -cne $commit)) {
+                throw 'Draft更新時に予定タグ名または対象SHAを省略しました。'
+            }
             if ($patch.ContainsKey('draft') -and !$patch.draft -and $state.draft) {
                 if ($patch.target_commitish -cne $commit) { throw '試用公開時の対象SHAが固定されていません。' }
                 $state.tagCommit = $commit
@@ -64,7 +67,7 @@ function gh {
             $args -notcontains '--draft' -or $args -contains '--verify-tag' -or
             $state.tagCommit) { throw '受け渡しDraftの設定が不正です。' }
         $state.name = $args[[array]::IndexOf($args, '--title') + 1]
-        if (!$state.name.StartsWith('draft-esa-worldcover-')) { throw 'Draft名が不正です。' }
+        if (!$state.name.StartsWith('[draft] esa-worldcover-')) { throw 'Draft名が不正です。' }
         $state.created = $true
         $state.body = $notes
         return
