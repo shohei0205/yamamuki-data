@@ -57,6 +57,8 @@ cargo run --locked --release --manifest-path surface/Cargo.toml --bin surface-to
 
 ## 地表データの公開
 
+Release名とGitタグの扱いは、[共通のRelease名の規則](../README.md#release名の規則)に従う。
+
 公開対象は1データセットを収録したSQLite。`surface/<データセットのフォルダー>/release.json` に、台帳の `datasetId`、`versionPattern`、配布単位 `packages` を記載する。各配布単位で `releaseId`、`fileName`、収録するレイヤーIDの配列 `layers` を指定する。タグは `<releaseId>-<データ版>`。全レイヤー入りのSQLiteは `all` で指定する。配布単位に `levels` を指定すると、入力SQLiteのレイヤー別収録ズームをその定義と照合する。レイヤー別配布を行う場合は、同じ配布単位に `splitPackages` を記載する。
 
 ```powershell
@@ -123,5 +125,3 @@ Actionは添付したSQLite、manifest、ライセンスを取得し直し、収
 ## データを追加するとき
 
 `surface/<取得元と対象>/` に、README、生成処理、配布設定をまとめる。実装時にこの一覧を更新し、README に元データの取得方法・生成手順・出典と利用条件を書く。SQLite の検査や配布 manifest の作成には共通の `surface-tool` を使う。
-
-Draftの作成・加工ではGitタグの実体を作らず、タグ名と対象コミットSHAだけを記録する。Draftを削除すれば同じ版で作り直せる。Gitタグは試用公開と同時に確定し、正式公開まで同じものを維持する。

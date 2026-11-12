@@ -142,7 +142,7 @@ def prepare(directory, channel="stable"):
         from distribution_license import LICENSE_FILE, ODBL_FILE
         url = shared.gh("release", "create", tag, str(Path(directory) / FILE_NAME), str(Path(directory) / "manifest.json"),
            *[str(Path(directory) / name) for name in (*filenames("osm-peaks"), LICENSE_FILE, ODBL_FILE) if (Path(directory) / name).exists()],
-           "--draft", "--latest=false", "--target", os.environ["GITHUB_SHA"], "--title", tag,
+           "--draft", "--latest=false", "--target", os.environ["GITHUB_SHA"], "--title", "draft-" + tag,
            "--notes-file", str(notes), f"--prerelease={str(not stable).lower()}").strip()
         shared.append_summary(f"\n## 生成したリリース\n\n[生成したリリースを開く]({url})\n\n"
                               f"- タグ: `{tag}`\n"

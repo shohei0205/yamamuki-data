@@ -53,6 +53,8 @@ def publish_candidate(release, sha256="", *, preview=False):
                 "--dir", str(directory))
         checksum = validate(directory, tag, sha256.strip())
         fields = {"draft": False, "prerelease": preview, "make_latest": "false"}
+        if preview:
+            fields["name"] = (release.get("name") or tag).removeprefix("draft-")
         if release["draft"]:
             commit = release["target_commitish"]
             if not re.fullmatch(r"[0-9a-f]{40}", commit):
