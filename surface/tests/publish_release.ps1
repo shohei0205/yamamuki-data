@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Path $testRoot | Out-Null
 $inputDir = Join-Path $testRoot 'input'
 $commit = '1' * 40
 $repo = 'shohei0205/yamamuki-data'
-$state = @{ draft = $true; prerelease = $false; body = '<!-- yamamuki-data:temporary-draft:v1 -->'; assets = @{}; nextId = 1; uploaded = @(); failUpload = $true; created = $false; started = $false; pendingCommit = $null }
+$state = @{ draft = $true; prerelease = $false; body = '<!-- yamamuki-data:temporary-draft:v1 -->'; assets = @{}; nextId = 1; uploaded = @(); failUpload = $true; created = $false; started = $false; pendingCommit = $null; hiddenVerifications = 0 }
 $previousEnv = @{}
 foreach ($key in @('GITHUB_REPOSITORY', 'GITHUB_REF', 'GITHUB_STEP_SUMMARY')) {
     $previousEnv[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
@@ -80,6 +80,11 @@ function gh {
             $output = [array]::IndexOf($args, '--output')
             $destination = if ($output -ge 0) { $args[$output + 1] } else { $args[$dir + 1] }
             Copy-Item -LiteralPath $source -Destination $destination
+            if ($output -ge 0 -and [IO.Path]::GetFileName($destination).StartsWith('.verify-', [StringComparison]::Ordinal)) {
+                # WindowsでもLinuxのドットファイルと同じ隠し属性で検査する。
+                if ($IsWindows) { [IO.File]::SetAttributes($destination, [IO.FileAttributes]::Hidden) }
+                $state.hiddenVerifications++
+            }
         }
         return
     }
@@ -131,6 +136,7 @@ try {
         $state.uploaded -contains 'esa-worldcover-z9.sqlite3') {
         throw '再実行時の添付・公開結果が不正です。'
     }
+    if ($state.hiddenVerifications -eq 0) { throw '隠しファイルによる添付の再検証が実行されませんでした。' }
     if (!$state.body.Contains('<!-- yamamuki-data:temporary-draft:v1 -->') -or
         !$state.body.Contains('<!-- yamamuki-data:surface-draft:v1 ')) {
         throw '加工後のDraftに整理マーカーまたは検査記録がありません。'

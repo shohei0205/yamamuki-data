@@ -94,7 +94,8 @@ function Test-SplitAsset($Asset, $LocalFile, [string]$Hash) {
         gh release download $Tag --repo $repo --pattern $LocalFile.Name --output $check | Out-Null
         return (Get-FileHash -LiteralPath $check -Algorithm SHA256).Hash -ieq $Hash
     } finally {
-        if (Test-Path -LiteralPath $check) { Remove-Item -LiteralPath $check }
+        # Linuxでは.verify-*が隠しファイルになるため、属性にかかわらず削除する。
+        if (Test-Path -LiteralPath $check) { Remove-Item -LiteralPath $check -Force }
     }
 }
 
