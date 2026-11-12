@@ -81,7 +81,7 @@ class ReleaseDataTests(unittest.TestCase):
                     patch.object(common, "gh", return_value="https://example.com/release") as gh:
                 release_data.prepare(directory, channel)
                 arguments = gh.call_args.args
-                self.assertEqual(arguments[arguments.index("--title") + 1], "draft-" + arguments[2])
+                self.assertEqual(arguments[arguments.index("--title") + 1], "[draft] " + arguments[2])
                 self.assertIn("--draft", arguments)
                 gh.assert_called_once()
                 self.assertEqual(arguments[2], "osm-peaks-" + ("dev-" if channel == "dev" else "") + "test")

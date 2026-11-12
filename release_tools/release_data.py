@@ -64,7 +64,7 @@ def create_verified_release(tag, directory, files, notes, title, channel, *, pub
     # Draftには予定のタグ名と対象SHAだけを記録し、Gitタグは試用公開時に作る。
     url = gh("release", "create", tag, *(str(directory / name) for name in names),
              "--draft", "--latest=false", "--target", os.environ["GITHUB_SHA"],
-             "--title", "draft-" + tag, "--notes-file", str(notes), *options).strip()
+             "--title", "[draft] " + tag, "--notes-file", str(notes), *options).strip()
     checked = directory / "checked"
     gh("release", "download", tag, *(part for name in names for part in ("--pattern", name)),
        "--dir", str(checked))

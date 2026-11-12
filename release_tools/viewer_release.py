@@ -54,7 +54,7 @@ def publish_candidate(release, sha256="", *, preview=False):
         checksum = validate(directory, tag, sha256.strip())
         fields = {"draft": False, "prerelease": preview, "make_latest": "false"}
         if preview:
-            fields["name"] = (release.get("name") or tag).removeprefix("draft-")
+            fields["name"] = (release.get("name") or tag).removeprefix("[draft] ").removeprefix("draft-")
         if release["draft"]:
             commit = release["target_commitish"]
             if not re.fullmatch(r"[0-9a-f]{40}", commit):
@@ -62,7 +62,7 @@ def publish_candidate(release, sha256="", *, preview=False):
             refs = json.loads(site.gh("api", site.endpoint(f"git/matching-refs/tags/{tag}")))
             if any(ref["ref"] == f"refs/tags/{tag}" and ref["object"]["sha"] != commit for ref in refs):
                 raise ValueError("タグが下書きの作成元と異なるコミットを指しています")
-            fields.update(target_commitish=commit,
+            fields.update(tag_name=tag, target_commitish=commit,
                           body=(release.get("body") or "").replace(site.TEMPORARY_DRAFT_MARKER, ""))
         published = release
         if release["draft"] or release["prerelease"] != preview:

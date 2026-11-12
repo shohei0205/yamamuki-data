@@ -94,6 +94,6 @@ class SharedReleaseDataTests(unittest.TestCase):
                                  [call.args[:2] for call in calls.call_args_list])
                 create = calls.call_args_list[0].args
                 self.assertIn("--draft", create)
-                self.assertEqual("draft-" + dataset + "-test", create[create.index("--title") + 1])
+                self.assertEqual("[draft] " + dataset + "-test", create[create.index("--title") + 1])
                 self.assertNotIn("--verify-tag", create)
                 self.assertEqual(commit, create[create.index("--target") + 1])

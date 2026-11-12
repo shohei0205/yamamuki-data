@@ -275,7 +275,7 @@ def publish_candidate(target, sha256="", reason="", *, preview=False):
 
         fields = {"draft": False, "prerelease": preview, "make_latest": "false"}
         if preview:
-            fields["name"] = (release.get("name") or tag).removeprefix("draft-")
+            fields["name"] = (release.get("name") or tag).removeprefix("[draft] ").removeprefix("draft-")
         if preview:
             fields["body"] = (release.get("body") or "").replace(site.TEMPORARY_DRAFT_MARKER, "")
         if release["draft"]:
@@ -285,6 +285,7 @@ def publish_candidate(target, sha256="", reason="", *, preview=False):
             refs = json.loads(site.gh("api", site.endpoint(f"git/matching-refs/tags/{tag}")))
             if any(ref["ref"] == f"refs/tags/{tag}" and ref["object"]["sha"] != commit for ref in refs):
                 raise ValueError(f"タグが下書きの作成元と異なるコミットを指しています: {tag}")
+            fields["tag_name"] = tag
             fields["target_commitish"] = commit
         if not preview:
             previous = previous_release(dataset, "stable", directory / "previous", releases)

@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import textwrap
+import shlex
 
 from release_tools.viewer_build import plan
 
@@ -69,6 +70,7 @@ git() { echo "Draft作成時のGit操作は禁止" >&2; return 1; }
             self.assertTrue(calls[0].startswith("api repos/owner/repo/git/matching-refs/tags/"))
             self.assertTrue(calls[1].startswith("release create viewer-test "))
             self.assertIn("--draft", calls[1])
-            self.assertIn("--title draft-viewer-test", calls[1])
+            create = shlex.split(calls[1])
+            self.assertEqual("[draft] viewer-test", create[create.index("--title") + 1])
             self.assertIn("--target " + "a" * 40, calls[1])
             self.assertNotIn("--verify-tag", calls[1])
