@@ -29,6 +29,8 @@ function New-SurfaceReleaseDescription($Manifest, $Variants) {
         ''
         '## 配布ファイル'
         ''
+        'ファイルは、このページ下部のAssetsから取得してください。'
+        ''
         '| SQLite | 収録ズーム | サイズ | manifest |'
         '|---|---|---:|---|'
         foreach ($variant in $sortedVariants) {
@@ -41,29 +43,15 @@ function New-SurfaceReleaseDescription($Manifest, $Variants) {
                 @($ids | ForEach-Object { "$_`: $(Format-SurfaceReleaseZooms $variant.levels[$_])" }) -join '<br>'
             }
             $size = ([double]$data.sizeBytes / 1MB).ToString('F2', [Globalization.CultureInfo]::InvariantCulture)
-            "| [$($data.fileName)]($($data.downloadUrl)) | $zooms | $size MiB | [$($variant.manifestName)]($($variant.manifestUrl)) |"
+            $sqliteLabel = [char]96 + $data.fileName + [char]96
+            $manifestLabel = [char]96 + $variant.manifestName + [char]96
+            "| $sqliteLabel | $zooms | $size MiB | $manifestLabel |"
         }
         ''
-        '## 利用方法'
+        '## 出典'
         ''
-        'SQLiteと対応するmanifestを取得し、manifestのサイズ・SHA-256と照合してください。ネイティブの山むきデータビューワでは「地表SQLiteを開く」から読み込めます。'
-        ''
-        '同じレイヤー・ズームを重複して取得する必要はありません。'
-        ''
-        "[地表SQLiteの仕様](https://github.com/shohei0205/yamamuki-data/blob/main/surface/formats/sqlite.md) ／ [ライセンスと帰属表示]($($Manifest.licenseUrl))"
-        ''
-        '## 出典と利用条件'
         foreach ($source in $Manifest.metadata.sources) {
-            ''
-            "### $($source.name)"
-            ''
-            "提供元: $($source.source)"
-            ''
-            "利用条件: $($source.license)"
-            ''
-            $source.attribution
-            ''
-            "加工内容: $($source.changes)"
+            "- $($source.name): $($source.attribution) / $($source.license)"
         }
         ''
         '## 検証情報'
