@@ -62,7 +62,7 @@ Actions とローカルのどちらで生成したデータも、配布ファイ
 
 データ名は `osm-peaks`・`gsi-peaks`・`esa-worldcover`・`viewer`。UTC日時は `yyyyMMddTHHmmssZ`、Run IDと試行番号はGitHub Actionsの実行情報を使う。例：`[draft] osm-peaks-20261112T000032Z-43123965055-1`。試用公開時に先頭の `[draft] ` だけを外し、正式公開でも同じ名前を維持する。
 
-地表はローカルからDraftを添付する時点では `[draft] esa-worldcover-<UTC日時>` の仮名を使い、加工・検査ActionでRun IDと試行番号を付けて確定する。加工の再実行では確定済みの名前を維持する。
+地表はローカルからDraftを添付する時点では `[draft] esa-worldcover-<UTC日時>` の仮名を使い、加工・検査Actionの実行時UTC日時・Run ID・試行番号から配布識別子を確定する。manifestの `version`・`datasets[].dataVersion`、SQLiteの `data_version`、Releaseの予定タグと表示名は同じ識別子を使う。加工の再実行では識別子と名前を維持する。
 
 `[draft] ` はRelease名だけに付ける。タグの予定名・添付ファイル名・manifest内のURLには付けない。Draft時点ではGitタグの実体を作らず、予定のタグ名と対象コミットSHAだけを記録する。Draftを削除すれば同じ版で作り直せる。Gitタグは試用公開時に対象コミットSHAで確定し、正式公開まで同じものを維持する。データ版はSQLiteやmanifestのメタデータで管理する。
 

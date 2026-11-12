@@ -246,6 +246,7 @@ try {
     }
     if ($Operation -eq 'Prepare') {
         $publicName = ([string]$release.name) -creplace '^(\[draft\] |draft-)', ''
+        if ($Tag.Substring($tagPrefix.Length) -cmatch '^\d{8}T\d{6}Z-\d+-\d+$') { $publicName = $Tag }
         if ($publicName -cnotmatch '^[a-z][a-z0-9-]*-\d{8}T\d{6}Z-\d+-\d+$') {
             $created = if ($release.created_at -is [datetime]) { $release.created_at.ToUniversalTime() } elseif ($release.created_at) { [DateTimeOffset]::Parse($release.created_at, [Globalization.CultureInfo]::InvariantCulture).UtcDateTime } else { [DateTime]::UtcNow }
             if ($env:GITHUB_RUN_ID -notmatch '^\d+$' -or $env:GITHUB_RUN_ATTEMPT -notmatch '^\d+$') {

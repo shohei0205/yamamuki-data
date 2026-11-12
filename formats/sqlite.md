@@ -38,7 +38,7 @@ ORDER BY id;
 
 [共通manifest版6](manifest.md) に従う。 `dataSchemaFormat` は `yamamuki-sqlite`、`dataSchemaVersion` はコンテナの `PRAGMA user_version`。SQLiteをそのまま配布するので `sizeBytes` と `uncompressedSizeBytes` は同じ値。 `sha256` はSQLite全体のハッシュ。
 
-ESA地表の `data_version` は `20261110T032217Z` のようなUTC日時の配布識別子とし、セマンティックバージョン番号は使わない。形式の版は `format_version` と `user_version` で別に管理する。
+ESA地表の `data_version` は、ローカル生成時は `20261110T032217Z` のようなUTC日時の仮識別子、加工・検査Action完了後は `20261113T010203Z-12345-1` のようなUTC日時・Run ID・試行番号の確定識別子とし、セマンティックバージョン番号は使わない。形式の版は `format_version` と `user_version` で別に管理する。
 
 単一データセットの配布では `version` に台帳の `data_version`、`name` に `title`、`metadata` に `metadata_json` を使う。追加項目の `datasets[]` に台帳の `id`・`kind`・`title`・`dataVersion`・`formatVersion`・`metadata` を載せられる。地表の収録レイヤーとズームはSQLiteの `surface_layers` と `surface_levels` を参照する。複数データセットを統合したファイルの公開用メタデータと配布版の決め方は今後定める。
 

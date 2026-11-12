@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 
 from release_tools.publish_reviewed import ROOT, check_branch, find_release
+from release_tools.surface_identity import finalize
 
 
 def resolve_config(tag):
@@ -52,6 +53,8 @@ def prepare(target):
             or datasets[0].get("id") != settings["datasetId"]
             or datasets[0].get("kind") != "surface"):
         raise ValueError("添付manifestと地表の公開設定が一致しません")
+    release, manifest = finalize(release, manifest, dataset, package, settings, config)
+    tag, checksum = release["tag_name"], manifest["sha256"]
     print(f"加工対象: {dataset}/{package} / {tag}", flush=True)
     print(f"対象コミット: {commit}\nSQLiteのSHA-256: {checksum}", flush=True)
     environment = dict(os.environ, GITHUB_REPOSITORY=os.environ["GH_REPO"])

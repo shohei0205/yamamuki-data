@@ -67,7 +67,7 @@ pwsh -NoProfile -File surface/esa_worldcover/scripts/build_esa_worldcover.ps1 `
 
 z5〜z7では、収録タイル全域を森林・水域・陰影の共通範囲として処理する。この範囲に入る日本国外の陸地もESA原本の分類で収録する。標高のない箇所の陰影は中立値。z8〜z12の収録範囲は作業用標高SQLiteから選ぶ。z11とz12では、z9の作業区画でESA原本を従来の2倍の細かさで読み取り、各レベルのタイルに縮小する。陰影はz13とz14のDEMを使う。
 
-配布識別子は生成完了時のUTC日時から `yyyyMMddTHHmmssZ` 形式で自動生成する。セマンティックバージョン番号は指定しない。SQLite台帳の `data_version` とmanifestの `version`・`datasets[].dataVersion` はこの識別子を共有する。
+ローカル生成時は生成完了時のUTC日時から `yyyyMMddTHHmmssZ` 形式の仮識別子を自動生成する。加工・検査Actionで `yyyyMMddTHHmmssZ-<Run ID>-<試行番号>` 形式の配布識別子に確定し、SQLite・manifest・Releaseの予定タグへ反映する。セマンティックバージョン番号は指定しない。SQLite台帳の `data_version` とmanifestの `version`・`datasets[].dataVersion` はこの識別子を共有する。
 
 完了すると、作業ディレクトリに `esa-worldcover.sqlite3` と `manifest.json` ができる。全国データと作業ファイルはGit管理外の `build/` に置く。配布ファイルは次の手順でそろえる。
 
@@ -96,7 +96,7 @@ cargo run --locked --release --manifest-path surface/Cargo.toml --bin surface-to
 
 ### 最大レベル別の配布
 
-各ファイルに森林・陰影・水域の3レイヤーを収録する。配布識別子 `20261110T032217Z` の場合、すべてのファイルを同じ `esa-worldcover-20261110T032217Z` Release に添付する。各SQLiteのデータセットIDは `esa-worldcover-japan`。
+各ファイルに森林・陰影・水域の3レイヤーを収録する。確定後の配布識別子 `20261113T010203Z-12345-1` の場合、すべてのファイルを同じ `esa-worldcover-20261113T010203Z-12345-1` Release に添付する。各SQLiteのデータセットIDは `esa-worldcover-japan`。
 
 | 収録レベル | SQLite ファイル | manifest |
 |---|---|---|

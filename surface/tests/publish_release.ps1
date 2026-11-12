@@ -207,7 +207,7 @@ try {
         throw '試用公開でファイル名のみの説明が維持されていません。'
     }
     $preparedBody = $state.body
-    if ($state.name -cne 'esa-worldcover-20261112T000000Z-12345-1') { throw "試用公開時のRelease名が不正です: $($state.name)" }
+    if ($state.name -cne $tag) { throw "試用公開時のRelease名が不正です: $($state.name)" }
     $state.tagCommit = $null
     try {
         & (Join-Path $scripts 'publish_release.ps1') @publish -Operation Formalize
