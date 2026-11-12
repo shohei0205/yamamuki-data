@@ -72,6 +72,7 @@ function gh {
     if ($args[0] -eq 'workflow' -and $args[1] -eq 'run') {
         if (!$state.created -or $args[2] -cne 'publish-surface.yml' -or
             $args[[array]::IndexOf($args, '--ref') + 1] -cne 'main') { throw '加工Actionの起動が不正です。' }
+        if ($args.Count -ne 9 -or $args[7] -cne '-f' -or $args[8] -notlike 'target=esa-worldcover-japan-*') { throw '加工Actionの入力が不正です。' }
         $state.started = $true
         return
     }

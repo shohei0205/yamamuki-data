@@ -70,6 +70,8 @@ pwsh -NoProfile -File surface/scripts/prepare_release.ps1 `
 
 `-ProcessDraft` は受け渡し用Draftの作成・添付と「地表：下書き Release 加工・検査」の起動を行う。GitHub CLIでログインし、生成に使ったコミットを先にpushして、Actionを `main` に配置する。`-CreateDraft` は受け渡し用Draftの作成まで行う。どちらも省くと配布ファイルの準備だけを行う。出力先は新規ディレクトリを指定する。生成日時は同じ場所のmanifestから引き継ぐ。記録がないファイルや抽出したSQLiteには、元の生成日時を `-DataTimestamp` にUTCで指定する。
 
+「地表：下書き Release 加工・検査」の入力は、**下書きReleaseのURLまたはタグ**の1項目。ReleaseページのURLをそのまま貼り付ける。データセットと配布単位は `release.json` とタグから、SQLiteのSHA-256は添付manifestから、対象コミットSHAはDraftの `target_commitish` から自動取得する。未公開のDraftでない場合や、公開設定・manifest・対象SHAが一致しない場合は処理を中止する。
+
 Actionは添付したSQLite、manifest、ライセンスを取得し直し、収録画像、ハッシュ、レイヤーとレベル、タグと対象コミットを照合する。構成別の添付を作成し、検査記録を本文に残して同じReleaseを配布用Draftに整える。失敗時はDraftが残る。起動だけが失敗した場合は、表示された `gh workflow run` コマンドで再実行できる。
 
 受け渡し用と配布用のDraftには整理マーカー `<!-- yamamuki-data:temporary-draft:v1 -->` を付ける。作成から7日以上経ったマーカー付きDraftは、共通の週次整理の対象になる。

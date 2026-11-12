@@ -143,8 +143,7 @@ if ($uploadDraft) {
     # Draftではタグ名と対象SHAだけを記録し、Gitタグの実体は作らない。
     gh release create $tag @assets @releaseOptions
     if ($ProcessDraft) {
-        $sha = $manifest.sha256
-        Write-Output "Actionの再起動: gh workflow run $workflow --repo $repo --ref main -f dataset=$Dataset -f package=$Package -f tag=$tag -f sha256=$sha -f target_commit=$TargetCommit"
-        gh workflow run $workflow --repo $repo --ref main -f "dataset=$Dataset" -f "package=$Package" -f "tag=$tag" -f "sha256=$sha" -f "target_commit=$TargetCommit"
+        Write-Output "Actionの再起動: gh workflow run $workflow --repo $repo --ref main -f target=$tag"
+        gh workflow run $workflow --repo $repo --ref main -f "target=$tag"
     }
 }
