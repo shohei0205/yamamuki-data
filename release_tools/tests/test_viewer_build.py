@@ -11,7 +11,7 @@ class ViewerBuildTests(unittest.TestCase):
         now = datetime(2026, 11, 13, 8, 45, 6, tzinfo=timezone(timedelta(hours=9)))
         self.assertEqual({
             "tag": "viewer-20261112T234506Z-123-1",
-            "title": "Yamamuki Data Viewer 20261112T234506Z-123-1",
+            "title": "Yamamuki-Data-Viewer-20261112T234506Z-123-1",
             "version": "2026.11.12",
         }, plan(now, "123", "1"))
 
