@@ -83,3 +83,5 @@ GitHub Actions の「データビューワ：下書き Release 生成・検査�
 GitHub Releasesでは、ZIPと `SHA256SUMS.txt` を配布する。Windows版はZIPを展開して `yamamuki-viewer.exe` を起動する。macOS版はApple Silicon向けのZIPを展開して `YamamukiViewer.app` を開く。macOS版はアドホック署名で、Appleによる公証は行っていない。
 
 Cargo.toml の `version` は Rust の内部情報として固定し、配布の識別には使わない。macOS の内部の版は UTC の生成日から自動設定する。既存の `viewer-v<版>` の下書きも、引き続き試用公開・正式公開できる。
+
+Draftの作成・加工ではGitタグの実体を作らず、タグ名と対象コミットSHAだけを記録する。Draftを削除すれば同じ版で作り直せる。Gitタグは試用公開と同時に確定し、正式公開まで同じものを維持する。

@@ -61,7 +61,7 @@ def create_verified_release(tag, directory, files, notes, title, channel, *, pub
         if not (directory / name).is_file():
             raise ValueError(f"添付ファイルがありません: {name}")
     options = ("--prerelease",) if channel == "dev" else ()
-    # 既存タグは create が失敗する。公開済みのファイルを差し替えない。
+    # Draftには予定のタグ名と対象SHAだけを記録し、Gitタグは試用公開時に作る。
     url = gh("release", "create", tag, *(str(directory / name) for name in names),
              "--draft", "--latest=false", "--target", os.environ["GITHUB_SHA"],
              "--title", title, "--notes-file", str(notes), *options).strip()

@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Path $testRoot | Out-Null
 $inputDir = Join-Path $testRoot 'input'
 $commit = '1' * 40
 $repo = 'shohei0205/yamamuki-data'
-$state = @{ draft = $true; prerelease = $false; body = '<!-- yamamuki-data:temporary-draft:v1 -->'; assets = @{}; nextId = 1; uploaded = @(); failUpload = $true; created = $false; started = $false; pendingCommit = $null; hiddenVerifications = 0 }
+$state = @{ draft = $true; prerelease = $false; body = '<!-- yamamuki-data:temporary-draft:v1 -->'; assets = @{}; nextId = 1; uploaded = @(); failUpload = $true; created = $false; started = $false; tagCommit = $null; hiddenVerifications = 0 }
 $previousEnv = @{}
 foreach ($key in @('GITHUB_REPOSITORY', 'GITHUB_REF', 'GITHUB_STEP_SUMMARY')) {
     $previousEnv[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
@@ -38,17 +38,18 @@ function gh {
         if ($args[1] -eq '--paginate') {
             return '[[{"id":42,"tag_name":"' + $tag + '"}]]'
         }
-        if ($args[1] -like '*/git/ref/tags/*') {
-            return @{object=@{type='commit';sha=$commit}} | ConvertTo-Json -Compress
+        if ($args[1] -like '*/git/matching-refs/tags/*') {
+            if (!$state.tagCommit) { return '[]' }
+            return '[{"ref":"refs/tags/' + $tag + '","object":{"type":"commit","sha":"' + $state.tagCommit + '"}}]'
         }
-        if ($args[1] -eq '--method' -and $args[2] -eq 'POST') {
-            if ($args[3] -notlike '*/git/refs' -or $args[-1] -cne "sha=$commit") { throw 'タグの事前作成が不正です。' }
-            $state.pendingCommit = $commit
-            return '{}'
-        }
+        if ($args[1] -eq '--method' -and $args[2] -eq 'POST') { throw 'Draft時点のタグ作成は禁止です。' }
         if ($args[1] -eq '--method') {
             if ($args[2] -ne 'PATCH' -or $state.assets.Count -ne 9) { throw '不完全なReleaseを公開しようとしました。' }
             $patch = Get-Content -LiteralPath $args[5] -Raw | ConvertFrom-Json -AsHashtable
+            if ($patch.ContainsKey('draft') -and !$patch.draft -and $state.draft) {
+                if ($patch.target_commitish -cne $commit) { throw '試用公開時の対象SHAが固定されていません。' }
+                $state.tagCommit = $commit
+            }
             foreach ($key in @('draft','prerelease','body')) {
                 if ($patch.Contains($key)) { $state[$key] = $patch[$key] }
             }
@@ -60,8 +61,8 @@ function gh {
     if ($args[0] -eq 'release' -and $args[1] -eq 'create') {
         $notes = $args[[array]::IndexOf($args, '--notes') + 1]
         if (!$notes.Contains('<!-- yamamuki-data:temporary-draft:v1 -->') -or
-            $args -notcontains '--draft' -or $args -notcontains '--verify-tag' -or
-            $state.pendingCommit -cne $commit) { throw '受け渡しDraftの設定が不正です。' }
+            $args -notcontains '--draft' -or $args -contains '--verify-tag' -or
+            $state.tagCommit) { throw '受け渡しDraftの設定が不正です。' }
         $state.created = $true
         $state.body = $notes
         return
@@ -104,6 +105,7 @@ try {
     $timestamp = @{}
     if ($DataTimestamp) { $timestamp.DataTimestamp = $DataTimestamp }
     & (Join-Path $scripts 'prepare_release.ps1') -Dataset esa_worldcover -Database $Database -OutputDirectory $inputDir -TargetCommit $commit -ProcessDraft @timestamp
+    if ($state.tagCommit) { throw 'Draft作成時にGitタグが作られました。' }
     if (!$state.created -or !$state.started) { throw '受け渡しDraftまたは加工Actionが作成されませんでした。' }
     Get-ChildItem -LiteralPath $inputDir -File | ForEach-Object { Add-TestAsset $_ }
     $manifest = Get-Content -LiteralPath (Join-Path $inputDir 'esa-worldcover-z12.manifest.json') -Raw | ConvertFrom-Json
@@ -136,6 +138,7 @@ try {
         $state.uploaded -contains 'esa-worldcover-z9.sqlite3') {
         throw '再実行時の添付・公開結果が不正です。'
     }
+    if ($state.tagCommit) { throw 'Draft加工時にGitタグが作られました。' }
     if ($state.hiddenVerifications -eq 0) { throw '隠しファイルによる添付の再検証が実行されませんでした。' }
     if (!$state.body.Contains('<!-- yamamuki-data:temporary-draft:v1 -->') -or
         !$state.body.Contains('<!-- yamamuki-data:surface-draft:v1 ')) {
@@ -149,10 +152,19 @@ try {
     }
     $state.uploaded = @()
     & (Join-Path $scripts 'publish_release.ps1') @publish -Operation Preview
+    if ($state.tagCommit -cne $commit) { throw '試用公開時にGitタグが確定しませんでした。' }
     if ($state.draft -or !$state.prerelease -or $state.uploaded.Count -ne 0 -or
         $state.body.Contains('<!-- yamamuki-data:temporary-draft:v1 -->')) {
         throw '試用公開の状態、整理マーカーまたは添付の不変性が不正です。'
     }
+    $state.tagCommit = $null
+    try {
+        & (Join-Path $scripts 'publish_release.ps1') @publish -Operation Formalize
+        throw '公開後のタグ欠落を見逃しました。'
+    } catch {
+        if ($_.Exception.Message -notmatch '公開済みReleaseのタグが存在しません') { throw }
+    }
+    $state.tagCommit = $commit
     & (Join-Path $scripts 'publish_release.ps1') @publish -Operation Formalize -Reason 'アプリで確認'
     if ($state.draft -or $state.prerelease -or $state.uploaded.Count -ne 0 -or
         !$state.body.Contains('アプリで確認')) {

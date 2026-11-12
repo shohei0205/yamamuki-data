@@ -71,3 +71,28 @@ class SharedReleaseDataTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     release_data.create_verified_release("custom-v1", directory, ("manifest.json",), directory / "notes.md", "任意のデータ", "stable")
                 self.assertEqual(1, calls.call_count)
+
+    def test_point_drafts_record_target_without_creating_tags(self):
+        for dataset in ("osm-peaks", "gsi-peaks"):
+            with self.subTest(dataset=dataset), tempfile.TemporaryDirectory() as folder:
+                directory = Path(folder)
+                names = ("manifest.json",)
+                (directory / names[0]).write_bytes(b"{}")
+                def gh(*args):
+                    if args[:2] == ("release", "download"):
+                        checked = Path(args[-1])
+                        checked.mkdir()
+                        shutil.copyfile(directory / names[0], checked / names[0])
+                    return ""
+                commit = "a" * 40
+                with patch.dict(os.environ, GITHUB_ACTIONS="false", GITHUB_SHA=commit), \
+                        patch.object(release_data, "gh", side_effect=gh) as calls:
+                    release_data.create_verified_release(
+                        dataset + "-test", directory, names, directory / "notes.md",
+                        dataset, "stable", publish=False)
+                self.assertEqual([("release", "create"), ("release", "download")],
+                                 [call.args[:2] for call in calls.call_args_list])
+                create = calls.call_args_list[0].args
+                self.assertIn("--draft", create)
+                self.assertNotIn("--verify-tag", create)
+                self.assertEqual(commit, create[create.index("--target") + 1])

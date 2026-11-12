@@ -125,7 +125,7 @@ if ($uploadDraft) {
     $remoteSha = gh api "repos/$repo/commits/$TargetCommit" --jq .sha
     if ($remoteSha -ne $TargetCommit) { throw '生成に使ったコミットが公開先に見つかりません。' }
     $existingTag = git ls-remote --refs "https://github.com/$repo.git" "refs/tags/$tag"
-    if ($existingTag -and (!$ProcessDraft -or ($existingTag -split '\s+')[0] -ne $TargetCommit)) {
+    if ($existingTag) {
         throw "公開先に同じタグがあります: $tag"
     }
 
@@ -140,13 +140,7 @@ if ($uploadDraft) {
         '--title', "$($entry.title) $version"
         '--notes', "<!-- yamamuki-data:temporary-draft:v1 -->`nローカルで生成した地表SQLiteの受け渡し用Draftです。加工・検査Actionを実行してください。"
     )
-    if ($uploadDraft) {
-        # Actionのトークンから試用公開できるよう、利用者の認証でタグを先に確定する。
-        if (!$existingTag) {
-            gh api --method POST "repos/$repo/git/refs" -f "ref=refs/tags/$tag" -f "sha=$TargetCommit" | Out-Null
-        }
-        $releaseOptions += '--verify-tag'
-    }
+    # Draftではタグ名と対象SHAだけを記録し、Gitタグの実体は作らない。
     gh release create $tag @assets @releaseOptions
     if ($ProcessDraft) {
         $sha = $manifest.sha256

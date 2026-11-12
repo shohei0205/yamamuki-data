@@ -127,6 +127,7 @@ jobs:
             assets+=("$asset")
           done
           (cd dist && sha256sum "$RELEASE_TAG"-*.zip > SHA256SUMS.txt)
+          # DraftではGitタグを作らず、試用公開時に対象SHAで確定する。
           gh release create "$RELEASE_TAG" "${assets[@]}" dist/SHA256SUMS.txt \
             --target "$GITHUB_SHA" --title "$RELEASE_TITLE" \
             --draft --latest=false \
@@ -134,6 +135,6 @@ jobs:
           {
             echo "## 作成した Draft Release"
             echo ""
-            echo "- タグ: \`$RELEASE_TAG\`"
+            echo "- タグ名（試用公開時に確定）: \`$RELEASE_TAG\`"
             echo '内容を確認し、「共通：Draft-release を試用公開」でタグを指定してください。'
           } >> "$GITHUB_STEP_SUMMARY"

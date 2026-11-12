@@ -100,8 +100,14 @@ function Test-SplitAsset($Asset, $LocalFile, [string]$Hash) {
 }
 
 function Confirm-TagCommit {
-    $tagRef = gh api "$prefix/git/ref/tags/$Tag" | ConvertFrom-Json
-    if ($tagRef.object.type -cne 'commit' -or $tagRef.object.sha -ne $TargetCommit) {
+    $refs = gh api "$prefix/git/matching-refs/tags/$Tag" | ConvertFrom-Json
+    $matches = @($refs | Where-Object { $_.ref -ceq "refs/tags/$Tag" })
+    if ($matches.Count -eq 0) {
+        # Draftは未確定のタグ名だけを持つ。公開後はタグの欠落を許可しない。
+        if ((Read-Release).draft) { return }
+        throw "公開済みReleaseのタグが存在しません: $Tag"
+    }
+    if ($matches.Count -ne 1 -or $matches[0].object.type -cne 'commit' -or $matches[0].object.sha -cne $TargetCommit) {
         throw "タグが指定コミットを直接指していません: $Tag"
     }
 }
@@ -253,6 +259,8 @@ try {
         if ($Operation -eq 'Preview') {
             $fields.draft = $false
             $fields.prerelease = $true
+            # GitHubがこの試用公開と同時に、固定したSHAからタグを作成する。
+            $fields.target_commitish = $TargetCommit
             $fields.body = $release.body.Replace($temporaryMarker, '').Trim()
         } else {
             $fields.prerelease = $false
@@ -278,6 +286,7 @@ try {
         ($Operation -eq 'Formalize' -and ($result.draft -or $result.prerelease))) {
         throw 'Releaseの処理結果が指定操作と一致しません。'
     }
+    if ($Operation -ne 'Prepare') { Confirm-TagCommit }
     @(
         '## 地表SQLiteの処理結果'
         ''
