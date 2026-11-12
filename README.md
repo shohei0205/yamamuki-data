@@ -45,7 +45,7 @@ OSM 山頂・国土地理院山頂の生成 Action は、タグを付けた下�
 
 Actions とローカルのどちらで生成したデータも、配布ファイルは [Releases](https://github.com/shohei0205/yamamuki-data/releases) の **Assets** に添付する。データの種類と版は Release のタグで、試用公開と正式公開は Pre-release の設定で区別する。ローカル生成のデータは、添付するファイルと検証方法をデータごとの README に記載する。
 
-地表データでは、ローカルで生成したファイルを、整理マーカー付きの受け渡し用Draft Releaseにアップロードする。「地表：Release 加工・検査」がファイルを加工・検査し、同じReleaseを配布用Draftに整える。地形データも追加時にこの手順にそろえる。この配布用 Draft Release を、Pre-release → 正式 Release の順に公開する。Draft の間は添付ファイルを変更できる。Pre-release として公開するときから、タグ・添付ファイル・取得 URL を固定する。加工と検証の具体的な手順は、各データの追加時に用意する。
+地表データでは、ローカルで生成したファイルを、整理マーカー付きの受け渡し用Draft Releaseにアップロードする。「地表：下書き Release 加工・検査」がファイルを加工・検査し、同じReleaseを配布用Draftに整える。地形データも追加時にこの手順にそろえる。この配布用 Draft Release を、Pre-release → 正式 Release の順に公開する。Draft の間は添付ファイルを変更できる。Pre-release として公開するときから、タグ・添付ファイル・取得 URL を固定する。加工と検証の具体的な手順は、各データの追加時に用意する。
 
 正式公開・復旧で、正式版の manifest・カタログ・履歴を更新する。既存の開発版カタログとその参照先は公開当時の内容で残す。サイトは Actions から直接配置する。
 
@@ -80,7 +80,7 @@ Actions とローカルのどちらで生成したデータも、配布ファイ
 | 共通：文字形式の確認 | 改行コードとBOM |
 | 共通：Draft-release を試用公開 | 下書きを Pre-release として公開 |
 | 共通：Pre-release を正式公開 | 試用版を正式公開。地点データは配布カタログも更新 |
-| 地表：Release 加工・検査 | [ローカル生成物を加工・検査し、配布用Draftを作成](surface/README.md#地表データの公開) |
+| 地表：下書き Release 加工・検査 | [ローカル生成物を加工・検査し、配布用Draftを作成](surface/README.md#地表データの公開) |
 | データビューワ：下書き Release 生成・検査 | [Windows・macOS のビューワのDraftを生成](viewer/README.md#配布版の公開) |
 
 データ固有のActionと操作手順は各READMEを参照する。
