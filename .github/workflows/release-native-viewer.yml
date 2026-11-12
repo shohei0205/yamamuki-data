@@ -12,34 +12,19 @@ concurrency:
 
 jobs:
   plan:
-    name: ビューワの版とタグを決める
+    name: ビューワの生成日時とタグを決める
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
+      title: ${{ steps.version.outputs.title }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Cargo.tomlの版を読む
+      - name: 生成日時から配布名を決める
         id: version
-        run: |
-          python3 - <<'PY'
-          import os
-          import re
-          import tomllib
-
-          with open("viewer/Cargo.toml", "rb") as manifest:
-              version = tomllib.load(manifest)["package"]["version"]
-          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
-              raise SystemExit("ビューワの版は数字3つで指定してください")
-          tag = f"viewer-v{version}"
-          ref = os.environ["GITHUB_REF"]
-          if ref != "refs/heads/main":
-              tag += f"-test.{os.environ['GITHUB_RUN_ID']}"
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              print(f"version={version}\ntag={tag}", file=output)
-          PY
+        run: python3 -m release_tools.viewer_build
 
   build:
     name: 配布用ビルド (${{ matrix.platform }})
@@ -119,6 +104,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+      RELEASE_TITLE: ${{ needs.plan.outputs.title }}
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -142,7 +128,7 @@ jobs:
           done
           (cd dist && sha256sum "$RELEASE_TAG"-*.zip > SHA256SUMS.txt)
           gh release create "$RELEASE_TAG" "${assets[@]}" dist/SHA256SUMS.txt \
-            --target "$GITHUB_SHA" --title "山むき・データビューワ ${RELEASE_TAG#viewer-v}" \
+            --target "$GITHUB_SHA" --title "$RELEASE_TITLE" \
             --draft --latest=false \
             --notes $'Windows x64、macOS Apple Silicon 向け。macOS版はアドホック署名で、公証は行っていません。\n\n<!-- yamamuki-data:temporary-draft:v1 -->'
           {
