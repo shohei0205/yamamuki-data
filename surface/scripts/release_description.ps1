@@ -6,7 +6,7 @@ function New-SurfaceReleaseDescription($Manifest, $Variants) {
     @(
         "## $($entry.title)"
         ''
-        "データ版: $($entry.dataVersion) ／ 生成日時（UTC）: $generatedAt"
+        "生成日時（UTC）: $generatedAt"
         ''
         '地表画像タイルを収録したSQLiteです。必要なレイヤーと最大ズームに合うファイルを選んでください。'
         ''

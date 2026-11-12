@@ -164,6 +164,7 @@ try {
             if (!$state.body.Contains($source[$field])) { throw "配布本文に出典の$field がありません。" }
         }
     }
+    if ($state.body.Contains('データ版:')) { throw '配布本文にバージョン番号が表示されています。' }
     $preparedBody = $state.body.Replace('<!-- yamamuki-data:temporary-draft:v1 -->', '').Trim()
     if ($state.tagCommit) { throw 'Draft加工時にGitタグが作られました。' }
     if ($state.hiddenVerifications -eq 0) { throw '隠しファイルによる添付の再検証が実行されませんでした。' }
