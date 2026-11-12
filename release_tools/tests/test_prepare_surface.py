@@ -18,7 +18,7 @@ class PrepareSurfaceTests(unittest.TestCase):
         self.addCleanup(environment.stop)
         self.release = dict(tag_name="esa-worldcover-20261112T000000Z-12345-1", draft=True,
                             prerelease=False, target_commitish="a" * 40)
-        self.manifest = dict(schemaFormat="yamamuki-manifest", schemaVersion=6,
+        self.manifest = dict(version="20261112T000000Z-12345-1", schemaFormat="yamamuki-manifest", schemaVersion=6,
                              dataSchemaFormat="yamamuki-sqlite", dataSchemaVersion=1,
                              fileName="esa-worldcover-z12.sqlite3", sha256="b" * 64,
                              datasets=[dict(id="esa-worldcover-japan", kind="surface")])
@@ -72,3 +72,12 @@ class PrepareSurfaceTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         target.prepare(self.release["tag_name"])
                     self.assertEqual(1, calls.call_count)
+
+    def test_processing_uses_finalized_tag_and_checksum(self):
+        finalized = {**self.release, "tag_name": "esa-worldcover-20261113T010203Z-99999-2"}
+        manifest = {**self.manifest, "version": "20261113T010203Z-99999-2", "sha256": "c" * 64}
+        with patch.object(target, "finalize", return_value=(finalized, manifest)):
+            calls = self.invoke()
+        args = calls.call_args.args[0]
+        self.assertEqual(finalized["tag_name"], args[args.index("-Tag") + 1])
+        self.assertEqual("c" * 64, args[args.index("-Sha256") + 1])

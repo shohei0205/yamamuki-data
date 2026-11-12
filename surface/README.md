@@ -72,6 +72,8 @@ pwsh -NoProfile -File surface/scripts/prepare_release.ps1 `
 
 「地表：下書き Release 加工・検査」の入力は、**下書きReleaseのURLまたはタグ**の1項目。ReleaseページのURLをそのまま貼り付ける。データセットと配布単位は `release.json` とタグから、SQLiteのSHA-256は添付manifestから、対象コミットSHAはDraftの `target_commitish` から自動取得する。未公開のDraftでない場合や、公開設定・manifest・対象SHAが一致しない場合は処理を中止する。
 
+Actionは初回の加工で `yyyyMMddTHHmmssZ-<Run ID>-<試行番号>` の配布識別子を確定する。SQLiteはRustツールで複製し、画像BLOBを変えずに `data_version` を更新する。manifestの `version`・`datasets[].dataVersion`、配布URL、Releaseの予定タグ・表示名も同じ識別子に揃え、ハッシュを再計算する。差し替え前に識別子と変更前後のハッシュをDraftに記録するため、途中失敗からの再実行でも新しい版にはならない。
+
 Actionは添付したSQLite、manifest、ライセンスを取得し直し、収録画像、ハッシュ、レイヤーとレベル、タグと対象コミットを照合する。構成別の添付を作成し、Release本文を収録内容・構成別のファイル名・レイヤー別ズーム・容量と、地点Releaseと同じ箇条書き形式の出典（名称・帰属表示・利用条件）を含む配布向け説明に書き換える。検査記録は非表示コメントとして残す。添付ファイルはリンクではなくファイル名だけを記載し、ページ下部のAssetsからの取得を案内する。この説明は試用公開・正式公開でも維持する。失敗時はDraftが残る。起動だけが失敗した場合は、表示された `gh workflow run` コマンドで再実行できる。
 
 受け渡し用と配布用のDraftには整理マーカー `<!-- yamamuki-data:temporary-draft:v1 -->` を付ける。作成から7日以上経ったマーカー付きDraftは、共通の週次整理の対象になる。
