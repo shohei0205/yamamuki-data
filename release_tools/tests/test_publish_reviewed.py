@@ -101,7 +101,7 @@ class PublishReviewedTests(unittest.TestCase):
             run.assert_not_called()
 
     def candidate_with_manifest(self, manifest, receipt, *, preview=True, checksum=""):
-        release = dict(tag_name="esa-worldcover-japan-0.1.0",
+        release = dict(tag_name="esa-worldcover-20261112T000000Z-12345-1",
                        body="<!-- yamamuki-data:surface-draft:v1 " + json.dumps(receipt) + " -->")
         commands = []
 
