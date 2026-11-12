@@ -1,4 +1,4 @@
-name: 地表：Release 加工・検査
+name: 地表：下書き Release 加工・検査
 
 on:
   workflow_dispatch:
