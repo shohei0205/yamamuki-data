@@ -12,6 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 . (Join-Path $PSScriptRoot 'release_config.ps1')
+. (Join-Path $PSScriptRoot 'release_description.ps1')
 $config = Read-SurfaceReleaseConfig $Dataset $Package
 $repo = $env:GITHUB_REPOSITORY
 if ($repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $env:GITHUB_REF -cne 'refs/heads/main') {
@@ -176,6 +177,10 @@ try {
         if (!$license.Contains($author.name)) { throw 'LICENSE.txtに作成者がありません。' }
     }
 
+    $variants = @(@{
+        manifest = $expected; levels = $sourceLevels; manifestName = $config.manifestName
+        manifestUrl = "$releaseRoot/$Tag/$($config.manifestName)"
+    })
     $splitHashes = @{}
     foreach ($split in $config.splitPackages) {
         $splitDb = Join-Path $download $split.fileName
@@ -198,6 +203,10 @@ try {
             throw "分割SQLiteの配布情報が一致しません: $($split.fileName)"
         }
         $splitManifest.licenseUrl = $expected.licenseUrl
+        $variants += @{
+            manifest = $splitManifest; levels = $actualLevels; manifestName = $split.manifestName
+            manifestUrl = "$releaseRoot/$Tag/$($split.manifestName)"
+        }
         $splitManifest | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath (Join-Path $download $split.manifestName) -Encoding utf8NoBOM
         $splitHashes[$split.fileName] = $splitManifest.sha256
         $splitHashes[$split.manifestName] = (Get-FileHash -LiteralPath (Join-Path $download $split.manifestName) -Algorithm SHA256).Hash
@@ -253,9 +262,7 @@ try {
             $temporaryMarker
             '<!-- yamamuki-data:surface-draft:v1 ' + $receipt + ' -->'
             ''
-            '地表SQLiteの加工・検査が完了しました。共通Actionで試用公開できます。'
-            ''
-            ('- SHA-256: ' + [char]96 + $expected.sha256 + [char]96)
+            (New-SurfaceReleaseDescription $manifest $variants)
         ) -join [Environment]::NewLine
     } else {
         $matches = [regex]::Matches($release.body, $receiptPattern)
