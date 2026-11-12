@@ -12,6 +12,7 @@ mod point_detail;
 mod point_list;
 mod points;
 mod surface;
+mod surface_palette;
 mod surface_shade;
 mod tile_cache;
 #[cfg(windows)]
@@ -34,6 +35,7 @@ const _: () = assert!(
 const APP_ID: &str = "yamamuki-viewer";
 const MAP_SOURCE_KEY: &str = "map_source";
 const LOD_KEY: &str = "auto_lod";
+const SURFACE_PALETTE_KEY: &str = "surface_palette";
 const DEFAULT_WINDOW_SIZE: egui::Vec2 = egui::vec2(1150., 800.);
 const NORMAL_WINDOW_SIZE_KEY: &str = "normal_window_size";
 const NORMAL_WINDOW_POSITION_KEY: &str = "normal_window_position";
@@ -52,6 +54,7 @@ struct Viewer {
     tiles: Vec<map::Tiles>,
     map_source: map::Source,
     lod: map::Lod,
+    surface_palette: surface_palette::Palette,
     lod_renderer: Option<lod_fade::Renderer>,
     show_online_map: bool,
     points: Option<Arc<Points>>,
@@ -95,6 +98,7 @@ impl Viewer {
             tiles: Vec::new(),
             map_source: map::Source::Gsi,
             lod: map::Lod::default(),
+            surface_palette: surface_palette::Palette::default(),
             lod_renderer: None,
             show_online_map: true,
             client,
@@ -240,6 +244,7 @@ impl Viewer {
             return;
         }
         let mut surface = surface::Surface::new(ctx, source);
+        surface.palette = self.surface_palette;
         surface.fit = self.surfaces.is_empty();
         surface.reveal = true;
         if surface.fit {
@@ -525,6 +530,7 @@ impl eframe::App for Viewer {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, MAP_SOURCE_KEY, &self.map_source);
         eframe::set_value(storage, LOD_KEY, &self.lod);
+        eframe::set_value(storage, SURFACE_PALETTE_KEY, &self.surface_palette);
         eframe::set_value(storage, NORMAL_WINDOW_SIZE_KEY, &self.normal_window_size);
         if let Some(position) = self.normal_window_position {
             eframe::set_value(storage, NORMAL_WINDOW_POSITION_KEY, &position);
@@ -609,6 +615,11 @@ impl eframe::App for Viewer {
                         ui.spinner();
                         ui.label("データを読み込み中");
                     }
+                    ui.menu_button("地表の配色",|ui| {
+                        if self.surface_palette.menu(ui) {
+                            for surface in &mut self.surfaces {surface.palette=self.surface_palette;}
+                        }
+                    });
                     ui.menu_button("自動LOD", |ui| {
                         let slider_max = self.lod_slider_max();
                         let mut max = self.lod.max_level.unwrap_or(slider_max).min(slider_max);
@@ -1160,6 +1171,10 @@ fn run() -> Result<()> {
                 .storage
                 .and_then(|storage| eframe::get_value(storage, LOD_KEY))
                 .unwrap_or_default();
+            viewer.surface_palette = cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, SURFACE_PALETTE_KEY))
+                .unwrap_or_default();
             if let Some(size) = cc
                 .storage
                 .and_then(|storage| {
@@ -1667,5 +1682,81 @@ mod tests {
         }
         assert_eq!(viewer.marks.len(), 1);
         assert_eq!(delay, std::time::Duration::MAX);
+    }
+}
+
+#[cfg(test)]
+mod surface_palette_checks {
+    use super::*;
+    use eframe::App as _;
+    #[derive(Default)]
+    struct Storage(std::collections::HashMap<String, String>);
+    impl eframe::Storage for Storage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.to_owned(), value);
+        }
+        fn flush(&mut self) {}
+    }
+    #[test]
+    fn palette_menu_selects_and_saves_the_display_colors() {
+        let ctx = egui::Context::default();
+        let client = reqwest::blocking::Client::builder()
+            .proxy(reqwest::Proxy::all("http://127.0.0.1:9").unwrap())
+            .build()
+            .unwrap();
+        let mut viewer = Viewer::new(&ctx, client, None);
+        let mut app_frame = eframe::Frame::_new_kittest();
+        let mut frame = |viewer: &mut Viewer, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1100., 700.))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| viewer.update(ctx, &mut app_frame),
+            )
+        };
+        let find = |output: &egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.text() == label => {
+                        Some(t.pos + t.galley.rect.center().to_vec2())
+                    }
+                    _ => None,
+                })
+                .expect(label)
+        };
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut viewer, vec![]);
+        let output = frame(&mut viewer, vec![]);
+        let at = find(&output, "地表の配色");
+        frame(
+            &mut viewer,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+        );
+        frame(&mut viewer, vec![button(at, false)]);
+        let output = frame(&mut viewer, vec![]);
+        let at = find(&output, "高コントラスト");
+        frame(
+            &mut viewer,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+        );
+        frame(&mut viewer, vec![button(at, false)]);
+        assert_eq!(viewer.surface_palette, surface_palette::Palette::Contrast);
+        let mut storage = Storage::default();
+        viewer.save(&mut storage);
+        let saved: surface_palette::Palette =
+            eframe::get_value(&storage, SURFACE_PALETTE_KEY).unwrap();
+        assert_eq!(saved, surface_palette::Palette::Contrast);
     }
 }

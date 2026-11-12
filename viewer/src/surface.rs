@@ -1,6 +1,6 @@
 //! 共通SQLiteの地表を読み、可視タイルだけを背景で合成する。
 use crate::map::{Lod, Source as MapSource, TILE_SIZE, Tile, View};
-use crate::{lod_fade, surface_shade};
+use crate::{lod_fade, surface_palette::Palette, surface_shade};
 use anyhow::{Result, bail, ensure};
 use eframe::{
     egui::{self, ColorImage, Pos2, Rect, TextureHandle},
@@ -259,6 +259,7 @@ fn surface_uv(pixels: usize) -> Rect {
 // 描画タイルの1画素の余白で共有する、復号済み元タイルの作業キャッシュ。
 #[derive(Default)]
 struct DecodedTiles {
+    palette: Palette,
     images: HashMap<(i64, i64, Tile), Option<Arc<image::RgbaImage>>>,
     order: VecDeque<(i64, i64, Tile)>,
 }
@@ -352,6 +353,7 @@ fn composite_cached(
         let Some(z) = z else { continue };
         let fallback = set.complete_tile_extent && auto_levels.get(index) == Some(&true);
         let is_shade = matches!(layer.role, Role::Hillshade);
+        let mask_color = decoded.palette.mask(&layer.id).or(layer.settings.color);
         // オンライン地図に掛ける陰影と、ローカルの地表画像を分けておく。
         let shade_online = overlay && is_shade;
         let apply_shade = has_base && is_shade;
@@ -363,6 +365,7 @@ fn composite_cached(
             layer
                 .settings
                 .background
+                .map(|color| decoded.palette.background(&layer.id).unwrap_or(color))
                 .map_or([0.; 4], |color| premultiply(color, 1.))
         };
         let xs = samples(tile.x, tile.z, z, pixels);
@@ -489,7 +492,7 @@ fn composite_cached(
                             Role::Rgb => premultiply(v, 1.),
                             Role::Mask => over(
                                 premultiply(
-                                    layer.settings.color.expect("mask color"),
+                                    mask_color.expect("mask color"),
                                     f32::from(v[1]) / 255.,
                                 ),
                                 background,
@@ -609,6 +612,7 @@ struct Key {
     levels: Vec<Option<u32>>,
     auto_levels: Vec<bool>,
     overlay: bool,
+    palette: Palette,
 }
 
 impl Key {
@@ -619,6 +623,7 @@ impl Key {
             && self.levels == other.levels
             && self.auto_levels == other.auto_levels
             && self.overlay == other.overlay
+            && self.palette == other.palette
     }
 }
 
@@ -778,6 +783,7 @@ pub struct Surface {
     show_file_info: bool,
     options: Vec<(bool, Option<u32>)>,
     pub enabled: bool,
+    pub palette: Palette,
     pub fit: bool,
     pub reveal: bool,
     jobs: mpsc::Sender<Key>,
@@ -806,6 +812,7 @@ impl Surface {
                 loop {
                     let job = incoming.lock().expect("surface queue").recv();
                     let Ok(job) = job else { break };
+                    decoded.palette = job.palette;
                     let result = match &conn {
                         Ok(conn) => composite_cached(
                             conn,
@@ -834,6 +841,7 @@ impl Surface {
             show_file_info: false,
             options,
             enabled: true,
+            palette: Palette::default(),
             fit: true,
             reveal: false,
             jobs,
@@ -1082,6 +1090,7 @@ impl Surface {
                     pixels,
                     levels: levels.clone(),
                     auto_levels: auto_levels.clone(),
+                    palette: self.palette,
                     overlay,
                 })
                 .collect();
@@ -1729,7 +1738,7 @@ mod tests {
         Ok(())
     }
 
-    fn interior(image: &ColorImage) -> Vec<egui::Color32> {
+    pub(super) fn interior(image: &ColorImage) -> Vec<egui::Color32> {
         image
             .pixels
             .chunks_exact(image.size[0])
@@ -2235,6 +2244,83 @@ mod tests {
             "先に開いたSQLiteの森林を非表示にできる"
         );
         assert!(surfaces[1].options[0].0, "別ファイルの森林は表示したまま");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod palette_checks {
+    use super::*;
+    use anyhow::Context;
+    #[test]
+    fn palette_recolors_masks_and_keeps_transparency_and_decoded_pixels() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("palette.sqlite3");
+        let conn = Connection::open(&path)?;
+        db::initialize(&conn)?;
+        conn.execute_batch(
+            r#"
+            INSERT INTO datasets VALUES(1,'palette','surface','配色','1',1,'{}');
+            INSERT INTO surface_layers VALUES
+              (1,1,'forest','mask',0,'[]','{"color":[10,20,30,255],"background":[70,80,90,255]}'),
+              (1,2,'hillshade','hillshade',10,'[]','{"neutral":136,"strength":0.65}'),
+              (1,3,'water','mask',20,'[]','{"color":[40,50,60,255]}');
+            INSERT INTO surface_levels VALUES(1,1,0,'z0',2),(1,2,0,'z0',2),(1,3,0,'z0',2);
+        "#,
+        )?;
+        for (layer, pixels) in [(1, [0, 255, 0, 0]), (2, [136; 4]), (3, [0, 0, 255, 0])] {
+            let mut png = Vec::new();
+            {
+                let mut encoder = png::Encoder::new(&mut png, 2, 2);
+                encoder.set_color(png::ColorType::Grayscale);
+                encoder.write_header()?.write_image_data(&pixels)?;
+            }
+            conn.execute(
+                "INSERT INTO surface_tiles VALUES(1,?1,0,0,0,1,?2)",
+                (layer, png),
+            )?;
+        }
+        let source = Source::open(path)?;
+        let set = &source.datasets[0];
+        let tile = Tile { z: 0, x: 0, y: 0 };
+        let mut decoded = DecodedTiles::default();
+        let original = decoded.get(&conn, 1, 1, tile)?.unwrap();
+        for palette in Palette::ALL {
+            decoded.palette = palette;
+            for overlay in [false, true] {
+                let result = composite_cached(
+                    &conn,
+                    set,
+                    tile,
+                    2,
+                    &[Some(0); 3],
+                    overlay,
+                    &[],
+                    &mut decoded,
+                )?;
+                let colors = if palette == Palette::Source {
+                    [[70, 80, 90, 255], [10, 20, 30, 255], [40, 50, 60, 255]]
+                } else {
+                    palette.colors()
+                };
+                let color =
+                    |c: [u8; 4]| egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+                let other = if overlay {
+                    egui::Color32::TRANSPARENT
+                } else {
+                    color(colors[0])
+                };
+                assert_eq!(
+                    tests::interior(&result.image.context("地表画像がありません")?),
+                    vec![other, color(colors[1]), color(colors[2]), other]
+                );
+                assert_eq!(result.shades.len(), usize::from(overlay));
+            }
+            assert!(Arc::ptr_eq(
+                &original,
+                &decoded.get(&conn, 1, 1, tile)?.unwrap()
+            ));
+        }
         Ok(())
     }
 }
