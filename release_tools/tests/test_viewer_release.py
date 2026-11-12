@@ -13,7 +13,7 @@ from release_tools import viewer_release as viewer
 from release_tools import publish_reviewed as entry
 
 
-TAG = "viewer-v1.2.3"
+TAG = "viewer-20261112T012345Z-123456-1"
 RELEASE = dict(id=12, tag_name=TAG, draft=True, prerelease=False,
                target_commitish="a" * 40, body=viewer.site.TEMPORARY_DRAFT_MARKER,
                html_url=f"https://github.com/owner/repo/releases/tag/{TAG}")
@@ -31,6 +31,13 @@ def assets(directory, *, missing_executable=False):
 
 
 class ViewerReleaseTests(unittest.TestCase):
+    def test_existing_numbered_draft_still_accepts_preview(self):
+        release = {**RELEASE, "tag_name": "viewer-v0.1.0"}
+        with (patch.object(viewer.site, "gh", return_value="[]"),
+              patch.object(viewer, "validate", side_effect=RuntimeError("download reached"))):
+            with self.assertRaisesRegex(RuntimeError, "download reached"):
+                viewer.publish_candidate(release, preview=True)
+
     def test_preview_then_formalize_preserves_release_and_assets_without_pages(self):
         release = dict(RELEASE)
         patches = []

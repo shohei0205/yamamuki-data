@@ -39,8 +39,8 @@ def validate(directory, tag, expected_sha256=""):
 def publish_candidate(release, sha256="", *, preview=False):
     check_branch("stable")
     tag = release["tag_name"]
-    if not re.fullmatch(r"viewer-v\d+\.\d+\.\d+", tag):
-        raise ValueError("ビューワのタグは viewer-v<版> を指定してください")
+    if not re.fullmatch(r"viewer-(?:\d{8}T\d{6}Z-\d+-\d+|v\d+\.\d+\.\d+)", tag):
+        raise ValueError("ビューワのタグは viewer-<生成日時>-<実行 ID>-<試行番号> を指定してください")
     if release["draft"] and not preview:
         raise ValueError("下書きを先に試用向けに公開してください")
     if preview and not (release["draft"] or release["prerelease"]):
