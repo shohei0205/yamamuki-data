@@ -172,3 +172,9 @@ cargo run --locked --release --manifest-path surface/Cargo.toml --bin surface-to
 - 収録された既定色を使う場合、森林濃度0、陰影136、水域濃度0の有効画素は背景色 `[224,216,196,255]`。水域濃度255の画素は `[114,172,204,255]`。森林タイルの行がなく、水域濃度0なら出力は透明。
 
 森林・水域・陰影を別のレベルにしても位置が一致することと、タイル行のない箇所が背景へ抜けることを確認する。
+
+## JPEG XLとの比較実験
+
+現行WebPとJPEG XLの独立圧縮・段階的圧縮の容量、復号時間、メモリ、画質を比較する手順と測定結果は、[JPEG XLによる地表圧縮の比較](experiments/jpeg-xl.md)を参照する。正式な配布形式はWebP／PNGを維持する。
+
+全レベルをdistance 4で圧縮する比較用全国SQLiteの格納構造・生成・再開手順は、[全国JPEG XLの比較用SQLite](experiments/jpeg-xl-sqlite.md)を参照する。これは正式な共通SQLiteとは異なる比較用形式。ネイティブビューワは専用の読み込み経路で対応し、Release処理は未対応。

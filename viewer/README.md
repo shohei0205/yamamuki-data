@@ -54,6 +54,22 @@ cargo run --locked --release --manifest-path viewer/Cargo.toml -- --check-surfac
 
 ツールバーの「自動LOD」でオンライン地図と地表に共通の上限と選択基準を設定できる。上限は実XYZの `z` をスライダーで指定する。数値をクリックすると直接入力できる。スライダーの最大値は、表示中のオンライン地図と地表レイヤーで利用できる最も細かいレベル。初期値はその最大値。上限が地表レイヤーの収録範囲より低い場合は、そのレイヤーの最も粗い収録レベルを表示する。選択基準のズーム補正は表示ズームに加える値で、+1で目標の画素密度が2倍、−1で半分になる。各レイヤーで選んだ固定LODは個別設定として優先する。自動LODの設定は終了時に保存する。LODの切り替えでは、新しいレベルの可視タイルを読み込んでから、約0.22秒でクロスフェードする。大きくズームアウトして旧レベルのタイルが画面内に密集する場合は、読み込み後に切り替える。
 
+### JPEG XLの比較用SQLite
+
+森林・水域・陰影をdistance 4で格納した[全国JPEG XLの比較用SQLite](../surface/esa_worldcover/experiments/jpeg-xl-sqlite.md)も、「地表SQLiteを開く」、ファイルのドロップ、起動引数から開ける。通常のWebP／PNGのSQLiteを同時に開いて比較できる。データセット・各レイヤーの表示、個別の固定レベル、自動LOD、クロスフェードは同じ操作で使う。
+
+RustのJPEG XLデコーダーをアプリへ組み込んでいるため、Windows・macOSとも外部DLLやlibjxlのインストールは不要。jxl-rs 0.8.0のSIMD対応デコーダーを使い、目的レベルに必要な途中入力を復号して共有画像からタイルを切り出す。粗いレベルは行コールバックでTriangle縮小し、1536×1536の出力ラスタを確保せず384×384／768×768の画像を作る。中間段階が存在しない画像も、入力全体を読みながら同じ縮小出力を使う。デコーダー内部の逆変換・フィルターには原寸で処理する部分が残る。
+
+z10〜z12で同じグループを使うタイルは、グループ・段階ごとの復号済み画像を64 MiBを目安とするキャッシュで共有する。2つの背景ワーカーが同じグループを要求しても重複して復号せず、異なるグループは並列に処理する。JPEG XLは1画像16,777,216サンプルを上限として受け付ける。これは内部バッファのバイト数を制限するものではない。これらはGPUテクスチャやアプリ全体のメモリ上限ではない。
+
+タイルをすべて独立圧縮したJPEG XL版も同じ操作で開ける。独立版はz10〜z12それぞれ384×384の画像を復号し、周囲16枚の復号を待たない。レベル間のBLOB共有はない。
+
+レイヤーの情報ボタンでは、レベルごとに必要な画像の入力量を重複なしで表示する。段階式はレベル間で同じBLOBを使うため、各レベルの数値を合計しても配布容量にはならない。独立版は各レベルの画像容量を合計できる。この比較用形式は正式な共通SQLiteの検査・Release公開処理には対応していない。
+
+```powershell
+viewer\run_win.bat build/surface/jxl-national-d4-20261112/esa-worldcover-jxl-d4.sqlite3
+```
+
 ## 確認
 
 ```sh
@@ -81,3 +97,7 @@ GitHub Actions の「データビューワ：下書き Release 生成・検査�
 GitHub Releasesでは、ZIPと `SHA256SUMS.txt` を配布する。Windows版はZIPを展開して `yamamuki-viewer.exe` を起動する。macOS版はApple Silicon向けのZIPを展開して `YamamukiViewer.app` を開く。macOS版はアドホック署名で、Appleによる公証は行っていない。
 
 Cargo.toml の `version` は Rust の内部情報として固定し、配布の識別には使わない。macOS の内部の版は UTC の生成日から自動設定する。既存の `viewer-v<版>` の下書きも、引き続き試用公開・正式公開できる。
+
+JPEG XLの実データ検査は、`YAMAMUKI_JXL_SQLITE` に全国SQLite、`YAMAMUKI_JXL_PREVIEW` に公式libjxlで出力した27枚のPNGを含むディレクトリ、`YAMAMUKI_WEBP_SQLITE` に比較元WebP版、`YAMAMUKI_JXL_INDEPENDENT` に独立JPEG XL版を指定し、`cargo test --locked --release --manifest-path viewer/Cargo.toml jxl -- --include-ignored` で実行する。通常のテストでは実データを必要とする検査を除外し、参照範囲・共有キャッシュ・キャッシュ容量と行縮小の検査を実行する。
+
+復号速度の比較は、同じSQLiteを指定して `cargo test --locked --release --manifest-path viewer/Cargo.toml compares_decoders -- --ignored --nocapture` で実行する。jxl-oxide、jxl-rs通常出力＋縮小、jxl-rs直接縮小の順に、5地点・3レイヤー・z10〜z12の45段階を比較する。jxl-oxideは比較テスト専用の依存で、アプリには組み込まない。行出力の変更箇所は [同梱デコーダーの説明](vendor/jxl/README.yamamuki.md) を参照。

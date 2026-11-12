@@ -1,6 +1,6 @@
 //! 共通SQLiteの地表を読み、可視タイルだけを背景で合成する。
 use crate::map::{Lod, Source as MapSource, TILE_SIZE, Tile, View};
-use crate::{lod_fade, surface_shade};
+use crate::{lod_fade, surface_jxl, surface_shade};
 use anyhow::{Result, bail, ensure};
 use eframe::{
     egui::{self, ColorImage, Pos2, Rect, TextureHandle},
@@ -64,7 +64,7 @@ pub struct Source {
 
 impl Source {
     pub fn open(path: PathBuf) -> Result<Self> {
-        let conn = db::open(&path)?;
+        let conn = surface_jxl::open(&path)?;
         let mut datasets = Vec::new();
         for dataset in db::datasets(&conn)? {
             if dataset.kind != "surface" || dataset.format_version != 1 {
@@ -260,6 +260,8 @@ fn surface_uv(pixels: usize) -> Rect {
 #[derive(Default)]
 struct DecodedTiles {
     images: HashMap<(i64, i64, Tile), Option<Arc<image::RgbaImage>>>,
+    jxl: Option<bool>,
+    groups: Arc<surface_jxl::Cache>,
     order: VecDeque<(i64, i64, Tile)>,
 }
 
@@ -275,8 +277,21 @@ impl DecodedTiles {
         if let Some(image) = self.images.get(&key) {
             return Ok(image.clone());
         }
-        let image = db::surface_tile(conn, dataset, layer, tile.z, tile.x, tile.y)?
-            .map(|image| Arc::new(image.into_rgba8()));
+        let is_jxl = match self.jxl {
+            Some(value) => value,
+            None => {
+                let value = surface_jxl::is_jxl(conn)?;
+                self.jxl = Some(value);
+                value
+            }
+        };
+        let image = if is_jxl {
+            self.groups
+                .tile(conn, dataset, layer, tile.z, tile.x, tile.y)?
+        } else {
+            db::surface_tile(conn, dataset, layer, tile.z, tile.x, tile.y)?
+                .map(|image| Arc::new(image.into_rgba8()))
+        };
         // 大きな汎用タイルの復号結果は作業キャッシュに保持しない。
         if image.as_ref().is_none_or(|image| image.width() <= 512) {
             if self.order.len() == 32 {
@@ -662,24 +677,26 @@ struct LevelStats {
     pixels: u32,
     tiles: u64,
     bytes: u64,
+    shared: bool,
 }
 
 fn read_layer_stats(path: &Path, dataset: i64, layer: i64) -> Result<Vec<LevelStats>> {
-    let conn = db::open(path)?;
-    let mut statement = conn.prepare(
-        "SELECT l.z, l.tile_pixels, COUNT(t.z), COALESCE(SUM(length(t.payload)), 0)
-         FROM surface_levels AS l
-         LEFT JOIN surface_tiles AS t USING (dataset_key, layer_key, z)
-         WHERE l.dataset_key=?1 AND l.layer_key=?2
-         GROUP BY l.z, l.tile_pixels
-         ORDER BY l.z DESC",
-    )?;
+    let conn = surface_jxl::open(path)?;
+    let is_jxl = surface_jxl::is_jxl(&conn)?;
+    let shared = is_jxl && conn.query_row("SELECT EXISTS(SELECT 1 FROM jxl_groups WHERE dataset_key=? AND layer_key=? AND source_tiles>1)",[dataset,layer],|r|r.get::<_,bool>(0))?;
+    let sql = if is_jxl {
+        "SELECT l.z,l.tile_pixels,(SELECT count(*) FROM surface_tiles t WHERE t.dataset_key=l.dataset_key AND t.layer_key=l.layer_key AND t.z=l.z),coalesce((SELECT sum(prefix_bytes) FROM (SELECT group_id,max(prefix_bytes) prefix_bytes FROM surface_tiles t WHERE t.dataset_key=l.dataset_key AND t.layer_key=l.layer_key AND t.z=l.z GROUP BY group_id)),0) FROM surface_levels l WHERE l.dataset_key=?1 AND l.layer_key=?2 ORDER BY l.z DESC"
+    } else {
+        "SELECT l.z,l.tile_pixels,count(t.z),coalesce(sum(length(t.payload)),0) FROM surface_levels l LEFT JOIN surface_tiles t USING(dataset_key,layer_key,z) WHERE l.dataset_key=?1 AND l.layer_key=?2 GROUP BY l.z,l.tile_pixels ORDER BY l.z DESC"
+    };
+    let mut statement = conn.prepare(sql)?;
     let rows = statement.query_map([dataset, layer], |row| {
         Ok(LevelStats {
             z: row.get(0)?,
             pixels: row.get(1)?,
             tiles: row.get(2)?,
             bytes: row.get(3)?,
+            shared,
         })
     })?;
     Ok(rows.collect::<db::rusqlite::Result<_>>()?)
@@ -726,6 +743,9 @@ impl LayerStats {
                 );
             }
             Self::Ready(levels) => {
+                if levels.iter().any(|l| l.shared) {
+                    ui.label("JPEG XL：各レベルの必要入力量（共有グループの重複を除く）。レベル間ではBLOBを共有します。");
+                }
                 let size = |ui: &mut egui::Ui, bytes| {
                     let label = if bytes >= 1024 * 1024 {
                         format!("{:.2} MiB", bytes as f64 / (1024. * 1024.))
@@ -796,13 +816,18 @@ impl Surface {
         let (jobs, incoming) = mpsc::channel::<Key>();
         let (replies, outgoing) = mpsc::channel();
         let incoming = Arc::new(Mutex::new(incoming));
+        let groups = Arc::new(surface_jxl::Cache::default());
         for _ in 0..2 {
             let (incoming, replies, ctx) = (incoming.clone(), replies.clone(), ctx.clone());
             let datasets = source.datasets.clone();
             let path = source.path.clone();
+            let groups = groups.clone();
             std::thread::spawn(move || {
-                let conn = db::open(&path);
-                let mut decoded = DecodedTiles::default();
+                let conn = surface_jxl::open(&path);
+                let mut decoded = DecodedTiles {
+                    groups,
+                    ..Default::default()
+                };
                 loop {
                     let job = incoming.lock().expect("surface queue").recv();
                     let Ok(job) = job else { break };
@@ -1587,7 +1612,7 @@ pub fn layer_list(
 
 pub fn check(path: &Path) -> Result<()> {
     let source = Source::open(path.to_owned())?;
-    let conn = db::open(path)?;
+    let conn = surface_jxl::open(path)?;
     for set in source.datasets {
         let mut rendered = 0;
         let mut statement = conn.prepare(
@@ -1942,7 +1967,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["森林", "陰影", "水域"]
         );
-        let conn = db::open(&path)?;
+        let conn = surface_jxl::open(&path)?;
         let image = composite(
             &conn,
             set,
@@ -2235,6 +2260,23 @@ mod tests {
             "先に開いたSQLiteの森林を非表示にできる"
         );
         assert!(surfaces[1].options[0].0, "別ファイルの森林は表示したまま");
+        Ok(())
+    }
+    #[test]
+    #[ignore = "JPEG XL全国SQLiteを指定するレイヤー一覧・集計の実データ検査"]
+    fn reads_jxl_layer_list_and_statistics() -> Result<()> {
+        let path = std::env::var_os("YAMAMUKI_JXL_SQLITE").context("YAMAMUKI_JXL_SQLITE")?;
+        let source = Source::open(PathBuf::from(&path))?;
+        assert_eq!(source.datasets.len(), 1);
+        for set in &source.datasets {
+            assert_eq!(set.layers.len(), 3);
+            for layer in &set.layers {
+                let stats = read_layer_stats(Path::new(&path), set.key, layer.key)?;
+                assert_eq!(stats.len(), 8);
+                assert_eq!(stats.iter().map(|s| s.tiles).sum::<u64>(), 22350);
+                assert!(stats.iter().all(|s| s.shared && s.bytes > 0));
+            }
+        }
         Ok(())
     }
 }

@@ -12,6 +12,7 @@ mod point_detail;
 mod point_list;
 mod points;
 mod surface;
+mod surface_jxl;
 mod surface_shade;
 mod tile_cache;
 #[cfg(windows)]
@@ -30,6 +31,23 @@ const _: () = assert!(
     eframe::wgpu::Instance::enabled_backend_features().contains(eframe::wgpu::Backends::METAL),
     "macOSのビューワにはMetalが必要です"
 );
+
+// 起動引数・ドロップ・ファイル選択で同じ判定を使う。
+fn open_file(path: PathBuf) -> Result<OpenedFile> {
+    if !points::is_sqlite(&path) {
+        return Points::open(&path).map(OpenedFile::Points);
+    }
+    let conn = surface_jxl::open(&path)?;
+    let jxl = surface_jxl::is_jxl(&conn)?;
+    drop(conn);
+    if jxl {
+        return surface::Source::open(path).map(OpenedFile::Surface);
+    }
+    Points::try_open_sqlite(&path).and_then(|points| match points {
+        Some(points) => Ok(OpenedFile::Points(points)),
+        None => surface::Source::open(path).map(OpenedFile::Surface),
+    })
+}
 
 const APP_ID: &str = "yamamuki-viewer";
 const MAP_SOURCE_KEY: &str = "map_source";
@@ -189,14 +207,7 @@ impl Viewer {
         self.loading = Some((path.clone(), receive));
         self.error = None;
         std::thread::spawn(move || {
-            let result = if points::is_sqlite(&path) {
-                Points::try_open_sqlite(&path).and_then(|points| match points {
-                    Some(points) => Ok(OpenedFile::Points(points)),
-                    None => surface::Source::open(path).map(OpenedFile::Surface),
-                })
-            } else {
-                Points::open(&path).map(OpenedFile::Points)
-            };
+            let result = open_file(path);
             let _ = send.send(result);
             ctx.request_repaint();
         });
@@ -1120,6 +1131,10 @@ fn run() -> Result<()> {
                     .ok_or_else(|| anyhow::anyhow!("地表SQLiteを指定してください"))?,
             );
             ensure!(args.next().is_none(), "地表SQLiteは1つ指定してください");
+            ensure!(
+                matches!(open_file(path.clone())?, OpenedFile::Surface(_)),
+                "地表SQLiteを指定してください"
+            );
             return surface::check(&path);
         }
         Some(arg) if arg == "--check-points" => {
@@ -1202,6 +1217,57 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn generic_open_recognizes_jxl_before_the_points_probe() -> Result<()> {
+        use yamamuki_data_sqlite as db;
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("esa-worldcover-jxl-d4.sqlite3");
+        let conn = db::rusqlite::Connection::open(&path)?;
+        db::initialize(&conn)?;
+        conn.execute_batch(r#"
+            PRAGMA application_id=1498237528;
+            CREATE TABLE experiment_info(key TEXT PRIMARY KEY,value TEXT);
+            INSERT INTO experiment_info VALUES('configuration','{"format":"surface-jxl-progressive-experiment-v1","mode":"VarDCT","distance":4}');
+            INSERT INTO datasets VALUES(1,'jxl-test','surface','JPEG XL','1',1,'{}');
+            INSERT INTO surface_layers VALUES(1,1,'forest','mask',0,'[]','{"color":[111,148,88,255]}');
+            INSERT INTO surface_levels VALUES(1,1,10,'z10',384);
+            DROP TABLE surface_tiles;
+            CREATE TABLE surface_tiles(dataset_key INTEGER,layer_key INTEGER,z INTEGER,x INTEGER,y INTEGER,group_id INTEGER,downsample INTEGER,actual_ratio INTEGER,prefix_bytes INTEGER,left_px INTEGER,top_px INTEGER,tile_pixels INTEGER);
+            INSERT INTO surface_tiles VALUES(1,1,10,0,0,1,1,1,1,0,0,384);
+        "#)?;
+        drop(conn);
+        assert!(matches!(open_file(path)?, OpenedFile::Surface(_)));
+        Ok(())
+    }
+    #[test]
+    #[ignore = "JPEG XL全国SQLiteで起動・ドロップ相当・地表選択の経路を検査する"]
+    fn jxl_loads_through_startup_and_generic_file_open() -> Result<()> {
+        let path = PathBuf::from(
+            std::env::var_os("YAMAMUKI_JXL_SQLITE")
+                .ok_or_else(|| anyhow::anyhow!("YAMAMUKI_JXL_SQLITE"))?,
+        );
+        let ctx = egui::Context::default();
+        let mut viewer = Viewer::new(&ctx, map::client()?, Some(path.clone()));
+        let wait = |viewer: &mut Viewer| -> Result<()> {
+            let start = std::time::Instant::now();
+            while viewer.loading.is_some() || viewer.loading_surface.is_some() {
+                viewer.poll_file(&ctx);
+                viewer.poll_surface(&ctx);
+                ensure!(start.elapsed().as_secs() < 10, "読み込みが完了しません");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            ensure!(viewer.error.is_none(), "読み込みエラー: {:?}", viewer.error);
+            ensure!(viewer.surfaces.len() == 1, "地表レイヤーが追加されません");
+            Ok(())
+        };
+        wait(&mut viewer)?;
+        viewer.open(&ctx, path.clone());
+        wait(&mut viewer)?;
+        viewer.open_surface(&ctx, path);
+        wait(&mut viewer)?;
+        assert!(viewer.points.is_none());
+        Ok(())
+    }
     #[test]
     fn lod_slider_follows_visible_map_and_surface_levels() {
         use yamamuki_data_sqlite as db;
