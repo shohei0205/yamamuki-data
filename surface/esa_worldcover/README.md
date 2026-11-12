@@ -60,13 +60,14 @@ pwsh -NoProfile -File surface/esa_worldcover/scripts/download_esa_worldcover.ps1
 ```powershell
 pwsh -NoProfile -File surface/esa_worldcover/scripts/build_esa_worldcover.ps1 `
   -Dem14 'build/surface/source/gsi-dem10b/14' `
-  -WorkDirectory 'build/surface/japan-0.1.0' `
-  -Version '0.1.0'
+  -WorkDirectory 'build/surface/japan-20261110T032217Z'
 ```
 
 実行スクリプトは、DEM10B PNGから作業用標高SQLiteを作り、GeoTIFFのモザイクを作り、標高SQLiteから作業区画を決める。次に、森林・水域の分類と穴埋め、LOD別の縮小、陰影生成、タイルのパック、PNG／WebP圧縮、共通SQLiteへの格納と検査を順に行う。森林と水域は4ビット相当、陰影は北西からの単方向で明暗の変化に応じて8〜3ビット相当。タイルの一辺はz10〜z12が384画素、z5〜z9が512画素。森林は最も細かいz12からz5まで順に生成し、各レベルは直上のタイルの森林被覆率を面積平均する。z10からz9では384画素の子タイルを親の256画素四方に縮小する。直上のタイルがない区画は元のESAデータから生成した結果を使う。
 
 z5〜z7では、収録タイル全域を森林・水域・陰影の共通範囲として処理する。この範囲に入る日本国外の陸地もESA原本の分類で収録する。標高のない箇所の陰影は中立値。z8〜z12の収録範囲は作業用標高SQLiteから選ぶ。z11とz12では、z9の作業区画でESA原本を従来の2倍の細かさで読み取り、各レベルのタイルに縮小する。陰影はz13とz14のDEMを使う。
+
+配布識別子は生成完了時のUTC日時から `yyyyMMddTHHmmssZ` 形式で自動生成する。セマンティックバージョン番号は指定しない。SQLite台帳の `data_version` とmanifestの `version`・`datasets[].dataVersion` はこの識別子を共有する。
 
 完了すると、作業ディレクトリに `esa-worldcover.sqlite3` と `manifest.json` ができる。全国データと作業ファイルはGit管理外の `build/` に置く。配布ファイルは次の手順でそろえる。
 
@@ -77,14 +78,25 @@ z5〜z7では、収録タイル全域を森林・水域・陰影の共通範囲�
 ```powershell
 pwsh -NoProfile -File surface/scripts/prepare_release.ps1 `
   -Dataset esa_worldcover -Package all `
-  -Database 'build/surface/japan-0.1.0/esa-worldcover.sqlite3' `
-  -OutputDirectory 'build/surface/esa-worldcover-release-0.1.0' `
+  -Database 'build/surface/japan-20261110T032217Z/esa-worldcover.sqlite3' `
+  -OutputDirectory 'build/surface/esa-worldcover-release-20261110T032217Z' `
   -TargetCommit '<生成に使ったコミットの40桁のSHA>' -ProcessDraft
 ```
 
+### 生成済みSQLiteの配布識別子を更新する
+
+画像を再生成せず、配布識別子だけを更新する場合はRustツールで新しいSQLiteに複製する。入力ファイルと圧縮済み画像BLOBは変更しない。出力には未使用のパスを指定する。
+
+```powershell
+cargo run --locked --release --manifest-path surface/Cargo.toml --bin surface-tool -- `
+  set-data-version '入力.sqlite3' 'build/surface/esa-worldcover-datetime.sqlite3' '20261110T032217Z'
+```
+
+その後、上の配布準備コマンドに新しいSQLiteを指定する。元の生成manifestがない場合は `-DataTimestamp` に元データの実際の生成日時を指定する。配布識別子を更新したSQLiteはハッシュも変わるため、manifest・ライセンス・分割版は再作成する。
+
 ### 最大レベル別の配布
 
-各ファイルに森林・陰影・水域の3レイヤーを収録する。データ版 `0.1.0` の場合、すべてのファイルを同じ `esa-worldcover-japan-0.1.0` Release に添付する。各SQLiteのデータセットIDは `esa-worldcover-japan`。
+各ファイルに森林・陰影・水域の3レイヤーを収録する。配布識別子 `20261110T032217Z` の場合、すべてのファイルを同じ `esa-worldcover-20261110T032217Z` Release に添付する。各SQLiteのデータセットIDは `esa-worldcover-japan`。
 
 | 収録レベル | SQLite ファイル | manifest |
 |---|---|---|
@@ -127,13 +139,13 @@ pwsh -NoProfile -File surface/tests/publish_release.ps1 -Database build/surface/
 全国データで検査するときは、次を実行する。
 
 ```powershell
-pwsh -NoProfile -File surface/tests/publish_release.ps1 -Database build/surface/japan-0.1.0/esa-worldcover.sqlite3
+pwsh -NoProfile -File surface/tests/publish_release.ps1 -Database build/surface/japan-20261110T032217Z/esa-worldcover.sqlite3
 ```
 
 ```powershell
 cargo test --locked --manifest-path surface/Cargo.toml -p surface-esa-worldcover
 cargo run --locked --release --manifest-path surface/Cargo.toml --bin surface-tool -- `
-  validate build/surface/japan-0.1.0/esa-worldcover.sqlite3
+  validate build/surface/japan-20261110T032217Z/esa-worldcover.sqlite3
 ```
 
 配布manifestの作成やSQLiteの統合は [地表データの共通手順](../README.md#検査と統合)を参照する。

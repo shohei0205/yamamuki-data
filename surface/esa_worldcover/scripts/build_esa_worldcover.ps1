@@ -1,7 +1,6 @@
 param(
     [Parameter(Mandatory)][string]$Dem14,
     [Parameter(Mandatory)][string]$WorkDirectory,
-    [Parameter(Mandatory)][string]$Version,
     [string]$WorldCoverDirectory,
     [ValidateRange(1,64)][int]$Jobs = 4
 )
@@ -44,10 +43,12 @@ try {
     & $shade --pack-ground-512 combined/landcover-with-hillshade.sqlite3 --l2-384 --output packed
     & $shade --compress-hillshade packed/landcover-with-hillshade.sqlite3 --quality 89 --output compressed-shade
     & $shade --compress-hillshade compressed-shade/landcover-with-hillshade.sqlite3 --lossless-masks --output compressed
-    & $cli pack-esa compressed/landcover-with-hillshade.sqlite3 esa-worldcover.sqlite3 $Version
-    $dataTimestamp = [datetime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", [Globalization.CultureInfo]::InvariantCulture)
+    $generatedAt = [datetime]::UtcNow
+    $identifier = $generatedAt.ToString('yyyyMMddTHHmmssZ', [Globalization.CultureInfo]::InvariantCulture)
+    & $cli pack-esa compressed/landcover-with-hillshade.sqlite3 esa-worldcover.sqlite3 $identifier
+    $dataTimestamp = $generatedAt.ToString("yyyy-MM-ddTHH:mm:ssZ", [Globalization.CultureInfo]::InvariantCulture)
     & $tool validate esa-worldcover.sqlite3
-    & $tool manifest esa-worldcover.sqlite3 https://github.com/shohei0205/yamamuki-data/releases/download $dataTimestamp | Set-Content -Encoding utf8NoBOM manifest.json
+    & $tool manifest esa-worldcover.sqlite3 https://github.com/shohei0205/yamamuki-data/releases/download $dataTimestamp esa-worldcover | Set-Content -Encoding utf8NoBOM manifest.json
     Get-Item -LiteralPath 'esa-worldcover.sqlite3','manifest.json'
 } finally {
     Pop-Location

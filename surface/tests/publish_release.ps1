@@ -75,7 +75,7 @@ function gh {
     if ($args[0] -eq 'workflow' -and $args[1] -eq 'run') {
         if (!$state.created -or $args[2] -cne 'publish-surface.yml' -or
             $args[[array]::IndexOf($args, '--ref') + 1] -cne 'main') { throw '加工Actionの起動が不正です。' }
-        if ($args.Count -ne 9 -or $args[7] -cne '-f' -or $args[8] -notlike 'target=esa-worldcover-japan-*') { throw '加工Actionの入力が不正です。' }
+        if ($args.Count -ne 9 -or $args[7] -cne '-f' -or $args[8] -notlike 'target=esa-worldcover-*') { throw '加工Actionの入力が不正です。' }
         $state.started = $true
         return
     }
@@ -119,7 +119,7 @@ try {
     $manifest = Get-Content -LiteralPath (Join-Path $inputDir 'esa-worldcover-z12.manifest.json') -Raw | ConvertFrom-Json
     $suffix = if ($IsWindows) { ".exe" } else { "" }
     $tool = Join-Path (Split-Path $PSScriptRoot -Parent) "target/release/surface-tool$suffix"
-    $tag = "esa-worldcover-japan-$($manifest.version)"
+    $tag = "esa-worldcover-$($manifest.version)"
     $env:GITHUB_REPOSITORY = $repo
     $env:GITHUB_REF = 'refs/heads/main'
     $env:GITHUB_STEP_SUMMARY = Join-Path $testRoot 'summary.md'

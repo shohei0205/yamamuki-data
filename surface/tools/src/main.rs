@@ -133,6 +133,29 @@ fn main() -> Result<()> {
                 db::copy_surface_selection(destination, &db::open(Path::new(input))?, &selection)
             })
         }
+        ("set-data-version", [input, output, version]) => {
+            let version = version.to_str().context("配布識別子が不正です")?;
+            ensure!(
+                version
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                    && version
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c)),
+                "配布識別子が不正です"
+            );
+            let source = db::open(Path::new(input))?;
+            ensure!(
+                db::datasets(&source)?.len() == 1,
+                "データセット1件のSQLiteを指定してください"
+            );
+            write_database(Path::new(output), true, |destination| {
+                db::merge_from(destination, &source)?;
+                destination.execute("UPDATE datasets SET data_version=?1", [version])?;
+                Ok(())
+            })
+        }
         ("surface-levels", [path]) => {
             let connection = db::open(Path::new(path))?;
             let datasets = db::datasets(&connection)?;
@@ -177,6 +200,6 @@ fn main() -> Result<()> {
 
 fn usage() -> Result<()> {
     anyhow::bail!(
-        "使い方: surface-tool merge <出力> <入力>... | select-layers <入力> <出力> <レイヤーID>... | select-surface <入力> <出力> <レイヤー別ズームJSON> | surface-levels <入力> | validate <入力> | manifest <入力> <ReleaseのdownloadルートURL> <生成日時UTC> [公開ID]"
+        "使い方: surface-tool merge <出力> <入力>... | select-layers <入力> <出力> <レイヤーID>... | select-surface <入力> <出力> <レイヤー別ズームJSON> | set-data-version <入力> <出力> <配布識別子> | surface-levels <入力> | validate <入力> | manifest <入力> <ReleaseのdownloadルートURL> <生成日時UTC> [公開ID]"
     );
 }

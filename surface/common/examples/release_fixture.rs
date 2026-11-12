@@ -14,7 +14,7 @@ fn main() -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(r#"
         INSERT INTO datasets VALUES
-          (1,'esa-worldcover-japan','surface','地表公開テスト','0.1.0',1,
+          (1,'esa-worldcover-japan','surface','地表公開テスト','20261112T000000Z-12345-1',1,
            '{"sources":[{"name":"テスト","source":"架空の画像","license":"CC0-1.0","attribution":"公開テスト","changes":"テスト用に作成"}]}');
         INSERT INTO surface_layers VALUES
           (1,1,'forest','mask',0,'["テスト"]','{"color":[111,148,88,255]}'),

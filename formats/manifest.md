@@ -136,13 +136,13 @@ SQLiteも共通manifest版6を使う。データ本体はSQLiteファイルを�
   "dataSchemaFormat": "yamamuki-sqlite",
   "dataSchemaVersion": 1,
   "name": "見本の地表データ",
-  "version": "0.1.0",
+  "version": "20261110T032217Z",
   "fileName": "sample-surface-z9.sqlite3",
-  "downloadUrl": "https://example.com/releases/sample-surface-0.1.0/sample-surface-z9.sqlite3",
+  "downloadUrl": "https://example.com/releases/sample-surface-20261110T032217Z/sample-surface-z9.sqlite3",
   "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "sizeBytes": 1000,
   "uncompressedSizeBytes": 1000,
-  "dataTimestamp": "2026-11-10T00:00:00Z",
+  "dataTimestamp": "2026-11-10T03:22:17Z",
   "metadata": {
     "sources": [
       {
