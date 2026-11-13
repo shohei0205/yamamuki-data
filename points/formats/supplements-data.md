@@ -18,6 +18,7 @@
 
 | 形式の版 | 機械検証用スキーマ | 規格 |
 |---|---|---|
+| 3 | [supplements-data-v3.schema.json](../schemas/supplements-data-v3.schema.json) | JSON Schema Draft 2020-12 |
 | 2 | [supplements-data-v2.schema.json](../schemas/supplements-data-v2.schema.json) | JSON Schema Draft 2020-12 |
 | 1 / 1.1 | [supplements-data-v1.schema.json](../schemas/supplements-data-v1.schema.json) | JSON Schema Draft 2020-12 |
 
@@ -30,15 +31,15 @@
 | 項目 | 型 | 必須 | 内容 | 版の履歴 |
 |---|---|---|---|---|
 | `schemaFormat` | string | 必須 | JSON の形式の識別子。`yamamuki-point-supplements` 固定。他の形式と区別する | [版2] 追加 |
-| `schemaVersion` | integer | 必須 | 補足 JSON の形式の版。`2` | [版1] 追加 |
+| `schemaVersion` | integer | 必須 | 補足 JSON の形式の版。`3`（地点追加を使わない場合は版2も使用できる） | [版1] 追加 |
 | `metadata` | object | 任意 | 共通の出典一覧とタグ情報。省略・空 object は共通情報なし | [版2] 追加 |
-| `points` | array | 必須 | 地点ごとの補足。`id` で元データと対応付ける | [版1] 追加 |
+| `points` | array | 必須 | 地点ごとの補足。`id` で元データと対応付ける。版3では `add: true` の地点も含む | [版1] 追加 |
 
 ### 共通情報（metadata）
 
 共通項目の型・構造・制約は [metadata フォーマット](../../formats/metadata.md) を参照する。補足 JSON では `metadata` は任意。`sources` と `tags` を使い、`pointCount` は指定しない。
 
-`metadata.sources` には補足に使った資料を登録する。地点や補足項目ごとの出典指定は行わない。生成時は補足の出典情報をマージ済み地点 JSON の `metadata.sources` に保持する。
+`metadata.sources` には補足に使った資料を登録する。既存地点の補正では地点や補足項目ごとの出典指定は行わない。追加地点は `provenance.dataSource` でこの一覧の出典名を参照する。生成時は補足の出典情報をマージ済み地点 JSON の `metadata.sources` に保持する。
 
 `metadata.tags` への登録だけでは地点にタグを追加しない。タグは地点ごとの `tags` で追加する。元データのタグに対して読みだけを登録でき、使っていないタグの情報も登録できる。生成時は補足のタグ情報を地点 JSON の `metadata.tags` に引き継ぐ。
 
@@ -48,12 +49,16 @@
 
 | 項目 | 型 | 必須 | 内容 | 版の履歴 |
 |---|---|---|---|---|
-| `id` | string | 必須 | 対応する地点の `id` と完全一致する文字列。空文字・前後の空白は使わない | [版2] 追加 |
+| `id` | string | 必須 | 補正時は対応する地点の `id` と完全一致する文字列。追加時は元データ・他の補足と重複しない ID。OSM ノードを新設したと誤解される `osm:` は追加に使わない。空文字・前後の空白は使わない | [版2] 追加 |
+| `add` | boolean | 任意 | `true` で元データにない地点を追加する。省略・`false` は既存地点の補正。既存 ID への追加はエラーにする | [版3] 追加 |
+| `latitude`・`longitude` | number | 追加時必須 | 十進数の緯度（−90～90）・経度（−180～180）。`add: true` の地点だけに指定できる | [版3] 追加 |
+| `provenance` | object | 追加時必須 | `dataSource` に `metadata.sources` に登録した出典名を指定する。地点 JSON 版6と同じ構造 | [版3] 追加 |
+| `type` | string または null | 任意 | 追加地点の種別。地点 JSON 版6と同じ。省略時は種別不明 | [版3] 追加 |
 | `osmId` | integer | 廃止 | 版1の OSM ノード番号による対象指定。版2では `id: "osm:<ノード番号>"` を使う | [版1] 追加<br>[版2] 廃止 |
 | `relatedIds` | string の配列 | 任意（補正項目のうち1つ以上が必須） | 関連先 ID の配列全体を置き換える。空配列で解除する。重複・自分自身の ID は指定しない | [版2] 追加 |
 | `tags` | string の配列 | 任意（補正項目のうち1つ以上が必須） | 追加するタグの配列。元のタグを保って重複なく追記する | [版1] 追加 |
 | `tagsRemove` | string の配列 | 任意（補正項目のうち1つ以上が必須） | 元のタグから削除する値の配列。画面上のタグ削除も保存する | [版1] 追加 |
-| `name` | string | 任意（補正項目のうち1つ以上が必須） | 表示名を置き換える。空文字は使えない | [版1] 追加 |
+| `name` | string | 追加時必須、補正時任意 | 追加地点の名称、または既存地点の表示名の置き換え。空文字は使えない | [版1] 追加<br>[版3] 追加地点では必須 |
 | `nameReading` | string・string の配列・null | 任意（補正項目のうち1つ以上が必須） | よみがなを置き換える。複数ある場合は重複のない1件以上の文字列配列。`null` は元のよみがなを削除する。空配列は使わない | [版1] 追加<br>[版2] 複数の読みに対応 |
 | `graphic` | object または null | 任意（補正項目のうち1つ以上が必須） | `svg` に SVG 本文、任意の `scale` に表示倍率を指定する。元の画像を置き換え、`null` は画像を削除する。省略時は元の画像を保つ | [版1.1] 追加（#56） |
 | `elevationM` | number または null | 任意（補正項目のうち1つ以上が必須） | 標高（m）を置き換える。有限の数値を指定する。`null` は標高を削除、省略は元の値を維持する。補正値の出典は補足の `metadata.sources` に記録する | [版2] 追加 |
@@ -66,11 +71,15 @@
 
 `id` で対象地点を指定する。同じ ID の補足行の重複はエラーにする。`relatedIds` は対象を探すキーではなく、その地点の関連付けを補正する値。関連先を含むデータセットは同時に読み込まれていなくてもよい。
 
-`id` はデータセットをまたいで一意とする。補足の適用時は、対象の地点 JSON にその ID が存在することを確認する。OSM のノード番号を持たない GSI や手動作成の地点には `id` を使う。ID の永続性は保証されないため、元データを更新した場合は対応する地点を確認する。
+`id` はデータセットをまたいで一意とする。既存地点への補足の適用時は、対象の地点 JSON にその ID が存在することを確認する。OSM のノード番号を持たない GSI や手動作成の地点には `id` を使う。ID の永続性は保証されないため、元データを更新した場合は対応する地点を確認する。
 
 補足する各項目を省略すると元の値を使う。タグ・別名の空配列は追加・削除しない指定とする。`relatedIds` の空配列は関連付けを解除する。同じタグや別名を追加と削除の両方に指定できない。タグ・別名・よみがなには空文字や前後の空白を使えず、配列内の重複も拒否する。各地点には `tags`・`tagsRemove`・`name`・`nameReading`・`graphic`・`aliases`・`aliasesRemove`・`exclude`・`relatedIds` のいずれかの指定が必要。
 
 ## 読み込みと検証
+
+版3では `points` の `add: true` の項目を地点として追加してから、補正・除外を適用する。追加地点は `id`・`name`・`latitude`・`longitude`・`provenance.dataSource` が必須で、地点 JSON 版6の値の制約に従う。`add`・`exclude`・`note`・`reason`・`expected`・`tagsRemove`・`aliasesRemove` は操作指定なので、配布する地点には含めない。追加地点に `expected` の想定値は指定できない。`exclude: true` は追加地点を補足に残したまま配布から外す。追加地点も名前・読み・別名・タグ・画像を編集できる。
+
+版1・版2の読み込みは継続する。地点追加を含むファイルは版3で保存し、旧版の形式や公開済みのスキーマは変更しない。地点本体は版6のままで、利用するアプリ側に補足形式の対応は不要。補足を読む生成処理・ビューアを先に更新してから版3の補足を使う。
 
 現行形式では、各 object に未知の項目を許可し、読み手はそれを解釈しない。既知の項目の型・必須条件・重複などの制約は維持する。
 
@@ -89,6 +98,19 @@
 地点名と別名の `nameReading` は、1つの読みを文字列、複数の読みを文字列配列で記録できる。例えば白馬岳は `"nameReading": ["しろうまだけ", "はくばだけ"]` とする。読みの空配列・重複・空文字・前後の空白は認めない。`metadata.tags` の `nameReading` も同じく文字列または文字列配列を使う。
 
 ## JSON の例
+
+### 版3
+
+```json
+{
+  "schemaFormat": "yamamuki-point-supplements",
+  "schemaVersion": 3,
+  "metadata": {
+    "sources": [{"name": "資料名", "source": "https://example.com/reference", "license": "資料の利用条件", "attribution": "資料の帰属表示"}]
+  },
+  "points": [{"id": "custom:example", "add": true, "name": "追加地点", "latitude": 35, "longitude": 139, "provenance": {"dataSource": "資料名"}}]
+}
+```
 
 ### 版2
 
@@ -282,6 +304,12 @@
 標高を補正した地点の `provenance.elevationSource` は `supplement`（補足による補正）にする。標高を削除した場合は `elevationM` と `provenance.elevationSource` を省略する。補足を解除した場合は原本の標高と出典に戻る。
 
 ## 変更履歴
+
+### 版3（2026-11-13）
+
+- `points` の `add: true` で、名称・座標・出典を持つ地点を追加できるようにする。
+- 既存 ID との重複、出典の登録漏れ、追加地点の必須値を生成処理とビューアで検査する。
+- 版1・版2の読み込みを保ち、追加を含まない補足は引き続き版2で保存できる。
 
 ### 版2（2026-10-14）
 

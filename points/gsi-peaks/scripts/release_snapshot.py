@@ -30,10 +30,10 @@ INFO = "snapshot.json"
 PROVENANCE = ("sources", "sourceDate", "experimental", "coordinatePolicy", "elevationPolicy")
 
 
-def validate(points):
+def validate(points, added_ids=()):
     validate_rows(points)
     for point in points:
-        if not point["id"].startswith(("gsi-mountain-list:", "gsi-natural:", "gsi-vector:")) or point.get("type") != "peak":
+        if (point["id"] not in added_ids and not point["id"].startswith(("gsi-mountain-list:", "gsi-natural:", "gsi-vector:"))) or point.get("type") != "peak":
             raise ValueError("国土地理院の山頂以外の地点が含まれています")
         if point.get("nameReading") is not None and not name_reading(point["nameReading"]):
             raise ValueError("読みの形式が不正です")
@@ -50,7 +50,6 @@ def snapshot(source, output=DATA):
     body = json.loads(raw)
     points = document_rows(body, 6)
     common = metadata_of(body)
-    validate(points)
     manifest = json.loads((source / "manifest.json").read_bytes())
     manifest_info = metadata_maps(manifest.get("metadata", manifest))
     if manifest_info["pointCount"] != len(points) or manifest["uncompressedSizeBytes"] != len(raw):
@@ -73,6 +72,7 @@ def snapshot(source, output=DATA):
     supplements_raw = gzip.decompress((source / "supplements.json.gz").read_bytes())
     from scripts.supplements import validate_supplements
     supplements = validate_supplements(json.loads(supplements_raw))
+    validate(points, {row["id"] for row in supplements["points"] if row.get("add") is True})
     from document_metadata import distributed_point, ordered_point
     if [distributed_point(p) for p in apply_supplements(original_points, supplements)] != points:
         raise ValueError("オリジナルと補足から生成結果を再現できません")
@@ -110,7 +110,7 @@ def prepare(version, directory, channel, source=DATA):
         raise ValueError("オリジナル JSON と snapshot の出典が一致しません")
     supplements = read_supplements(source / "supplements.json")
     points = apply_supplements(original_points, supplements)
-    validate(points)
+    validate(points, {row["id"] for row in supplements["points"] if row.get("add") is True})
     from document_metadata import metadata_maps
     common = metadata_maps(original["metadata"])
     common.pop("pointCount", None)

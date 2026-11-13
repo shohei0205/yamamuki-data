@@ -132,7 +132,13 @@
       "tags": [
         "日本百名山"
       ],
-      "note": "岩手山"
+      "note": "岩手山",
+      "aliases": [
+        {
+          "name": "薬師岳",
+          "nameReading": "やくしだけ"
+        }
+      ]
     },
     {
       "id": "gsi-mountain-list:166",

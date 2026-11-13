@@ -48,6 +48,30 @@ class GsiReleaseTests(unittest.TestCase):
             self.assertEqual(manifest['metadata']['tags'], json.loads((root/'release'/target.FILE).read_bytes())['metadata']['tags'])
             self.assertNotIn('tags', info)
 
+    def test_added_peak_survives_prepare_and_snapshot(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / 'source'
+            source.mkdir()
+            for name in (target.SOURCE_FILE, target.INFO):
+                shutil.copyfile(target.DATA / name, source / name)
+            supplement = json.loads((target.DATA / 'supplements.json').read_bytes())
+            supplement['schemaVersion'] = 3
+            supplement['metadata']['sources'].append({'name':'追加地点の資料','source':'https://example.com/reference','license':'CC0'})
+            added = {'id':'custom:test-peak','name':'追加山頂','latitude':35,'longitude':139,'type':'peak','provenance':{'dataSource':'追加地点の資料'}}
+            supplement['points'].append({**added,'add':True})
+            (source / 'supplements.json').write_text(json.dumps(supplement,ensure_ascii=False),encoding='utf-8')
+            _, manifest = target.prepare('test-added', root / 'release', 'dev', source=source)
+            released = json.loads((root / 'release' / target.FILE).read_bytes())
+            self.assertEqual(next(p for p in released['points'] if p['id'] == added['id']),added)
+            self.assertEqual(metadata_maps(manifest['metadata'])['pointCount'],len(released['points']))
+            manifest['sourceFiles'] = [{'url':'https://example.com/mountains.csv','fetchedAt':'2026-10-14T00:00:00Z'}]
+            (root / 'release/manifest.json').write_text(json.dumps(manifest),encoding='utf-8')
+            info = target.snapshot(root / 'release',root / 'staged')
+            self.assertEqual(info['pointCount'],json.loads((source / target.INFO).read_bytes())['pointCount'])
+            with self.assertRaises(ValueError):target.validate([added])
+            with self.assertRaises(ValueError):target.validate([{**added,'type':'landmark'}],{added['id']})
+
     def test_png_dem_sources_keep_layer_and_template(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
