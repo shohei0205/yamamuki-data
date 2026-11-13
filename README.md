@@ -70,7 +70,7 @@ Actions とローカルのどちらで生成したデータも、配布ファイ
 
 ### 配布データの取得情報（manifest.json）
 
-データ本体の取得先・大きさ・ハッシュ・出典を記載する共通の JSON。項目・制約・読み込み方法は [manifest フォーマット](formats/manifest.md) を、各 JSON の共通情報は [metadata フォーマット](formats/metadata.md) を参照する。
+データ本体の取得先・大きさ・ハッシュ・出典を記載する共通の JSON。項目・制約・読み込み方法は [manifest フォーマット](formats/manifest.md) を、各 JSON の共通情報は [metadata フォーマット](formats/metadata.md) を参照する。対象地域・GeoJSON の提供範囲は `metadata.coverage`、文字列の主な言語は `metadata.language` に記載できる。地表の最も精細な範囲は `coverage.finest.geometry` に記載する。図形がない場合は範囲不明として扱う。GSI は海上保安庁の公式概念図から作った概略ポリゴン、OSM は配信元の境界と追加抽出範囲、地表は各ファイルの収録タイルから図形を生成する。
 
 ## Actions の構成
 
@@ -172,6 +172,9 @@ Pages を更新する公開ジョブの Summary には、公開後の Release �
 # 改行コードと BOM の確認
 .github/scripts/check-text-format.sh
 
+# 提供範囲の生成・検証に使う共通依存
+python -m pip install -r points/requirements-geometry.txt
+
 # データ種別共通の手動公開入口のテスト
 python -m unittest discover -s release_tools/tests -v
 ```
@@ -193,6 +196,8 @@ CI の「共通：文字形式の確認」はすべての PR で文字コード�
 |---|---|---|---|
 | OpenStreetMap 由来の地点データ | © OpenStreetMap contributors | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) | [OSM 山頂の出典とライセンス](points/osm-peaks/README.md#出典とライセンス)。補足適用前の原本と旧形式のデータも含む |
 | 国土地理院由来の地点データ・OSM版の地点照合と補正に用いた情報 | 出典：国土地理院。資料名と加工内容を記録する | [公共データ利用規約（第1.0版）](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（PDL-1.0） | [GSI 山頂](points/gsi-peaks/README.md#出典とライセンス)・[OSM 山頂](points/osm-peaks/README.md#出典とライセンス) の出典とライセンス |
+| GSI 山頂データの概略提供範囲 | 出典：「日本の領海等概念図」（海上保安庁海洋情報部）を加工して作成 | [海洋情報部ホームページ利用ルール](https://www1.kaiho.mlit.go.jp/copyright.html)（政府標準利用規約第2.0版準拠） | [提供範囲の作成方法](points/gsi-peaks/README.md#提供範囲の更新)。公式概念図から陸域・領海・EEZ を含む概略ポリゴンを作成。加工した範囲を公式の境界として扱わない |
+| GSI の概略提供範囲の位置合わせに用いた情報 | 出典：地球地図日本 第2.1版（国土地理院）を加工して作成 | [公共データ利用規約（第1.0版）](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（PDL-1.0） | [地球地図日本](https://www.gsi.go.jp/kankyochiri/gm_jpn.html)。6島の陸域重心を位置合わせに使用 |
 | ESA WorldCover 由来の地表データ（森林・水域） | © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [ESA WorldCover の出典とライセンス](surface/esa_worldcover/README.md#出典とライセンス)。分類・穴埋め・ノイズ除去・縮小を行って作成 |
 | 国土地理院の標高タイル由来の陰影・地表分類の補助情報 | 地理院タイル（標高タイル）を加工して作成 | [公共データ利用規約（第1.0版）](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（PDL-1.0） | [ESA WorldCover の出典とライセンス](surface/esa_worldcover/README.md#出典とライセンス)。DEM10Bから陰影を生成し、地表分類の補助判定にも使用 |
 | 日本百名山の山名一覧 | Wikipedia「日本百名山」の投稿者 | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) | [GSI 山頂](points/gsi-peaks/README.md#出典とライセンス)・[OSM 山頂](points/osm-peaks/README.md#出典とライセンス) |

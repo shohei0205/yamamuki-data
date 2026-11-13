@@ -164,6 +164,7 @@ pub struct FileInfo {
     pub size_bytes: Option<u64>,
     pub dataset: Option<yamamuki_data_sqlite::Dataset>,
     pub metadata_json: Option<String>,
+    pub coverage: crate::coverage::Coverage,
 }
 
 pub struct Points {
@@ -215,6 +216,7 @@ impl Points {
             FileInfo {
                 format: "SQLite コンテナ版1",
                 size_bytes: std::fs::metadata(path).ok().map(|metadata| metadata.len()),
+                coverage: crate::coverage::Coverage::from_metadata(&dataset.metadata, false)?,
                 dataset: Some(dataset),
                 metadata_json,
             },
@@ -260,6 +262,11 @@ impl Points {
             }
             _ => anyhow::bail!("地点JSONの配列または版6のオブジェクトが必要です"),
         };
+        let coverage = metadata
+            .as_ref()
+            .map(|info| crate::coverage::Coverage::from_metadata(info, false))
+            .transpose()?
+            .unwrap_or_default();
         let metadata_json = metadata
             .as_ref()
             .map(serde_json::to_string_pretty)
@@ -279,6 +286,7 @@ impl Points {
                 },
                 size_bytes: None,
                 dataset: None,
+                coverage,
                 metadata_json,
             },
         )

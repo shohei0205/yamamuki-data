@@ -4,6 +4,14 @@ ESA WorldCover 2021 v200から森林・水域を作り、**国土地理院の標
 
 [ESA WorldCover](https://esa-worldcover.org/en/data-access) · [国土地理院の標高タイル](https://maps.gsi.go.jp/development/ichiran.html)
 
+## 対象地域と言語
+
+新規に梱包する地表の共通 metadata には `coverage.regions: ["JP"]` を記録する。文字列の焼き込みはないため、既定では `language` を記載しない。中間 SQLite の `metadata` テーブルにある `manifest` に `coverage`・`language` が明示されていれば、その値を検証し、国・地域と言語を配布 SQLite に引き継ぐ。形式は [共通 metadata](../../formats/metadata.md#対象地域と提供範囲) を参照する。
+
+提供範囲は配布 SQLite に実際に収録されたタイルの領域から生成する。`coverage.geometry` は全レイヤー・全 LOD の和集合、`coverage.finest.geometry` は `tilePixels × 2^z` が最大になる解像度のタイルの和集合とする。空の宣言レベルは使わず、透明なタイルも収録行があれば含める。画素ごとの有効範囲を表すものではない。
+
+梱包時とレイヤー・LOD の抽出後に、そのファイルの内容から両方を再計算する。元の図形は引き継がず、国・地域と言語を保つ。公開準備でも、入力原本のハッシュを照合した後、配布用の複製だけを更新してから manifest と最終ハッシュを作る。原本は変更しない。作業用 SQLite を直接更新する場合は `surface-tool update-coverage <SQLiteファイル>` を使う。
+
 ## 必要なツール
 
 - Rust stable、C/C++ビルドツール、CMake、`sqlite3` コマンド、PowerShell 7を用意する。Windowsでは Visual Studio Build Tools の「C++ によるデスクトップ開発」を使う。`cmake` と `sqlite3` は初回ビルド時に PATH から実行できるようにする。
@@ -125,6 +133,8 @@ cargo run --locked --release --manifest-path surface/Cargo.toml --bin surface-to
 出典・帰属表示・利用条件・加工内容は、SQLiteの `datasets.metadata_json` 内の `sources` と、配布manifestの `metadata.sources` に記録する。利用・再配布時は出典ごとの利用条件を確認する。
 
 ## 検査
+
+共通 SQLite のテストでは、地点と共用する GeoJSON・言語の検証例も確認する。`surface-tool` のテストでは ESA 梱包時の対象範囲・言語の引き継ぎと、レイヤー抽出時の範囲の扱いを確かめる。
 
 GitHubに接続せず、受け渡し用Draftへの整理マーカー付与、配布版の加工と再実行、試用公開・正式公開を確認するには、生成済みSQLiteを指定する。
 

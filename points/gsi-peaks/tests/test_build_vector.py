@@ -132,8 +132,16 @@ class TargetedNaturalTests(unittest.TestCase):
             return 0, 200 if found else 404, gzip.compress(payload) if found else None, json.dumps({"url": NATURAL_URL.format(x=x, y=y),
                 "fetchedAt": "date", "status": 200 if found else 404, "sha256": hashlib.sha256(payload).hexdigest() if found else None})
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder); archive = root / 'input.pmtiles'; archive.write_bytes(b'archive')
-            (root / 'optimal_bvmap-source.json').write_text(json.dumps({'url': PMTILES_URL, 'sha256': hashlib.sha256(b'archive').hexdigest(), 'sizeBytes': 7, 'fetchedAt': 'date'}))
+            root = Path(folder); archive = root / 'input.pmtiles'
+            from pmtiles.writer import Writer
+            from pmtiles.tile import Compression, TileType, zxy_to_tileid
+            with archive.open('wb') as stream:
+                writer = Writer(stream)
+                tiles = [tuple(int(v) for v in tile_position(lat, lon, 16)) for lat, lon in [(35,139),(36,140)]]
+                for x,y in sorted(tiles,key=lambda t:zxy_to_tileid(16,*t)):
+                    writer.write_tile(zxy_to_tileid(16,x,y),gzip.compress(b''))
+                writer.finalize({'tile_compression':Compression.GZIP,'tile_type':TileType.MVT},{})
+            (root / 'optimal_bvmap-source.json').write_text(json.dumps({'url': PMTILES_URL, 'sha256': hashlib.sha256(archive.read_bytes()).hexdigest(), 'sizeBytes': archive.stat().st_size, 'fetchedAt': 'date'}))
             output = root / 'output'
             supplements = root / 'supplements.json'
             supplements.write_text(json.dumps({'schemaVersion': 1, 'points': [{'id': vector['id'], 'tags': ['日本百名山']}]}), encoding='utf-8')
@@ -158,6 +166,22 @@ class TargetedNaturalTests(unittest.TestCase):
             report = json.loads((output / 'report.json').read_bytes())
             self.assertEqual(report['naturalAcquisition']['networkRequests'], 0)
             self.assertEqual(report['naturalAcquisition']['network404Count'], 0)
+            # 全国版の再生成から原本の取り込みまで、保存済みポリゴンを保持する。
+            from source_coverage import generated_coverage
+            from release_snapshot import snapshot
+            expected_coverage, expected_record = generated_coverage()
+            manifest = json.loads((output / 'manifest.json').read_bytes())
+            original = json.loads(gzip.decompress((output / 'gsi-peaks-source.json.gz').read_bytes()))
+            for metadata in [json.loads(first)['metadata'], manifest['metadata'], original['metadata']]:
+                self.assertEqual(metadata['coverage'], expected_coverage)
+                self.assertTrue({entry['name'] for entry in expected_record['metadataSources']}
+                                <= {entry['name'] for entry in metadata['sources']})
+            self.assertEqual(manifest['coverageSource'], expected_record)
+            imported = root / 'snapshot'
+            info = snapshot(output, imported)
+            self.assertEqual(json.loads((imported / 'gsi-peaks-source.json').read_bytes())['metadata']['coverage'],
+                             expected_coverage)
+            self.assertEqual(info['coverageSource'], expected_record)
 
     def test_targets_cover_boundary_and_are_unique(self):
         n = 2 ** 15

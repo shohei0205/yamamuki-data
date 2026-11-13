@@ -43,7 +43,7 @@ def validate_supplement_sources(sources):
 
 def supplement_document(data):
     data=validate_supplements(data)
-    return {"schemaFormat":"yamamuki-point-supplements","schemaVersion":3 if data["schemaVersion"] == 3 else 2,"metadata":metadata_arrays({"sources":data.get("sources",{}),"tags":data.get("tags",{})}),"points":[{**{k:v for k,v in row.items() if k != "osmId"}, **({"id":f"osm:{row['osmId']}"} if "osmId" in row else {}), **({"aliases":alias_objects(row["aliases"])} if "aliases" in row else {})} for row in data["points"]]}
+    return {"schemaFormat":"yamamuki-point-supplements","schemaVersion":3 if data["schemaVersion"] == 3 else 2,"metadata":metadata_arrays({"sources":data.get("sources",{}),"tags":data.get("tags",{}), **{k:data[k] for k in ("coverage", "language") if k in data}}),"points":[{**{k:v for k,v in row.items() if k != "osmId"}, **({"id":f"osm:{row['osmId']}"} if "osmId" in row else {}), **({"aliases":alias_objects(row["aliases"])} if "aliases" in row else {})} for row in data["points"]]}
 
 
 def validate_supplements(data):
@@ -56,6 +56,8 @@ def validate_supplements(data):
 
     if not isinstance(data, dict) or type(data.get("schemaVersion")) is not int or data["schemaVersion"] not in (1, 2, 3):
         raise ValueError("地点補足 JSON の schemaVersion は 1・2・3 にしてください")
+    from document_metadata import validate_metadata
+    validate_metadata({k:data[k] for k in ("coverage", "language") if k in data})
     if "tags" in data:
         validate_tag_metadata(data["tags"])
     sources = data.get("sources", {})

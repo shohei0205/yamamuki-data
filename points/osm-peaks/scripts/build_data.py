@@ -148,7 +148,7 @@ def normalize_timestamp(value):
     return stamp.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL, channel="stable", source_pbfs=None, supplement_sources=None, tag_metadata=None):
+def write_distribution(mountains, output_dir, version, source_timestamp, latest_mountain_timestamp, *, source_url=SOURCE_URL, channel="stable", source_pbfs=None, supplement_sources=None, tag_metadata=None, coverage=None):
     if tag_metadata is not None:
         validate_tag_metadata(tag_metadata)
     if supplement_sources is not None:
@@ -177,7 +177,7 @@ def write_distribution(mountains, output_dir, version, source_timestamp, latest_
             raise ValueError("元データと補足の出典 ID が競合しています: " + name)
         sources[name] = dict(entry)
     from distribution_license import authors, license_url, write_license_files
-    raw = point_document_json(document(mountains, tag_metadata, sources=sources, authors=authors())).encode("utf-8")
+    raw = point_document_json(document(mountains, tag_metadata, sources=sources, authors=authors(), coverage={"regions":["JP"]} if coverage is None else coverage, language="ja")).encode("utf-8")
     # ファイル名と生成時刻をヘッダーに含めず、同じ内容の圧縮結果をそろえる。
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -245,7 +245,10 @@ def verified_source_url(pbf, region="japan"):
     return url
 
 
-def build(pbf, output_dir, version, *, channel="stable", additional_pbfs=None, tags_directory=None, supplements_path=DEFAULT_SUPPLEMENTS):
+def build(pbf, output_dir, version, *, channel="stable", additional_pbfs=None, tags_directory=None, supplements_path=DEFAULT_SUPPLEMENTS, coverage=None):
+    if coverage is not None:
+        from coverage_metadata import validate_coverage
+        validate_coverage(coverage)
     started = time.monotonic()
     source_url = verified_source_url(pbf)
     inputs = {"japan": Path(pbf)}
@@ -253,6 +256,13 @@ def build(pbf, output_dir, version, *, channel="stable", additional_pbfs=None, t
         if set(additional_pbfs) != set(SOURCES) - {"japan"}:
             raise ValueError("ロシア極東の PBF を指定してください")
         inputs.update(additional_pbfs)
+    boundary_record = None
+    if coverage is None:
+        if __package__:
+            from .source_coverage import generated_coverage
+        else:
+            from source_coverage import generated_coverage
+        coverage, boundary_record = generated_coverage(pbf, additional=additional_pbfs is not None)
     merged, revisions, source_pbfs = {}, {}, []
     with tempfile.TemporaryDirectory() as temporary:
         for region, input_pbf in inputs.items():
@@ -298,12 +308,21 @@ def build(pbf, output_dir, version, *, channel="stable", additional_pbfs=None, t
         else:
             supplement_sources = {row.get("name", row.get("tag")): {key: value for key, value in row.items() if key not in ("name", "tag")}
                                   for row in apply_tag_jsons(mountains, tags_directory)}
+        from coverage_geometry import check_points
+        if "geometry" in coverage:
+            check_points(coverage["geometry"], mountains)
         original = mountains
         if supplements is not None:
             mountains = apply_supplements(original, supplements)
-        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel, supplement_sources=supplement_sources, tag_metadata=supplements.get("tags") if supplements is not None else None, source_pbfs=source_pbfs if additional_pbfs is not None else None)
+            if "geometry" in coverage:
+                check_points(coverage["geometry"], mountains)
+        manifest = write_distribution(mountains, output_dir, version, timestamp, latest_timestamp, source_url=source_url, channel=channel, supplement_sources=supplement_sources, tag_metadata=supplements.get("tags") if supplements is not None else None, source_pbfs=source_pbfs if additional_pbfs is not None else None, coverage=coverage)
         if supplements is not None:
             write_parts(output_dir, original, supplements, manifest)
+        if boundary_record is not None:
+            manifest["coverageSource"] = {"kind":"geofabrik-poly", **boundary_record,
+                "additionalRegions":REGIONS if additional_pbfs is not None else []}
+            (Path(output_dir) / "manifest.json").write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+"\n",encoding="utf-8",newline="\n")
     logging.info("全国データの生成完了（経過 %.1f 秒）", time.monotonic() - started)
     return manifest
 
@@ -316,9 +335,14 @@ def main():
     parser.add_argument("--version", required=True)
     parser.add_argument("--channel", choices=("stable", "dev"), default=os.environ.get("RELEASE_CHANNEL", "stable"))
     parser.add_argument("--far-eastern-pbf", type=Path, default=Path("build/far-eastern-fed-district.osm.pbf"))
+    parser.add_argument("--coverage", type=Path, help="対象範囲を記載した coverage object の JSON")
     parser.add_argument("--supplements", type=Path, default=DEFAULT_SUPPLEMENTS)
     args = parser.parse_args()
-    manifest = build(args.pbf, args.output_dir, args.version, channel=args.channel, supplements_path=args.supplements, additional_pbfs={"far-eastern-fed-district": args.far_eastern_pbf})
+    coverage = json.loads(args.coverage.read_text(encoding="utf-8")) if args.coverage else None
+    if args.coverage:
+        from coverage_metadata import validate_coverage
+        validate_coverage(coverage)
+    manifest = build(args.pbf, args.output_dir, args.version, channel=args.channel, supplements_path=args.supplements, additional_pbfs={"far-eastern-fed-district": args.far_eastern_pbf}, coverage=coverage)
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
 
 

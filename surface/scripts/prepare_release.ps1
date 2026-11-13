@@ -61,10 +61,12 @@ New-Item -ItemType Directory -Path $stage | Out-Null
 try {
     Copy-Item -LiteralPath $inputFile.FullName -Destination $stagedDatabase
     & $tool validate $stagedDatabase
-    $manifest = & $tool manifest $stagedDatabase $releaseRoot $DataTimestamp $config.releaseId | ConvertFrom-Json -AsHashtable
-    if ($generationManifest -and $generationManifest.sha256 -cne $manifest.sha256) {
+    if ($generationManifest -and $generationManifest.sha256 -cne (Get-FileHash -LiteralPath $stagedDatabase -Algorithm SHA256).Hash.ToLowerInvariant()) {
         throw '生成時のmanifestとSQLiteのSHA-256が一致しません。'
     }
+    # 元のSQLiteを保ち、配布用の複製にタイル由来の範囲を記録する。
+    & $tool update-coverage $stagedDatabase
+    $manifest = & $tool manifest $stagedDatabase $releaseRoot $DataTimestamp $config.releaseId | ConvertFrom-Json -AsHashtable
     $levels = & $tool surface-levels $stagedDatabase | ConvertFrom-Json -AsHashtable
     $tag = Get-SurfaceReleaseTag $config $manifest $levels
     $entry = $manifest.datasets[0]

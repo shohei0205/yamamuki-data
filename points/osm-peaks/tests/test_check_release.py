@@ -21,6 +21,25 @@ def dataset(count=10000, latitude=35):
 
 
 class CheckReleaseTests(unittest.TestCase):
+    def test_custom_id_requires_verified_supplement_addition(self):
+        from scripts.supplements import validate_supplements, apply_supplements
+        from scripts.distribution_parts import write_parts
+        original = dataset(1)[1]
+        supplement = validate_supplements({
+            "schemaFormat":"yamamuki-point-supplements", "schemaVersion":3,
+            "metadata":{"sources":[{"name":"資料", "source":"確認用"}]},
+            "points":[{"id":"osm-custom:sample", "add":True, "name":"追加の山",
+                       "latitude":35, "longitude":139, "provenance":{"dataSource":"資料"}}]})
+        points = apply_supplements(original, supplement)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = write_distribution(points, root, "test", "2026-09-29T20:22:51Z", "2026-09-29T12:00:00Z",
+                                          supplement_sources=supplement["sources"])
+            with self.assertRaisesRegex(ValueError, "山の ID"):
+                validate(root)
+            write_parts(root, original, supplement, manifest)
+            self.assertEqual(points, validate(root)[1])
+
     def test_report_separates_sources_from_checks_and_regions(self):
         current = dataset(1)
         current[0].update(sizeBytes=100, sha256='abc')

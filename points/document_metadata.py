@@ -1,9 +1,10 @@
 """地点文書の共通情報を、通常読み込み・逐次処理で同じ規則で検証する。"""
 
+from coverage_metadata import validate_coverage, validate_language
 from datetime import datetime
 import re
 
-FIELDS = {"schemaVersion","sources", "pointCount", "tags"}
+FIELDS = {"schemaVersion", "sources", "pointCount", "tags", "authors", "coverage", "language"}
 
 
 def text(value):
@@ -115,6 +116,10 @@ def validate_metadata(data, point_count=None):
         raise ValueError("地点文書の共通情報が不正です")
     if "schemaVersion" in data and (type(data["schemaVersion"]) is not int or data["schemaVersion"] != 6):
         raise ValueError("地点 JSON の schemaVersion は6にしてください")
+    if "coverage" in data:
+        validate_coverage(data["coverage"])
+    if "language" in data:
+        validate_language(data["language"])
     if "tags" in data:
         tags = data["tags"]
         if not isinstance(tags, dict) or any(not text(k) or not isinstance(v, dict)

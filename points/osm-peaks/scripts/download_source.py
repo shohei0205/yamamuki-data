@@ -176,6 +176,10 @@ def transfer(source, partial, *, timeout=60, deadline=None):
 def save_source_info(output, source):
     """検証済み PBF と組になる取得記録を、生成処理に渡す。"""
     path = Path(str(output) + ".source.json")
+    if path.exists():
+        previous = json.loads(path.read_bytes())
+        if all(previous.get(key) == source.get(key) for key in ("url", "sizeBytes", "md5")) and "boundary" in previous:
+            source = {**source, "boundary": previous["boundary"]}
     with tempfile.TemporaryDirectory(dir=output.parent) as directory:
         temporary = Path(directory) / "source.json"
         temporary.write_text(json.dumps(source, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
@@ -191,7 +195,9 @@ def cache_values(source):
         raise ValueError("キャッシュ用の取得元情報が不正です")
     stamp = match[1]
     source_date = date.fromisoformat(f"20{stamp[:2]}-{stamp[2:4]}-{stamp[4:]}").isoformat()
-    return {"cache-key": f"osm-{region}-v1-{stamp}-{source['md5']}", "source-date": source_date}
+    legacy_key = f"osm-{region}-v1-{stamp}-{source['md5']}"
+    return {"cache-key": legacy_key.replace("-v1-", "-v2-", 1) if region == "japan" else legacy_key,
+            "legacy-cache-key": legacy_key, "source-date": source_date}
 
 
 def download(output, *, attempts=6, retry_delay=15, max_seconds=3600, source_date="", resolve_only=False, region="japan"):
@@ -271,6 +277,13 @@ def main():
     output = args.output or Path("build") / ("japan-latest.osm.pbf" if args.region == "japan" else f"{args.region}.osm.pbf")
     source = download(output, max_seconds=args.max_seconds, source_date=args.source_date,
                       resolve_only=args.resolve_only, region=args.region)
+    if not args.resolve_only and args.region == "japan":
+        if __package__:
+            from .source_coverage import capture_boundary
+        else:
+            from source_coverage import capture_boundary
+        _, record = capture_boundary(output)
+        source["boundary"] = record
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
             for key, value in cache_values(source).items():

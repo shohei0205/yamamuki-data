@@ -49,6 +49,7 @@ struct Dataset {
     label: String,
     info: db::Dataset,
     metadata_json: String,
+    coverage: crate::coverage::Coverage,
     work_areas: Option<HashSet<(u32, u32)>>,
     complete_tile_extent: bool,
     layers: Vec<Layer>,
@@ -173,6 +174,7 @@ impl Source {
                     key: dataset.key,
                     label: format!("{} ({})", dataset.title, dataset.data_version),
                     metadata_json: serde_json::to_string_pretty(&dataset.metadata)?,
+                    coverage: crate::coverage::Coverage::from_metadata(&dataset.metadata, true)?,
                     info: dataset,
                     layers,
                     bounds,
@@ -783,6 +785,7 @@ pub struct Surface {
     show_file_info: bool,
     options: Vec<(bool, Option<u32>)>,
     pub enabled: bool,
+    coverage_visibility: crate::coverage::Visibility,
     pub palette: Palette,
     pub fit: bool,
     pub reveal: bool,
@@ -841,6 +844,7 @@ impl Surface {
             show_file_info: false,
             options,
             enabled: true,
+            coverage_visibility: crate::coverage::Visibility::default(),
             palette: Palette::default(),
             fit: true,
             reveal: false,
@@ -858,6 +862,29 @@ impl Surface {
 
     fn default_options(set: &Dataset) -> Vec<(bool, Option<u32>)> {
         vec![(true, None); set.layers.len()]
+    }
+
+    pub fn coverage_menu(&mut self, ui: &mut egui::Ui) -> Option<[[f64; 2]; 2]> {
+        let set = &self.source.datasets[self.dataset];
+        let name = format!(
+            "{} — {}",
+            self.source
+                .path
+                .file_name()
+                .unwrap_or(self.source.path.as_os_str())
+                .to_string_lossy(),
+            set.label
+        );
+        set.coverage.menu(ui, &mut self.coverage_visibility, &name)
+    }
+
+    pub fn paint_coverage(&self, painter: &egui::Painter, rect: Rect, view: &View) {
+        self.source.datasets[self.dataset].coverage.paint(
+            painter,
+            rect,
+            view,
+            &self.coverage_visibility,
+        );
     }
 
     pub fn same_file(&self, source: &Source) -> bool {

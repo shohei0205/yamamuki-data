@@ -1,3 +1,4 @@
+from coverage_fixture import fixture_coverage
 import hashlib
 from scripts.point_document import ordered_point
 from document_metadata import distributed_point
@@ -316,7 +317,7 @@ class SupplementTests(unittest.TestCase):
             return deepcopy(self.points), '2026-10-01T00:00:00Z'
 
         with patch('scripts.build_data.verified_source_url',return_value='https://example.com/source'), patch('scripts.build_data.subprocess.check_output',return_value='2026-10-01T00:00:00Z'), patch('scripts.build_data.subprocess.run'), patch('scripts.build_data.read_mountains',side_effect=read_fixture):
-            manifest=build(self.root/'source.pbf',self.root/'dist','test',supplements_path=path)
+            manifest=build(self.root/'source.pbf',self.root/'dist','test',supplements_path=path, coverage=fixture_coverage())
         self.assertEqual({k:v for k,v in metadata_maps(manifest['metadata'])["sources"].items() if k != 'OpenStreetMap（日本・Geofabrik 配布）'},self.data['sources'])
         self.assertNotIn('tagSources',manifest)
         with gzip.open(self.root/'dist/osm-peaks.json.gz','rt',encoding='utf-8') as f:

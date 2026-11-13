@@ -108,11 +108,13 @@ function gh {
 }
 
 try {
+    $sourceHash = (Get-FileHash -LiteralPath $Database).Hash
     $timestamp = @{}
     if ($DataTimestamp) { $timestamp.DataTimestamp = $DataTimestamp }
     $env:GITHUB_RUN_ID = '12345'
     $env:GITHUB_RUN_ATTEMPT = '1'
     & (Join-Path $scripts 'prepare_release.ps1') -Dataset esa_worldcover -Database $Database -OutputDirectory $inputDir -TargetCommit $commit -ProcessDraft @timestamp
+    if ((Get-FileHash -LiteralPath $Database).Hash -cne $sourceHash) { throw '入力原本が変更されました。' }
     if ($state.tagCommit) { throw 'Draft作成時にGitタグが作られました。' }
     if (!$state.created -or !$state.started) { throw '受け渡しDraftまたは加工Actionが作成されませんでした。' }
     Get-ChildItem -LiteralPath $inputDir -File | ForEach-Object { Add-TestAsset $_ }
@@ -151,6 +153,8 @@ try {
         throw '配布向け説明に置き換わっていません。'
     }
     $previousRowPosition = -1
+    $previousFinest = $null
+    $wholeCoverage = $null
     foreach ($z in 9..12) {
         $rowPosition = $state.body.IndexOf("| " + [char]96 + "esa-worldcover-z$z.sqlite3", [StringComparison]::Ordinal)
         if ($rowPosition -le $previousRowPosition -or !$state.body.Contains(" | z5〜z$z | ")) {
@@ -234,6 +238,14 @@ try {
         $name = "esa-worldcover-z$z"
         $manifestName = "$name.manifest.json"
         $variant = Get-Content -LiteralPath (Join-Path $inputDir $manifestName) -Raw | ConvertFrom-Json -AsHashtable
+        $coverage = $variant.datasets[0].metadata.coverage
+        if (!$coverage.geometry -or !$coverage.finest.geometry) { throw "提供範囲がありません: $name" }
+        $whole = $coverage.geometry | ConvertTo-Json -Depth 100 -Compress
+        $finest = $coverage.finest.geometry | ConvertTo-Json -Depth 100 -Compress
+        if ($wholeCoverage -and $whole -cne $wholeCoverage) { throw "全体の提供範囲が変わりました: $name" }
+        if ($previousFinest -and $finest -ceq $previousFinest) { throw "分割後の精細範囲が再計算されていません: $name" }
+        $wholeCoverage = $whole
+        $previousFinest = $finest
         $database = Join-Path $inputDir "$name.sqlite3"
         $hash = (Get-FileHash -LiteralPath $database).Hash
         $levels = & $tool surface-levels $database | ConvertFrom-Json -AsHashtable

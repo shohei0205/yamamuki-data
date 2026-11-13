@@ -1,3 +1,4 @@
+from coverage_fixture import fixture_coverage
 """地点 JSON 内の SVG・表示倍率・生成と公開時の検査を確かめる。"""
 
 import json
@@ -66,7 +67,7 @@ class GraphicsTests(unittest.TestCase):
                 patch("scripts.build_data.subprocess.check_output", return_value="2026-09-29T20:00:00Z"), \
                 patch("scripts.build_data.subprocess.run"), \
                 patch("scripts.build_data.read_mountains", side_effect=read_fixture):
-            manifest = build(self.root / "unused.pbf", self.output, "test", supplements_path=supplements)
+            manifest = build(self.root / "unused.pbf", self.output, "test", supplements_path=supplements, coverage=fixture_coverage())
         self.assertNotIn("graphic", rows[0])
         distributed = validate(self.output)[1]
         self.assertEqual({"svg": SVG.decode("utf-8"), "scale": 1.5}, distributed[0]["graphic"])

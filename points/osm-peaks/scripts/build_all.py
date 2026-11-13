@@ -79,7 +79,7 @@ def build(pbf, output, peaks=None):
 
     from scripts.point_document import source_entries
     from scripts.source_regions import SOURCE_NAMES
-    report = write_points(points(), output, "osm-all-points", tags=metadata.get("tags"), metadata={"sources":source_entries(SOURCE_NAMES["japan"],source_url,"ODbL-1.0","© OpenStreetMap contributors",metadata.get("sources"))})
+    report = write_points(points(), output, "osm-all-points", tags=metadata.get("tags"), metadata={"coverage":{"regions":["JP"]}, "language":"ja", "sources":source_entries(SOURCE_NAMES["japan"],source_url,"ODbL-1.0","© OpenStreetMap contributors",metadata.get("sources"))})
     report.update(sourceTimestamp=timestamp, sourceUrl=source_url, inputs=[input_record(pbf)],
                   scope="名前付きノードのみ。線・面・relation の代表点は作らない。",
                   license="ODbL-1.0", attribution="© OpenStreetMap contributors")

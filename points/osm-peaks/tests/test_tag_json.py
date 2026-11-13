@@ -1,3 +1,4 @@
+from coverage_fixture import fixture_coverage
 """外部通信をせず、タグの付与と JSON の補完結果を検証する。"""
 
 import gzip
@@ -174,7 +175,7 @@ class TagJsonTests(unittest.TestCase):
         with patch("scripts.build_data.verified_source_url", return_value="https://example.com/source"), \
                 patch("scripts.build_data.subprocess.check_output", return_value="2026-09-30T00:00:00Z"), \
                 patch("scripts.build_data.subprocess.run", side_effect=extract):
-            manifest = build(self.root / "input.pbf", self.root / "dist", "test", tags_directory=self.tags)
+            manifest = build(self.root / "input.pbf", self.root / "dist", "test", tags_directory=self.tags, coverage=fixture_coverage())
         with gzip.open(self.root / "dist/osm-peaks.json.gz", "rt", encoding="utf-8") as stream:
             point = json.load(stream)["points"][0]
             self.assertEqual(point["tags"], ["日本百名山", "花の百名山"])

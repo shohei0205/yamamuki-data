@@ -16,6 +16,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: 提供範囲の検証に使うライブラリを準備
+        run: python -m pip install -r ${{ github.workspace }}/points/requirements-geometry.txt
       - name: 公開入口と実行概要のテスト
         run: python -m unittest release_tools.tests.test_publish_reviewed release_tools.tests.test_point_release release_tools.tests.test_shared_release_data release_tools.tests.test_workflow_summary release_tools.tests.test_draft_cleanup release_tools.tests.test_viewer_release release_tools.tests.test_viewer_build -v
 
@@ -27,6 +29,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: 提供範囲の検証に使うライブラリを準備
+        run: python -m pip install -r ${{ github.workspace }}/points/requirements-geometry.txt
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
@@ -70,6 +74,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: 提供範囲の検証に使うライブラリを準備
+        run: python -m pip install -r ${{ github.workspace }}/points/requirements-geometry.txt
       - name: osmium を準備
         run: |
           sudo apt-get update
@@ -87,6 +93,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: 提供範囲の検証に使うライブラリを準備
+        run: python -m pip install -r ${{ github.workspace }}/points/requirements-geometry.txt
       - name: 国土地理院の生成・snapshot・Release 公開処理のテスト
         run: |
           python -m pip install -r points/gsi-peaks/requirements-vector.txt

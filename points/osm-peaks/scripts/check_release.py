@@ -149,9 +149,10 @@ def validate(directory, *, tag=None, channel="stable"):
                 raise ValueError("地点 JSON と manifest の出典情報が一致しません")
     if not isinstance(rows, list) or not rows or len(rows) != manifest.get(count_key):
         raise ValueError("山の件数が不正です")
+    added_ids = set()
     if original_manifest["schemaVersion"] >= 6:
         from scripts.distribution_parts import validate_parts
-        validate_parts(directory, original_manifest, rows)
+        added_ids = validate_parts(directory, original_manifest, rows)
     validate_companions(directory, original_manifest, rows, tags=info.get("tags", {}) if data_version == 6 else None)
     seen = set()
     for row in rows:
@@ -159,7 +160,7 @@ def validate(directory, *, tag=None, channel="stable"):
             raise ValueError("山データがオブジェクトではありません")
         if data_version >= 5:
             identifier = row.get("id")
-            valid_id = isinstance(identifier, str) and re.fullmatch(r"osm:[1-9][0-9]*" if data_version >= 6 else r"[1-9][0-9]*", identifier)
+            valid_id = isinstance(identifier, str) and (re.fullmatch(r"osm:[1-9][0-9]*" if data_version >= 6 else r"[1-9][0-9]*", identifier) or identifier in added_ids)
         else:
             identifier = row.get("osmId")
             valid_id = type(identifier) is int and identifier > 0
