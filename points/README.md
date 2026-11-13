@@ -142,7 +142,6 @@ GSI の出力は `gsi-all-points.json`、`gsi-all-points.json.gz`、`report.json
 
 追加地点は補足 JSON 版3の `points` に `add: true` として保存する。元の地点 JSON は書き換えない。追加後も補足編集・除外・元に戻す・やり直すを使え、補足 JSON の再読み込みや OSM・GSI の生成処理でも追加を再現する。既存 ID と重複する追加や、出典の登録がない追加はエラーになる。追加地点を含む補足は更新後の生成処理・ビューアで読み込む。詳細は [補足データの形式](formats/supplements-data.md) を参照する。
 
-
 ### 地点 JSON を開く
 
 「地点 JSON ファイルを開く」で、共通形式の JSON または JSON.gz を選ぶ。osmId のない手動作成の地点も読み込める。gzip の読み込みには DecompressionStream に対応するブラウザが必要で、対応していない場合は展開した JSON を使う。
