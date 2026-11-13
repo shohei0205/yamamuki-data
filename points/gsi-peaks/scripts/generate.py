@@ -239,10 +239,26 @@ def write(points, report, output, version, tags=None, metadata=None):
     if any(MOUNTAIN_LIST_TAG in p.get("tags", []) for p in points):
         tags[MOUNTAIN_LIST_TAG] = MOUNTAIN_LIST_TAG_METADATA.copy()
     legacy = dict(metadata or {})
+    coverage_record = report.get("coverageSource")
+    if "coverage" not in legacy:
+        if report.get("coverage") is not None:
+            legacy["coverage"] = report["coverage"]
+        elif report.get("bbox") is not None:
+            west, south, east, north = report["bbox"]
+            legacy["coverage"] = {"regions":["JP"], "geometry":{"type":"Polygon", "coordinates":[[[west,south],[east,south],[east,north],[west,north],[west,south]]]}}
+        else:
+            from source_coverage import generated_coverage
+            legacy["coverage"], coverage_record = generated_coverage()
     source_url = legacy.pop("sourceUrl",CSV_URL)
     license = legacy.pop("license",LICENSE)
     attribution = legacy.pop("attribution",ATTRIBUTION)
     sources = source_entries("国土地理院（日本の主な山岳標高）" if source_url == CSV_URL else "国土地理院（最適化ベクトルタイル）",source_url,license,attribution,legacy.pop("supplementSources",None))
+    for entry in (coverage_record or {}).get("metadataSources", []):
+        name = entry["name"]
+        value = {k:v for k,v in entry.items() if k != "name"}
+        if name in sources and sources[name] != value:
+            raise ValueError("提供範囲と地点の出典 ID が競合しています: " + name)
+        sources[name] = value
     # 実際に使った国土地理院の資料を、取得記録の種別ごとに一覧へ残す。
     for item in report.get("sources",[]):
         url=item["url"]
@@ -252,7 +268,7 @@ def write(points, report, output, version, tags=None, metadata=None):
             sources=source_entries("国土地理院（標高タイル）","https://maps.gsi.go.jp/development/ichiran.html",license,attribution,sources)
         elif url==CSV_URL and source_url!=CSV_URL:
             sources=source_entries("国土地理院（日本の主な山岳標高）",CSV_URL,license,attribution,sources)
-    info = {"schemaVersion":6,"pointCount":len(points),"sources":sources,**legacy,"tags":{} if tags is None else tags}
+    info = {"schemaVersion":6,"pointCount":len(points),"sources":sources,"coverage":{"regions":["JP"]},"language":"ja",**legacy,"tags":{} if tags is None else tags}
     validate_metadata(info, len(points))
     raw = point_document_json({"schemaFormat":"yamamuki-points","schemaVersion":6,"metadata":metadata_arrays({k:v for k,v in info.items() if k != "schemaVersion"}),"points":[distributed_point(point) for point in points]}).encode()
     stream = io.BytesIO()
@@ -272,6 +288,8 @@ def write(points, report, output, version, tags=None, metadata=None):
                 "coordinatePolicy": "主な山岳一覧の最高地点。自然地名を追加した場合は山の代表点を含む。",
                 "elevationPolicy": "山岳一覧の標高を優先。任意の DEM 補完は代表点の地表標高であり公称の山頂標高ではない。",
                 "sourceFiles": report["sources"]}
+    if coverage_record is not None:
+        manifest["coverageSource"] = coverage_record
     manifest.update({k:v for k,v in legacy.items() if k != "schemaVersion"})
     if tags:
         manifest["tags"]=tags

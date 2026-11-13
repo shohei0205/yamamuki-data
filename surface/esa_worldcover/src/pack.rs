@@ -37,7 +37,8 @@ pub fn import(db: &mut Connection, source: &Path, version: &str) -> Result<()> {
         .as_array()
         .filter(|palette| palette.len() == 5)
         .context("地表のパレットがありません")?;
-    let metadata = json!({
+    let mut metadata = json!({
+        "coverage": {"regions": ["JP"]},
         "authors": [{
             "name": "The yamamuki Authors",
             "role": "配布データの編集・加工",
@@ -54,6 +55,14 @@ pub fn import(db: &mut Connection, source: &Path, version: &str) -> Result<()> {
              "changes": "標高タイルを地表分類の補助判定と陰影の生成に使用"}
         ]
     });
+    // 国・地域と言語を引き継ぐ。図形は収録タイルの読み込み後に再計算する。
+    if let Some(coverage) = manifest.get("coverage") {
+        metadata["coverage"] = coverage.clone();
+    }
+    if let Some(language) = manifest.get("language") {
+        metadata["language"] = language.clone();
+    }
+    yamamuki_data_sqlite::validate_coverage_metadata(&metadata, true)?;
     let complete_tile_extent = manifest["completeCoarseTiles"] == true;
     let tx = db.transaction()?;
     tx.execute(
@@ -153,6 +162,7 @@ pub fn import(db: &mut Connection, source: &Path, version: &str) -> Result<()> {
             write.execute(params![dataset, key, z, x, y, encoding, payload])?;
         }
     }
+    yamamuki_data_sqlite::recompute_surface_coverage(&tx, dataset)?;
     tx.commit()?;
     Ok(())
 }

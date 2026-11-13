@@ -24,6 +24,9 @@ def write_parts(directory, original, supplements, manifest):
     dataset = manifest["fileName"].removesuffix(".json.gz")
     original_rows = rows(original) if isinstance(original, dict) else original
     source_info = metadata_maps(original.get("metadata", {})) if isinstance(original, dict) else {"sources": {k:v for k,v in metadata_maps(manifest["metadata"]).get("sources", {}).items() if k not in supplements.get("sources", {})}}
+    for field in ("coverage", "language"):
+        if field not in source_info and field in manifest["metadata"]:
+            source_info[field] = deepcopy(manifest["metadata"][field])
     source_info.pop("pointCount", None)
     tags = source_info.pop("tags", {})
     source_document = document(original_rows, tags, **source_info)
@@ -45,7 +48,7 @@ def validate_parts(directory, manifest, integrated):
     names = filenames(manifest["fileName"].removesuffix(".json.gz"))
     present = [(directory / name).exists() for name in names]
     if not any(present):
-        return
+        return set()
     if not all(present):
         raise ValueError("オリジナル・補足とそれぞれの manifest がそろっていません")
     documents = []
@@ -67,3 +70,4 @@ def validate_parts(directory, manifest, integrated):
     supplement = validate_supplements(documents[1])
     if [distributed_point(p) for p in apply_supplements(source, supplement)] != [distributed_point(p) for p in integrated]:
         raise ValueError("オリジナルと補足から配布地点を再現できません")
+    return {row["id"] for row in supplement["points"] if row.get("add") is True}

@@ -52,6 +52,8 @@ def snapshot(source, output=DATA):
     common = metadata_of(body)
     manifest = json.loads((source / "manifest.json").read_bytes())
     manifest_info = metadata_maps(manifest.get("metadata", manifest))
+    if manifest.get("schemaVersion") == 6 and body.get("metadata") != manifest.get("metadata"):
+        raise ValueError("地点 JSON と manifest の metadata が一致しません")
     if manifest_info["pointCount"] != len(points) or manifest["uncompressedSizeBytes"] != len(raw):
         raise ValueError("生成結果と manifest の件数・サイズが一致しません")
     if gzip.decompress((source / (FILE + ".gz")).read_bytes()) != raw:
@@ -78,6 +80,8 @@ def snapshot(source, output=DATA):
         raise ValueError("オリジナルと補足から生成結果を再現できません")
     info = {key: (original["metadata"]["sources"] if key == "sources" else manifest[key]) for key in PROVENANCE}
     info.update(inputSha256=hashlib.sha256(original_raw).hexdigest(), pointCount=len(original_points), sourceSnapshot={})
+    if "coverageSource" in manifest:
+        info["coverageSource"] = manifest["coverageSource"]
     for kind, items in sorted(groups.items()):
         dates = [item["fetchedAt"] for item in items]
         summary = {"fileCount": len(items), "firstFetchedAt": min(dates), "lastFetchedAt": max(dates)}
@@ -122,6 +126,18 @@ def prepare(version, directory, channel, source=DATA):
     common["sources"] = sources
     from distribution_license import authors, license_url, write_license_files
     common["authors"] = authors()
+    coverage_record = info.get("coverageSource")
+    if "coverage" not in common or "geometry" not in common["coverage"]:
+        if __package__:
+            from .source_coverage import generated_coverage
+        else:
+            from source_coverage import generated_coverage
+        common["coverage"], coverage_record = generated_coverage()
+        for entry in coverage_record["metadataSources"]:
+            sources[entry["name"]] = {k:v for k,v in entry.items() if k != "name"}
+    from coverage_geometry import check_points
+    check_points(common["coverage"]["geometry"], points)
+    common.setdefault("language", "ja")
     tags = {**common.pop("tags", {}), **supplements.get("tags", {})}
     body = document(points, tags, **common)
     common = body["metadata"]
@@ -136,6 +152,8 @@ def prepare(version, directory, channel, source=DATA):
                     downloadUrl=f"https://github.com/{repo}/releases/download/{tag}/{FILE}.gz",
                     sha256=hashlib.sha256(archive).hexdigest(), sizeBytes=len(archive),
                     uncompressedSizeBytes=len(raw), inputSha256=info["inputSha256"], sourceSnapshot=info["sourceSnapshot"])
+    if coverage_record is not None:
+        manifest["coverageSource"] = coverage_record
     manifest["licenseUrl"] = license_url(manifest["downloadUrl"])
     manifest["dataTimestamp"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     from document_metadata import copy_manifest_metadata

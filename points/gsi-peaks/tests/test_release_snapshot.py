@@ -18,6 +18,23 @@ target = import_module("points.gsi-peaks.scripts.release_snapshot")
 from document_metadata import metadata_maps
 
 class GsiReleaseTests(unittest.TestCase):
+    def test_coverage_and_language_match_body_source_and_manifest(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, manifest = target.prepare('test-coverage', root / 'release', 'stable')
+            self.assertEqual(manifest['metadata']['coverage']['regions'], ['JP'])
+            self.assertIn('geometry', manifest['metadata']['coverage'])
+            self.assertEqual(manifest['metadata']['language'], 'ja')
+            body = json.loads((root / 'release' / target.FILE).read_bytes())
+            self.assertEqual(body['metadata'], manifest['metadata'])
+            source = json.loads(gzip.decompress((root / 'release' / (target.SOURCE_FILE + '.gz')).read_bytes()))
+            self.assertEqual(source['metadata']['coverage'], manifest['metadata']['coverage'])
+            self.assertEqual(source['metadata']['language'], 'ja')
+            manifest['metadata']['language'] = 'en'
+            (root / 'release/manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'metadata'):
+                target.snapshot(root / 'release', root / 'snapshot')
+
     def test_supplement_sources_survive_prepare_and_snapshot(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -31,7 +48,8 @@ class GsiReleaseTests(unittest.TestCase):
             } <= names)
             self.assertFalse(any(name.startswith('gsi-') for name in names))
             expected = metadata_maps(json.loads((target.DATA / 'supplements.json').read_bytes())['metadata'])['sources']
-            self.assertEqual({k:v for k,v in metadata_maps(manifest['metadata'])["sources"].items() if not k.startswith('国土地理院（')}, expected)
+            original_sources = metadata_maps(json.loads((target.DATA / target.SOURCE_FILE).read_bytes())["metadata"])["sources"]
+            self.assertEqual({k:v for k,v in metadata_maps(manifest["metadata"])["sources"].items() if k not in original_sources}, expected)
             self.assertEqual(metadata_maps(json.loads((root / 'release' / target.FILE).read_bytes())['metadata'])['tags']['日本百名山']['nameReading'],'にほんひゃくめいざん')
             tag = '日本の主な山岳標高'
             released = json.loads((root / 'release' / target.FILE).read_bytes())

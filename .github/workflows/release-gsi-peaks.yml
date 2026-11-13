@@ -26,6 +26,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: 提供範囲の検証に使うライブラリを準備
+        run: python -m pip install -r ${{ github.workspace }}/points/requirements-geometry.txt
       - name: 公開処理とコミット済み JSON をテスト
         run: |
           python -m unittest discover -s release_tools/tests -v

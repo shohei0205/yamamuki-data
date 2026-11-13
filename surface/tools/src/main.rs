@@ -156,6 +156,23 @@ fn main() -> Result<()> {
                 Ok(())
             })
         }
+        ("update-coverage", [path]) => {
+            // 公開済みファイルではなく、配布準備で作った複製に対して呼ぶ。
+            db::open(Path::new(path))?;
+            let mut connection = db::rusqlite::Connection::open_with_flags(
+                Path::new(path),
+                db::rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+            )?;
+            let tx = connection.transaction()?;
+            for dataset in db::datasets(&tx)? {
+                if dataset.kind == "surface" {
+                    db::recompute_surface_coverage(&tx, dataset.key)?;
+                }
+            }
+            db::validate(&tx)?;
+            tx.commit()?;
+            Ok(())
+        }
         ("surface-levels", [path]) => {
             let connection = db::open(Path::new(path))?;
             let datasets = db::datasets(&connection)?;
@@ -200,6 +217,6 @@ fn main() -> Result<()> {
 
 fn usage() -> Result<()> {
     anyhow::bail!(
-        "使い方: surface-tool merge <出力> <入力>... | select-layers <入力> <出力> <レイヤーID>... | select-surface <入力> <出力> <レイヤー別ズームJSON> | set-data-version <入力> <出力> <配布識別子> | surface-levels <入力> | validate <入力> | manifest <入力> <ReleaseのdownloadルートURL> <生成日時UTC> [公開ID]"
+        "使い方: surface-tool merge <出力> <入力>... | select-layers <入力> <出力> <レイヤーID>... | select-surface <入力> <出力> <レイヤー別ズームJSON> | set-data-version <入力> <出力> <配布識別子> | update-coverage <作業用SQLite> | surface-levels <入力> | validate <入力> | manifest <入力> <ReleaseのdownloadルートURL> <生成日時UTC> [公開ID]"
     );
 }

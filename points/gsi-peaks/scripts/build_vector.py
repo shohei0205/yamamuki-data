@@ -143,6 +143,7 @@ def main():
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--cache", type=Path, default=Path("build/gsi-cache"))
     parser.add_argument("--output", type=Path, default=Path("build/gsi-national-primary"))
+    parser.add_argument("--extra-geometry", type=Path, help="追加の元資料の対象範囲を示す GeoJSON Geometry")
     parser.add_argument("--extraction-cache", type=Path, help="抽出済みの vector-annotations.sqlite3 を再利用する")
     parser.add_argument("--natural-database", type=Path, help="取得済み全国自然地名 DB。存在確認済みタイルを全件再利用する")
     parser.add_argument("--max-natural-tiles", type=int, default=100000)
@@ -157,6 +158,8 @@ def main():
     if archive_info["url"] != PMTILES_URL or archive_info["sha256"] != digest or archive_info["sizeBytes"] != args.archive.stat().st_size:
         raise ValueError("PMTiles と保存記録が一致しません")
     records, skipped, processed = extract(args.archive, args.extraction_cache or args.output / "vector-annotations.sqlite3")
+    from source_coverage import generated_coverage
+    coverage, coverage_source = generated_coverage(extra_geometries=[json.loads(args.extra_geometry.read_bytes())] if args.extra_geometry else [])
     cache = Cache(args.cache, offline=args.offline)
     mountains = read_csv(cache.get(CSV_URL))
     selected, scan = acquire([r["point"] for r in records] + mountains, args.output / "natural-selected.sqlite3",
@@ -195,9 +198,12 @@ def main():
         elevation_source = "mountainList" if source == "mountainList" else height_sources.get(p["id"])
         if elevation_source is not None:
             p["provenance"]["elevationSource"] = elevation_source
+    from coverage_geometry import check_points
+    check_points(coverage["geometry"], points)
     original_points = points
     points, supplement_sources = supplement_points(points, args.supplements)
-    report = {"pointCount": len(points), "primarySource": "optimal_bvmap-v1", "vectorAnnotationCount": len(records),
+    check_points(coverage["geometry"], points)
+    report = {"coverage":coverage, "coverageSource":coverage_source, "pointCount": len(points), "primarySource": "optimal_bvmap-v1", "vectorAnnotationCount": len(records),
               "vectorPointCount": comparison["vectorPointCount"], "fallbackCount": len(comparison["fallbackIds"]),
               "readingCount": sum(bool(p.get("nameReading")) for p in points), "elevationCount": sum(p["elevationM"] is not None for p in points),
               "demElevationCount": dem_report["pointCount"], "demSources": dem_report["bySource"],
@@ -205,12 +211,12 @@ def main():
               "reviewCount": len(comparison["review"]), "skipped": skipped + omissions,
               "sources": sorted([archive_info, *natural_sources, *cache.used.values()], key=lambda s: s["url"])}
     tags = read_supplements(args.supplements).get("tags", {})
-    write(points, report, args.output, args.version, tags=tags, metadata={"sourceUrl": PMTILES_URL, "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html", "attribution": "出典：国土地理院（最適化ベクトルタイル・日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成", "supplementSources": supplement_sources})
+    write(points, report, args.output, args.version, tags=tags, metadata={"coverage":coverage, "sourceUrl": PMTILES_URL, "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html", "attribution": "出典：国土地理院（最適化ベクトルタイル・日本の主な山岳標高一覧・自然地名・標高タイル）を加工して作成", "supplementSources": supplement_sources})
     from scripts.distribution_parts import write_parts
     write_parts(args.output, original_points, read_supplements(args.supplements), json.loads((args.output / "manifest.json").read_text(encoding="utf-8")))
     path = args.output / "manifest.json"
     manifest = json.loads(path.read_bytes())
-    manifest.update(sourceDate=None,
+    manifest.update(coverageSource=coverage_source, sourceDate=None,
                     elevationPolicy="山岳一覧の公称標高、25 m 以内で双方に一意な三角点・標高点、DEM1A・DEM5A・DEM5B・DEM5C・DEM10B の順に採用。DEM は指定座標の地表標高であり、最高地点の標高とは限らない。",
                     coordinatePolicy="山名・座標は最適化ベクトルタイルを優先し、一意に照合できた山岳一覧の最高地点を優先する。未収録の山は山岳一覧・取得済み自然地名から追加する。注記・代表点は最高地点とは限らない。")
     path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

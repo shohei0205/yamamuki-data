@@ -47,6 +47,9 @@ class SourceRegionTests(unittest.TestCase):
         pbf = self.pbfs[source]
         save_source_info(pbf,{"url":source_url_for_date(day,source),"sizeBytes":pbf.stat().st_size,
                               "md5":hashlib.md5(pbf.read_bytes()).hexdigest()})
+        if source == "japan":
+            from coverage_fixture import save_boundary
+            save_boundary(pbf)
 
     def extract(self, command, **kwargs):
         source = next(key for key,path in self.pbfs.items() if str(path)==command[2])
@@ -112,6 +115,14 @@ class SourceRegionTests(unittest.TestCase):
         self.assertEqual(2, len(manifest["sourcePbfs"]))
         self.assertEqual(supplement["sources"], {entry["name"]: {k: v for k, v in entry.items() if k != "name"} for entry in manifest["metadata"]["sources"] if entry["name"] in supplement["sources"]})
         validate_parts(self.root / "out", manifest, rows)
+
+    def test_supplement_outside_scope_stops_before_output(self):
+        def outside(original, supplements):
+            return [*original, {"id":"custom:outside", "longitude":150, "latitude":50}]
+        with patch("scripts.build_data.apply_supplements", side_effect=outside), \
+                self.assertRaisesRegex(ValueError, "custom:outside"):
+            self.generate()
+        self.assertFalse((self.root/"out").exists())
 
     def test_empty_northern_peaks_stop_before_output(self):
         self.xmls["far-eastern-fed-district"].write_text('<osm/>',encoding="utf-8")
@@ -228,11 +239,16 @@ class SourceRegionTests(unittest.TestCase):
         for region in SOURCES:
             with patch("sys.argv", ["download_source.py", "--region", region]), \
                     patch("scripts.download_source.download", return_value={}) as fetch, \
+                    patch("scripts.source_coverage.capture_boundary", return_value=({},{})) as boundary, \
                     patch.dict("scripts.download_source.os.environ", {}, clear=True):
                 main()
             expected = "japan-latest.osm.pbf" if region == "japan" else region + ".osm.pbf"
             self.assertEqual(Path("build") / expected, fetch.call_args.args[0])
             self.assertEqual(region, fetch.call_args.kwargs["region"])
+            if region == "japan":
+                boundary.assert_called_once_with(Path("build") / expected)
+            else:
+                boundary.assert_not_called()
 
     def test_additional_download_failure_is_propagated(self):
         with patch("scripts.download_source.resolve_source",side_effect=OSError("取得失敗")):

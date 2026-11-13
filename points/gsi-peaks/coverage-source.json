@@ -1,0 +1,55 @@
+{
+  "kind": "jcg-concept-map-trace",
+  "approximate": true,
+  "sourcePage": "https://www1.kaiho.mlit.go.jp/ryokai/gainenzu.html",
+  "sourceImage": {
+    "url": "https://www1.kaiho.mlit.go.jp/ryokai/image/gainenzu/gainenzu_notext.png",
+    "sha256": "498c923f237b2c78ac9735f97311295cd97771d0c395bed7aa2084e71f0ac038",
+    "sizeBytes": 65113,
+    "width": 1302,
+    "height": 1232
+  },
+  "controlPointSource": {
+    "url": "https://www1.gsi.go.jp/geowww/globalmap-gsi/download/data/gm-japan/gm-jpn-bnd_u_2_1.zip",
+    "sha256": "826a2b54630f2d15376bc1831aafe77f72f107e1c39ef0034bb41b184330faaa",
+    "description": "地球地図日本 第2.1版の行政域を結合し、6島の最大陸域ポリゴンの重心を基準点に使用。ITRF94 の経緯度を概略位置合わせに使用。"
+  },
+  "method": "manual-image-trace",
+  "projection": "spherical-mercator-axis-aligned-least-squares",
+  "alignment": {
+    "xCoefficients": [
+      28.647827064,
+      -3287.454956773
+    ],
+    "yCoefficients": [
+      -1646.860267307,
+      1666.731680881
+    ],
+    "maxControlResidualPixels": 2.329245
+  },
+  "traceSha256": "2c22b7c42e66ea7bffdb24e258e05d57b36fb21cf544042991688f00b8b86302",
+  "geometrySha256": "a788aa029f4d5a25c3e1d91a33f235dcb6afae05af1595613ee4e4b6de400dfb",
+  "notes": [
+    "陸域・内水・領海・接続水域・EEZ を含む、提供範囲の目安。",
+    "延長大陸棚だけの海域（概念図の桃色）は除外する。",
+    "概念図の手動トレースであり、法的な境界・航海用の情報ではない。",
+    "外国との境界が未画定の海域では、元図が便宜上図示した地理的中間線を用いる。",
+    "概念図の模式化・画素・座標合わせに由来する誤差を含む。"
+  ],
+  "metadataSources": [
+    {
+      "name": "海上保安庁（日本の領海等概念図）",
+      "source": "https://www1.kaiho.mlit.go.jp/ryokai/gainenzu.html",
+      "license": "海洋情報部ホームページ利用ルール（政府標準利用規約第2.0版準拠） https://www1.kaiho.mlit.go.jp/copyright.html",
+      "attribution": "出典：日本の領海等概念図（海上保安庁海洋情報部）を加工して作成",
+      "changes": "陸域・内水・領海・EEZ を含む概略範囲を手動トレースし、延長大陸棚だけの海域を除外。法的境界・航海用の情報ではない。未画定海域は元図の便宜上の図示に従う。"
+    },
+    {
+      "name": "国土地理院（地球地図日本・提供範囲の位置合わせ）",
+      "source": "https://www.gsi.go.jp/kankyochiri/gm_jpn.html",
+      "license": "国土地理院コンテンツ利用規約 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
+      "attribution": "出典：地球地図日本 第2.1版（国土地理院）を加工して作成",
+      "changes": "6島の陸域ポリゴンの重心（ITRF94 経緯度）を概念図の概略位置合わせに使用。境界そのものの合成には使用しない。"
+    }
+  ]
+}

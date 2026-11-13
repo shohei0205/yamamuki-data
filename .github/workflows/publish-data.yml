@@ -36,6 +36,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: 提供範囲の検証に使うライブラリを準備
+        run: python -m pip install -r ${{ github.workspace }}/points/requirements-geometry.txt
       - name: 実行パラメーターを Summary に表示
         working-directory: .
         env:
@@ -59,8 +61,12 @@ jobs:
         timeout-minutes: 10
         continue-on-error: true
         with:
-          path: points/osm-peaks/build/japan-latest.osm.pbf
+          path: |
+            points/osm-peaks/build/japan-latest.osm.pbf
+            points/osm-peaks/build/japan-latest.osm.pbf.poly
+            points/osm-peaks/build/japan-latest.osm.pbf.source.json
           key: ${{ steps.source.outputs.cache-key }}
+          restore-keys: ${{ steps.source.outputs.legacy-cache-key }}
       - name: 全国 PBF を検証し、未取得なら Geofabrik から取得
         id: download
         timeout-minutes: 65
@@ -73,7 +79,10 @@ jobs:
         timeout-minutes: 10
         continue-on-error: true
         with:
-          path: points/osm-peaks/build/japan-latest.osm.pbf
+          path: |
+            points/osm-peaks/build/japan-latest.osm.pbf
+            points/osm-peaks/build/japan-latest.osm.pbf.poly
+            points/osm-peaks/build/japan-latest.osm.pbf.source.json
           key: ${{ steps.download.outputs.cache-key }}
       - name: ロシア極東 PBF の配布日と MD5 を確認
         id: far-eastern-fed-district-source

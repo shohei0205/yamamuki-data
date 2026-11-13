@@ -256,6 +256,8 @@ class BuildDataTests(unittest.TestCase):
         save_source_info(pbf, {"url": "https://download.geofabrik.de/asia/japan-260929.osm.pbf",
                               "sizeBytes": pbf.stat().st_size,
                               "md5": hashlib.md5(pbf.read_bytes()).hexdigest()})
+        from coverage_fixture import save_boundary
+        save_boundary(pbf)
 
     def test_source_info_missing_or_mismatched_stops_generation(self):
         pbf = self.root / "source.osm.pbf"

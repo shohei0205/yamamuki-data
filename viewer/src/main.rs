@@ -5,6 +5,7 @@
 
 mod appearance;
 mod boundaries;
+mod coverage;
 mod lod_fade;
 mod map;
 mod markers;
@@ -59,6 +60,8 @@ struct Viewer {
     show_online_map: bool,
     points: Option<Arc<Points>>,
     show_point_markers: bool,
+    point_coverage_visibility: coverage::Visibility,
+    coverage_fit: Option<[[f64; 2]; 2]>,
     client: reqwest::blocking::Client,
     boundaries: Arc<boundaries::BoundaryCache>,
     location_job: Option<mpsc::Receiver<Result<Vec<boundaries::Location>>>>,
@@ -107,6 +110,8 @@ impl Viewer {
             detail: point_detail::Detail::default(),
             points: None,
             show_point_markers: true,
+            point_coverage_visibility: coverage::Visibility::default(),
+            coverage_fit: None,
             list: point_list::PointList::default(),
             layer_list_height: None,
             selected: None,
@@ -271,6 +276,7 @@ impl Viewer {
             Ok(OpenedFile::Points(points)) => {
                 self.source = Some(path);
                 self.show_point_markers = true;
+                self.point_coverage_visibility = coverage::Visibility::default();
                 self.show_point_file_info = false;
                 self.list.reset(&points);
                 let points = Arc::new(points);
@@ -620,6 +626,23 @@ impl eframe::App for Viewer {
                             for surface in &mut self.surfaces {surface.palette=self.surface_palette;}
                         }
                     });
+                    ui.menu_button("提供範囲", |ui| {
+                        if let Some(points) = &self.points {
+                            let name = self.source.as_ref().and_then(|path| path.file_name()).map(|name| name.to_string_lossy()).unwrap_or_else(|| "地点".into());
+                            if let Some(bounds) = points.info.coverage.menu(ui, &mut self.point_coverage_visibility, &name) {
+                                self.coverage_fit = Some(bounds);
+                            }
+                        }
+                        for surface in &mut self.surfaces {
+                            if self.points.is_some() { ui.separator(); }
+                            if let Some(bounds) = surface.coverage_menu(ui) {
+                                self.coverage_fit = Some(bounds);
+                            }
+                        }
+                        if self.points.is_none() && self.surfaces.is_empty() {
+                            ui.label("地点・地表ファイルを開くと範囲を確認できます");
+                        }
+                    });
                     ui.menu_button("自動LOD", |ui| {
                         let slider_max = self.lod_slider_max();
                         let mut max = self.lod.max_level.unwrap_or(slider_max).min(slider_max);
@@ -852,6 +875,9 @@ impl eframe::App for Viewer {
                 for surface in &mut self.surfaces {
                     surface.fit_view(&mut self.view, rect);
                 }
+                if let Some(bounds) = self.coverage_fit.take() {
+                    self.view.fit(rect, bounds);
+                }
                 let compass_rect = Rect::from_center_size(
                     rect.right_top() + egui::vec2(-32., 32.),
                     egui::vec2(48., 48.),
@@ -941,6 +967,18 @@ impl eframe::App for Viewer {
                         self.lod,
                     );
                     has_base |= surface.has_enabled_layers();
+                }
+                // 範囲はデータの描画と独立して切り替えられる。
+                for surface in &self.surfaces {
+                    surface.paint_coverage(&painter, rect, &self.view);
+                }
+                if let Some(points) = &self.points {
+                    points.info.coverage.paint(
+                        &painter,
+                        rect,
+                        &self.view,
+                        &self.point_coverage_visibility,
+                    );
                 }
                 let click_position = response
                     .interact_pointer_pos()

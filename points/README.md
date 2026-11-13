@@ -72,9 +72,12 @@ manifest の項目と検証ルールは [manifest フォーマット](../formats
 
 ### 共通ビューアのテスト
 
+このテストにはタイル領域・配信元境界からの図形生成、GeoJSON の対象範囲と言語の検証、通常・逐次読み込みと配布 manifest への保持も含む。`schemas/testdata/coverage-metadata.json` は地表の Rust 検証でも共用する。
+
 共通ビューアの補足 JSON 解析・タグ編集・保存内容の検査と、全部入り地点 JSON の逐次読み書きのテストは `points/tests/` に置く。Python 3.12 と Node.js を使い、リポジトリ直下で次のコマンドを実行する。外部通信は行わない。Node.js がない場合は、Node.js を使うテストをスキップする。
 
 ```bash
+python -m pip install -r points/requirements-geometry.txt
 python -m unittest discover -s points/tests -v
 ```
 
