@@ -59,7 +59,7 @@ const linked={schemaFormat:'yamamuki-point-supplements',schemaVersion:2,points:[
         code=next(line for line in page.splitlines() if line.startswith("async function saveSupplementFile("))
         checks=r"""
 const assert=require('node:assert/strict');const data={points:[{id:'gsi:1',tags:['A']}]};
-const basePoints=[],tagEdits=new Map([[4,{}]]);let supplementDocument={},savedSupplementState='old',refreshed=0,closed=0,saveResult='saved';
+const basePoints=[],tagEdits=new Map([[4,{}]]);let supplementDocument={points:[]},savedSupplementState='old',refreshed=0,closed=0,saveResult='saved';
 const fields={'supplement-sources':{value:'[]'},'supplement-tag-metadata':{value:'[]'},'tag-json-save-dialog':{close(){closed++;}},'tag-json-save-status':{textContent:''}};
 const document={getElementById(id){return fields[id];}};
 const filters={search:'山',tags:['A','B'],sources:['vector'],hidden:true,scroll:345};

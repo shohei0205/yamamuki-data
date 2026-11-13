@@ -1,14 +1,14 @@
 {
   "schemaFormat": "yamamuki-point-supplements",
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "metadata": {
     "sources": [
       {
         "name": "国土地理院",
-        "source": "国土地理院の地点原本 points/gsi-peaks/gsi-peaks-source.json。日本の主な山岳標高一覧 https://www.gsi.go.jp/KOKUJYOHO/MOUNTAIN/1003zan20260331.csv ; 最適化ベクトルタイル https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/optimal_bvmap-v1.pmtiles ; 自然地名 https://github.com/gsi-cyberjapan/experimental_pni",
+        "source": "https://www.gsi.go.jp/KOKUJYOHO/MOUNTAIN/1003zan20260331.csv ; https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/optimal_bvmap-v1.pmtiles ; https://github.com/gsi-cyberjapan/experimental_pni",
         "license": "PDL-1.0 https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
         "attribution": "出典：国土地理院（日本の主な山岳標高一覧・最適化ベクトルタイル・自然地名）を加工して作成",
-        "changes": "国土地理院の地点の位置・名称・別名を使って対応する OSM ノードを選定し、GSI 版の採用地点・名称・読み・別名・配布除外を反映した。作成者がビューアーで手動調整した。国土地理院の資料を使って標高の一部を補正した。座標は OSM 原本を維持する。"
+        "changes": "国土地理院の地点の位置・名称・別名を使って対応する OSM ノードを選定し、本プロジェクトで国土地理院の資料から作成・補正した山頂データ（gsi-peaks）に合わせて、採用する地点・名称・読み・別名と、配布から除外する地点を決めた。作成者がビューアーで手動調整した。国土地理院の資料を使って標高の一部を補正した。既存地点の座標は OSM 原本を維持し、大雪山は国土地理院の資料にある座標で追加した。"
       },
       {
         "name": "日本百名山",
@@ -26,6 +26,18 @@
     ]
   },
   "points": [
+    {
+      "id": "osm-custom:taisetsuzan",
+      "name": "大雪山",
+      "latitude": 43.594852,
+      "longitude": 142.853582,
+      "provenance": {
+        "dataSource": "国土地理院"
+      },
+      "nameReading": "たいせつざん",
+      "add": true,
+      "note": "大雪山"
+    },
     {
       "id": "osm:165028676",
       "note": "奥穂高岳",
@@ -189,6 +201,11 @@
       ]
     },
     {
+      "id": "osm:917987193",
+      "exclude": true,
+      "note": "阿蘇山"
+    },
+    {
       "id": "osm:917987459",
       "note": "高岳",
       "name": "阿蘇山",
@@ -224,6 +241,12 @@
       "tags": [
         "日本百名山"
       ]
+    },
+    {
+      "id": "osm:1116306688",
+      "name": "白根山",
+      "nameReading": "しらねさん",
+      "note": "草津白根山"
     },
     {
       "id": "osm:1140877707",
@@ -547,6 +570,11 @@
       ]
     },
     {
+      "id": "osm:1852101603",
+      "exclude": true,
+      "note": "霧島山"
+    },
+    {
       "id": "osm:1954353628",
       "note": "常念岳",
       "nameReading": "じょうねんだけ",
@@ -590,6 +618,11 @@
       "tags": [
         "日本百名山"
       ]
+    },
+    {
+      "id": "osm:2596204497",
+      "exclude": true,
+      "note": "赤城山"
     },
     {
       "id": "osm:2933768500",
@@ -649,6 +682,12 @@
       "nameReading": "いわてさん",
       "tags": [
         "日本百名山"
+      ],
+      "aliases": [
+        {
+          "name": "薬師岳",
+          "nameReading": "やくしだけ"
+        }
       ]
     },
     {
@@ -994,6 +1033,11 @@
       "exclude": true
     },
     {
+      "id": "osm:3600643281",
+      "exclude": true,
+      "note": "蔵王山"
+    },
+    {
       "id": "osm:3684227754",
       "note": "男体山",
       "tags": [
@@ -1061,6 +1105,11 @@
       "tags": [
         "日本百名山"
       ]
+    },
+    {
+      "id": "osm:5214573299",
+      "exclude": true,
+      "note": "岩手山"
     },
     {
       "id": "osm:5314363928",

@@ -28,6 +28,8 @@ LICENSES/          Release に添付するライセンスの本文
 
 データの種類ごとにフォルダを分け、内部の構成は各 README に記載する。Actions の定義は `.github/workflows/` に置く。
 
+地点の補足 JSON 版3では、`points` の `add: true` で元データにない地点を追加できる。[地点ビューアの操作手順](points/README.md#地点データをブラウザで確認する)と[補足データの形式](points/formats/supplements-data.md)を参照する。
+
 ## データの配布
 
 - [正式版の Release 一覧](https://github.com/shohei0205/yamamuki-data/releases?q=draft%3Afalse+prerelease%3Afalse)

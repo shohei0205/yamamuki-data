@@ -14,7 +14,7 @@ class HistoryTests(unittest.TestCase):
 const assert=require('node:assert/strict');
 const undoEdits=[],redoEdits=[],basePoints=[{source:{id:'gsi-vector:1'}},{source:{id:'osm:1'}}];let historyPointIndex=null,historyBusy=false,tagEdits=new Map();
 let supplementDocument={points:[]},savedSupplementState=JSON.stringify(supplementDocument);
-let selectedIndex=3;const largeMode=false,wrap={scrollTop:123},fields={};
+const points=[{},{},{},{}];let selectedIndex=3;const largeMode=false,wrap={scrollTop:123},fields={};
 const document={getElementById(id){return fields[id]??={open:false};},querySelector(){return wrap;}};
 function exportSupplement(){return supplementDocument;}
 function validateSupplement(data){assert.ok(Array.isArray(data.points));}
