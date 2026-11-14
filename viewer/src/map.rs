@@ -1,6 +1,6 @@
 use crate::{lod_fade, tile_cache};
 use anyhow::{Context, Result, ensure};
-use eframe::egui::{self, ColorImage, Pos2, Rect, TextureHandle};
+use eframe::egui::{self, ColorImage, Pos2, Rect};
 use image::ImageDecoder;
 use std::{
     collections::{HashMap, HashSet},
@@ -81,16 +81,22 @@ impl Source {
     ];
 
     pub fn is_osm(self) -> bool {
-        self.osm_cache_directory().is_some()
+        Self::OSM_LAYERS.contains(&self)
     }
 
-    fn osm_cache_directory(self) -> Option<&'static str> {
+    fn cache_directory(self) -> &'static str {
         match self {
-            Self::OpenStreetMap => Some("osm-tiles"),
-            Self::OpenTopoMap => Some("opentopomap-tiles"),
-            Self::CyclOsm => Some("cyclosm-tiles"),
-            Self::Humanitarian => Some("osm-humanitarian-tiles"),
-            _ => None,
+            Self::Gsi => "gsi-std-tiles",
+            Self::Pale => "gsi-pale-tiles",
+            Self::Blank => "gsi-blank-tiles",
+            Self::Photo => "gsi-photo-tiles",
+            Self::Relief => "gsi-relief-tiles",
+            Self::Hillshade => "gsi-hillshade-tiles",
+            Self::Slope => "gsi-slope-tiles",
+            Self::OpenStreetMap => "osm-tiles",
+            Self::OpenTopoMap => "opentopomap-tiles",
+            Self::CyclOsm => "cyclosm-tiles",
+            Self::Humanitarian => "osm-humanitarian-tiles",
         }
     }
 
@@ -245,30 +251,26 @@ fn fetch(
     source: Source,
 ) -> Result<Option<LoadedTile>> {
     let url = tile.url(source);
-    if let Some(directory) = source.osm_cache_directory() {
-        let path = tile
-            .cache_path(directory)
-            .context("OpenStreetMapのタイルキャッシュを利用できません")?;
-        return Ok(
-            tile_cache::load(client, &url, &path, USER_AGENT, decode_png)?.map(|(image, ttl)| {
-                (
-                    image,
-                    Instant::now().checked_add(ttl.max(Duration::from_secs(1))),
-                )
-            }),
-        );
-    }
-    let response = client.get(url).send()?;
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
-    }
-    let body = tile_cache::read_body(response.error_for_status()?)?;
-    let image = if source == Source::Photo {
-        decode_jpeg(&body)?
+    let path = tile
+        .cache_path(source.cache_directory())
+        .context("地図のタイルキャッシュを利用できません")?;
+    Ok(tile_cache::load(client, &url, &path, USER_AGENT, |bytes| {
+        decode_tile(source, bytes)
+    })?
+    .map(|(image, ttl)| {
+        (
+            image,
+            Instant::now().checked_add(ttl.max(Duration::from_secs(1))),
+        )
+    }))
+}
+
+fn decode_tile(source: Source, bytes: &[u8]) -> Result<ColorImage> {
+    if source == Source::Photo {
+        decode_jpeg(bytes)
     } else {
-        decode_png(&body)?
-    };
-    Ok(Some((image, None)))
+        decode_png(bytes)
+    }
 }
 
 fn decode_jpeg(bytes: &[u8]) -> Result<ColorImage> {
@@ -362,6 +364,13 @@ impl Orientation {
         self.rotation.inverse() * egui::vec2(offset.x, offset.y / self.vertical_scale)
     }
 
+    pub fn angles(self) -> (f64, f64) {
+        (
+            self.rotation.angle() as f64,
+            self.vertical_scale.acos() as f64,
+        )
+    }
+
     pub fn north(self) -> egui::Vec2 {
         self.project(-egui::Vec2::Y).normalized()
     }
@@ -422,8 +431,15 @@ impl View {
     }
 
     pub fn zoom_at(&mut self, rect: Rect, pointer: Pos2, delta: f64) {
+        self.zoom_at_limit(rect, pointer, delta, MAX_ZOOM);
+    }
+    /// 3Dはオンライン地図の取得上限でカメラの接近を止めない。
+    pub fn zoom_at_terrain(&mut self, rect: Rect, pointer: Pos2, delta: f64) {
+        self.zoom_at_limit(rect, pointer, delta, f64::INFINITY);
+    }
+    fn zoom_at_limit(&mut self, rect: Rect, pointer: Pos2, delta: f64, maximum: f64) {
         let anchor = self.world_at(rect, pointer);
-        self.zoom = (self.zoom + delta).clamp(MIN_ZOOM, MAX_ZOOM);
+        self.zoom = (self.zoom + delta).clamp(MIN_ZOOM, maximum);
         let after = self.world_at(rect, pointer);
         for axis in 0..2 {
             self.center[axis] = (self.center[axis] + anchor[axis] - after[axis]).clamp(0., 1.);
@@ -474,22 +490,6 @@ impl View {
             .map(|world| self.screen(rect, world))
     }
 
-    pub fn paint_tile(
-        &self,
-        painter: &egui::Painter,
-        rect: Rect,
-        tile: Tile,
-        texture: egui::TextureId,
-    ) {
-        self.paint_tile_uv(
-            painter,
-            rect,
-            tile,
-            texture,
-            Rect::from_min_max(Pos2::ZERO, egui::pos2(1., 1.)),
-        );
-    }
-
     pub fn paint_tile_uv(
         &self,
         painter: &egui::Painter,
@@ -528,7 +528,7 @@ impl View {
 }
 
 enum Cached {
-    Texture(TextureHandle, Option<Instant>),
+    Texture(crate::tile_atlas::Image, Option<Instant>),
     Missing,
     Failed(Instant),
 }
@@ -544,6 +544,9 @@ pub struct Tiles {
     cache: HashMap<Tile, (Cached, u64)>,
     frame: u64,
     lod: lod_fade::State<u32>,
+    material_lods: Vec<lod_fade::State<u32>>,
+    material_pass: usize,
+    material_ready: bool,
 }
 
 impl Tiles {
@@ -579,9 +582,29 @@ impl Tiles {
             cache: HashMap::new(),
             frame: 0,
             lod: lod_fade::State::default(),
+            material_lods: (0..4).map(|_| Default::default()).collect(),
+            material_pass: 0,
+            material_ready: false,
         }
     }
 
+    pub fn material_ready(&self) -> bool {
+        self.material_ready
+    }
+    pub fn finish_material_frame(&mut self) {
+        trim_cache(&mut self.cache, MAX_CACHE, self.frame);
+    }
+    pub fn select_material_pass(&mut self, pass: usize) {
+        if self.material_lods.len() <= pass {
+            self.material_lods.resize_with(pass + 1, Default::default);
+        }
+
+        if self.material_pass != pass {
+            std::mem::swap(&mut self.lod, &mut self.material_lods[self.material_pass]);
+            std::mem::swap(&mut self.lod, &mut self.material_lods[pass]);
+            self.material_pass = pass;
+        }
+    }
     pub fn paint(
         &mut self,
         ui: &egui::Ui,
@@ -590,9 +613,11 @@ impl Tiles {
         view: &View,
         dragging: bool,
         tile_zoom: u32,
+        lod_zoom: f64,
         fade_backend: lod_fade::Backend<'_>,
     ) -> bool {
-        self.frame += 1;
+        self.frame = ui.ctx().cumulative_pass_nr();
+        self.material_ready = false;
         let limit = if dragging { 1 } else { MAX_PENDING };
         let mut processed = 0;
         // 取得とPNGの展開はワーカーで行う。ドラッグ中はGPUへ渡すタイル数を抑える。
@@ -601,7 +626,8 @@ impl Tiles {
             self.pending.remove(&tile);
             let entry = match result {
                 Ok(Some((image, expiry))) => Cached::Texture(
-                    ui.ctx().load_texture(
+                    crate::tile_atlas::Image::load(
+                        ui.ctx(),
                         tile.url(self.source),
                         image,
                         egui::TextureOptions::LINEAR,
@@ -650,6 +676,7 @@ impl Tiles {
         }
         let now = ui.input(|input| input.time);
         let ready = tiles.iter().all(|tile| self.cache.contains_key(tile));
+        self.material_ready = ready && processed == 0;
         if ready && processed != 0 {
             ui.ctx().request_repaint();
         }
@@ -657,13 +684,13 @@ impl Tiles {
             && self
                 .lod
                 .current
-                .is_some_and(|old| lod_fade::can_blend(old, tile_zoom, view.zoom));
+                .is_some_and(|old| lod_fade::can_blend(old, tile_zoom, lod_zoom));
         self.lod
             .update(tile_zoom, ready && processed == 0, fade, now);
         let current = self.lod.current.unwrap_or(tile_zoom);
         if let (Some((state, renderer)), Some((&old, amount))) =
             (fade_backend, self.lod.blend(ui.ctx(), now))
-            && lod_fade::can_blend(old, current, view.zoom)
+            && lod_fade::can_blend(old, current, lod_zoom)
         {
             let textures = state.renderer.read();
             let quads = view
@@ -672,25 +699,35 @@ impl Tiles {
                 .filter_map(|tile| {
                     let [(old_tile, old_uv), (new_tile, new_uv)] =
                         [old, current].map(|z| lod_fade::sample(tile, z, lod_fade::FULL_UV));
-                    let [(old, old_ready), (new, new_ready)] = [old_tile, new_tile].map(|tile| {
-                        let Some((cached, touched)) = self.cache.get_mut(&tile) else {
-                            return (None, false);
-                        };
-                        *touched = self.frame;
-                        match cached {
-                            Cached::Texture(handle, _) => {
-                                let texture = lod_fade::color_view(&textures, handle.id());
-                                let ready = texture.is_some();
-                                (texture, ready)
+                    let [(old, old_ready, old_uv), (new, new_ready, new_uv)] =
+                        [(old_tile, old_uv), (new_tile, new_uv)].map(|(tile, uv)| {
+                            let Some((cached, touched)) = self.cache.get_mut(&tile) else {
+                                return (None, false, uv);
+                            };
+                            *touched = self.frame;
+                            match cached {
+                                Cached::Texture(handle, _) => {
+                                    let texture =
+                                        renderer.color_view(&textures, handle.id(), self.frame);
+                                    let ready = texture.is_some();
+                                    (texture, ready, handle.uv(uv))
+                                }
+                                Cached::Missing => (None, true, uv),
+                                Cached::Failed(_) => (None, false, uv),
                             }
-                            Cached::Missing => (None, true),
-                            Cached::Failed(_) => (None, false),
-                        }
-                    });
+                        });
                     lod_fade::Quad::new(tile, [old_uv, new_uv], [old, new], [old_ready, new_ready])
                 })
                 .collect();
-            renderer.paint(painter, rect, view, quads, Vec::new(), amount);
+            renderer.paint(
+                painter,
+                rect,
+                view,
+                quads,
+                Vec::new(),
+                amount,
+                self.material_pass != 0,
+            );
         } else {
             let mut drawn = false;
             if current != tile_zoom {
@@ -700,7 +737,13 @@ impl Tiles {
                         && Rect::from_points(&view.tile_corners(rect, tile)).intersects(rect)
                     {
                         *touched = self.frame;
-                        view.paint_tile(painter, rect, tile, texture.id());
+                        view.paint_tile_uv(
+                            painter,
+                            rect,
+                            tile,
+                            texture.id(),
+                            texture.uv(lod_fade::FULL_UV),
+                        );
                         drawn = true;
                     }
                 }
@@ -708,23 +751,35 @@ impl Tiles {
             if !drawn {
                 for tile in tiles {
                     if let Some((Cached::Texture(texture, _), _)) = self.cache.get(&tile) {
-                        view.paint_tile(painter, rect, tile, texture.id());
+                        view.paint_tile_uv(
+                            painter,
+                            rect,
+                            tile,
+                            texture.id(),
+                            texture.uv(lod_fade::FULL_UV),
+                        );
                     }
                 }
             }
         }
-        while self.cache.len() > cache_limit {
-            if let Some(key) = self
-                .cache
-                .iter()
-                .filter(|(_, (_, touched))| *touched != self.frame)
-                .min_by_key(|(_, (_, touched))| *touched)
-                .map(|(&key, _)| key)
-            {
-                self.cache.remove(&key);
-            }
+        if self.material_pass == 0 {
+            trim_cache(&mut self.cache, cache_limit, self.frame);
         }
         failed
+    }
+}
+
+fn trim_cache(cache: &mut HashMap<Tile, (Cached, u64)>, limit: usize, frame: u64) {
+    // 切替前のタイルも表示中なら一時的な超過を許す。削除候補なしで巡回し続けない。
+    let excess = cache.len().saturating_sub(limit);
+    let mut candidates = cache
+        .iter()
+        .filter(|(_, (_, touched))| *touched != frame)
+        .map(|(&key, (_, touched))| (key, *touched))
+        .collect::<Vec<_>>();
+    candidates.sort_unstable_by_key(|(_, touched)| *touched);
+    for (key, _) in candidates.into_iter().take(excess) {
+        cache.remove(&key);
     }
 }
 
@@ -737,6 +792,76 @@ impl Drop for Tiles {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn material_ranges_keep_each_others_tiles_across_zoom_frames() {
+        let ctx = egui::Context::default();
+        let (queue, _jobs) = mpsc::channel();
+        let (_send, replies) = mpsc::channel();
+        let mut tiles = Tiles {
+            source: Source::Gsi,
+            cancelled: Arc::default(),
+            queue,
+            replies,
+            pending: HashSet::new(),
+            cache: HashMap::new(),
+            frame: 0,
+            lod: Default::default(),
+            material_lods: (0..4).map(|_| Default::default()).collect(),
+            material_pass: 0,
+            material_ready: false,
+        };
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(2048., 2048.));
+        let views = [0.25, 0.5, 0.75].map(|x| View {
+            center: [x, 0.5],
+            zoom: 10.,
+            orientation: Default::default(),
+        });
+        let required = views
+            .iter()
+            .flat_map(|view| view.tiles_at(rect, 10))
+            .collect::<HashSet<_>>();
+        assert!(required.len() > MAX_CACHE);
+        for &tile in &required {
+            tiles.cache.insert(tile, (Cached::Missing, 0));
+        }
+        for _ in 0..3 {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    for (i, view) in views.iter().enumerate() {
+                        tiles.select_material_pass(i + 1);
+                        tiles.paint(ui, ui.painter(), rect, view, false, 10, 10., None);
+                        assert!(tiles.material_ready());
+                    }
+                    tiles.finish_material_frame();
+                });
+            });
+            assert!(required.iter().all(|key| tiles.cache.contains_key(key)));
+            assert!(
+                tiles.pending.is_empty(),
+                "別範囲のタイルを削除して再取得している"
+            );
+        }
+    }
+
+    #[test]
+    fn zoom_out_preserves_visible_fallbacks_without_spinning_at_cache_limit() {
+        let frame = 42;
+        let mut cache = (0..MAX_CACHE as u32 + 20)
+            .map(|x| (Tile { z: 12, x, y: 0 }, (Cached::Missing, frame)))
+            .collect::<HashMap<_, _>>();
+        // 拡大前後の表示中タイルだけで上限超過しても終了し、表示を保持する。
+        trim_cache(&mut cache, MAX_CACHE, frame);
+        assert_eq!(cache.len(), MAX_CACHE + 20);
+        for (_, touched) in cache.values_mut() {
+            *touched = frame - 1;
+        }
+        let active = Tile { z: 12, x: 0, y: 0 };
+        cache.get_mut(&active).unwrap().1 = frame;
+        trim_cache(&mut cache, MAX_CACHE, frame);
+        assert_eq!(cache.len(), MAX_CACHE);
+        assert!(cache.contains_key(&active));
+    }
 
     #[test]
     fn overzoom_uses_the_highest_available_tile_without_changing_the_view() {
@@ -766,6 +891,39 @@ mod tests {
         }
     }
 
+    #[test]
+    fn terrain_zoom_is_not_limited_by_online_map_zoom() {
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(900., 600.));
+        let mut view = View {
+            center: [0.5; 2],
+            zoom: 18.,
+            orientation: Orientation::default(),
+        };
+        view.zoom_at_terrain(rect, rect.center(), 6.);
+        assert_eq!(view.zoom, 24.);
+        assert_eq!(view.center, [0.5; 2]);
+        assert_eq!(Source::Gsi.tile_zoom(view.zoom, Lod::default()), 18);
+    }
+    #[test]
+    fn terrain_distances_keep_independent_lod_transitions() {
+        let mut tiles = Tiles::new(
+            &egui::Context::default(),
+            reqwest::blocking::Client::new(),
+            Source::Gsi,
+        );
+        tiles.lod.current = Some(10);
+        tiles.select_material_pass(1);
+        assert_eq!(tiles.lod.current, None);
+        tiles.lod.current = Some(15);
+        tiles.select_material_pass(2);
+        tiles.lod.current = Some(12);
+        tiles.select_material_pass(3);
+        tiles.lod.current = Some(6);
+        for (pass, z) in [(1, 15), (2, 12), (3, 6), (0, 10)] {
+            tiles.select_material_pass(pass);
+            assert_eq!(tiles.lod.current, Some(z));
+        }
+    }
     #[test]
     fn online_lod_respects_bias_and_both_zoom_limits() {
         let mut lod = Lod {
@@ -812,13 +970,88 @@ mod tests {
         for source in Source::OSM_LAYERS {
             let path = cache
                 .path()
-                .join(source.osm_cache_directory().unwrap())
+                .join(source.cache_directory())
                 .with_extension("tile");
             let (image, _) =
                 tile_cache::load(&client, &tile.url(source), &path, USER_AGENT, decode_png)
                     .unwrap_or_else(|error| panic!("{source:?}: {error:#}"))
                     .unwrap_or_else(|| panic!("{source:?}"));
             assert_eq!(image.size, [TILE_SIZE; 2], "{source:?}");
+        }
+    }
+
+    #[test]
+    fn all_online_layers_have_separate_disk_caches() {
+        let sources = Source::GSI_LAYERS
+            .into_iter()
+            .chain(Source::OSM_LAYERS)
+            .collect::<Vec<_>>();
+        let directories = sources
+            .iter()
+            .map(|source| source.cache_directory())
+            .collect::<HashSet<_>>();
+        assert_eq!(directories.len(), sources.len());
+        assert_eq!(Source::Gsi.cache_directory(), "gsi-std-tiles");
+    }
+    #[test]
+    fn gsi_png_and_photo_are_reused_from_disk_without_the_server() {
+        use std::{
+            io::{BufRead, BufReader, Write},
+            net::TcpListener,
+        };
+        for source in [Source::Gsi, Source::Photo] {
+            let rgb = vec![128u8; TILE_SIZE * TILE_SIZE * 3];
+            let mut body = Vec::new();
+            if source == Source::Photo {
+                image::codecs::jpeg::JpegEncoder::new(&mut body)
+                    .encode(
+                        &rgb,
+                        TILE_SIZE as u32,
+                        TILE_SIZE as u32,
+                        image::ExtendedColorType::Rgb8,
+                    )
+                    .unwrap();
+            } else {
+                let mut encoder = png::Encoder::new(&mut body, TILE_SIZE as u32, TILE_SIZE as u32);
+                encoder.set_color(png::ColorType::Rgb);
+                let mut writer = encoder.write_header().unwrap();
+                writer.write_image_data(&rgb).unwrap();
+            }
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/tile", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                {
+                    let mut reader = BufReader::new(&socket);
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                            break;
+                        }
+                    }
+                }
+                write!(socket,"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\nCache-Control: max-age=86400\r\n\r\n",body.len()).unwrap();
+                socket.write_all(&body).unwrap();
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(source.cache_directory()).join("tile");
+            let client = reqwest::blocking::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap();
+            let load = || {
+                tile_cache::load(&client, &url, &path, USER_AGENT, |bytes| {
+                    decode_tile(source, bytes)
+                })
+                .unwrap()
+                .unwrap()
+            };
+            let first = load().0;
+            server.join().unwrap();
+            let second = load().0;
+            assert_eq!(first.size, [TILE_SIZE; 2]);
+            assert_eq!(first.pixels, second.pixels);
         }
     }
 
@@ -835,14 +1068,11 @@ mod tests {
             .collect();
         let directories: HashSet<_> = Source::OSM_LAYERS
             .iter()
-            .map(|&source| source.osm_cache_directory().unwrap())
+            .map(|&source| source.cache_directory())
             .collect();
         assert_eq!(urls.len(), Source::OSM_LAYERS.len());
         assert_eq!(directories.len(), Source::OSM_LAYERS.len());
-        assert_eq!(
-            Source::OpenStreetMap.osm_cache_directory(),
-            Some("osm-tiles")
-        );
+        assert_eq!(Source::OpenStreetMap.cache_directory(), "osm-tiles");
         assert!(Source::GSI_LAYERS.iter().all(|source| !source.is_osm()));
     }
 
@@ -873,6 +1103,9 @@ mod tests {
             cache: HashMap::new(),
             frame: 0,
             lod: lod_fade::State::default(),
+            material_lods: (0..4).map(|_| Default::default()).collect(),
+            material_pass: 0,
+            material_ready: false,
         };
         let view = View {
             center: [0.5; 2],
@@ -889,6 +1122,7 @@ mod tests {
                         &view,
                         dragging,
                         Source::Gsi.tile_zoom(view.zoom, Lod::default()),
+                        view.zoom,
                         None,
                     );
                 });

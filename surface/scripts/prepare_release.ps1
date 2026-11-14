@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [ValidateSet("surface","terrain")][string]$Kind = "surface",
     [Parameter(Mandatory)][string]$Dataset,
     [string]$Package = "all",
     [Parameter(Mandatory)][string]$Database,
@@ -13,7 +14,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 . (Join-Path $PSScriptRoot 'release_config.ps1')
-$config = Read-SurfaceReleaseConfig $Dataset $Package
+$config = Read-SurfaceReleaseConfig $Dataset $Package $Kind
 if ($CreateDraft -and $ProcessDraft) { throw '-CreateDraft と -ProcessDraft は同時に指定できません。' }
 $uploadDraft = $CreateDraft -or $ProcessDraft
 if ($uploadDraft -and !$TargetCommit) { throw '下書きを作るには、生成に使ったコミットのSHAを指定してください。' }
@@ -51,6 +52,13 @@ $target = Join-Path $surface 'target'
 $suffix = if ($IsWindows) { '.exe' } else { '' }
 cargo build --locked --release --manifest-path (Join-Path $surface 'Cargo.toml') --target-dir $target --bin surface-tool
 $tool = Join-Path $target "release/surface-tool$suffix"
+$terrainTool = $null
+if ($Kind -eq 'terrain') {
+    $terrain = Join-Path (Split-Path $surface -Parent) 'terrain'
+    cargo build --locked --release --manifest-path (Join-Path $terrain 'Cargo.toml') --bin terrain-tool
+    $terrainTool = Join-Path $terrain "target/release/terrain-tool$suffix"
+}
+
 
 $stage = Join-Path $parent ('.surface-release-' + [guid]::NewGuid())
 $databaseName = $config.fileName
@@ -59,13 +67,17 @@ $stagedLicense = Join-Path $stage 'LICENSE.txt'
 $stagedManifest = Join-Path $stage $config.manifestName
 New-Item -ItemType Directory -Path $stage | Out-Null
 try {
-    Copy-Item -LiteralPath $inputFile.FullName -Destination $stagedDatabase
+    if ($terrainTool) {
+        $selection = ConvertTo-Json -InputObject @($config.selection.terrain) -Compress
+        & $terrainTool select-levels $inputFile.FullName $stagedDatabase $selection
+    } else { Copy-Item -LiteralPath $inputFile.FullName -Destination $stagedDatabase }
     & $tool validate $stagedDatabase
+    if ($terrainTool) { & $terrainTool validate $stagedDatabase }
     $manifest = & $tool manifest $stagedDatabase $releaseRoot $DataTimestamp $config.releaseId | ConvertFrom-Json -AsHashtable
-    if ($generationManifest -and $generationManifest.sha256 -cne $manifest.sha256) {
+    if ($generationManifest -and $generationManifest.sha256 -cne (Get-FileHash -LiteralPath $inputFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant()) {
         throw '生成時のmanifestとSQLiteのSHA-256が一致しません。'
     }
-    $levels = & $tool surface-levels $stagedDatabase | ConvertFrom-Json -AsHashtable
+    $levels = & $tool ("$Kind-levels") $stagedDatabase | ConvertFrom-Json -AsHashtable
     $tag = Get-SurfaceReleaseTag $config $manifest $levels
     $entry = $manifest.datasets[0]
     $version = $entry.dataVersion
@@ -118,7 +130,7 @@ foreach ($split in $config.splitPackages) {
 }
 
 if ($uploadDraft) {
-    $workflow = 'publish-surface.yml'
+    $workflow = "publish-$Kind.yml"
     if ($ProcessDraft -and (gh api "repos/$repo/actions/workflows/$workflow" --jq .state) -cne 'active') {
         throw '加工・検査Actionを先にmainに配置して有効にしてください。'
     }
@@ -137,7 +149,7 @@ if ($uploadDraft) {
     $assets = @($databaseName, $config.manifestName, 'LICENSE.txt') | ForEach-Object { Join-Path $output $_ }
     $releaseOptions = @(
         '--repo', $repo, '--target', $TargetCommit, '--draft', '--latest=false'
-        '--title', ('[draft] ' + $Dataset.Replace('_', '-') + '-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))
+        '--title', ('[draft] ' + $config.releaseId + '-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))
         '--notes', "<!-- yamamuki-data:temporary-draft:v1 -->`nローカルで生成した地表SQLiteの受け渡し用Draftです。加工・検査Actionを実行してください。"
     )
     # Draftではタグ名と対象SHAだけを記録し、Gitタグの実体は作らない。

@@ -1,0 +1,3 @@
+[workspace]
+members = ["common", "gsi_dem", "tools"]
+resolver = "3"

@@ -3,7 +3,7 @@ use crate::map::{Lod, Source as MapSource, TILE_SIZE, Tile, View};
 use crate::{lod_fade, surface_palette::Palette, surface_shade};
 use anyhow::{Result, bail, ensure};
 use eframe::{
-    egui::{self, ColorImage, Pos2, Rect, TextureHandle},
+    egui::{self, ColorImage, Pos2, Rect},
     egui_wgpu::wgpu,
 };
 use serde::Deserialize;
@@ -630,7 +630,7 @@ impl Key {
 type Reply = (Key, Result<ComposedTile>);
 
 struct Cached {
-    image: Option<TextureHandle>,
+    image: Option<crate::tile_atlas::Image>,
     shades: Vec<(usize, surface_shade::ShadeTexture)>,
     bytes: usize,
     touched: u64,
@@ -644,10 +644,10 @@ impl Cached {
         rect: Rect,
         key: &Key,
         images: &mut Vec<(Tile, Rect, egui::TextureId)>,
-        shades: &mut Vec<([Pos2; 4], Rect, wgpu::BindGroup)>,
+        shades: &mut Vec<([Pos2; 4], Rect, wgpu::BindGroup, wgpu::TextureView)>,
     ) -> bool {
         if let Some(image) = &self.image {
-            images.push((key.tile, surface_uv(key.pixels), image.id()));
+            images.push((key.tile, image.uv(surface_uv(key.pixels)), image.id()));
         }
         if !self.shades.is_empty() {
             let corners = view.tile_corners(rect, key.tile);
@@ -655,7 +655,7 @@ impl Cached {
             shades.extend(
                 self.shades
                     .iter()
-                    .map(|(_, shade)| (corners, uv, shade.bind_group.clone())),
+                    .map(|(_, shade)| (corners, uv, shade.bind_group.clone(), shade.view.clone())),
             );
         }
         self.image.is_some() || !self.shades.is_empty()
@@ -793,6 +793,9 @@ pub struct Surface {
     cache_bytes: usize,
     frame: u64,
     lod_fade: lod_fade::State<Key>,
+    material_lods: Vec<lod_fade::State<Key>>,
+    material_pass: usize,
+    material_ready: bool,
     shade_renderer: Option<surface_shade::Renderer>,
     error: Option<String>,
 }
@@ -851,6 +854,9 @@ impl Surface {
             cache_bytes: 0,
             frame: 0,
             lod_fade: lod_fade::State::default(),
+            material_lods: (0..4).map(|_| Default::default()).collect(),
+            material_pass: 0,
+            material_ready: false,
             shade_renderer: None,
             error: None,
         }
@@ -860,6 +866,30 @@ impl Surface {
         vec![(true, None); set.layers.len()]
     }
 
+    /// 実際に使える最も細かい画像の画素密度。過拡大で材質の範囲を縮め続けないために使う。
+    pub fn material_max_zoom(&self, lod: Lod) -> Option<f64> {
+        self.source.datasets[self.dataset]
+            .layers
+            .iter()
+            .zip(&self.options)
+            .filter(|(_, option)| option.0)
+            .filter_map(|(layer, &(_, fixed))| {
+                let selected = layer
+                    .levels
+                    .iter()
+                    .filter(|level| fixed.map_or_else(|| lod.allows(level.z), |z| level.z == z))
+                    .map(|level| equivalent_zoom(level.z, level.pixels))
+                    .max_by(f64::total_cmp);
+                selected.or_else(|| {
+                    layer
+                        .levels
+                        .iter()
+                        .min_by_key(|l| l.z)
+                        .map(|l| equivalent_zoom(l.z, l.pixels))
+                })
+            })
+            .max_by(f64::total_cmp)
+    }
     pub fn same_file(&self, source: &Source) -> bool {
         self.source.identity == source.identity
     }
@@ -986,6 +1016,37 @@ impl Surface {
         }
     }
 
+    pub fn material_ready(&self) -> bool {
+        self.material_ready
+    }
+    pub fn finish_material_frame(&mut self) {
+        while self.cache_bytes > CACHE_BYTES || self.cache.len() > 512 {
+            let Some(key) = self
+                .cache
+                .iter()
+                .filter(|(_, e)| e.touched != self.frame)
+                .min_by_key(|(_, e)| e.touched)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            self.cache_bytes -= self.cache.remove(&key).expect("cached tile").bytes;
+        }
+    }
+    pub fn select_material_pass(&mut self, pass: usize) {
+        if self.material_lods.len() <= pass {
+            self.material_lods.resize_with(pass + 1, Default::default);
+        }
+
+        if self.material_pass != pass {
+            std::mem::swap(
+                &mut self.lod_fade,
+                &mut self.material_lods[self.material_pass],
+            );
+            std::mem::swap(&mut self.lod_fade, &mut self.material_lods[pass]);
+            self.material_pass = pass;
+        }
+    }
     pub fn paint(
         &mut self,
         ui: &egui::Ui,
@@ -996,9 +1057,11 @@ impl Surface {
         overlay: bool,
         fade_backend: lod_fade::Backend<'_>,
         lod: Lod,
+        lod_zoom: f64,
     ) {
         let set = &self.source.datasets[self.dataset];
-        self.frame += 1;
+        self.frame = ui.ctx().cumulative_pass_nr();
+        self.material_ready = false;
         let limit = if dragging { 1 } else { PENDING };
         let mut received = 0;
         for (key, result) in self.replies.try_iter().take(limit) {
@@ -1015,7 +1078,8 @@ impl Surface {
                 Ok(ComposedTile { image, shades }) => {
                     if let Some(image) = image {
                         entry.bytes += image.pixels.len() * 4;
-                        entry.image = Some(ui.ctx().load_texture(
+                        entry.image = Some(crate::tile_atlas::Image::load(
+                            ui.ctx(),
                             "surface tile",
                             image,
                             egui::TextureOptions::LINEAR,
@@ -1045,14 +1109,19 @@ impl Surface {
         if received == limit && !self.pending.is_empty() {
             ui.ctx().request_repaint();
         }
-        let scale = view.scale() * f64::from(ui.ctx().pixels_per_point());
+        // 3Dの収集用座標系には画素数の意味がない。通常の画面と同じ密度で元タイルを保持する。
+        let scale = if self.material_pass == 0 {
+            view.scale()
+        } else {
+            256. * lod_zoom.exp2()
+        } * f64::from(ui.ctx().pixels_per_point());
         let levels: Vec<_> = set
             .layers
             .iter()
             .zip(&self.options)
             .map(|(l, &(show, z))| {
                 if show {
-                    z.or_else(|| auto_level(&l.levels, view.zoom, lod))
+                    z.or_else(|| auto_level(&l.levels, lod_zoom, lod))
                 } else {
                     None
                 }
@@ -1112,6 +1181,7 @@ impl Surface {
                 }
             }
 
+            self.material_ready = !waiting && received == 0;
             if let Some(target) = visible.first() {
                 let mut target = target.clone();
                 target.tile.x = 0;
@@ -1130,14 +1200,14 @@ impl Surface {
                 }
                 let fade = fade_backend.is_some()
                     && self.lod_fade.current.as_ref().is_some_and(|old| {
-                        lod_fade::can_blend(old.tile.z, target.tile.z, view.zoom)
+                        lod_fade::can_blend(old.tile.z, target.tile.z, lod_zoom)
                     });
                 self.lod_fade
                     .update(target.clone(), !waiting && received == 0, fade, now);
                 let current = self.lod_fade.current.as_ref().unwrap_or(&target);
                 if let (Some((state, renderer)), Some((old, amount))) =
                     (fade_backend, self.lod_fade.blend(ui.ctx(), now))
-                    && lod_fade::can_blend(old.tile.z, current.tile.z, view.zoom)
+                    && lod_fade::can_blend(old.tile.z, current.tile.z, lod_zoom)
                 {
                     let textures = state.renderer.read();
                     let mut colors = Vec::new();
@@ -1155,13 +1225,12 @@ impl Surface {
                             )
                         });
                         let uv = [old.1, current.1];
-                        let mut fetch = |key| {
+                        let mut fetch = |key, uv| {
                             let entry = self.cache.get_mut(key).filter(|entry| !entry.failed)?;
                             entry.touched = self.frame;
-                            let color = entry
-                                .image
-                                .as_ref()
-                                .and_then(|image| lod_fade::color_view(&textures, image.id()));
+                            let color = entry.image.as_ref().and_then(|image| {
+                                renderer.color_view(&textures, image.id(), self.frame)
+                            });
                             let color_ready = entry.image.is_none() || color.is_some();
                             Some((
                                 color,
@@ -1171,16 +1240,21 @@ impl Surface {
                                     .iter()
                                     .map(|(layer, shade)| (*layer, shade.view.clone()))
                                     .collect::<Vec<_>>(),
+                                entry.image.as_ref().map_or(uv, |image| image.uv(uv)),
                             ))
                         };
-                        let mut entries = [fetch(&old.0), fetch(&current.0)];
+                        let mut entries = [fetch(&old.0, old.1), fetch(&current.0, current.1)];
                         let color_ready = entries
                             .each_ref()
                             .map(|entry| entry.as_ref().is_some_and(|entry| entry.1));
                         let color = entries
                             .each_mut()
                             .map(|entry| entry.as_mut().and_then(|entry| entry.0.take()));
-                        colors.extend(lod_fade::Quad::new(tile, uv, color, color_ready));
+                        let color_uv = [
+                            entries[0].as_ref().map_or(uv[0], |e| e.3),
+                            entries[1].as_ref().map_or(uv[1], |e| e.3),
+                        ];
+                        colors.extend(lod_fade::Quad::new(tile, color_uv, color, color_ready));
                         let ready = entries.each_ref().map(Option::is_some);
                         for layer in 0..set.layers.len() {
                             let shade = entries.each_ref().map(|entry| {
@@ -1194,7 +1268,15 @@ impl Surface {
                             shades.extend(lod_fade::Quad::new(tile, uv, shade, ready));
                         }
                     }
-                    renderer.paint(painter, rect, view, colors, shades, amount);
+                    renderer.paint(
+                        painter,
+                        rect,
+                        view,
+                        colors,
+                        shades,
+                        amount,
+                        self.material_pass != 0,
+                    );
                 } else {
                     let mut used_previous = false;
                     if !current.same_grid(&target) {
@@ -1222,22 +1304,13 @@ impl Surface {
             self.lod_fade = lod_fade::State::default();
         }
         if let Some(renderer) = &self.shade_renderer {
-            renderer.paint(painter, rect, shade_tiles);
+            renderer.paint(painter, rect, shade_tiles, self.material_pass != 0);
         }
         for (tile, uv, image) in images {
             view.paint_tile_uv(painter, rect, tile, image, uv);
         }
-        while self.cache_bytes > CACHE_BYTES || self.cache.len() > 512 {
-            let Some(key) = self
-                .cache
-                .iter()
-                .filter(|(_, e)| e.touched != self.frame)
-                .min_by_key(|(_, e)| e.touched)
-                .map(|(k, _)| k.clone())
-            else {
-                break;
-            };
-            self.cache_bytes -= self.cache.remove(&key).expect("cached tile").bytes;
+        if self.material_pass == 0 {
+            self.finish_material_frame();
         }
     }
 }
@@ -1248,7 +1321,6 @@ pub struct PointLayer<'a> {
     pub enabled: &'a mut bool,
     pub close: &'a mut bool,
     pub show_info: &'a mut bool,
-    pub fit: &'a mut bool,
 }
 
 pub fn layer_list(
@@ -1260,6 +1332,7 @@ pub fn layer_list(
     zoom: f64,
     max_height: f32,
     lod: Lod,
+    surface_lod: Lod,
 ) -> Option<usize> {
     const HEADER_HEIGHT: f32 = 20.;
     const LAYER_INDENT: f32 = 14.;
@@ -1372,9 +1445,6 @@ pub fn layer_list(
                     row.col(|ui| {
                         if ui.button("i").on_hover_text("地点ファイルの情報").clicked() {
                             *layer.show_info = true;
-                        }
-                        if ui.small_button("地点全体").clicked() {
-                            *layer.fit = true;
                         }
                         if ui
                             .small_button("閉じる")
@@ -1522,7 +1592,8 @@ pub fn layer_list(
                         if !surface.enabled {
                             ui.disable();
                         }
-                        let selected_z = level.or_else(|| auto_level(&layer.levels, zoom, lod));
+                        let selected_z =
+                            level.or_else(|| auto_level(&layer.levels, zoom, surface_lod));
                         let label = selected_z.map_or_else(|| "—".to_owned(), |z| format!("z{z}"));
                         let current = if level.is_some() {
                             label
@@ -1642,6 +1713,64 @@ pub fn check(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use anyhow::Context;
+    #[test]
+    fn material_density_uses_image_pixels_and_fixed_lod() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("density.sqlite3");
+        let conn = Connection::open(&path)?;
+        db::initialize(&conn)?;
+        conn.execute_batch(
+            r#"
+            INSERT INTO datasets VALUES(1,'test','surface','地表','1',1,'{}');
+            INSERT INTO surface_layers VALUES(1,1,'forest','mask',0,'[]','{"color":[111,148,88,255]}');
+            INSERT INTO surface_levels VALUES(1,1,9,'z9',512),(1,1,12,'z12',384);
+        "#,
+        )?;
+        for (z, pixels) in [(9, 512), (12, 384)] {
+            let mut bytes = Vec::new();
+            {
+                let mut encoder = png::Encoder::new(&mut bytes, pixels, pixels);
+                encoder.set_color(png::ColorType::Grayscale);
+                encoder.set_depth(png::BitDepth::Eight);
+                encoder
+                    .write_header()?
+                    .write_image_data(&vec![255; (pixels * pixels) as usize])?;
+            }
+            conn.execute(
+                "INSERT INTO surface_tiles VALUES(1,1,?1,0,0,1,?2)",
+                db::rusqlite::params![z, bytes],
+            )?;
+        }
+        drop(conn);
+        let mut surface = Surface::new(&egui::Context::default(), Source::open(path)?);
+        assert_eq!(
+            surface.material_max_zoom(Lod::default()),
+            Some(12. + 1.5f64.log2())
+        );
+        surface.options[0].1 = Some(9);
+        assert_eq!(surface.material_max_zoom(Lod::default()), Some(10.));
+        surface.options[0].0 = false;
+        assert_eq!(surface.material_max_zoom(Lod::default()), None);
+        Ok(())
+    }
+    #[test]
+    fn terrain_toggle_keeps_surface_lod_at_the_same_screen_zoom() {
+        let levels = [(8, 512), (10, 384), (12, 384)].map(|(z, pixels)| SurfaceLevel {
+            z,
+            lod: format!("z{z}"),
+            pixels,
+        });
+        for screen in [8., 11.7, 12.6, 25.] {
+            for material in [6.3, 10.4, 18.] {
+                let flat = crate::terrain_material::lod_zoom(screen, material, 0);
+                let terrain = crate::terrain_material::lod_zoom(screen, material, 2);
+                assert_eq!(
+                    auto_level(&levels, flat, Lod::default()),
+                    auto_level(&levels, terrain, Lod::default())
+                );
+            }
+        }
+    }
     #[test]
     fn surface_auto_lod_switches_at_the_equivalent_pixel_density() {
         let levels =
@@ -2078,6 +2207,7 @@ mod tests {
                                 &mut online_enabled,
                                 8.,
                                 f32::INFINITY,
+                                Lod::default(),
                                 Lod::default(),
                             );
                         });

@@ -117,7 +117,7 @@ def publish_candidate(target, sha256="", reason="", *, preview=False):
         return
     repo = os.environ["GH_REPO"]
     manifest_name = "manifest.json"
-    receipts = re.findall(r"<!-- yamamuki-data:surface-draft:v1 (.+?) -->", release.get("body") or "")
+    receipts = re.findall(r"<!-- yamamuki-data:(?:surface|terrain)-draft:v1 (.+?) -->", release.get("body") or "")
     if receipts:
         if len(receipts) != 1:
             raise ValueError("地表の加工・検査記録を一意に特定できません")
@@ -139,7 +139,7 @@ def publish_candidate(target, sha256="", reason="", *, preview=False):
         return
     if manifest.get("dataSchemaFormat") != "yamamuki-sqlite" or manifest.get("schemaVersion") != 6:
         raise ValueError("未対応のデータ形式です")
-    matches = re.findall(r"<!-- yamamuki-data:surface-draft:v1 (.+?) -->", release.get("body") or "")
+    matches = re.findall(r"<!-- yamamuki-data:(?:surface|terrain)-draft:v1 (.+?) -->", release.get("body") or "")
     if len(matches) != 1:
         raise ValueError("地表の加工・検査記録がありません")
     receipt = json.loads(matches[0])
@@ -159,6 +159,7 @@ def publish_candidate(target, sha256="", reason="", *, preview=False):
     environment["GITHUB_REPOSITORY"] = repo
     subprocess.run([
         "pwsh", "-NoProfile", "-File", str(ROOT / "surface/scripts/publish_release.ps1"),
+        "-Kind", "terrain" if "<!-- yamamuki-data:terrain-draft:v1 " in (release.get("body") or "") else "surface",
         "-Dataset", dataset, "-Package", package,
         "-Operation", "Preview" if preview else "Formalize",
         "-Tag", release["tag_name"], "-Sha256", checksum, "-TargetCommit", commit,

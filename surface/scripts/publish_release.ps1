@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [ValidateSet("surface","terrain")][string]$Kind = "surface",
     [Parameter(Mandatory)][string]$Dataset,
     [string]$Package = "all",
     [ValidateSet('Prepare','Preview','Formalize')][string]$Operation = 'Prepare',
@@ -13,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 . (Join-Path $PSScriptRoot 'release_config.ps1')
 . (Join-Path $PSScriptRoot 'release_description.ps1')
-$config = Read-SurfaceReleaseConfig $Dataset $Package
+$config = Read-SurfaceReleaseConfig $Dataset $Package $Kind
 $repo = $env:GITHUB_REPOSITORY
 if ($repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $env:GITHUB_REF -cne 'refs/heads/main') {
     throw '地表Releaseの処理は対象リポジトリのmainから実行してください。'
@@ -40,7 +41,7 @@ if ($candidates.Count -ne 1) { throw "下書きを一意に特定できません
 $releasePath = "$prefix/releases/$($candidates[0].id)"
 
 $temporaryMarker = '<!-- yamamuki-data:temporary-draft:v1 -->'
-$receiptPattern = '<!-- yamamuki-data:surface-draft:v1 (.+?) -->'
+$receiptPattern = "<!-- yamamuki-data:$Kind-draft:v1 (.+?) -->"
 
 function Read-Release {
     $draft = gh api $releasePath | ConvertFrom-Json -AsHashtable
@@ -120,6 +121,13 @@ $target = Join-Path $surface 'target'
 $suffix = if ($IsWindows) { '.exe' } else { '' }
 cargo build --locked --release --manifest-path (Join-Path $surface 'Cargo.toml') --target-dir $target --bin surface-tool
 $tool = Join-Path $target "release/surface-tool$suffix"
+$terrainTool = $null
+if ($Kind -eq 'terrain') {
+    $terrain = Join-Path (Split-Path $surface -Parent) 'terrain'
+    cargo build --locked --release --manifest-path (Join-Path $terrain 'Cargo.toml') --bin terrain-tool
+    $terrainTool = Join-Path $terrain "target/release/terrain-tool$suffix"
+}
+
 
 $download = Join-Path ([IO.Path]::GetTempPath()) ('surface-publish-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $download | Out-Null
@@ -147,8 +155,9 @@ try {
 
     $database = Join-Path $download $files[0]
     & $tool validate $database
+    if ($terrainTool) { & $terrainTool validate $database }
     $expected = & $tool manifest $database $releaseRoot $timestamp $config.releaseId | ConvertFrom-Json -AsHashtable
-    $sourceLevels = & $tool surface-levels $database | ConvertFrom-Json -AsHashtable
+    $sourceLevels = & $tool ("$Kind-levels") $database | ConvertFrom-Json -AsHashtable
     if ((Get-SurfaceReleaseTag $config $expected $sourceLevels) -cne $Tag) {
         throw 'SQLiteのデータセット・版がタグと一致しません。'
     }
@@ -185,10 +194,13 @@ try {
     foreach ($split in $config.splitPackages) {
         $splitDb = Join-Path $download $split.fileName
         $selection = ConvertTo-Json -InputObject $split.selection -Depth 6 -Compress
-        & $tool select-surface $database $splitDb $selection
+        if ($terrainTool) {
+            $zooms = ConvertTo-Json -InputObject @($split.selection.terrain) -Compress
+            & $terrainTool select-levels $database $splitDb $zooms
+        } else { & $tool select-surface $database $splitDb $selection }
         & $tool validate $splitDb
         $splitManifest = & $tool manifest $splitDb $releaseRoot $timestamp $config.releaseId | ConvertFrom-Json -AsHashtable
-        $actualLevels = & $tool surface-levels $splitDb | ConvertFrom-Json -AsHashtable
+        $actualLevels = & $tool ("$Kind-levels") $splitDb | ConvertFrom-Json -AsHashtable
         foreach ($id in $split.layers) {
             $wanted = $split.selection[$id] ?? $sourceLevels[$id]
             if (!$actualLevels.Contains($id) -or (($actualLevels[$id] -join ',') -cne ($wanted -join ','))) {
@@ -252,7 +264,7 @@ try {
             if ($env:GITHUB_RUN_ID -notmatch '^\d+$' -or $env:GITHUB_RUN_ATTEMPT -notmatch '^\d+$') {
                 throw 'Release名の確定にはActionsの実行IDと試行番号が必要です。'
             }
-            $publicName = $Dataset.Replace('_', '-') + '-' + $created.ToString('yyyyMMddTHHmmssZ') + '-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT
+            $publicName = $config.releaseId + '-' + $created.ToString('yyyyMMddTHHmmssZ') + '-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT
         }
         $fields.name = '[draft] ' + $publicName
         $receipt = @{
@@ -261,7 +273,7 @@ try {
         } | ConvertTo-Json -Depth 6 -Compress
         $fields.body = @(
             $temporaryMarker
-            '<!-- yamamuki-data:surface-draft:v1 ' + $receipt + ' -->'
+            "<!-- yamamuki-data:$Kind-draft:v1 " + $receipt + ' -->'
             ''
             (New-SurfaceReleaseDescription $manifest $variants)
         ) -join [Environment]::NewLine

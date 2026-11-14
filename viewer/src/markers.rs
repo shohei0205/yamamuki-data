@@ -181,6 +181,9 @@ impl Sprites {
         mesh.vertices.reserve(count * 4);
         mesh.indices.reserve(count * 6);
         for (position, matched, active) in positions {
+            if !position.is_finite() {
+                continue;
+            }
             let u = (usize::from(matched) + 2 * usize::from(active)) as f32 / 4.;
             mesh.add_rect_with_uv(
                 egui::Rect::from_center_size(position, egui::Vec2::splat(self.side)),
@@ -199,6 +202,24 @@ impl Sprites {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn points_behind_camera_never_create_nonfinite_gpu_vertices() {
+        let ctx = egui::Context::default();
+        let mut cache = None;
+        let sprites = Sprites::update(&mut cache, &ctx, 12., 100);
+        let mesh = sprites.mesh(
+            [
+                (egui::pos2(20., 30.), true, false),
+                (egui::pos2(f32::INFINITY, f32::INFINITY), true, false),
+                (egui::pos2(f32::NAN, 0.), true, false),
+            ]
+            .into_iter(),
+            3,
+        );
+        assert_eq!(mesh.vertices.len(), 4);
+        assert_eq!(mesh.indices.len(), 6);
+        assert!(mesh.vertices.iter().all(|vertex| vertex.pos.is_finite()));
+    }
     #[test]
     fn html_marker_sizes() {
         for (zoom, matched, count, selected, radius) in [

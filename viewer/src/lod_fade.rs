@@ -97,14 +97,21 @@ impl Quad {
     }
 }
 
+#[derive(Default)]
+struct TextureViews {
+    frame: u64,
+    entries: std::collections::HashMap<wgpu::Texture, (wgpu::TextureView, u64)>,
+}
 pub struct Renderer {
     device: wgpu::Device,
     layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
+    sampler_group: wgpu::BindGroup,
     empty: wgpu::TextureView,
     color: wgpu::RenderPipeline,
     darken: wgpu::RenderPipeline,
     brighten: wgpu::RenderPipeline,
+    gamma_shade: bool,
+    views: std::sync::Mutex<TextureViews>,
 }
 
 impl Renderer {
@@ -125,20 +132,34 @@ impl Renderer {
         };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("LOD crossfade"),
-            entries: &[
-                texture(0),
-                texture(1),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
+            entries: &[texture(0), texture(1)],
+        });
+        // D3D12の共有サンプラー領域は2048個。タイルごとに複製せず全描画で一つ使う。
+        let sampler_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("共通の画像サンプラー"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            }],
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let sampler_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("全タイル共通の画像サンプラー"),
+            layout: &sampler_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            }],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[&layout],
+            bind_group_layouts: &[&layout, &sampler_layout],
             push_constant_ranges: &[],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -220,18 +241,37 @@ impl Renderer {
         Self {
             device: device.clone(),
             layout,
-            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            }),
+            sampler_group,
             empty,
+            gamma_shade: !format.is_srgb(),
+            views: Default::default(),
             color,
             darken,
             brighten,
         }
     }
 
+    pub fn color_view(
+        &self,
+        renderer: &egui_wgpu::Renderer,
+        id: egui::TextureId,
+        frame: u64,
+    ) -> Option<wgpu::TextureView> {
+        let texture = renderer.texture(&id)?.texture.as_ref()?;
+        let mut cache = self.views.lock().unwrap();
+        if cache.frame != frame {
+            cache
+                .entries
+                .retain(|_, (_, used)| *used >= frame.saturating_sub(2));
+            cache.frame = frame;
+        }
+        let entry = cache
+            .entries
+            .entry(texture.clone())
+            .or_insert_with(|| (texture.create_view(&Default::default()), frame));
+        entry.1 = frame;
+        Some(entry.0.clone())
+    }
     pub fn paint(
         &self,
         painter: &egui::Painter,
@@ -240,7 +280,28 @@ impl Renderer {
         color: Vec<Quad>,
         shades: Vec<Quad>,
         amount: f32,
+        direct: bool,
     ) {
+        if direct {
+            for (quad, shade) in shades
+                .into_iter()
+                .map(|q| (q, true))
+                .chain(color.into_iter().map(|q| (q, false)))
+            {
+                yamamuki_terrain_view::direct_material::capture(
+                    painter,
+                    yamamuki_terrain_view::direct_material::Capture {
+                        rect: Rect::from_points(&view.tile_corners(rect, quad.tile)),
+                        uv: quad.uv,
+                        textures: quad.textures,
+                        amount,
+                        shade,
+                        gamma_shade: shade && self.gamma_shade,
+                    },
+                );
+            }
+            return;
+        }
         if let Some(draw) = self.draw(rect, view, color, shades, amount) {
             painter.add(egui_wgpu::Callback::new_paint_callback(rect, draw));
         }
@@ -293,10 +354,6 @@ impl Renderer {
                             new.as_ref().unwrap_or(&self.empty),
                         ),
                     },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
                 ],
             }));
         }
@@ -311,6 +368,7 @@ impl Renderer {
                 usage: wgpu::BufferUsages::VERTEX,
             });
         Some(Draw {
+            sampler_group: self.sampler_group.clone(),
             vertices,
             textures,
             shade_count,
@@ -321,20 +379,8 @@ impl Renderer {
     }
 }
 
-pub fn color_view(
-    renderer: &egui_wgpu::Renderer,
-    texture: egui::TextureId,
-) -> Option<wgpu::TextureView> {
-    Some(
-        renderer
-            .texture(&texture)?
-            .texture
-            .as_ref()?
-            .create_view(&Default::default()),
-    )
-}
-
 struct Draw {
+    sampler_group: wgpu::BindGroup,
     vertices: wgpu::Buffer,
     textures: Vec<wgpu::BindGroup>,
     shade_count: usize,
@@ -357,6 +403,7 @@ impl egui_wgpu::CallbackTrait for Draw {
 impl Draw {
     fn render(&self, pass: &mut wgpu::RenderPass<'static>) {
         pass.set_vertex_buffer(0, self.vertices.slice(..));
+        pass.set_bind_group(1, &self.sampler_group, &[]);
         for (pipeline, range) in [
             (&self.darken, 0..self.shade_count),
             (&self.brighten, 0..self.shade_count),

@@ -1,0 +1,31 @@
+name: 地形：下書き Release 加工・検査
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 下書きReleaseのURLまたはタグ（ReleaseページのURLを貼り付け）
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-data-pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - name: 下書きを検査し、配布用Draftを作成
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TARGET: ${{ inputs.target }}
+        run: python -m release_tools.prepare_terrain --target "$RELEASE_TARGET"

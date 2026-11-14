@@ -99,6 +99,7 @@ Co-authored-by: Codex GPT-6
 コミットの前に、共通の確認と変更したデータに応じたテストを行う。具体的なコマンド・必要なツール・CI での実行範囲は、各 README の記述を参照する。手順の重複と更新漏れを避けるため、このファイルにはコマンドを転記しない。
 
 - 共通の確認（改行コード・BOM、Release の作成と添付確認・手動公開入口・共通形式の地点 Release とビューワの ZIP・チェックサムの検証と段階的な公開・データ固有の公開モジュールへの非依存）: [ルート README の「変更の確かめ方」](README.md#変更の確かめ方)
+- 地形の形式・Rust生成器・SQLite復号と親参照のテスト: [地形READMEの「検査」](terrain/README.md#検査)。全国生成はローカルで行い、CIでは外部データ不要のfixtureを使う。
 - 地表SQLiteの検査・Draftの加工と公開のテスト: [ESA地表READMEの「テスト」](surface/esa_worldcover/README.md#テスト)
 - 地点の共通ビューアのテスト: [地点 README の「共通ビューアのテスト」](points/README.md#共通ビューアのテスト)
 - データビューワのビルドとテストは Windows と macOS（Apple Silicon）の CI で行う。Windows ではリリース実行ファイルで地点 JSON を読み込む。手元での確認手順は [ビューワ README の「確認」](viewer/README.md#確認) を参照する。

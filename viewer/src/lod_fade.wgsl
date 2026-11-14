@@ -17,7 +17,7 @@ fn vertex(
 
 @group(0) @binding(0) var old_tile: texture_2d<f32>;
 @group(0) @binding(1) var new_tile: texture_2d<f32>;
-@group(0) @binding(2) var linear_sampler: sampler;
+@group(1) @binding(0) var linear_sampler: sampler;
 
 fn gamma(color: vec4<f32>) -> vec4<f32> {
     let rgb = select(

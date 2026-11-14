@@ -25,7 +25,11 @@ function New-SurfaceReleaseDescription($Manifest, $Variants) {
         ''
         "生成日時（UTC）: $generatedAt"
         ''
-        '地表画像タイルを収録したSQLiteです。必要なレイヤーと最大ズームに合うファイルを選んでください。'
+        if ($entry.kind -ceq 'terrain') {
+            '標高の自由配置制御点を収録したSQLiteです。自然近傍補間で地形を再構成します。'
+        } else {
+            '地表画像タイルを収録したSQLiteです。必要なレイヤーと最大ズームに合うファイルを選んでください。'
+        }
         ''
         '## 配布ファイル'
         ''

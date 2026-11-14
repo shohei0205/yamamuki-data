@@ -12,9 +12,9 @@ from release_tools.publish_reviewed import ROOT, check_branch, find_release
 from release_tools.surface_identity import finalize
 
 
-def resolve_config(tag):
+def resolve_config(tag, kind="surface"):
     matches = []
-    for path in sorted((ROOT / "surface").glob("*/release.json")):
+    for path in sorted((ROOT / kind).glob("*/release.json")):
         settings = json.loads(path.read_text(encoding="utf-8-sig"))
         for package, config in settings["packages"].items():
             prefix = config["releaseId"] + "-"
@@ -25,13 +25,13 @@ def resolve_config(tag):
     return matches[0]
 
 
-def prepare(target):
+def prepare(target, kind="surface"):
     check_branch("stable")
     release = find_release(target)
     if not release.get("draft") or release.get("prerelease"):
         raise ValueError("未公開のDraft Releaseを指定してください")
     tag = release["tag_name"]
-    dataset, package, settings, config = resolve_config(tag)
+    dataset, package, settings, config = resolve_config(tag, kind)
     commit = release.get("target_commitish", "")
     if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
         raise ValueError("下書きの対象コミットが40桁のSHAで固定されていません")
@@ -51,15 +51,15 @@ def prepare(target):
             or not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum)
             or not isinstance(datasets, list) or len(datasets) != 1
             or datasets[0].get("id") != settings["datasetId"]
-            or datasets[0].get("kind") != "surface"):
+            or datasets[0].get("kind") != kind):
         raise ValueError("添付manifestと地表の公開設定が一致しません")
-    release, manifest = finalize(release, manifest, dataset, package, settings, config)
+    release, manifest = finalize(release, manifest, dataset, package, settings, config, kind=kind)
     tag, checksum = release["tag_name"], manifest["sha256"]
     print(f"加工対象: {dataset}/{package} / {tag}", flush=True)
     print(f"対象コミット: {commit}\nSQLiteのSHA-256: {checksum}", flush=True)
     environment = dict(os.environ, GITHUB_REPOSITORY=os.environ["GH_REPO"])
     subprocess.run(["pwsh", "-NoProfile", "-File", str(ROOT / "surface/scripts/publish_release.ps1"),
-                    "-Dataset", dataset, "-Package", package, "-Operation", "Prepare",
+                    "-Kind", kind, "-Dataset", dataset, "-Package", package, "-Operation", "Prepare",
                     "-Tag", tag, "-Sha256", checksum, "-TargetCommit", commit],
                    check=True, env=environment)
 

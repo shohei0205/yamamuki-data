@@ -2,7 +2,7 @@
 
 山の地点データなどを作り、誰でも使える形で配るリポジトリ。[山むきアプリ](https://github.com/shohei0205/yamamuki)もこのデータを使っている。
 
-[データビューワ](viewer/README.md) では、地点データを地理院地図などに重ねて表示できる。地表SQLiteは単独で表示することも、地図に重ねることもできる。
+[データビューワ](viewer/README.md) では、地点データを地理院地図などに重ねて表示できる。地形SQLiteはGPUで曲面を再構成して3D表示できる。地表SQLiteは単独で表示することも、地図に重ねることもできる。
 
 ## データの種類
 
@@ -10,7 +10,7 @@
 |---|---|
 | [地点データ](points/README.md) | 山頂などの地点の名称・座標・標高 |
 | [地表データ](surface/README.md) | 森林・水域・陰影を表す地図画像タイル |
-| 地形データ | 標高から地形の起伏を再現するデータ（追加予定） |
+| [地形データ](terrain/README.md) | 自由配置の制御点で山の起伏を再現する標高タイル |
 
 収録対象、データ本体の形式、ダウンロード先、生成・公開手順、検査基準は、種類ごとの文書にまとめる。
 
@@ -19,6 +19,7 @@
 ```text
 points/            地点データ（詳細は points/README.md）
 surface/           地表データの生成・SQLite読取
+terrain/           地形データの生成・圧縮・復号
 formats/           データ種別に共通する metadata・manifest・SQLite の仕様
 schemas/           データ種別に共通する manifest の版別スキーマ
 release_tools/     データ種別共通の公開入口
@@ -82,6 +83,7 @@ Actions とローカルのどちらで生成したデータも、配布ファイ
 | 共通：文字形式の確認 | 改行コードとBOM |
 | 共通：Draft-release を試用公開 | 下書きを Pre-release として公開 |
 | 共通：Pre-release を正式公開 | 試用版を正式公開。地点データは配布カタログも更新 |
+| 地形：下書き Release 加工・検査 | [地形SQLiteの全復号・配布用Draft作成](terrain/README.md#地形データの公開) |
 | 地表：下書き Release 加工・検査 | [ローカル生成物を加工・検査し、配布用Draftを作成](surface/README.md#地表データの公開) |
 | データビューワ：下書き Release 生成・検査 | [Windows・macOS のビューワのDraftを生成](viewer/README.md#配布版の公開) |
 
@@ -176,11 +178,12 @@ Pages を更新する公開ジョブの Summary には、公開後の Release �
 python -m unittest discover -s release_tools/tests -v
 ```
 
-CI の「共通：文字形式の確認」はすべての PR で文字コード・改行を確認する。「共通：データ処理のテスト」（`.github/workflows/test.yml`）は push・PR 時に、共通の公開処理・地点の共通ビューア・データビューワ（Windows・macOS）・OSM 山頂・国土地理院山頂・地表SQLiteの公開手順を別のジョブで確認する。データ種別を追加するときもこのActionにジョブを追加する。必須チェックの `test` ジョブは各テストの結果を集約し、すべて成功した場合だけ成功する。ジョブを追加するときは `test` の依存先と結果確認にも追加する。
+CI の「共通：文字形式の確認」はすべての PR で文字コード・改行を確認する。「共通：データ処理のテスト」（`.github/workflows/test.yml`）は push・PR 時に、共通の公開処理・地点の共通ビューア・データビューワ（Windows・macOS）・OSM 山頂・国土地理院山頂・地表SQLiteの公開手順・地形の形式とRust生成器を別のジョブで確認する。データ種別を追加するときもこのActionにジョブを追加する。必須チェックの `test` ジョブは各テストの結果を集約し、すべて成功した場合だけ成功する。ジョブを追加するときは `test` の依存先と結果確認にも追加する。
 
 データ固有のテストは各 README を参照する。
 
 - [地表データの公開テスト](surface/esa_worldcover/README.md#テスト)
+- [地形データの検査](terrain/README.md#検査)
 - [地点データのテスト](points/README.md#変更の確かめ方)
 
 ## ライセンス
@@ -195,6 +198,7 @@ CI の「共通：文字形式の確認」はすべての PR で文字コード�
 | 国土地理院由来の地点データ・OSM版の地点照合と補正に用いた情報 | 出典：国土地理院。資料名と加工内容を記録する | [公共データ利用規約（第1.0版）](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（PDL-1.0） | [GSI 山頂](points/gsi-peaks/README.md#出典とライセンス)・[OSM 山頂](points/osm-peaks/README.md#出典とライセンス) の出典とライセンス |
 | ESA WorldCover 由来の地表データ（森林・水域） | © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [ESA WorldCover の出典とライセンス](surface/esa_worldcover/README.md#出典とライセンス)。分類・穴埋め・ノイズ除去・縮小を行って作成 |
 | 国土地理院の標高タイル由来の陰影・地表分類の補助情報 | 地理院タイル（標高タイル）を加工して作成 | [公共データ利用規約（第1.0版）](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（PDL-1.0） | [ESA WorldCover の出典とライセンス](surface/esa_worldcover/README.md#出典とライセンス)。DEM10Bから陰影を生成し、地表分類の補助判定にも使用 |
+| 国土地理院の標高タイル由来の地形 | 地理院タイル（標高タイル）を加工して作成 | [公共データ利用規約（第1.0版）](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)（PDL-1.0） | [国土地理院DEMの出典とライセンス](terrain/gsi_dem/README.md#出典とライセンス)。標高を自由配置の制御点へ適合し、方向別誤差で削減・差分圧縮 |
 | 日本百名山の山名一覧 | Wikipedia「日本百名山」の投稿者 | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) | [GSI 山頂](points/gsi-peaks/README.md#出典とライセンス)・[OSM 山頂](points/osm-peaks/README.md#出典とライセンス) |
 | 公開済みの動作確認用地点データ | このリポジトリで作成 | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | [開発版カタログ](https://shohei0205.github.io/yamamuki-data/points/catalog-dev.json) の `testdata` |
 

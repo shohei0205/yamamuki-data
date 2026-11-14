@@ -156,6 +156,21 @@ fn main() -> Result<()> {
                 Ok(())
             })
         }
+        ("terrain-levels", [path]) => {
+            let connection = db::open(Path::new(path))?;
+            let datasets = db::datasets(&connection)?;
+            ensure!(
+                datasets.len() == 1 && datasets[0].kind == "terrain",
+                "地形データセットを1件指定してください"
+            );
+            let mut query = connection
+                .prepare("SELECT z FROM terrain_levels WHERE dataset_key=? ORDER BY z")?;
+            let levels = query
+                .query_map([datasets[0].key], |r| r.get::<_, u32>(0))?
+                .collect::<db::rusqlite::Result<Vec<_>>>()?;
+            println!("{}", serde_json::json!({"terrain":levels}));
+            Ok(())
+        }
         ("surface-levels", [path]) => {
             let connection = db::open(Path::new(path))?;
             let datasets = db::datasets(&connection)?;

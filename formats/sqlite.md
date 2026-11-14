@@ -61,11 +61,9 @@ ORDER BY ordinal;
 
 地点JSON版6を格納するとき、`payload_json` は `points[]` の1件と同じJSONオブジェクト。表示には少なくとも `id`、`name`、WGS 84の度単位の `latitude`・`longitude` を使う。`elevationM` はメートル、`nameReading` は文字列または文字列配列。その他の項目は [地点JSON仕様](../points/formats/data.md) に従う。ビューワーはこの設計案の地点JSON版6の収録枠を読み取り、地点ファイルの情報から台帳とメタデータを表示できる。コンテナへ地点JSONを取り込むコマンドは今後の工程。
 
-## 地形の収録枠
+## 地形の収録形式
 
-> **設計案**。この節は検討中の収録形式を示す。正式仕様の確定時に、テーブル構造や読み込み規則が変わる可能性がある。
-
-`terrain_levels(dataset_key, level_key, z, settings_json)` の主キーは `(dataset_key, level_key)`。`z` は実XYZズーム。`terrain_tiles(dataset_key, level_key, x, y, encoding, payload)` の主キーは `(dataset_key, level_key, x, y)`。`encoding` は文字列のコーデック名、`payload` は圧縮BLOB。差分の参照先は同じ地形データセットのレベルと座標で表す。タイルのコーデック・量子化・復号の正式仕様は未定義のため、現時点では収録とコピーまで扱える。
+`terrain_levels(dataset_key,level_key,z,settings_json)` と `terrain_tiles(dataset_key,level_key,x,y,encoding,payload)` を使う。形式版1の座標・制御点・差分参照・復号・表示は [地形のSQLite形式](../terrain/formats/sqlite.md) を参照する。地形BLOBはコンテナのdataset_keyに依存しないため、地表・地点と同じSQLiteへ統合できる。
 
 ## 統合時の互換性
 

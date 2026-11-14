@@ -1,0 +1,12 @@
+[package]
+name = "terrain-tool"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+serde_json = "1"
+anyhow = "1"
+yamamuki-terrain = { path = "../common" }
+surface-tool = { path = '../../surface/tools' }
+yamamuki-data-sqlite = { path = '../../surface/common' }

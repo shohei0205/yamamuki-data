@@ -1,8 +1,12 @@
-param([Parameter(Mandatory)][string]$Database, [string]$DataTimestamp)
+param([Parameter(Mandatory)][string]$Database, [string]$DataTimestamp, [ValidateSet("surface","terrain")][string]$Kind = "surface")
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 $scripts = Join-Path (Split-Path $PSScriptRoot -Parent) 'scripts'
+$datasetName = if ($Kind -eq 'terrain') { 'gsi_dem' } else { 'esa_worldcover' }
+$releasePrefix = if ($Kind -eq 'terrain') { 'gsi-terrain' } else { 'esa-worldcover' }
+$minZoom = if ($Kind -eq 'terrain') { 6 } else { 5 }
+$layerIds = if ($Kind -eq 'terrain') { @('terrain') } else { @('forest','hillshade','water') }
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('surface-publish-test-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 $inputDir = Join-Path $testRoot 'input'
@@ -32,7 +36,7 @@ function git {
 
 function gh {
     if ($args[0] -eq 'api') {
-        if ($args[1] -like '*/actions/workflows/publish-surface.yml') { return 'active' }
+        if ($args[1] -like "*/actions/workflows/publish-$Kind.yml") { return 'active' }
         if ($args[1] -like '*/commits/*') { return $commit }
         if ($args[1] -eq '--paginate' -and !$state.created) { return '[[]]' }
         if ($args[1] -eq '--paginate') {
@@ -67,15 +71,15 @@ function gh {
             $args -notcontains '--draft' -or $args -contains '--verify-tag' -or
             $state.tagCommit) { throw '受け渡しDraftの設定が不正です。' }
         $state.name = $args[[array]::IndexOf($args, '--title') + 1]
-        if (!$state.name.StartsWith('[draft] esa-worldcover-')) { throw 'Draft名が不正です。' }
+        if (!$state.name.StartsWith("[draft] $releasePrefix-")) { throw 'Draft名が不正です。' }
         $state.created = $true
         $state.body = $notes
         return
     }
     if ($args[0] -eq 'workflow' -and $args[1] -eq 'run') {
-        if (!$state.created -or $args[2] -cne 'publish-surface.yml' -or
+        if (!$state.created -or $args[2] -cne "publish-$Kind.yml" -or
             $args[[array]::IndexOf($args, '--ref') + 1] -cne 'main') { throw '加工Actionの起動が不正です。' }
-        if ($args.Count -ne 9 -or $args[7] -cne '-f' -or $args[8] -notlike 'target=esa-worldcover-*') { throw '加工Actionの入力が不正です。' }
+        if ($args.Count -ne 9 -or $args[7] -cne '-f' -or $args[8] -notlike "target=$releasePrefix-*") { throw '加工Actionの入力が不正です。' }
         $state.started = $true
         return
     }
@@ -107,24 +111,33 @@ function gh {
     throw "未定義のgh呼び出しです: $args"
 }
 
+$testSource = $null
 try {
+    if ($Kind -eq 'terrain') {
+        # 加工Actionによる識別子確定後の状態をRustで用意する。元の全国SQLiteは変更しない。
+        $suffix = if ($IsWindows) { '.exe' } else { '' }
+        $identityTool = Join-Path (Split-Path $PSScriptRoot -Parent) "target/release/surface-tool$suffix"
+        $testSource = Join-Path $testRoot 'source-with-release-identifier.sqlite3'
+        & $identityTool set-data-version $Database $testSource '20261112T000000Z-12345-1'
+        $Database = $testSource
+    }
     $timestamp = @{}
     if ($DataTimestamp) { $timestamp.DataTimestamp = $DataTimestamp }
     $env:GITHUB_RUN_ID = '12345'
     $env:GITHUB_RUN_ATTEMPT = '1'
-    & (Join-Path $scripts 'prepare_release.ps1') -Dataset esa_worldcover -Database $Database -OutputDirectory $inputDir -TargetCommit $commit -ProcessDraft @timestamp
+    & (Join-Path $scripts 'prepare_release.ps1') -Kind $Kind -Dataset $datasetName -Database $Database -OutputDirectory $inputDir -TargetCommit $commit -ProcessDraft @timestamp
     if ($state.tagCommit) { throw 'Draft作成時にGitタグが作られました。' }
     if (!$state.created -or !$state.started) { throw '受け渡しDraftまたは加工Actionが作成されませんでした。' }
     Get-ChildItem -LiteralPath $inputDir -File | ForEach-Object { Add-TestAsset $_ }
-    $manifest = Get-Content -LiteralPath (Join-Path $inputDir 'esa-worldcover-z12.manifest.json') -Raw | ConvertFrom-Json
+    $manifest = Get-Content -LiteralPath (Join-Path $inputDir "$releasePrefix-z12.manifest.json") -Raw | ConvertFrom-Json
     $suffix = if ($IsWindows) { ".exe" } else { "" }
     $tool = Join-Path (Split-Path $PSScriptRoot -Parent) "target/release/surface-tool$suffix"
-    $tag = "esa-worldcover-$($manifest.version)"
+    $tag = "$releasePrefix-$($manifest.version)"
     $env:GITHUB_REPOSITORY = $repo
     $env:GITHUB_REF = 'refs/heads/main'
     $env:GITHUB_STEP_SUMMARY = Join-Path $testRoot 'summary.md'
     $publish = @{
-        Dataset = 'esa_worldcover'; Tag = $tag; Sha256 = $manifest.sha256; TargetCommit = $commit
+        Kind = $Kind; Dataset = $datasetName; Tag = $tag; Sha256 = $manifest.sha256; TargetCommit = $commit
     }
     try {
         & (Join-Path $scripts 'publish_release.ps1') @publish
@@ -134,16 +147,16 @@ try {
     }
     if (!$state.draft -or $state.assets.Count -ne 5) { throw '途中失敗時に下書きが保持されませんでした。' }
     # 正常なSQLiteは再利用し、壊れたmanifestだけを差し替える。
-    $z9Manifest = Join-Path $inputDir 'esa-worldcover-z9.manifest.json'
+    $z9Manifest = Join-Path $inputDir "$releasePrefix-z9.manifest.json"
     Set-Content -LiteralPath $z9Manifest -Value '{}' -Encoding utf8NoBOM
     Add-TestAsset (Get-Item -LiteralPath $z9Manifest)
-    $state.assets['esa-worldcover-z9.sqlite3'].digest = $null
+    $state.assets["$releasePrefix-z9.sqlite3"].digest = $null
     $state.failUpload = $false
     $state.uploaded = @()
     & (Join-Path $scripts 'publish_release.ps1') @publish
     if (!$state.draft -or $state.prerelease -or $state.assets.Count -ne 9 -or $state.uploaded.Count -ne 5 -or
-        $state.uploaded -notcontains 'esa-worldcover-z9.manifest.json' -or
-        $state.uploaded -contains 'esa-worldcover-z9.sqlite3') {
+        $state.uploaded -notcontains "$releasePrefix-z9.manifest.json" -or
+        $state.uploaded -contains "$releasePrefix-z9.sqlite3") {
         throw '再実行時の添付・公開結果が不正です。'
     }
     if ($state.body.Contains('共通Actionで試用公開できます') -or
@@ -152,19 +165,19 @@ try {
     }
     $previousRowPosition = -1
     foreach ($z in 9..12) {
-        $rowPosition = $state.body.IndexOf("| " + [char]96 + "esa-worldcover-z$z.sqlite3", [StringComparison]::Ordinal)
-        if ($rowPosition -le $previousRowPosition -or !$state.body.Contains(" | z5〜z$z | ")) {
+        $rowPosition = $state.body.IndexOf("| " + [char]96 + "$releasePrefix-z$z.sqlite3", [StringComparison]::Ordinal)
+        if ($rowPosition -le $previousRowPosition -or !$state.body.Contains(" | z$minZoom〜z$z | ")) {
             throw "配布順序または共通ズーム表記が不正です: z$z"
         }
         $previousRowPosition = $rowPosition
         foreach ($suffix in @('sqlite3','manifest.json')) {
-            $assetName = "esa-worldcover-z$z.$suffix"
+            $assetName = "$releasePrefix-z$z.$suffix"
             if (!$state.body.Contains(([char]96 + $assetName + [char]96))) {
                 throw "Draft本文に添付ファイル名がありません: $assetName"
             }
         }
     }
-    $descriptionManifest = Get-Content -LiteralPath (Join-Path $inputDir 'esa-worldcover-z12.manifest.json') -Raw | ConvertFrom-Json -AsHashtable
+    $descriptionManifest = Get-Content -LiteralPath (Join-Path $inputDir "$releasePrefix-z12.manifest.json") -Raw | ConvertFrom-Json -AsHashtable
     foreach ($source in $descriptionManifest.metadata.sources) {
         $line = "- $($source.name): $($source.attribution) / $($source.license)"
         if (!$state.body.Contains($line)) { throw '配布本文の出典が共通の箇条書き形式ではありません。' }
@@ -187,7 +200,7 @@ try {
     if ($state.tagCommit) { throw 'Draft加工時にGitタグが作られました。' }
     if ($state.hiddenVerifications -eq 0) { throw '隠しファイルによる添付の再検証が実行されませんでした。' }
     if (!$state.body.Contains('<!-- yamamuki-data:temporary-draft:v1 -->') -or
-        !$state.body.Contains('<!-- yamamuki-data:surface-draft:v1 ')) {
+        !$state.body.Contains("<!-- yamamuki-data:$Kind-draft:v1 ")) {
         throw '加工後のDraftに整理マーカーまたは検査記録がありません。'
     }
     try {
@@ -231,21 +244,21 @@ try {
         }
     }
     foreach ($z in 9..12) {
-        $name = "esa-worldcover-z$z"
+        $name = "$releasePrefix-z$z"
         $manifestName = "$name.manifest.json"
         $variant = Get-Content -LiteralPath (Join-Path $inputDir $manifestName) -Raw | ConvertFrom-Json -AsHashtable
         $database = Join-Path $inputDir "$name.sqlite3"
         $hash = (Get-FileHash -LiteralPath $database).Hash
-        $levels = & $tool surface-levels $database | ConvertFrom-Json -AsHashtable
+        $levels = & $tool ("$Kind-levels") $database | ConvertFrom-Json -AsHashtable
         if ($variant.Contains('surface') -or $variant.Contains('surfaceLayerIds') -or $variant.Contains('surfaceLevels') -or
-            (Compare-Object @('forest','hillshade','water') @($levels.Keys) -CaseSensitive) -or
+            (Compare-Object @($layerIds) @($levels.Keys) -CaseSensitive) -or
             $variant.downloadUrl -cne "https://github.com/$repo/releases/download/$tag/$name.sqlite3" -or
             $variant.licenseUrl -cne "https://github.com/$repo/releases/download/$tag/LICENSE.txt" -or
             $variant.sha256 -ine $hash) {
             throw "配布manifestが不正です: $name"
         }
-        foreach ($layer in @('forest','hillshade','water')) {
-            if (($levels[$layer] -join ',') -cne ((5..$z) -join ',')) {
+        foreach ($layer in $layerIds) {
+            if (($levels[$layer] -join ',') -cne (($minZoom..$z) -join ',')) {
                 throw "配布SQLiteの収録レベルが不正です: $name / $layer"
             }
         }
@@ -259,5 +272,6 @@ try {
     }
     $summary = Join-Path $testRoot 'summary.md'
     if (Test-Path -LiteralPath $summary) { Remove-Item -LiteralPath $summary }
+    if ($testSource -and (Test-Path -LiteralPath $testSource)) { Remove-Item -LiteralPath $testSource }
     [IO.Directory]::Delete($testRoot)
 }

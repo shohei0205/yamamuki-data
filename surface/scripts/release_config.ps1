@@ -26,11 +26,12 @@ function Read-SurfaceLevelSelection($Layers, $Levels) {
     return ,$selection
 }
 
-function Read-SurfaceReleaseConfig([string]$Dataset, [string]$Package) {
+function Read-SurfaceReleaseConfig([string]$Dataset, [string]$Package, [ValidateSet("surface","terrain")][string]$Kind = "surface") {
     if ($Dataset -cnotmatch '^[a-z][a-z0-9_]*$' -or $Package -cnotmatch '^[a-z][a-z0-9_-]*$') {
         throw 'データセットまたは配布単位の名前が不正です。'
     }
-    $path = Join-Path (Split-Path $PSScriptRoot -Parent) "$Dataset/release.json"
+    $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+    $path = Join-Path $root "$Kind/$Dataset/release.json"
     $settings = Get-Content -LiteralPath $path -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable
     if (!$settings.packages -or !$settings.packages.Contains($Package)) {
         throw "配布単位が定義されていません: $Dataset/$Package"
@@ -70,6 +71,7 @@ function Read-SurfaceReleaseConfig([string]$Dataset, [string]$Package) {
         }
     }
     @{
+        kind = $Kind
         datasetId = $settings.datasetId
         versionPattern = $settings.versionPattern
         releaseId = $config.releaseId
@@ -83,7 +85,7 @@ function Read-SurfaceReleaseConfig([string]$Dataset, [string]$Package) {
 
 function Get-SurfaceReleaseTag($Config, $Manifest, $Levels) {
     $datasets = @($Manifest.datasets)
-    if ($datasets.Count -ne 1 -or $datasets[0].id -cne $Config.datasetId -or $datasets[0].kind -cne 'surface') {
+    if ($datasets.Count -ne 1 -or $datasets[0].id -cne $Config.datasetId -or $datasets[0].kind -cne $(if ($Config.kind) { $Config.kind } else { "surface" })) {
         throw "公開設定に対応する地表データセットだけを収録したSQLiteを指定してください: $($Config.datasetId)"
     }
     if ($null -ne $Config.layers -and
@@ -96,6 +98,8 @@ function Get-SurfaceReleaseTag($Config, $Manifest, $Levels) {
             throw "SQLiteの収録レベルが配布単位の設定と一致しません: $id"
         }
     }
+    if ($datasets[0].metadata.fixture -eq $true) { throw "検査用fixtureは配布できません。" }
+    if ($Config.kind -eq "terrain" -and $datasets[0].metadata.generation.scope -cne "national") { throw "全国生成が完了した地形データを指定してください。" }
     $version = $datasets[0].dataVersion
     if ($version -cnotmatch $Config.versionPattern) {
         throw "データ版が公開設定の規則に合いません: $version"

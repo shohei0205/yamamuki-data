@@ -21,7 +21,10 @@ resvg = { version = "0.45", default-features = false }
 tempfile = "3"
 yamamuki-data-sqlite = { path = "../surface/common" }
 
+yamamuki-terrain-view = { path = "terrain" }
+
 [dev-dependencies]
+yamamuki-terrain = { path = "../terrain/common" }
 pollster = "0.4"
 
 [target.'cfg(windows)'.dependencies]
@@ -31,3 +34,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphic
 
 [target.'cfg(target_os = "macos")'.dependencies]
 wgpu = { version = "24", default-features = false, features = ["metal"] }
+
+[workspace]
+members = ["terrain"]
+resolver = "3"

@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: 公開入口と実行概要のテスト
-        run: python -m unittest release_tools.tests.test_publish_reviewed release_tools.tests.test_point_release release_tools.tests.test_shared_release_data release_tools.tests.test_workflow_summary release_tools.tests.test_draft_cleanup release_tools.tests.test_viewer_release release_tools.tests.test_viewer_build -v
+        run: python -m unittest release_tools.tests.test_publish_reviewed release_tools.tests.test_point_release release_tools.tests.test_shared_release_data release_tools.tests.test_workflow_summary release_tools.tests.test_draft_cleanup release_tools.tests.test_viewer_release release_tools.tests.test_viewer_build release_tools.tests.test_prepare_terrain -v
 
   points-viewer:
     name: 地点 / 共通ビューア
@@ -45,9 +45,15 @@ jobs:
       - name: Rust stable を準備
         run: rustup update stable
       - name: 地点スキーマとデータビューワのテスト
-        run: cargo +stable test --locked --release --manifest-path viewer/Cargo.toml
+        run: cargo +stable test --locked --release --workspace --manifest-path viewer/Cargo.toml
       - name: データビューワをビルド
         run: cargo +stable build --locked --release --manifest-path viewer/Cargo.toml
+      - name: 正式地形SQLiteの復号とGPU補助情報を検査
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path build/terrain -Force | Out-Null
+          cargo +stable run --locked --release --manifest-path terrain/Cargo.toml --bin terrain-tool -- fixture build/terrain/viewer-fixture.sqlite3
+          cargo +stable run --locked --release --manifest-path viewer/Cargo.toml -- --check-terrain build/terrain/viewer-fixture.sqlite3
       - name: Windows実行ファイルで地点JSONを開く
         if: runner.os == 'Windows'
         shell: pwsh
@@ -112,7 +118,7 @@ jobs:
   test:
     # ブランチ保護で使うチェック名を維持する。
     name: test
-    needs: [common, points-viewer, native-viewer, osm-peaks, gsi-peaks, surface]
+    needs: [common, points-viewer, native-viewer, osm-peaks, gsi-peaks, surface, terrain]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -123,6 +129,7 @@ jobs:
           NATIVE_VIEWER_RESULT: ${{ needs.native-viewer.result }}
           OSM_PEAKS_RESULT: ${{ needs.osm-peaks.result }}
           SURFACE_RESULT: ${{ needs.surface.result }}
+          TERRAIN_RESULT: ${{ needs.terrain.result }}
           GSI_PEAKS_RESULT: ${{ needs.gsi-peaks.result }}
         run: |
           test "$COMMON_RESULT" = success
@@ -131,3 +138,19 @@ jobs:
           test "$OSM_PEAKS_RESULT" = success
           test "$GSI_PEAKS_RESULT" = success
           test "$SURFACE_RESULT" = success
+          test "$TERRAIN_RESULT" = success
+
+  terrain:
+    name: 地形の形式・生成器
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup update stable
+      - name: 生成・復号・親依存のテスト
+        run: cargo +stable test --locked --release --workspace --manifest-path terrain/Cargo.toml
+      - name: 外部データ不要の地形SQLiteを生成・検査
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path build/terrain -Force | Out-Null
+          cargo +stable run --locked --release --manifest-path terrain/Cargo.toml --bin terrain-tool -- fixture build/terrain/fixture.sqlite3
+          cargo +stable run --locked --release --manifest-path terrain/Cargo.toml --bin terrain-tool -- validate build/terrain/fixture.sqlite3

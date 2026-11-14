@@ -14,7 +14,7 @@ pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
+    sampler_group: wgpu::BindGroup,
     darken: wgpu::RenderPipeline,
     brighten: wgpu::RenderPipeline,
     srgb_target: bool,
@@ -28,28 +28,42 @@ impl Renderer {
     fn for_target(device: &wgpu::Device, queue: &wgpu::Queue, target: wgpu::TextureFormat) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("map hillshade"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
+                count: None,
+            }],
+        });
+        let sampler_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("陰影の共通サンプラー"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            }],
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let sampler_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("陰影の共通サンプラー"),
+            layout: &sampler_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            }],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("map hillshade"),
-            bind_group_layouts: &[&layout],
+            bind_group_layouts: &[&layout, &sampler_layout],
             push_constant_ranges: &[],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -101,11 +115,7 @@ impl Renderer {
         Self {
             device: device.clone(),
             queue: queue.clone(),
-            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            }),
+            sampler_group,
             // 暗部は dst * (1 - src)、明部は dst * (1 + src) とする。
             darken: pipeline(
                 "darken",
@@ -165,16 +175,10 @@ impl Renderer {
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("hillshade tile"),
             layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            }],
         });
         ShadeTexture { view, bind_group }
     }
@@ -183,8 +187,25 @@ impl Renderer {
         &self,
         painter: &egui::Painter,
         rect: Rect,
-        tiles: Vec<([Pos2; 4], Rect, wgpu::BindGroup)>,
+        tiles: Vec<([Pos2; 4], Rect, wgpu::BindGroup, wgpu::TextureView)>,
+        direct: bool,
     ) {
+        if direct {
+            for (corners, uv, _, texture) in tiles {
+                yamamuki_terrain_view::direct_material::capture(
+                    painter,
+                    yamamuki_terrain_view::direct_material::Capture {
+                        rect: Rect::from_points(&corners),
+                        uv: [uv; 2],
+                        textures: [Some(texture.clone()), Some(texture)],
+                        amount: 1.,
+                        shade: true,
+                        gamma_shade: !self.srgb_target,
+                    },
+                );
+            }
+            return;
+        }
         if tiles.is_empty() {
             return;
         }
@@ -194,10 +215,14 @@ impl Renderer {
         ));
     }
 
-    fn draw(&self, rect: Rect, tiles: Vec<([Pos2; 4], Rect, wgpu::BindGroup)>) -> Draw {
+    fn draw(
+        &self,
+        rect: Rect,
+        tiles: Vec<([Pos2; 4], Rect, wgpu::BindGroup, wgpu::TextureView)>,
+    ) -> Draw {
         let mut vertices = Vec::with_capacity(tiles.len() * 96);
         let mut textures = Vec::with_capacity(tiles.len());
-        for (corners, uv, texture) in tiles {
+        for (corners, uv, texture, _) in tiles {
             let uv = [
                 uv.left_top(),
                 uv.right_top(),
@@ -223,6 +248,7 @@ impl Renderer {
                 usage: wgpu::BufferUsages::VERTEX,
             });
         Draw {
+            sampler_group: self.sampler_group.clone(),
             vertices,
             textures,
             darken: self.darken.clone(),
@@ -232,6 +258,7 @@ impl Renderer {
 }
 
 struct Draw {
+    sampler_group: wgpu::BindGroup,
     vertices: wgpu::Buffer,
     textures: Vec<wgpu::BindGroup>,
     darken: wgpu::RenderPipeline,
@@ -252,6 +279,7 @@ impl egui_wgpu::CallbackTrait for Draw {
 impl Draw {
     fn draw(&self, pass: &mut wgpu::RenderPass<'static>) {
         pass.set_vertex_buffer(0, self.vertices.slice(..));
+        pass.set_bind_group(1, &self.sampler_group, &[]);
         for pipeline in [&self.darken, &self.brighten] {
             pass.set_pipeline(pipeline);
             for (i, texture) in self.textures.iter().enumerate() {
@@ -300,6 +328,7 @@ mod tests {
                 ],
                 Rect::from_min_max(Pos2::ZERO, egui::pos2(1., 1.)),
                 shade.bind_group,
+                shade.view,
             )],
         );
         let size = wgpu::Extent3d {

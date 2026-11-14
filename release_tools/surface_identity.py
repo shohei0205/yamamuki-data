@@ -53,8 +53,8 @@ def patch_release(release, fields, repo, directory):
     return result
 
 
-def finalize(release, manifest, dataset, package, settings, config):
-    records = re.findall(PATTERN, release.get("body") or "")
+def finalize(release, manifest, dataset, package, settings, config, *, kind="surface"):
+    records = re.findall(PATTERN.replace("surface-identity", f"{kind}-identity"), release.get("body") or "")
     if len(records) > 1:
         raise ValueError("配布識別子の確定記録が重複しています")
     plan = json.loads(records[0]) if records else None
@@ -113,7 +113,7 @@ def finalize(release, manifest, dataset, package, settings, config):
         source_manifest = json.loads(run_tool(tool, "manifest", source / name,
                                             f"https://github.com/{repo}/releases/download", timestamp, config["releaseId"]))
         if (len(source_manifest["datasets"]) != 1 or source_manifest["datasets"][0]["id"] != settings["datasetId"]
-                or source_manifest["datasets"][0]["kind"] != "surface"):
+                or source_manifest["datasets"][0]["kind"] != kind):
             raise ValueError("元SQLiteのデータセットが公開設定と異なります")
         if source_manifest["version"] == identifier:
             shutil.copyfile(source / name, output / name)
@@ -135,7 +135,7 @@ def finalize(release, manifest, dataset, package, settings, config):
         else:
             plan = dict(identifier=identifier, tag=tag, dataset=dataset, package=package,
                         targetCommit=commit, sourceFiles=current_hashes, files=final_hashes)
-            body = (site.TEMPORARY_DRAFT_MARKER + "\n<!-- yamamuki-data:surface-identity:v1 "
+            body = (site.TEMPORARY_DRAFT_MARKER + f"\n<!-- yamamuki-data:{kind}-identity:v1 "
                     + json.dumps(plan, ensure_ascii=False, separators=(",", ":")) + " -->\n\n"
                     + "配布識別子を確定しました。添付の加工・検査を実行中です。")
             release = patch_release(release, dict(tag_name=tag, target_commitish=commit, draft=True,
