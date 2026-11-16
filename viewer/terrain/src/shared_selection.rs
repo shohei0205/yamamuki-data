@@ -13,6 +13,9 @@ pub struct Camera {
     pub maximum: u32,
     pub auto: bool,
     pub lod_quality: f64,
+    /// SQLiteに記録した誤差を使う。旧スナップショットでは従来値を維持する。
+    #[serde(default = "legacy_level_errors")]
+    pub level_errors_m: [f64; 8],
     /// 描画・曲面評価の目標間隔。カメラ停止後に段階的に小さくする（論理px）。
     pub mesh_pixels: f64,
     pub fov_y: f64,
@@ -20,6 +23,9 @@ pub struct Camera {
     pub observer: bool,
     #[serde(default)]
     pub globe: bool,
+}
+fn legacy_level_errors() -> [f64; 8] {
+    ERRORS
 }
 impl Default for Camera {
     fn default() -> Self {
@@ -33,6 +39,7 @@ impl Default for Camera {
             maximum: 13,
             auto: true,
             lod_quality: 2.0,
+            level_errors_m: ERRORS,
             mesh_pixels: 3.0,
             fov_y: std::f64::consts::FRAC_PI_4,
             observer: false,
@@ -319,7 +326,7 @@ impl Camera {
         let depth = self.preparation_depth(crate::shared_data::bounds(key));
         (
             depth.is_some(),
-            ERRORS[(key.0.clamp(6, 13) - 6) as usize] * self.viewport[1]
+            self.level_errors_m[(key.0.clamp(6, 13) - 6) as usize] * self.viewport[1]
                 / (2. * self.tan_half_fov() * depth.unwrap_or(f64::INFINITY)),
         )
     }
@@ -706,6 +713,24 @@ mod cache_tests {
 #[cfg(test)]
 mod map_camera_tests {
     use super::*;
+    #[test]
+    fn lod_uses_dataset_error_and_old_snapshots_keep_previous_values() {
+        let mut camera = Camera::default();
+        let side = WORLD / 64.;
+        let key = (
+            6,
+            (camera.center[0] / side) as i32,
+            (camera.center[1] / side) as i32,
+        );
+        let before = camera.projected(key).1;
+        assert!(before.is_finite() && before > 0.);
+        camera.level_errors_m[0] *= 0.625;
+        assert!((camera.projected(key).1 / before - 0.625).abs() < 1e-12);
+        let mut value = serde_json::to_value(&camera).unwrap();
+        value.as_object_mut().unwrap().remove("level_errors_m");
+        let restored: Camera = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.level_errors_m, ERRORS);
+    }
     #[test]
     fn dragging_and_zooming_never_raise_the_camera_to_terrain() {
         let mut camera = Camera {

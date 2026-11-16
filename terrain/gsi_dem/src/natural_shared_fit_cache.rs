@@ -30,7 +30,8 @@ impl Verified {
         s.db.execute_batch("CREATE TABLE IF NOT EXISTS fit_verified(id INTEGER PRIMARY KEY CHECK(id=1),signature TEXT,epoch INTEGER,flags BLOB)")?;
         let disabled=s.db.query_row("SELECT 1 FROM meta WHERE key='benchmark_disable_fit_verified' AND EXISTS(SELECT 1 FROM meta WHERE key='benchmark_only')",[],|_|Ok(())).optional()?.is_some();
         let enabled = std::env::var_os("TERRAIN_FIT_NO_VALID_CACHE").is_none() && !disabled;
-        let cache_signature = format!("fit-valid-v1:E25:up4:before-after:{signature}");
+        let cache_signature =
+            format!("fit-valid-v2:E{FINEST_ERROR}:symmetric:before-after:{signature}");
         let len = inputs.len().div_ceil(8);
         let row =
             s.db.query_row(
@@ -86,7 +87,7 @@ impl Verified {
         })?;
         for row in rows {
             let (x, y, _valid, up, down) = row?;
-            if up.is_finite() && down.is_finite() && (up * 4.).max(down) <= 25. + 1e-8 {
+            if up.is_finite() && down.is_finite() && up.max(down) <= FINEST_ERROR + 1e-8 {
                 if let Some(&k) = self.lookup.get(&(x, y)) {
                     if !self.has(k) {
                         self.flags[k / 8] |= 1 << (k % 8);
@@ -134,7 +135,7 @@ impl Verified {
         s.db.execute(
             "INSERT OR REPLACE INTO fit_verified VALUES(1,?,?,?)",
             params![
-                format!("fit-valid-v1:E25:up4:before-after:{signature}"),
+                format!("fit-valid-v2:E{FINEST_ERROR}:symmetric:before-after:{signature}"),
                 s.epoch(13)?,
                 self.flags
             ],

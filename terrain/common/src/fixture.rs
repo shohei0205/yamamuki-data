@@ -21,7 +21,7 @@ pub fn create(db: &mut Connection) -> Result<()> {
             params![
                 dataset,
                 z,
-                serde_json::json!({"errorDownMetres":error,"errorUpMetres":error/4.}).to_string()
+                serde_json::json!({"errorDownMetres":error,"errorUpMetres":error}).to_string()
             ],
         )?;
         let side = WORLD / 2f64.powi(z as i32);

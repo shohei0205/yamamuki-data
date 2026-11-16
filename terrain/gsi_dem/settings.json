@@ -1,63 +1,63 @@
 {
   "format": "national-shared-plan-v1",
-  "profile": "sibson-shared-no-lpf-z6-z13",
+  "profile": "sibson-shared-no-lpf-z6-z13-symmetric-v2",
   "crs": "EPSG:3857",
   "tile_scheme": "XYZ",
   "world_width_m": 40075016.68557849,
   "levels": [
     {
       "z": 6,
-      "error_down_m": 500,
-      "error_up_m": 125.0,
+      "error_down_m": 312.5,
+      "error_up_m": 312.5,
       "anchor": true,
       "parent_z": null
     },
     {
       "z": 7,
-      "error_down_m": 400,
-      "error_up_m": 100.0,
+      "error_down_m": 250.0,
+      "error_up_m": 250.0,
       "anchor": false,
       "parent_z": 6
     },
     {
       "z": 8,
-      "error_down_m": 300,
-      "error_up_m": 75.0,
+      "error_down_m": 187.5,
+      "error_up_m": 187.5,
       "anchor": false,
       "parent_z": 7
     },
     {
       "z": 9,
-      "error_down_m": 250,
-      "error_up_m": 62.5,
+      "error_down_m": 156.25,
+      "error_up_m": 156.25,
       "anchor": true,
       "parent_z": null
     },
     {
       "z": 10,
-      "error_down_m": 200,
-      "error_up_m": 50.0,
+      "error_down_m": 125.0,
+      "error_up_m": 125.0,
       "anchor": false,
       "parent_z": 9
     },
     {
       "z": 11,
-      "error_down_m": 125,
-      "error_up_m": 31.25,
+      "error_down_m": 78.125,
+      "error_up_m": 78.125,
       "anchor": false,
       "parent_z": 10
     },
     {
       "z": 12,
-      "error_down_m": 60,
-      "error_up_m": 15.0,
+      "error_down_m": 37.5,
+      "error_up_m": 37.5,
       "anchor": true,
       "parent_z": null
     },
     {
       "z": 13,
-      "error_down_m": 25,
-      "error_up_m": 6.25,
+      "error_down_m": 15.625,
+      "error_up_m": 15.625,
       "anchor": false,
       "parent_z": 12
     }

@@ -647,8 +647,11 @@ pub(super) fn run(
     let mut cache_rebuilds = 0u64;
     let mut preflight_rejections = 0u64;
     let mut serial_candidates = 0u64;
-    // z13は実測で優位を確認した仮想削除を標準にする。粗品質は従来経路を維持。
-    let virtual_proofs = (z == 13 && std::env::var_os("TERRAIN_SERIAL_REMOVAL_PROOFS").is_none())
+    // 証明済み領域内のまとめ評価は、レベルによらず同じ誤差条件で使える。
+    // 領域外へ影響する候補は従来の一候補ずつの証明へ戻す。
+    let blocks_enabled = std::env::var_os("TERRAIN_SINGLE_CANDIDATE_PRUNE").is_none();
+    let virtual_proofs = ((z == 13 || blocks_enabled)
+        && std::env::var_os("TERRAIN_SERIAL_REMOVAL_PROOFS").is_none())
         || std::env::var_os("TERRAIN_PARALLEL_REMOVAL_PROOFS").is_some();
     if z == 13 && virtual_proofs && std::env::var_os("TERRAIN_NO_SHARED_CIRCLES").is_none() {
         s.enable_deletion_certificates(z);
@@ -659,7 +662,6 @@ pub(super) fn run(
     let mut evaluated_candidates = 0u64;
     let deferred_sync = std::env::var_os("TERRAIN_EAGER_PARKED_SYNC").is_none();
     let mut journal = RemovalJournal::new(s.epoch(z)?);
-    let blocks_enabled = z == 13 && std::env::var_os("TERRAIN_SINGLE_CANDIDATE_PRUNE").is_none();
     let block_size = std::env::var("TERRAIN_PRUNE_BLOCK_SIZE")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
@@ -810,7 +812,7 @@ pub(super) fn run(
         {
             let mut chosen = Vec::<[f64; 4]>::new();
             let mut block_jobs = Vec::new();
-            for &(stripe, sequence, id, _) in &pending {
+            for &(stripe, sequence, id, q) in &pending {
                 if blocked[stripe] == Some(id) {
                     continue;
                 }
@@ -821,6 +823,7 @@ pub(super) fn run(
                 } else {
                     continue;
                 };
+                let b = blocks::bounded_region(b, [q[0], q[1]]);
                 if chosen
                     .iter()
                     .any(|a| a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1])
@@ -849,8 +852,15 @@ pub(super) fn run(
                     b[3] + STEP * 2.,
                 ];
                 let region_inputs = affected_inputs(inputs, &spatial, area);
+                ensure!(
+                    region_inputs.len() <= 196,
+                    "まとめ評価の元DEMが範囲上限を超えました"
+                );
                 let arrays = dem.read_many(&region_inputs)?;
                 let rasters = region_inputs.into_iter().zip(arrays).collect();
+                if let Some(p) = caches[stripe].as_mut() {
+                    p.certified_bounds = b;
+                }
                 chosen.push(b);
                 block_jobs.push(blocks::BlockTask {
                     stripe,
@@ -865,6 +875,7 @@ pub(super) fn run(
             }
             prepare_seconds += phase.elapsed().as_secs_f64();
             let block_started = Instant::now();
+            maximum_parallel_jobs = maximum_parallel_jobs.max(block_jobs.len());
             let results = block_jobs
                 .into_par_iter()
                 .map(|j| blocks::prepare_and_evaluate(j, error, root))
@@ -1219,7 +1230,7 @@ pub(super) fn run(
     done(
         s,
         &name,
-        json!({"max":max,"valid":valid,"epoch":s.epoch(z)?,"workers":workers,"maximum_parallel_jobs":maximum_parallel_jobs,"processed_this_run":initial_remaining,"seconds_this_run":started.elapsed().as_secs_f64()}),
+        json!({"max":max,"valid":valid,"epoch":s.epoch(z)?,"workers":workers,"maximum_parallel_jobs":maximum_parallel_jobs,"block_candidates":block_candidates,"blocks_enabled":blocks_enabled,"processed_this_run":initial_remaining,"seconds_this_run":started.elapsed().as_secs_f64()}),
     )?;
     Ok(())
 }

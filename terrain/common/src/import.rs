@@ -1,4 +1,4 @@
-use crate::sqlite::{Database, ENCODING, LEVELS, Tile};
+use crate::sqlite::{Database, ENCODING, Tile};
 use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::json;
@@ -35,12 +35,72 @@ pub fn import_shared(destination: &mut Connection, path: &Path, identifier: &str
         )
         .optional()?
         .is_some_and(|v| v == "true");
-    let metadata = json!({"authors":[{"name":"The yamamuki Authors","role":"配布データの編集・加工","url":"https://github.com/shohei0205/yamamuki-data/blob/main/AUTHORS.md"}],"sources":[{"name":"国土地理院の標高タイル（DEM10B）","source":"https://maps.gsi.go.jp/development/demtile.html","license":"公共データ利用規約（第1.0版） https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html","attribution":"地理院タイル（標高タイル）を加工して作成","changes":"標高を方向別誤差で適合・削減し、自由配置制御点と独立・差分Rice圧縮の地形タイルに加工"}],"generation":{"id":generation,"scope":if national{"national"}else{"window-test"},"interpolation":"sibson","lpf":false,"errorUpRatio":0.25,"xyStepMetres":0.0625,"heightStepMetres":0.125}});
+    // 生成結果の品質表を使い、旧データへ新しい設定を誤って付けない。
+    let raw: String = source
+        .query_row("SELECT value FROM metadata WHERE key='levels'", [], |r| {
+            r.get(0)
+        })
+        .context("生成結果の品質表がありません")?;
+    let quality: serde_json::Value = serde_json::from_str(&raw)?;
+    let quality = quality.as_array().context("品質表は配列が必要です")?;
+    ensure!(quality.len() == 8, "品質表はz6〜z13の8レベルが必要です");
+    let mut levels = std::collections::BTreeMap::new();
+    for level in quality {
+        let z = level["z"].as_u64().context("品質表のzが不正です")?;
+        let down = level["error_down_m"]
+            .as_f64()
+            .context("下向き許容誤差がありません")?;
+        let up = level["error_up_m"]
+            .as_f64()
+            .context("上向き許容誤差がありません")?;
+        ensure!(
+            (6..=13).contains(&z)
+                && down.is_finite()
+                && down > 0.
+                && up.is_finite()
+                && up > 0.
+                && levels.insert(z as u32, (down, up)).is_none(),
+            "品質表のズームが重複または誤差が不正です"
+        );
+    }
+    let ratio = levels[&6].1 / levels[&6].0;
+    let mut metadata = json!({"authors":[{"name":"The yamamuki Authors","role":"配布データの編集・加工","url":"https://github.com/shohei0205/yamamuki-data/blob/main/AUTHORS.md"}],"sources":[{"name":"国土地理院の標高タイル（DEM10B）","source":"https://maps.gsi.go.jp/development/demtile.html","license":"公共データ利用規約（第1.0版） https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html","attribution":"地理院タイル（標高タイル）を加工して作成","changes":"標高を記録された上下の許容誤差へ適合・削減し、自由配置制御点と独立・差分Rice圧縮の地形タイルに加工"}],"generation":{"id":generation,"scope":if national{"national"}else{"window-test"},"interpolation":"sibson","lpf":false,"xyStepMetres":0.0625,"heightStepMetres":0.125}});
+    if levels
+        .values()
+        .all(|(down, up)| (*up / *down - ratio).abs() < 1e-12)
+    {
+        metadata["generation"]["errorUpRatio"] = json!(ratio);
+    }
+    if let Some(raw) = source
+        .query_row(
+            "SELECT value FROM metadata WHERE key='source_window_z14'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+    {
+        let window: Vec<u32> = serde_json::from_str(&raw)?;
+        ensure!(
+            window.is_empty()
+                || window.len() == 4
+                    && window[0] < window[2]
+                    && window[1] < window[3]
+                    && window[2] <= 16384
+                    && window[3] <= 16384,
+            "生成対象のz14範囲が不正です"
+        );
+        metadata["generation"]["sourceWindowZ14"] = json!(window);
+    }
+    let title = if national {
+        "日本全国の地形（国土地理院標高）"
+    } else {
+        "地域の地形（国土地理院標高）"
+    };
     let tx = destination.transaction()?;
-    tx.execute("INSERT INTO datasets(id,kind,title,data_version,format_version,metadata_json) VALUES('gsi-terrain-japan','terrain','日本全国の地形（国土地理院標高）',?1,1,?2)",params![identifier,metadata.to_string()])?;
+    tx.execute("INSERT INTO datasets(id,kind,title,data_version,format_version,metadata_json) VALUES('gsi-terrain-japan','terrain',?3,?1,1,?2)",params![identifier,metadata.to_string(),title])?;
     let dataset = tx.last_insert_rowid();
-    for (z, error) in LEVELS {
-        let settings = json!({"errorDownMetres":error,"errorUpMetres":error/4.,"anchor":([6,9,12].contains(&z)),"interpolation":"sibson","xyStepMetres":0.0625,"heightStepMetres":0.125,"maxParentDepth":2,"maxDependencies":16});
+    for (z, (down, up)) in levels {
+        let settings = json!({"errorDownMetres":down,"errorUpMetres":up,"anchor":([6,9,12].contains(&z)),"interpolation":"sibson","xyStepMetres":0.0625,"heightStepMetres":0.125,"maxParentDepth":2,"maxDependencies":16});
         tx.execute(
             "INSERT INTO terrain_levels VALUES(?1,?2,?2,?3)",
             params![dataset, z, settings.to_string()],

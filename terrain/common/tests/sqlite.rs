@@ -16,6 +16,9 @@ fn database() -> (tempfile::NamedTempFile, Database) {
 fn all_levels_roundtrip_and_merge() {
     let (_file, mut db) = database();
     assert_eq!(db.validate_all().unwrap(), 8);
+    for (z, error) in yamamuki_terrain::sqlite::LEVELS {
+        assert_eq!(db.level_errors[&z], error);
+    }
     let merged = tempfile::NamedTempFile::new().unwrap();
     let mut dest = common::rusqlite::Connection::open(merged.path()).unwrap();
     common::initialize(&dest).unwrap();
@@ -128,6 +131,14 @@ fn imports_completed_work_without_reencoding_and_normalizes_identity() {
             [serde_json::json!("NS1-fixture").to_string()],
         )
         .unwrap();
+    let levels = yamamuki_terrain::sqlite::LEVELS
+        .map(|(z, error)| serde_json::json!({"z":z,"error_down_m":error,"error_up_m":error}));
+    source
+        .execute(
+            "INSERT INTO metadata VALUES('levels',?1)",
+            [serde_json::to_string(&levels).unwrap()],
+        )
+        .unwrap();
     for (&key, _) in &db.catalog {
         let tile = db.tile(key).unwrap();
         let hash = tile
@@ -162,6 +173,72 @@ fn imports_completed_work_without_reencoding_and_normalizes_identity() {
     let info = common::datasets(&conn).unwrap();
     assert_eq!(info[0].metadata["generation"]["id"], "NS1-fixture");
     assert_eq!(info[0].metadata["generation"]["scope"], "national");
+    assert_eq!(info[0].metadata["generation"]["errorUpRatio"], 1.);
+    for (z, error) in yamamuki_terrain::sqlite::LEVELS {
+        let raw: String = conn
+            .query_row(
+                "SELECT settings_json FROM terrain_levels WHERE z=?1",
+                [z],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let setting: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(setting["errorDownMetres"], error);
+        assert_eq!(setting["errorUpMetres"], error);
+    }
+    // 以前の非対称生成物の取り込みでも、実際の品質表をそのまま維持する。
+    let old_levels = yamamuki_terrain::sqlite::LEVELS.map(
+        |(z, error)| serde_json::json!({"z":z,"error_down_m":error/0.625,"error_up_m":error/2.5}),
+    );
+    source
+        .execute(
+            "UPDATE metadata SET value=?1 WHERE key='levels'",
+            [serde_json::to_string(&old_levels).unwrap()],
+        )
+        .unwrap();
+    let old_output = tempfile::NamedTempFile::new().unwrap();
+    let mut old_conn = common::rusqlite::Connection::open(old_output.path()).unwrap();
+    common::initialize(&old_conn).unwrap();
+    yamamuki_terrain::import::import_shared(&mut old_conn, legacy.path(), "20261113T000000Z")
+        .unwrap();
+    assert_eq!(
+        common::datasets(&old_conn).unwrap()[0].metadata["generation"]["errorUpRatio"],
+        0.25
+    );
+    let raw: String = old_conn
+        .query_row(
+            "SELECT settings_json FROM terrain_levels WHERE z=13",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let setting: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(setting["errorDownMetres"], 25.);
+    assert_eq!(setting["errorUpMetres"], 6.25);
+
+    source
+        .execute(
+            "UPDATE metadata SET value='false' WHERE key='national_complete'",
+            [],
+        )
+        .unwrap();
+    source
+        .execute(
+            "INSERT INTO metadata VALUES('source_window_z14','[14421,6379,14491,6449]')",
+            [],
+        )
+        .unwrap();
+    let regional_output = tempfile::NamedTempFile::new().unwrap();
+    let mut regional_conn = common::rusqlite::Connection::open(regional_output.path()).unwrap();
+    common::initialize(&regional_conn).unwrap();
+    yamamuki_terrain::import::import_shared(&mut regional_conn, legacy.path(), "20261116T000000Z")
+        .unwrap();
+    let sets = common::datasets(&regional_conn).unwrap();
+    assert_eq!(sets[0].title, "地域の地形（国土地理院標高）");
+    assert_eq!(
+        sets[0].metadata["generation"]["sourceWindowZ14"],
+        serde_json::json!([14421, 6379, 14491, 6449])
+    );
     let restored = Database::open(output.path()).unwrap();
     for &key in db.catalog.keys() {
         assert_eq!(

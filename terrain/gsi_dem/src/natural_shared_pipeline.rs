@@ -21,16 +21,19 @@ use std::{
 };
 const WORLD: f64 = 40075016.68557849;
 const STEP: f64 = WORLD / 4194304.;
-const LEVELS: [(i64, f64); 8] = [
-    (13, 25.),
-    (12, 60.),
-    (11, 125.),
-    (10, 200.),
-    (9, 250.),
-    (8, 300.),
-    (7, 400.),
-    (6, 500.),
-];
+// 設定・配布形式と同じ上下対称の許容誤差を使う。生成順だけを反転する。
+const LEVELS: [(i64, f64); 8] = {
+    let mut levels = [(0, 0.); 8];
+    let mut i = 0;
+    while i < 8 {
+        let (z, error) = yamamuki_terrain::sqlite::LEVELS[7 - i];
+        levels[i] = (z as i64, error);
+        i += 1;
+    }
+    levels
+};
+const FINEST_ERROR: f64 = LEVELS[0].1;
+const PROFILE: &str = "sibson-shared-no-lpf-z6-z13-symmetric-v2";
 #[derive(Clone)]
 struct Input {
     x: i32,
@@ -40,9 +43,20 @@ struct Input {
 static DEM_CACHE_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static DEM_CACHE_MISSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static DEM_READ_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+// 既定は約2GiB。地域生成では全入力を収められるよう約4GiBまで明示設定できる。
+// プロセス全体の常駐8GiB・private10GiBの実測制限は別に維持する。
+fn configured_dem_cache_limit(value: Option<&str>) -> usize {
+    value
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(4096)
+        .clamp(128, 8192)
+}
+fn dem_cache_limit() -> usize {
+    configured_dem_cache_limit(std::env::var("TERRAIN_DEM_CACHE_TILES").ok().as_deref())
+}
 fn dem_profile() -> Value {
     use std::sync::atomic::Ordering::Relaxed;
-    json!({"hits":DEM_CACHE_HITS.load(Relaxed),"misses":DEM_CACHE_MISSES.load(Relaxed),"read_decode_seconds":DEM_READ_NS.load(Relaxed) as f64/1e9,"tile_limit":std::env::var("TERRAIN_DEM_CACHE_TILES").ok().and_then(|s|s.parse::<usize>().ok()).unwrap_or(4096).clamp(128,4096)})
+    json!({"hits":DEM_CACHE_HITS.load(Relaxed),"misses":DEM_CACHE_MISSES.load(Relaxed),"read_decode_seconds":DEM_READ_NS.load(Relaxed) as f64/1e9,"tile_limit":dem_cache_limit()})
 }
 struct Dem {
     root: PathBuf,
@@ -74,11 +88,7 @@ impl Dem {
                 Ok((k, i, a))
             })
             .collect::<Result<Vec<_>>>()?;
-        let limit = std::env::var("TERRAIN_DEM_CACHE_TILES")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(4096)
-            .clamp(128, 4096);
+        let limit = dem_cache_limit();
         for (k, i, a) in loaded {
             let key = (i.x, i.y);
             if !self.cache.contains_key(&key) {
@@ -117,11 +127,7 @@ impl Dem {
             read_started.elapsed().as_nanos() as u64,
             std::sync::atomic::Ordering::Relaxed,
         );
-        let cache_limit = std::env::var("TERRAIN_DEM_CACHE_TILES")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(4096)
-            .clamp(128, 4096);
+        let cache_limit = dem_cache_limit();
         if self.cache.len() >= cache_limit {
             if let Some(k) = self.order.pop_front() {
                 self.cache.remove(&k);
@@ -155,7 +161,7 @@ fn quant(q: [f64; 3]) -> Result<[i32; 3]> {
     Ok(a.map(|v| v as i32))
 }
 fn score(delta: f64) -> f64 {
-    if delta > 0. { delta * 4. } else { -delta }
+    delta.abs()
 }
 #[derive(Clone)]
 struct InputBox {
@@ -276,7 +282,7 @@ fn initialize_internal(
     );
     let config = &job["settings"];
     ensure!(
-        config["profile"] == "sibson-shared-no-lpf-z6-z13" && config["generation"]["lpf"] == false,
+        config["profile"] == PROFILE && config["generation"]["lpf"] == false,
         "旧設定との混在です"
     );
     ensure!(
@@ -297,7 +303,7 @@ fn initialize_internal(
             .context("品質が不足")?;
         ensure!(
             level["error_down_m"].as_f64() == Some(e)
-                && level["error_up_m"].as_f64() == Some(e / 4.)
+                && level["error_up_m"].as_f64() == Some(e)
                 && level["anchor"].as_bool() == Some([6, 9, 12].contains(&z)),
             "品質表がエンジンと不一致 z{z}"
         );
@@ -322,7 +328,7 @@ fn initialize_internal(
                 .is_none(),
         "性能試験用DBを全国本番へ流用できません"
     );
-    let identity = json!({"generation":job["generation_id"],"window":window,"algorithm":"shared-certified-v1"});
+    let identity = json!({"generation":job["generation_id"],"window":window,"algorithm":"shared-certified-symmetric-v2"});
     if let Some(old) =
         s.db.query_row("SELECT value FROM meta WHERE key='identity'", [], |r| {
             r.get::<_, String>(0)
@@ -487,7 +493,7 @@ fn region_bound(
         (i.y as f64 * 256. + range[3] as f64) * STEP,
     ]);
     let [up, down] = p.model.affine_error_bounds_from(b, samples, p.hint_face)?;
-    Ok(Some(((up * 4.).max(down), count)))
+    Ok(Some((up.max(down), count)))
 }
 fn audit_fit_region(p: &Patch, i: &Input, raster: &[f64], range: [usize; 4]) -> Result<Audit> {
     match region_bound(p, i, raster, range)? {
@@ -498,9 +504,9 @@ fn audit_fit_region(p: &Patch, i: &Input, raster: &[f64], range: [usize; 4]) -> 
             valid: 0,
             candidate: None,
         }),
-        Some((bound, count)) if bound <= 25. => Ok(Audit {
+        Some((bound, count)) if bound <= FINEST_ERROR => Ok(Audit {
             max: bound,
-            up: bound / 4.,
+            up: bound,
             down: bound,
             valid: count,
             candidate: None,
@@ -622,7 +628,7 @@ fn audit_all_policy(
             .iter()
             .map(|v| {
                 v.map(|(valid, up, down)| Audit {
-                    max: (up * 4.).max(down),
+                    max: up.max(down),
                     up,
                     down,
                     valid,
@@ -706,7 +712,7 @@ fn audit_all_serial_reference(
         let a = if let Some((valid, up, down)) = cached {
             reused += 1;
             Audit {
-                max: (up * 4.).max(down),
+                max: up.max(down),
                 up,
                 down,
                 valid,
@@ -963,10 +969,10 @@ fn fit_proposal(
             .max_by(|&a, &b| blocks[a].max.total_cmp(&blocks[b].max))
             .unwrap();
         let a = &blocks[index];
-        if a.max <= 25. + 1e-8 {
+        if a.max <= FINEST_ERROR + 1e-8 {
             break;
         }
-        if a.max > 25. + 1e-8 {
+        if a.max > FINEST_ERROR + 1e-8 {
             let q = a.candidate.context("違反画素がありません")?;
             let local = [
                 q[0] as f64 / 16. - p.origin[0],
@@ -1151,7 +1157,7 @@ fn fit_finest_budget(
             root,
             json!({"stage":"fit-verify-seed","z":13,"total":inputs.len(),"note":"全画素の実測で、再利用できる適合済み領域を分類","complete":false}),
         )?;
-        let (ok, max, valid) = audit_all(s, 13, 25., inputs, dem, root, true)?;
+        let (ok, max, valid) = audit_all(s, 13, FINEST_ERROR, inputs, dem, root, true)?;
         verified.seed_from_audit(s)?;
         verified.save(s, &signature)?;
         if ok {
@@ -1372,7 +1378,7 @@ fn fit_finest_budget(
             }
         }
         if added == 0 {
-            let (ok, max, valid) = audit_all(s, 13, 25., inputs, dem, root, true)?;
+            let (ok, max, valid) = audit_all(s, 13, FINEST_ERROR, inputs, dem, root, true)?;
             if !ok {
                 s.db.execute("DELETE FROM fit_verified", [])?;
             }
@@ -2747,7 +2753,8 @@ fn audit_saved(root: &Path, inputs: &[Input], dem: &mut Dem) -> Result<Value> {
                 );
                 continue;
             };
-            let audit_key = format!("direct-Surface-certified-angle-v3:{checksum}");
+            let audit_key =
+                format!("direct-Surface-certified-angle-symmetric-v4:E{error}:{checksum}");
             if let Some(old) = work
                 .query_row(
                     "SELECT hash FROM audits WHERE z=? AND x=? AND y=?",
@@ -2832,7 +2839,7 @@ fn audit_saved(root: &Path, inputs: &[Input], dem: &mut Dem) -> Result<Value> {
             let down = blocks.iter().map(|v| v.1).fold(0f64, f64::max);
             let valid: u64 = blocks.iter().map(|v| v.2).sum();
             ensure!(
-                up <= error / 4. + 1e-7 && down <= error + 1e-7,
+                up <= error + 1e-7 && down <= error + 1e-7,
                 "保存後の全画素監査未達 z{z} {}/{} up={up} down={down}",
                 i.x,
                 i.y
@@ -3070,7 +3077,7 @@ pub fn execute(root: &Path, limit: usize, mode: &str, window: Vec<u32>) -> Resul
             timed(root, "fit-13", || fit_finest(&s, &inputs, &mut dem, root))?;
         }
         timed(root, "prune-13", || {
-            prune(&s, 13, 13, 25., &inputs, &mut dem, root)
+            prune(&s, 13, 13, FINEST_ERROR, &inputs, &mut dem, root)
         })?;
         timed(root, "certify-13", || {
             certify(&s, 13, &inputs, &mut dem, root)
@@ -3168,6 +3175,69 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn regional_dem_cache_can_hold_the_whole_input_with_bounded_memory() {
+        assert_eq!(configured_dem_cache_limit(None), 4096);
+        assert_eq!(configured_dem_cache_limit(Some("4726")), 4726);
+        assert_eq!(configured_dem_cache_limit(Some("999999")), 8192);
+        assert_eq!(configured_dem_cache_limit(Some("0")), 128);
+        assert_eq!(configured_dem_cache_limit(Some("-1")), 4096);
+        assert_eq!(configured_dem_cache_limit(Some("invalid")), 4096);
+    }
+    #[test]
+    fn symmetric_quality_accepts_equal_rises_and_drops_and_rejects_old_jobs() -> Result<()> {
+        for &(_, e) in &LEVELS {
+            assert_eq!(score(e), e);
+            assert_eq!(score(-e), e);
+            assert!(score(e + 0.125) > e);
+            assert!(score(-e - 0.125) > e);
+        }
+        let root = temporary();
+        fixture(&root)?;
+        let mut job: Value = serde_json::from_slice(&fs::read(root.join("job.json"))?)?;
+        job["settings"]["profile"] = json!("sibson-shared-no-lpf-z6-z13");
+        fs::write(root.join("job.json"), serde_json::to_vec(&job)?)?;
+        assert!(initialize(&root, 4096, &[14500, 6400, 14503, 6401]).is_err());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+    #[test]
+    fn symmetric_audit_and_fast_bound_treat_equal_offsets_identically() -> Result<()> {
+        let root = temporary();
+        fixture(&root)?;
+        let (s, _, inputs) = initialize(&root, 4096, &[14500, 6400, 14503, 6401])?;
+        let i = &inputs[0];
+        let b = rect(i);
+        let mut p = s.patch(13, b)?;
+        let raster = vec![100.; 65536];
+        for offset in [FINEST_ERROR - 0.125, FINEST_ERROR + 0.125] {
+            let mut measured = Vec::new();
+            for sign in [-1., 1.] {
+                let points = p
+                    .model
+                    .base
+                    .points
+                    .iter()
+                    .map(|v| [v[0], v[1], 100. + sign * offset])
+                    .collect();
+                p.model = crate::natural_regional_surface::Fast::certified(points)?;
+                let a = audit_region(&p, i, &raster, [0, 0, 256, 256])?;
+                let bound = region_bound(&p, i, &raster, [0, 0, 256, 256])?.unwrap().0;
+                assert!((a.max - offset).abs() < 1e-7);
+                assert!(bound + 1e-7 >= offset, "bound={bound} offset={offset}");
+                assert_eq!(
+                    bound <= FINEST_ERROR,
+                    offset <= FINEST_ERROR,
+                    "bound={bound} offset={offset}"
+                );
+                measured.push(a.max <= FINEST_ERROR);
+            }
+            assert_eq!(measured, [offset <= FINEST_ERROR; 2]);
+        }
+        drop(s);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+    #[test]
     fn distribution_uses_compact_rowid_layout_without_changing_keys() -> Result<()> {
         let root = temporary();
         fs::create_dir_all(&root)?;
@@ -3246,7 +3316,7 @@ mod tests {
         let report = state(&s, "fit-13")?.unwrap();
         assert_eq!(report["workers"], 2);
         assert!(report["conflicting_proposals_recomputed"].as_u64().unwrap() > 0);
-        assert!(audit_all(&s, 13, 25., &inputs, &mut dem, &root, false)?.0);
+        assert!(audit_all(&s, 13, FINEST_ERROR, &inputs, &mut dem, &root, false)?.0);
         parallel_prune::run(&s, 12, 13, 60., &inputs, &mut dem, &root, 2)?;
         assert!(audit_all(&s, 12, 60., &inputs, &mut dem, &root, false)?.0);
         drop(s);
@@ -3278,7 +3348,12 @@ mod tests {
         };
         parallel_prune::run(&s, 12, 13, 60., &inputs, &mut dem, &root, 2)?;
         let report = state(&s, "prune-12")?.unwrap();
-        assert!(report["maximum_parallel_jobs"].as_u64().unwrap() > 1);
+        // 領域が重なると、複数の一候補評価より一つのまとめ評価を優先する。
+        assert!(report["maximum_parallel_jobs"].as_u64().unwrap() >= 1);
+        assert!(
+            report["maximum_parallel_jobs"].as_u64().unwrap() > 1
+                || report["block_candidates"].as_u64().unwrap() > 1
+        );
         assert!(audit_all(&s, 12, 60., &inputs, &mut dem, &root, false)?.0);
         let epoch = s.epoch(12)?;
         parallel_prune::run(&s, 12, 13, 60., &inputs, &mut dem, &root, 2)?;
@@ -3450,11 +3525,11 @@ mod tests {
             cache: HashMap::new(),
             order: VecDeque::new(),
         };
-        let first = audit_all(&s, 13, 25., &inputs, &mut dem, &root, true)?;
+        let first = audit_all(&s, 13, FINEST_ERROR, &inputs, &mut dem, &root, true)?;
         assert!(first.0);
         assert_eq!(
             first,
-            audit_all(&s, 13, 25., &inputs, &mut dem, &root, true)?
+            audit_all(&s, 13, FINEST_ERROR, &inputs, &mut dem, &root, true)?
         );
         let progress: Value = serde_json::from_slice(&fs::read(root.join("progress.json"))?)?;
         assert_eq!(
@@ -3471,7 +3546,7 @@ mod tests {
             ])?,
             false,
         )?;
-        assert!(!audit_all(&s, 13, 25., &inputs, &mut dem, &root, false)?.0);
+        assert!(!audit_all(&s, 13, FINEST_ERROR, &inputs, &mut dem, &root, false)?.0);
         let path = dem
             .root
             .join("14")
@@ -3482,7 +3557,7 @@ mod tests {
         fs::write(&path, bytes)?;
         dem.cache.clear();
         dem.order.clear();
-        assert!(audit_all(&s, 13, 25., &inputs, &mut dem, &root, true).is_err());
+        assert!(audit_all(&s, 13, FINEST_ERROR, &inputs, &mut dem, &root, true).is_err());
         drop(s);
         fs::remove_dir_all(root)?;
         Ok(())
@@ -3599,7 +3674,8 @@ mod tests {
             order: VecDeque::new(),
         };
         s.cache_level(13)?;
-        let serial = audit_all_serial_reference(&s, 13, 25., &inputs, &mut dem, &root, true)?;
+        let serial =
+            audit_all_serial_reference(&s, 13, FINEST_ERROR, &inputs, &mut dem, &root, true)?;
         let rows = |s: &Store| -> Result<Vec<(i64, i64, i64, u64, f64, f64)>> {
             Ok(s.db
                 .prepare("SELECT x,y,epoch,valid,up,down FROM audit WHERE z=13 ORDER BY y,x")?
@@ -3619,12 +3695,12 @@ mod tests {
         s.db.execute("DELETE FROM audit WHERE z=13", [])?;
         assert_eq!(
             serial,
-            audit_all(&s, 13, 25., &inputs, &mut dem, &root, true)?
+            audit_all(&s, 13, FINEST_ERROR, &inputs, &mut dem, &root, true)?
         );
         assert_eq!(rows(&s)?, expected);
         assert_eq!(
             serial,
-            audit_all(&s, 13, 25., &inputs, &mut dem, &root, true)?
+            audit_all(&s, 13, FINEST_ERROR, &inputs, &mut dem, &root, true)?
         );
         let p: Value = serde_json::from_slice(&fs::read(root.join("progress.json"))?)?;
         assert_eq!(p["reused_inputs"], inputs.len());
@@ -3634,11 +3710,11 @@ mod tests {
             quant([(b[0] + b[2]) * 0.5, (b[1] + b[3]) * 0.5, 1000.])?,
             false,
         )?;
-        assert!(!audit_all_policy(&s, 13, 25., &inputs, &mut dem, &root, true, true)?.0);
+        assert!(!audit_all_policy(&s, 13, FINEST_ERROR, &inputs, &mut dem, &root, true, true)?.0);
         let p: Value = serde_json::from_slice(&fs::read(root.join("progress.json"))?)?;
         assert_eq!(p["early_failure"], true);
         assert!(state(&s, "certify-13")?.is_none());
-        assert!(!audit_all(&s, 13, 25., &inputs, &mut dem, &root, true)?.0);
+        assert!(!audit_all(&s, 13, FINEST_ERROR, &inputs, &mut dem, &root, true)?.0);
         drop(s);
         fs::remove_dir_all(root)?;
         Ok(())
@@ -3719,7 +3795,7 @@ mod tests {
         let report: Value = serde_json::from_slice(&fs::read(root.join("benchmark-fit.json"))?)?;
         assert_eq!(report["verified_inputs_reused"], 1);
         assert_eq!(report["added_points"], 0);
-        assert!(audit_all(&s, 13, 25., &inputs, &mut dem, &root, true)?.0);
+        assert!(audit_all(&s, 13, FINEST_ERROR, &inputs, &mut dem, &root, true)?.0);
         drop(s);
         fs::remove_dir_all(root)?;
         Ok(())

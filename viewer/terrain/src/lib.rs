@@ -22,7 +22,7 @@ pub fn check(path: &std::path::Path) -> anyhow::Result<()> {
 }
 use anyhow::Result;
 use eframe::egui;
-use shared_data::{Database, ERRORS, Key, Packet};
+use shared_data::{Database, Key, Packet};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
@@ -37,7 +37,7 @@ struct Request {
     resident: HashSet<Key>,
 }
 enum Message {
-    Catalog(HashMap<Key, usize>, String, String),
+    Catalog(HashMap<Key, usize>, String, String, [f64; 8]),
     Packet(u64, Arc<Packet>, bool),
     Selected(u64, Vec<Key>),
     Ready(u64, usize, f64),
@@ -81,6 +81,7 @@ fn worker(
             db.catalog.clone(),
             db.generation.clone(),
             db.credits.clone(),
+            db.level_errors,
         ));
         let mut roots = db
             .catalog
@@ -106,6 +107,7 @@ fn worker(
             while let Ok(new) = requests.try_recv() {
                 request = new;
             }
+            request.camera.level_errors_m = db.level_errors;
             let started = Instant::now();
             let mut keys = selection::select(&db.catalog, &request.camera);
             if request.camera.auto && request.prefer_finer {
@@ -953,7 +955,8 @@ impl eframe::App for App {
             // 通知はArc参照だけなので全件取り込み、GPUへの転送件数は別に制限する。
             for message in drain_messages(&self.receive) {
                 match message {
-                    Message::Catalog(catalog, generation, credits) => {
+                    Message::Catalog(catalog, generation, credits, level_errors) => {
+                        self.camera.level_errors_m = level_errors;
                         let maximum = catalog.keys().map(|k| k.0).max().unwrap_or(6);
                         self.camera.maximum = if self.camera.auto {
                             maximum
@@ -1078,7 +1081,7 @@ impl eframe::App for App {
                     changed|=ui.checkbox(&mut self.camera.auto,"自動LOD").changed();
                     let old=self.camera.maximum;
                     egui::ComboBox::from_label("最大／固定").selected_text(format!("z{old}")).show_ui(ui,|ui|{
-                        for z in self.catalog.keys().map(|k|k.0).collect::<std::collections::BTreeSet<_>>() {ui.selectable_value(&mut self.camera.maximum,z,format!("z{z}・{}m",ERRORS[(z-6) as usize]));}
+                        for z in self.catalog.keys().map(|k|k.0).collect::<std::collections::BTreeSet<_>>() {ui.selectable_value(&mut self.camera.maximum,z,format!("z{z}・{}m",self.camera.level_errors_m[(z-6) as usize]));}
                     });
                     changed|=old!=self.camera.maximum;
                     changed|=ui.add(egui::Slider::new(&mut self.camera.lod_quality,0.5..=4.).text("LOD精細度")).changed();

@@ -1,5 +1,16 @@
 //! 証明済みの互いに離れた領域で、削減候補をまとめて処理する。
 use super::*;
+// z6のWebタイル全域などを一括復号しない。余白を含めても最大196枚程度。
+// 大きい支持点集合を持つ既存パッチも、証明済み範囲の部分集合だけで処理する。
+pub(super) fn bounded_region(bounds: [f64; 4], q: [f64; 2]) -> [f64; 4] {
+    let half = 6. * 256. * STEP;
+    [
+        bounds[0].max(q[0] - half),
+        bounds[1].max(q[1] - half),
+        bounds[2].min(q[0] + half),
+        bounds[3].min(q[1] + half),
+    ]
+}
 pub(super) struct BlockTask {
     pub stripe: usize,
     pub patch: Option<Patch>,
@@ -204,7 +215,133 @@ pub(super) fn evaluate(mut j: BlockJob, error: f64, root: &Path) -> Result<Block
 mod tests {
     use super::*;
     #[test]
+    fn batch_dem_window_stays_bounded_for_all_web_zoom_levels() {
+        let side = 256. * STEP;
+        for z in 6..=13 {
+            let tile = WORLD / 2f64.powi(z);
+            let original = [0., 0., tile, tile];
+            for f in [0.0001, 0.13, 0.5, 0.99] {
+                let q = [tile * f, tile * (1. - f)];
+                let b = bounded_region(original, q);
+                assert!(
+                    b[0] >= original[0]
+                        && b[1] >= original[1]
+                        && b[2] <= original[2]
+                        && b[3] <= original[3]
+                );
+                assert!(inside(q, b));
+                let nx =
+                    ((b[2] + STEP * 2.) / side).floor() - ((b[0] - STEP * 2.) / side).floor() + 1.;
+                let ny =
+                    ((b[3] + STEP * 2.) / side).floor() - ((b[1] - STEP * 2.) / side).floor() + 1.;
+                assert!(nx * ny <= 196., "z{z} {nx}x{ny}");
+            }
+        }
+    }
+    #[test]
+    fn cropped_support_region_preserves_global_surface_after_batch_removal() -> Result<()> {
+        let s = Store::open(Path::new(":memory:"), 8192)?;
+        for (x, y) in [
+            (-1000000, -1000000),
+            (1000000, -1000000),
+            (1000000, 1000000),
+            (-1000000, 1000000),
+        ] {
+            s.insert(6, [x * 16, y * 16, 0], true)?;
+        }
+        for y in 0..33 {
+            for x in 0..33 {
+                s.insert(
+                    6,
+                    [
+                        (800 + x * 16) * 16,
+                        (800 + y * 16) * 16,
+                        (x * 13 + y * 7) % 5 - 2,
+                    ],
+                    false,
+                )?;
+            }
+        }
+        s.cache_level(6)?;
+        let whole = [-90000., -90000., 90000., 90000.];
+        let mut patch = s.patch(6, whole)?;
+        let cropped = bounded_region(whole, [1040., 1040.]);
+        patch.certified_bounds = cropped;
+        let mut stmt=s.db.prepare("SELECT id,x,y,h FROM points WHERE guard=0 AND x BETWEEN 15360 AND 17920 AND y BETWEEN 15360 AND 17920 ORDER BY y,x LIMIT 32")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    [
+                        r.get::<_, i32>(1)? as f64 / 16.,
+                        r.get::<_, i32>(2)? as f64 / 16.,
+                        r.get::<_, i32>(3)? as f64 / 8.,
+                    ],
+                ))
+            })?
+            .enumerate()
+            .map(|(k, r)| {
+                let (id, q) = r?;
+                Ok((k as i64 + 1, id, q, true))
+            })
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let dir = std::env::temp_dir().join(format!(
+            "bounded-block-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        fs::create_dir(&dir)?;
+        let r = evaluate(
+            BlockJob {
+                stripe: 0,
+                patch,
+                rows,
+                rasters: vec![(
+                    Input {
+                        x: 0,
+                        y: 0,
+                        sha: String::new(),
+                    },
+                    Arc::new(vec![0.; 65536]),
+                )],
+                witnesses: Vec::new(),
+            },
+            25.,
+            &dir,
+        )?;
+        assert!(!r.removed.is_empty());
+        s.delete_batch(6, &r.removed.iter().map(|r| r.id).collect::<Vec<_>>())?;
+        let rebuilt = s.patch(6, whole)?;
+        for q in [
+            [1000., 1000.],
+            [1100., 1100.],
+            [-20000., 20000.],
+            [20000., -20000.],
+        ] {
+            assert!(
+                (r.patch.evaluate(q, &mut Work::default())?
+                    - rebuilt.evaluate(q, &mut Work::default())?)
+                .abs()
+                    < 1e-7
+            );
+        }
+        fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+    #[test]
     fn disjoint_batches_match_global_rebuild_and_stop_is_safe() -> Result<()> {
+        disjoint_batches_at_level(13)
+    }
+    #[test]
+    fn coarse_batches_match_global_rebuild_and_stop_is_safe() -> Result<()> {
+        for z in [12, 9, 6] {
+            disjoint_batches_at_level(z)?;
+        }
+        Ok(())
+    }
+    fn disjoint_batches_at_level(z: i64) -> Result<()> {
         let s = Store::open(Path::new(":memory:"), 8192)?;
         for (x, y) in [
             (-10000, -10000),
@@ -212,14 +349,14 @@ mod tests {
             (10000, 10000),
             (-10000, 10000),
         ] {
-            s.insert(13, [x * 16, y * 16, (x / 16 + y / 8)], true)?;
+            s.insert(z, [x * 16, y * 16, (x / 16 + y / 8)], true)?;
         }
         for y in 0..33 {
             for x in 0..33 {
                 let xm = (x + 40) * 16;
                 let ym = (y + 40) * 16;
                 s.insert(
-                    13,
+                    z,
                     [
                         xm * 16,
                         ym * 16,
@@ -229,7 +366,7 @@ mod tests {
                 )?;
             }
         }
-        s.cache_level(13)?;
+        s.cache_level(z)?;
         let root = std::env::temp_dir().join(format!(
             "prune-block-{}-{}",
             std::process::id(),
@@ -275,7 +412,7 @@ mod tests {
                 .collect();
             jobs.push(BlockJob {
                 stripe,
-                patch: s.patch(13, b)?,
+                patch: s.patch(z, b)?,
                 rows,
                 rasters: vec![(input.clone(), raster.clone())],
                 witnesses: Vec::new(),
@@ -289,7 +426,7 @@ mod tests {
             assert!(r.removed.len() >= 8, "removed={}", r.removed.len());
         }
         s.delete_batch(
-            13,
+            z,
             &results
                 .iter()
                 .flat_map(|r| r.removed.iter().map(|v| v.id))
@@ -297,7 +434,7 @@ mod tests {
         )?;
         for r in results {
             let b = r.patch.certified_bounds;
-            let whole = s.patch(13, b)?;
+            let whole = s.patch(z, b)?;
             let mut a = Work::default();
             let mut bw = Work::default();
             for y in 0..9 {
@@ -312,8 +449,8 @@ mod tests {
                 }
             }
         }
-        let before = s.epoch(13)?;
-        let patch = s.patch(13, [600., 600., 900., 1250.])?;
+        let before = s.epoch(z)?;
+        let patch = s.patch(z, [600., 600., 900., 1250.])?;
         fs::write(root.join("stop-requested"), b"stop")?;
         let stopped = evaluate(
             BlockJob {
@@ -327,7 +464,7 @@ mod tests {
             &root,
         );
         assert!(stopped.is_err());
-        assert_eq!(s.epoch(13)?, before);
+        assert_eq!(s.epoch(z)?, before);
         fs::remove_dir_all(root)?;
         Ok(())
     }

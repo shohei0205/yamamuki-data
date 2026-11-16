@@ -135,6 +135,7 @@ impl Packet {
 pub struct Database {
     db: yamamuki_terrain::sqlite::Database,
     pub catalog: HashMap<Key, usize>,
+    pub level_errors: [f64; 8],
     pub generation: String,
     pub credits: String,
     packets: HashMap<Key, Arc<Packet>>,
@@ -150,6 +151,12 @@ impl Database {
             .iter()
             .map(|(&(z, x, y), &n)| ((z, x as i32, y as i32), n))
             .collect();
+        let mut level_errors = ERRORS;
+        for (&z, &error) in &db.level_errors {
+            if (6..=13).contains(&z) {
+                level_errors[(z - 6) as usize] = error;
+            }
+        }
         let generation = db.generation.clone();
         let credits = db.credits.clone();
         eprintln!(
@@ -160,6 +167,7 @@ impl Database {
         Ok(Self {
             db,
             catalog,
+            level_errors,
             generation,
             credits,
             packets: HashMap::new(),
@@ -366,6 +374,88 @@ fn prepare_packet(
 #[cfg(test)]
 mod benchmarks {
     use super::*;
+    #[test]
+    #[ignore = "実データのレベル切替に伴う標高差を計測する"]
+    fn measure_level_height_bias() -> Result<()> {
+        let path = std::env::var("YAMAMUKI_TERRAIN_BENCH_DB")?;
+        let mut db = Database::open(Path::new(&path))?;
+        for (name, lon, lat) in [
+            ("fuji", 138.7274, 35.3606),
+            ("yari", 137.647, 36.342),
+            ("tsukuba", 140.1069, 36.2254),
+        ] {
+            if std::env::var("YAMAMUKI_TERRAIN_BENCH_REGION")
+                .ok()
+                .is_some_and(|v| v != name)
+            {
+                continue;
+            }
+            let center = crate::selection::lonlat(lon, lat);
+            let mut models = HashMap::new();
+            for z in 6..13u32 {
+                let mut differences = Vec::new();
+                for y in -4..=4 {
+                    for x in -4..=4 {
+                        let q = [
+                            center[0] + f64::from(x) * 2000.,
+                            center[1] + f64::from(y) * 2000.,
+                        ];
+                        let mut h = [0.; 2];
+                        let mut valid = true;
+                        for (j, level) in [z, z + 1].into_iter().enumerate() {
+                            let side = WORLD / 2f64.powi(level as i32);
+                            let key = (level, (q[0] / side) as i32, (q[1] / side) as i32);
+                            if !db.catalog.contains_key(&key) {
+                                valid = false;
+                                break;
+                            }
+                            if !models.contains_key(&key) {
+                                let b = bounds(key);
+                                let points = db.db.points((level, key.1 as u32, key.2 as u32))?;
+                                models.insert(
+                                    key,
+                                    Fast::certified(
+                                        points
+                                            .iter()
+                                            .map(|p| {
+                                                [
+                                                    p[0] as f64 / 16. - b[0],
+                                                    p[1] as f64 / 16. - b[1],
+                                                    p[2] as f64 / 8.,
+                                                ]
+                                            })
+                                            .collect(),
+                                    )?,
+                                );
+                            }
+                            let b = bounds(key);
+                            h[j] = models[&key].evaluate(
+                                [q[0] - b[0], q[1] - b[1]],
+                                &mut crate::natural_regional_surface::Work::default(),
+                            )?;
+                        }
+                        if valid {
+                            differences.push(h[1] - h[0]);
+                        }
+                    }
+                }
+                if differences.is_empty() {
+                    continue;
+                }
+                eprintln!(
+                    "{name} z{z}->z{} count={} mean_fine_minus_coarse={:.3}m rising={} falling={} max_rise={:.3}m max_fall={:.3}m",
+                    z + 1,
+                    differences.len(),
+                    differences.iter().sum::<f64>() / differences.len() as f64,
+                    differences.iter().filter(|v| **v > 0.).count(),
+                    differences.iter().filter(|v| **v < 0.).count(),
+                    differences.iter().copied().fold(0., f64::max),
+                    differences.iter().copied().fold(0., f64::min)
+                );
+            }
+        }
+        Ok(())
+    }
     #[test]
     #[ignore = "全国SQLiteの索引とGPU初期化の時間を実測する"]
     fn benchmark_open_national_database() -> Result<()> {

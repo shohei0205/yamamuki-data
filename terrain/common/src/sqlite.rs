@@ -11,14 +11,14 @@ use std::{
 pub const WORLD: f64 = 40075016.68557849;
 pub const ENCODING: &str = "natural-controls-v1";
 pub const LEVELS: [(u32, f64); 8] = [
-    (6, 500.),
-    (7, 400.),
-    (8, 300.),
-    (9, 250.),
-    (10, 200.),
-    (11, 125.),
-    (12, 60.),
-    (13, 25.),
+    (6, 312.5),
+    (7, 250.),
+    (8, 187.5),
+    (9, 156.25),
+    (10, 125.),
+    (11, 78.125),
+    (12, 37.5),
+    (13, 15.625),
 ];
 pub type Key = (u32, u32, u32);
 
@@ -131,6 +131,8 @@ pub struct Database {
     pub credits: String,
     levels: HashMap<u32, i64>,
     pub catalog: HashMap<Key, usize>,
+    /// 元DEMに対する上下の許容誤差の大きい方。表示側のLOD選択に使う。
+    pub level_errors: HashMap<u32, f64>,
     cache: HashMap<Key, Arc<Vec<[i32; 3]>>>,
 }
 impl Database {
@@ -162,14 +164,32 @@ impl Database {
         let dataset = sets[0].key;
         let generation = sets[0].data_version.clone();
         let mut levels = HashMap::new();
+        let mut level_errors = HashMap::new();
         {
-            let mut query = connection
-                .prepare("SELECT z,level_key FROM terrain_levels WHERE dataset_key=?1")?;
+            let mut query = connection.prepare(
+                "SELECT z,level_key,settings_json FROM terrain_levels WHERE dataset_key=?1",
+            )?;
             let rows = query.query_map([dataset], |r| {
-                Ok((r.get::<_, u32>(0)?, r.get::<_, i64>(1)?))
+                Ok((
+                    r.get::<_, u32>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
             })?;
             for row in rows {
-                let (z, key) = row?;
+                let (z, key, raw) = row?;
+                let settings: serde_json::Value = serde_json::from_str(&raw)?;
+                let up = settings["errorUpMetres"]
+                    .as_f64()
+                    .context("上向き許容誤差がありません")?;
+                let down = settings["errorDownMetres"]
+                    .as_f64()
+                    .context("下向き許容誤差がありません")?;
+                ensure!(
+                    up.is_finite() && up > 0. && down.is_finite() && down > 0.,
+                    "許容誤差が不正です"
+                );
+                level_errors.insert(z, up.max(down));
                 ensure!(
                     z <= 30 && levels.insert(z, key).is_none(),
                     "地形のズームが不正または重複しています"
@@ -187,6 +207,7 @@ impl Database {
             generation,
             credits,
             levels,
+            level_errors,
             catalog,
             cache: HashMap::new(),
         })

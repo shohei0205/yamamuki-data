@@ -17,7 +17,7 @@ WHERE dataset_key=:dataset AND level_key=:level;
 
 `level_key` はDB内のキー。XYZズームは `terrain_levels.z` を使う。同じデータセットで同一zを重複定義しない。`terrain_tiles` の主キーは `(dataset_key,level_key,x,y)`。x・yは0以上 `2^z` 未満。タイルが存在しない領域を、標高0の新規タイルとして合成しない。
 
-`settings_json` の `errorDownMetres`・`errorUpMetres` は元DEMに対する下・上の誤差許容量。`interpolation='sibson'`、`xyStepMetres=0.0625`、`heightStepMetres=0.125`、`maxParentDepth=2`、`maxDependencies=16` を記録する。`anchor` は生成側の独立化方針であり、復号器は各BLOBの実際の親参照を優先する。
+`settings_json` の `errorDownMetres`・`errorUpMetres` は元DEMに対する下・上の誤差許容量。粗細レベル間の高さの大小制約ではない。地域試験データでは `metadata.generation.scope="window-test"` とし、`metadata.generation.sourceWindowZ14` に元DEMの対象範囲 `[x最小,y最小,x最大,y最大]`（右下を含まない）を記録できる。粗いXYZタイルの外形全域が元DEMで監査済みとは限らない。両者が同じ値でもよく、ビューワーは生成器の既定値を決め打ちせず、各レベルに記録された大きい方の誤差で自動LODを評価する。`interpolation='sibson'`、`xyStepMetres=0.0625`、`heightStepMetres=0.125`、`maxParentDepth=2`、`maxDependencies=16` を記録する。`anchor` は生成側の独立化方針であり、復号器は各BLOBの実際の親参照を優先する。
 
 ## 座標と整数
 
