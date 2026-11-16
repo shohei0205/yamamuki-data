@@ -201,6 +201,7 @@ impl Renderer {
                         amount: 1.,
                         shade: true,
                         gamma_shade: !self.srgb_target,
+                        edge_filter: false,
                     },
                 );
             }

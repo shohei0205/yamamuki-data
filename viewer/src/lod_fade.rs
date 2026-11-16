@@ -72,6 +72,7 @@ pub type Backend<'a> = Option<(&'a RenderState, &'a Renderer)>;
 
 pub struct Quad {
     pub tile: Tile,
+    pub edge_filter: bool,
     pub uv: [Rect; 2],
     pub textures: [Option<wgpu::TextureView>; 2],
 }
@@ -93,7 +94,12 @@ impl Quad {
             uv[1] = uv[0];
             textures[1] = textures[0].clone();
         }
-        Some(Self { tile, uv, textures })
+        Some(Self {
+            tile,
+            uv,
+            textures,
+            edge_filter: false,
+        })
     }
 }
 
@@ -164,7 +170,14 @@ impl Renderer {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("LOD crossfade"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("lod_fade.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                format!(
+                    "{}\n{}",
+                    include_str!("lod_fade.wgsl"),
+                    include_str!("../terrain/src/edge_interpolation.wgsl")
+                )
+                .into(),
+            ),
         });
         let pipeline = |entry, src_factor, dst_factor, shade| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -175,9 +188,9 @@ impl Renderer {
                     entry_point: Some("vertex"),
                     compilation_options: Default::default(),
                     buffers: &[wgpu::VertexBufferLayout {
-                        array_stride: 28,
+                        array_stride: 32,
                         step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32],
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32, 4 => Float32],
                     }],
                 },
                 primitive: Default::default(),
@@ -297,6 +310,7 @@ impl Renderer {
                         amount,
                         shade,
                         gamma_shade: shade && self.gamma_shade,
+                        edge_filter: quad.edge_filter,
                     },
                 );
             }
@@ -332,9 +346,18 @@ impl Renderer {
                 let x = 2. * (corners[i].x - rect.left()) / rect.width() - 1.;
                 let y = 1. - 2. * (corners[i].y - rect.top()) / rect.height();
                 vertices.extend(
-                    [x, y, uv[0][i].x, uv[0][i].y, uv[1][i].x, uv[1][i].y, amount]
-                        .into_iter()
-                        .flat_map(f32::to_le_bytes),
+                    [
+                        x,
+                        y,
+                        uv[0][i].x,
+                        uv[0][i].y,
+                        uv[1][i].x,
+                        uv[1][i].y,
+                        amount,
+                        f32::from(quad.edge_filter),
+                    ]
+                    .into_iter()
+                    .flat_map(f32::to_le_bytes),
                 );
             }
             let [old, new] = quad.textures;
@@ -487,6 +510,7 @@ mod tests {
                 .create_view(&Default::default())
         };
         let quad = |colors: [[u8; 4]; 2], format| Quad {
+            edge_filter: false,
             tile: Tile { z: 0, x: 0, y: 0 },
             uv: [FULL_UV; 2],
             textures: colors.map(|bytes| Some(texture(bytes, format))),
@@ -573,6 +597,159 @@ mod tests {
                 .zip([64, 64, 64, 255])
                 .all(|(a, b)| a.abs_diff(b) <= 1),
             "{actual:?}"
+        );
+    }
+    #[test]
+    #[ignore = "輪郭補間を実GPUで描き、斜線・縮小・分割境界を確認する"]
+    fn gpu_edge_interpolation_keeps_diagonals_and_split_tile_seams() {
+        let instance = wgpu::Instance::default();
+        let adapter =
+            pollster::block_on(instance.request_adapter(&Default::default())).expect("GPU");
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default(), None)).unwrap();
+        let renderer = Renderer::for_target(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let source_size = wgpu::Extent3d {
+            width: 8,
+            height: 8,
+            depth_or_array_layers: 1,
+        };
+        let values = (0..8)
+            .flat_map(|y| {
+                (0..8).flat_map(move |x| {
+                    let value = if x == y { 0 } else { 255 };
+                    [value, value, value, 255]
+                })
+            })
+            .collect::<Vec<u8>>();
+        let source = device
+            .create_texture_with_data(
+                &queue,
+                &wgpu::TextureDescriptor {
+                    label: Some("斜め1px線"),
+                    size: source_size,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                },
+                wgpu::util::TextureDataOrder::LayerMajor,
+                &values,
+            )
+            .create_view(&Default::default());
+        let render = |edge_filter, split, pixels: u32| {
+            let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(pixels as f32, pixels as f32));
+            let view = View {
+                center: [0.5, 0.5],
+                zoom: (pixels as f64 / 256.).log2(),
+                orientation: Default::default(),
+            };
+            let full = Rect::from_min_max(egui::pos2(0.125, 0.125), egui::pos2(0.875, 0.875));
+            let tiles = if split {
+                (0..2)
+                    .flat_map(|y| (0..2).map(move |x| Tile { z: 1, x, y }))
+                    .collect()
+            } else {
+                vec![Tile { z: 0, x: 0, y: 0 }]
+            };
+            let quads = tiles
+                .into_iter()
+                .map(|tile| {
+                    let side = (1u32 << tile.z) as f32;
+                    let uv = Rect::from_min_size(
+                        full.min + egui::vec2(tile.x as f32, tile.y as f32) * full.size() / side,
+                        full.size() / side,
+                    );
+                    Quad {
+                        tile,
+                        uv: [uv; 2],
+                        textures: [Some(source.clone()), Some(source.clone())],
+                        edge_filter,
+                    }
+                })
+                .collect();
+            let draw = renderer.draw(rect, &view, quads, Vec::new(), 1.).unwrap();
+            let size = wgpu::Extent3d {
+                width: pixels,
+                height: pixels,
+                depth_or_array_layers: 1,
+            };
+            let target = device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let pitch = (pixels * 4).div_ceil(256) * 256;
+            let read = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: u64::from(pitch * pixels),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &target.create_view(&Default::default()),
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        ..Default::default()
+                    })
+                    .forget_lifetime();
+                draw.render(&mut pass);
+            }
+            encoder.copy_texture_to_buffer(
+                target.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &read,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(pitch),
+                        rows_per_image: None,
+                    },
+                },
+                size,
+            );
+            queue.submit([encoder.finish()]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            read.slice(..)
+                .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
+            device.poll(wgpu::Maintain::Wait);
+            rx.recv().unwrap().unwrap();
+            let bytes = read.slice(..).get_mapped_range();
+            bytes
+                .chunks_exact(pitch as usize)
+                .flat_map(|row| row[..pixels as usize * 4].to_vec())
+                .collect::<Vec<_>>()
+        };
+        let ordinary = render(false, false, 128);
+        let edge = render(true, false, 128);
+        let split = render(true, true, 128);
+        assert!(
+            edge.iter().zip(&split).all(|(a, b)| a.abs_diff(*b) <= 1),
+            "分割境界で補間が変わる"
+        );
+        assert!(edge.chunks_exact(4).all(|p| p[3] == 255));
+        let dark = |image: &[u8]| image.chunks_exact(4).filter(|p| p[0] < 64).count();
+        assert!(
+            dark(&edge) > dark(&ordinary),
+            "斜め線の連結が改善していない"
+        );
+        assert_eq!(
+            render(false, false, 4),
+            render(true, false, 4),
+            "縮小画像を変えてはならない"
         );
     }
 }

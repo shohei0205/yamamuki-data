@@ -101,6 +101,7 @@ pub fn collect(
                         tint: color,
                         shade: false,
                         gamma_shade: false,
+                        edge_filter: false,
                         border: false,
                     });
                 }
@@ -115,6 +116,7 @@ pub fn collect(
                         tint: c.color.to_array().map(|v| v as f32 / 255.),
                         shade: false,
                         gamma_shade: false,
+                        edge_filter: false,
                         border: true,
                     });
                 } else if let Some(c) = callback.callback.downcast_ref::<Capture>() {
@@ -126,6 +128,7 @@ pub fn collect(
                         tint: [1.; 4],
                         shade: c.shade,
                         gamma_shade: c.gamma_shade,
+                        edge_filter: c.edge_filter,
                         border: false,
                     });
                 }

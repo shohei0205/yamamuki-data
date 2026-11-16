@@ -27,8 +27,8 @@ fn coordinate(p:vec4<f32>)->vec2<f32>{
   return vec4(linear(params.tint.rgb),params.tint.a);
  }
  if (u32(params.settings.w)&1u)!=0u {return vec4(linear(params.tint.rgb),params.tint.a);}
- var a=textureSampleLevel(oldTile,linearSampler,params.uv0.xy+uv*params.uv0.zw,0.);
- var b=textureSampleLevel(newTile,linearSampler,params.uv1.xy+uv*params.uv1.zw,0.);
+ var a=edge_sample(oldTile,linearSampler,params.uv0.xy+uv*params.uv0.zw,(u32(params.settings.w)&8u)!=0u);
+ var b=edge_sample(newTile,linearSampler,params.uv1.xy+uv*params.uv1.zw,(u32(params.settings.w)&8u)!=0u);
  a=vec4(gamma(a.rgb),a.a)*params.settings.y; b=vec4(gamma(b.rgb),b.a)*params.settings.z;
  let c=mix(a,b,params.settings.x)*params.tint;
  return vec4(linear(c.rgb),c.a);

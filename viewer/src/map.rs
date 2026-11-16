@@ -233,6 +233,16 @@ pub struct Tile {
 }
 
 impl Tile {
+    fn neighbor(self, dx: i32, dy: i32) -> Option<Self> {
+        let side = 1i64 << self.z;
+        let y = i64::from(self.y) + i64::from(dy);
+        (0..side).contains(&y).then(|| Self {
+            z: self.z,
+            x: (i64::from(self.x) + i64::from(dx)).rem_euclid(side) as u32,
+            y: y as u32,
+        })
+    }
+
     fn url(self, source: Source) -> String {
         let (base, extension) = source.tile_endpoint();
         format!("{base}/{}/{}/{}.{extension}", self.z, self.x, self.y)
@@ -550,6 +560,7 @@ enum Cached {
 type Reply = (Tile, Result<Option<LoadedTile>>);
 
 pub struct Tiles {
+    pub edge_filter: bool,
     pub borders: bool,
     pub source: Source,
     cancelled: Arc<AtomicBool>,
@@ -588,6 +599,7 @@ impl Tiles {
             });
         }
         Self {
+            edge_filter: false,
             borders: false,
             source,
             cancelled,
@@ -599,6 +611,37 @@ impl Tiles {
             lod: lod_fade::State::default(),
             material_lods: (0..4).map(|_| Default::default()).collect(),
             material_pass: 0,
+        }
+    }
+
+    // LODの全域切り替え待ちでも、各範囲で最も細かい読込済み祖先を使う。
+    fn cached_ancestor(&self, tile: Tile) -> Option<(Tile, Rect)> {
+        self.cached_ancestor_up_to(tile, tile.z)
+    }
+    fn cached_ancestor_up_to(&self, tile: Tile, maximum: u32) -> Option<(Tile, Rect)> {
+        (0..=maximum.min(tile.z)).rev().find_map(|z| {
+            let (source, uv) = lod_fade::sample(tile, z, lod_fade::FULL_UV);
+            matches!(self.cache.get(&source), Some((Cached::Texture(_, _), _)))
+                .then_some((source, uv))
+        })
+    }
+
+    fn stitch_neighbors(&self, tile: Tile) {
+        let Some((Cached::Texture(image, _), _)) = self.cache.get(&tile) else {
+            return;
+        };
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                if dx == 0 && dy == 0 {
+                    continue;
+                }
+                if let Some(other) = tile.neighbor(dx, dy)
+                    && let Some((Cached::Texture(neighbor, _), _)) = self.cache.get(&other)
+                {
+                    image.set_neighbor(neighbor, dx, dy);
+                    neighbor.set_neighbor(image, -dx, -dy);
+                }
+            }
         }
     }
 
@@ -648,15 +691,17 @@ impl Tiles {
                 Err(_) => Cached::Failed(Instant::now()),
             };
             self.cache.insert(tile, (entry, self.frame));
+            self.stitch_neighbors(tile);
         }
         if processed == limit && !self.pending.is_empty() {
             ui.ctx().request_repaint();
         }
         let tiles = view.tiles_at(rect, tile_zoom);
         // 傾斜で可視範囲が広がっても、表示中のタイルはキャッシュに収める。
-        let cache_limit = MAX_CACHE.max(tiles.len() + MAX_PENDING);
+        let requested = tiles_with_halo(tiles.clone());
+        let cache_limit = MAX_CACHE.max(requested.len() + MAX_PENDING);
         let mut failed = false;
-        for &tile in &tiles {
+        for &tile in &requested {
             if let Some((entry, touched)) = self.cache.get_mut(&tile) {
                 *touched = self.frame;
                 match entry {
@@ -700,14 +745,23 @@ impl Tiles {
         if let (Some((state, renderer)), Some((&old, amount))) =
             (fade_backend, self.lod.blend(ui.ctx(), now))
             && lod_fade::can_blend(old, current, lod_zoom)
+            && current == tile_zoom
         {
             let textures = state.renderer.read();
             let quads = view
                 .tiles_at(rect, old.max(current))
                 .into_iter()
                 .filter_map(|tile| {
-                    let [(old_tile, old_uv), (new_tile, new_uv)] =
+                    let [mut old_sample, new_sample] =
                         [old, current].map(|z| lod_fade::sample(tile, z, lod_fade::FULL_UV));
+                    // 中間レベルを表示済みなら、フェード開始時にも粗い旧状態へ戻さない。
+                    if old < current
+                        && let Some(cached) = self.cached_ancestor_up_to(tile, current - 1)
+                    {
+                        old_sample = cached;
+                    }
+                    let (old_tile, old_uv) = old_sample;
+                    let (new_tile, new_uv) = new_sample;
                     let [(old, old_ready, old_uv), (new, new_ready, new_uv)] =
                         [(old_tile, old_uv), (new_tile, new_uv)].map(|(tile, uv)| {
                             let Some((cached, touched)) = self.cache.get_mut(&tile) else {
@@ -726,6 +780,10 @@ impl Tiles {
                             }
                         });
                     lod_fade::Quad::new(tile, [old_uv, new_uv], [old, new], [old_ready, new_ready])
+                        .map(|mut quad| {
+                            quad.edge_filter = self.edge_filter;
+                            quad
+                        })
                 })
                 .collect();
             renderer.paint(
@@ -738,37 +796,62 @@ impl Tiles {
                 self.material_pass != 0,
             );
         } else {
-            let mut drawn = false;
-            if current != tile_zoom {
+            let mut filtered = Vec::new();
+            let mut paint = |tile: Tile, texture: &crate::tile_atlas::Image, uv: Rect| {
+                if self.edge_filter
+                    && let Some((state, renderer)) = fade_backend
+                {
+                    let textures = state.renderer.read();
+                    if let Some(view) = renderer.color_view(&textures, texture.id(), self.frame) {
+                        let mut quad = lod_fade::Quad::new(
+                            tile,
+                            [texture.uv(uv); 2],
+                            [Some(view.clone()), Some(view)],
+                            [true; 2],
+                        )
+                        .unwrap();
+                        quad.edge_filter = true;
+                        filtered.push(quad);
+                    } else {
+                        ui.ctx().request_repaint();
+                    }
+                } else {
+                    view.paint_tile_uv(painter, rect, tile, texture.id(), texture.uv(uv));
+                }
+            };
+            // ズームアウト中は以前の細タイルも下地として残す。
+            if current > tile_zoom {
                 for (&tile, (entry, touched)) in &mut self.cache {
                     if tile.z == current
                         && let Cached::Texture(texture, _) = entry
                         && Rect::from_points(&view.tile_corners(rect, tile)).intersects(rect)
                     {
                         *touched = self.frame;
-                        view.paint_tile_uv(
-                            painter,
-                            rect,
-                            tile,
-                            texture.id(),
-                            texture.uv(lod_fade::FULL_UV),
-                        );
-                        drawn = true;
+                        paint(tile, texture, lod_fade::FULL_UV);
                     }
                 }
             }
-            if !drawn {
-                for tile in tiles {
-                    if let Some((Cached::Texture(texture, _), _)) = self.cache.get(&tile) {
-                        view.paint_tile_uv(
-                            painter,
-                            rect,
-                            tile,
-                            texture.id(),
-                            texture.uv(lod_fade::FULL_UV),
-                        );
-                    }
+            for tile in tiles {
+                if let Some((source, uv)) = self.cached_ancestor(tile)
+                    && let Some((Cached::Texture(texture, _), touched)) =
+                        self.cache.get_mut(&source)
+                {
+                    *touched = self.frame;
+                    paint(tile, texture, uv);
                 }
+            }
+            if !filtered.is_empty()
+                && let Some((_, renderer)) = fade_backend
+            {
+                renderer.paint(
+                    painter,
+                    rect,
+                    view,
+                    filtered,
+                    Vec::new(),
+                    1.,
+                    self.material_pass != 0,
+                );
             }
         }
         if self.borders {
@@ -790,6 +873,24 @@ impl Tiles {
         }
         failed
     }
+}
+
+fn tiles_with_halo(tiles: Vec<Tile>) -> Vec<Tile> {
+    let mut requested = tiles.clone();
+    let mut included: HashSet<_> = tiles.iter().copied().collect();
+    // 表示端も補間できるよう、同ズームの一周分だけ余分に取得する。
+    for tile in tiles {
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                if let Some(neighbor) = tile.neighbor(dx, dy)
+                    && included.insert(neighbor)
+                {
+                    requested.push(neighbor);
+                }
+            }
+        }
+    }
+    requested
 }
 
 fn trim_cache(cache: &mut HashMap<Tile, (Cached, u64)>, limit: usize, frame: u64) {
@@ -858,6 +959,7 @@ mod tests {
         let (queue, _jobs) = mpsc::channel();
         let (_send, replies) = mpsc::channel();
         let mut tiles = Tiles {
+            edge_filter: false,
             borders: false,
             source: Source::Gsi,
             cancelled: Arc::default(),
@@ -878,7 +980,7 @@ mod tests {
         });
         let required = views
             .iter()
-            .flat_map(|view| view.tiles_at(rect, 10))
+            .flat_map(|view| tiles_with_halo(view.tiles_at(rect, 10)))
             .collect::<HashSet<_>>();
         assert!(required.len() > MAX_CACHE);
         for &tile in &required {
@@ -1158,6 +1260,7 @@ mod tests {
             .unwrap();
         }
         let mut tiles = Tiles {
+            edge_filter: false,
             borders: false,
             source: Source::Gsi,
             cancelled: Arc::default(),
@@ -1293,5 +1396,80 @@ mod tests {
         let world = view.world_at(rect, p);
         view.zoom_at(rect, p, 2.);
         assert_eq!(view.world_at(rect, p), world);
+    }
+    #[test]
+    fn tile_neighbors_wrap_longitude_but_not_poles() {
+        let tile = Tile { z: 2, x: 0, y: 0 };
+        assert_eq!(tile.neighbor(-1, 0), Some(Tile { z: 2, x: 3, y: 0 }));
+        assert_eq!(tile.neighbor(0, -1), None);
+        assert_eq!(
+            Tile { z: 2, x: 3, y: 3 }.neighbor(1, 0),
+            Some(Tile { z: 2, x: 0, y: 3 })
+        );
+        assert_eq!(Tile { z: 2, x: 3, y: 3 }.neighbor(0, 1), None);
+        assert_eq!(tiles_with_halo(vec![tile]).len(), 6);
+    }
+    #[test]
+    fn pending_zoom_uses_finest_cached_parent_for_each_range_and_fade() {
+        let ctx = egui::Context::default();
+        let (queue, _jobs) = mpsc::channel();
+        let (_send, replies) = mpsc::channel();
+        let mut tiles = Tiles {
+            edge_filter: false,
+            borders: false,
+            source: Source::Gsi,
+            cancelled: Arc::default(),
+            queue,
+            replies,
+            pending: HashSet::new(),
+            cache: HashMap::new(),
+            frame: 0,
+            lod: Default::default(),
+            material_lods: (0..4).map(|_| Default::default()).collect(),
+            material_pass: 0,
+        };
+        let target = Tile {
+            z: 12,
+            x: 2000,
+            y: 1500,
+        };
+        let parent = lod_fade::sample(target, 11, lod_fade::FULL_UV).0;
+        let grandparent = lod_fade::sample(target, 10, lod_fade::FULL_UV).0;
+        let make = |name| {
+            crate::tile_atlas::Image::load(
+                &ctx,
+                name,
+                ColorImage::new([2, 2], egui::Color32::WHITE),
+                egui::TextureOptions::LINEAR,
+            )
+        };
+        tiles
+            .cache
+            .insert(grandparent, (Cached::Texture(make("z10"), None), 0));
+        tiles.lod.current = Some(10);
+        assert_eq!(tiles.cached_ancestor(target).unwrap().0, grandparent);
+        tiles
+            .cache
+            .insert(parent, (Cached::Texture(make("z11"), None), 0));
+        // 全域のLODがz10のままでも、部分的に届いたz11を表示する。
+        assert_eq!(
+            tiles.cached_ancestor(target).unwrap(),
+            lod_fade::sample(target, 11, lod_fade::FULL_UV)
+        );
+        tiles
+            .cache
+            .insert(target, (Cached::Texture(make("z12"), None), 0));
+        assert_eq!(tiles.cached_ancestor(target).unwrap().0, target);
+        assert_eq!(tiles.cached_ancestor_up_to(target, 11).unwrap().0, parent);
+        // 別範囲はz11が未到着ならz10を使い、空白にはしない。
+        let other = Tile {
+            x: target.x + 2,
+            ..target
+        };
+        assert_eq!(tiles.cached_ancestor(other).unwrap().0, grandparent);
+        for pass in [0, 1, 2, 3] {
+            tiles.select_material_pass(pass);
+            assert_eq!(tiles.cached_ancestor_up_to(target, 11).unwrap().0, parent);
+        }
     }
 }

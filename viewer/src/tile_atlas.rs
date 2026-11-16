@@ -26,6 +26,51 @@ impl Drop for Lease {
 pub struct Image {
     lease: Arc<Lease>,
     area: Rect,
+    edges: Arc<Edges>,
+}
+// 隣接更新には外周だけを残し、全タイルの展開画像は保持しない。
+struct Edges {
+    size: [usize; 2],
+    top: Vec<egui::Color32>,
+    bottom: Vec<egui::Color32>,
+    left: Vec<egui::Color32>,
+    right: Vec<egui::Color32>,
+}
+impl Edges {
+    fn new(image: &ColorImage) -> Self {
+        let [w, h] = image.size;
+        Self {
+            size: image.size,
+            top: image.pixels[..w].to_vec(),
+            bottom: image.pixels[(h - 1) * w..].to_vec(),
+            left: (0..h).map(|y| image.pixels[y * w]).collect(),
+            right: (0..h).map(|y| image.pixels[y * w + w - 1]).collect(),
+        }
+    }
+    fn patch(&self, dx: i32, dy: i32) -> Option<([usize; 2], ColorImage)> {
+        let [w, h] = self.size;
+        let (at, size, pixels) = match (dx, dy) {
+            (-1, 0) => ([0, 1], [1, h], self.right.clone()),
+            (1, 0) => ([w + 1, 1], [1, h], self.left.clone()),
+            (0, -1) => ([1, 0], [w, 1], self.bottom.clone()),
+            (0, 1) => ([1, h + 1], [w, 1], self.top.clone()),
+            (-1 | 1, -1 | 1) => {
+                let row = if dy < 0 { &self.bottom } else { &self.top };
+                (
+                    [
+                        if dx < 0 { 0 } else { w + 1 },
+                        if dy < 0 { 0 } else { h + 1 },
+                    ],
+                    [1, 1],
+                    vec![row[if dx < 0 { w - 1 } else { 0 }]],
+                )
+            }
+            _ => return None,
+        };
+        let mut image = ColorImage::new(size, egui::Color32::TRANSPARENT);
+        image.pixels = pixels;
+        Some((at, image))
+    }
 }
 fn bordered(image: &ColorImage) -> ColorImage {
     let [w, h] = image.size;
@@ -84,6 +129,7 @@ impl Image {
             pool.pages.push(Arc::downgrade(&page));
             (page, 0)
         });
+        let edges = Arc::new(Edges::new(&image));
         let [w, h] = image.size;
         let x = slot % GRID * (w + 2);
         let y = slot / GRID * (h + 2);
@@ -105,7 +151,26 @@ impl Image {
         Self {
             lease: Arc::new(Lease { page, slot }),
             area,
+            edges,
         }
+    }
+    /// 同じズームの隣接タイルの端を余白へ転送する。UVと画像IDは維持する。
+    pub fn set_neighbor(&self, neighbor: &Self, dx: i32, dy: i32) {
+        if self.edges.size != neighbor.edges.size {
+            return;
+        }
+        let Some(([px, py], image)) = neighbor.edges.patch(dx, dy) else {
+            return;
+        };
+        let [w, h] = self.edges.size;
+        let slot = self.lease.slot;
+        let at = [slot % GRID * (w + 2) + px, slot / GRID * (h + 2) + py];
+        self.lease
+            .page
+            .texture
+            .lock()
+            .unwrap()
+            .set_partial(at, image, self.lease.page.options);
     }
     pub fn id(&self) -> egui::TextureId {
         self.lease.page.texture.lock().unwrap().id()
@@ -215,6 +280,85 @@ mod tests {
                     image.pixels[1]
                 ]
             );
+        }
+    }
+    #[test]
+    fn all_neighbor_edges_and_corners_use_the_neighbor_pixels() {
+        let mut source = ColorImage::new([3, 3], egui::Color32::BLACK);
+        for (i, pixel) in source.pixels.iter_mut().enumerate() {
+            *pixel = egui::Color32::from_gray(i as u8 * 20);
+        }
+        let edges = Edges::new(&source);
+        for (direction, at, indices) in [
+            ((-1, 0), [0, 1], vec![2, 5, 8]),
+            ((1, 0), [4, 1], vec![0, 3, 6]),
+            ((0, -1), [1, 0], vec![6, 7, 8]),
+            ((0, 1), [1, 4], vec![0, 1, 2]),
+            ((-1, -1), [0, 0], vec![8]),
+            ((1, -1), [4, 0], vec![6]),
+            ((-1, 1), [0, 4], vec![2]),
+            ((1, 1), [4, 4], vec![0]),
+        ] {
+            let (position, patch) = edges.patch(direction.0, direction.1).unwrap();
+            assert_eq!(position, at);
+            assert_eq!(
+                patch.pixels,
+                indices
+                    .into_iter()
+                    .map(|i| source.pixels[i])
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+    #[test]
+    fn late_neighbors_update_both_gutters_without_replacing_shared_texture_or_uv() {
+        let ctx = egui::Context::default();
+        let mut images = None;
+        let _ = ctx.run(Default::default(), |ctx| {
+            images = Some([
+                Image::load(
+                    ctx,
+                    "left",
+                    ColorImage::new([2, 2], egui::Color32::RED),
+                    egui::TextureOptions::LINEAR,
+                ),
+                Image::load(
+                    ctx,
+                    "right",
+                    ColorImage::new([2, 2], egui::Color32::BLUE),
+                    egui::TextureOptions::LINEAR,
+                ),
+            ]);
+        });
+        let [left, right] = images.unwrap();
+        let original = (left.id(), left.uv(crate::lod_fade::FULL_UV));
+        let output = ctx.run(Default::default(), |_| {
+            left.set_neighbor(&right, 1, 0);
+            right.set_neighbor(&left, -1, 0);
+        });
+        assert_eq!(original, (left.id(), left.uv(crate::lod_fade::FULL_UV)));
+        assert_eq!(left.id(), right.id());
+        let patches = output
+            .textures_delta
+            .set
+            .iter()
+            .filter_map(|(id, delta)| {
+                assert_eq!(*id, left.id());
+                delta.pos.map(|pos| (pos, &delta.image))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(patches.len(), 2);
+        for (position, data) in patches {
+            let egui::ImageData::Color(image) = data else {
+                panic!("カラー画像が必要");
+            };
+            assert_eq!(image.size, [1, 2]);
+            let expected = match position {
+                [3, 1] => egui::Color32::BLUE,
+                [4, 1] => egui::Color32::RED,
+                other => panic!("余白以外へ転送: {other:?}"),
+            };
+            assert!(image.pixels.iter().all(|p| *p == expected));
         }
     }
 }

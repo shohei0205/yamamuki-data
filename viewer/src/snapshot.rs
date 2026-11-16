@@ -24,6 +24,8 @@ pub(crate) struct Snapshot {
     #[serde(default)]
     map_borders: bool,
     #[serde(default)]
+    map_edge_filter: bool,
+    #[serde(default)]
     surface_borders: bool,
     palette: surface_palette::Palette,
     show_online_map: bool,
@@ -119,6 +121,7 @@ impl Viewer {
             lod: self.lod,
             surface_lod: self.surface_lod,
             map_borders: self.map_borders,
+            map_edge_filter: self.map_edge_filter,
             surface_borders: self.surface_borders,
             palette: self.surface_palette,
             show_online_map: self.show_online_map,
@@ -335,6 +338,7 @@ impl Viewer {
         self.lod = s.lod;
         self.surface_lod = s.surface_lod;
         self.map_borders = s.map_borders;
+        self.map_edge_filter = s.map_edge_filter;
         self.surface_borders = s.surface_borders;
         self.surface_palette = s.palette;
         self.show_online_map = s.show_online_map;
@@ -412,6 +416,7 @@ mod tests {
         v.view.orientation.orbit(egui::vec2(14., -80.));
         v.show_online_map = false;
         v.map_borders = true;
+        v.map_edge_filter = true;
         v.surface_borders = true;
         v.lod.bias = 1.25;
         v.surface_lod.max_level = Some(9);
@@ -428,6 +433,7 @@ mod tests {
         assert_eq!(replay.lod, v.lod);
         assert_eq!(replay.surface_lod, v.surface_lod);
         assert!(replay.map_borders && replay.surface_borders);
+        assert!(replay.map_edge_filter);
         assert_eq!(replay.map_pin_elevation, v.map_pin_elevation);
         assert!(!replay.show_online_map);
         assert!(replay.snapshot_frozen);

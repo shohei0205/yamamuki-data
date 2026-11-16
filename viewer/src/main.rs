@@ -173,6 +173,7 @@ struct Viewer {
     lod: map::Lod,
     surface_lod: map::Lod,
     map_borders: bool,
+    map_edge_filter: bool,
     surface_borders: bool,
     surface_palette: surface_palette::Palette,
     lod_renderer: Option<lod_fade::Renderer>,
@@ -225,6 +226,13 @@ impl Viewer {
                 match self.settings_section {
                     SettingsSection::OnlineMap => {
                         ui.checkbox(&mut self.map_borders, "タイル境界を表示");
+                        egui::ComboBox::from_label("拡大時の補間")
+                            .selected_text(if self.map_edge_filter { "輪郭優先（エミュレーター風）" } else { "バイリニア" })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.map_edge_filter, false, "バイリニア");
+                                ui.selectable_value(&mut self.map_edge_filter, true, "輪郭優先（エミュレーター風）");
+                            });
+                        ui.small("輪郭優先は上下左右の色差から斜めの線をつなぐ独自方式です。縮小時は通常の補間を使います。");
                         ui.strong("自動LOD");
                         let maximum = self.lod_slider_max();
                         lod_settings(ui, &mut self.lod, maximum);
@@ -331,6 +339,7 @@ impl Viewer {
             lod: map::Lod::default(),
             surface_lod: map::Lod::default(),
             map_borders: false,
+            map_edge_filter: false,
             surface_borders: false,
             surface_palette: surface_palette::Palette::default(),
             lod_renderer: None,
@@ -859,6 +868,7 @@ impl Viewer {
                 );
             }
             self.tiles[0].borders = self.map_borders;
+            self.tiles[0].edge_filter = self.map_edge_filter;
             self.tiles[0].select_material_pass(material_pass);
             self.tiles[0].paint(
                 ui,
@@ -977,6 +987,7 @@ impl Viewer {
                         tint: appearance::CANVAS.to_array().map(|v| f32::from(v) / 255.),
                         shade: false,
                         gamma_shade: false,
+                        edge_filter: false,
                         border: false,
                     });
                 }
@@ -1316,6 +1327,7 @@ impl eframe::App for Viewer {
         eframe::set_value(storage, MAP_SOURCE_KEY, &self.map_source);
         eframe::set_value(storage, LOD_KEY, &self.lod);
         eframe::set_value(storage, "map_borders", &self.map_borders);
+        eframe::set_value(storage, "map_edge_filter", &self.map_edge_filter);
         eframe::set_value(storage, "surface_borders", &self.surface_borders);
         eframe::set_value(storage, SURFACE_LOD_KEY, &self.surface_lod);
         eframe::set_value(storage, SURFACE_PALETTE_KEY, &self.surface_palette);
@@ -2403,6 +2415,10 @@ fn run() -> Result<()> {
                 .storage
                 .and_then(|s| eframe::get_value(s, "map_borders"))
                 .unwrap_or(false);
+            viewer.map_edge_filter = cc
+                .storage
+                .and_then(|s| eframe::get_value(s, "map_edge_filter"))
+                .unwrap_or(false);
             viewer.surface_borders = cc
                 .storage
                 .and_then(|s| eframe::get_value(s, "surface_borders"))
@@ -3074,6 +3090,7 @@ mod surface_palette_checks {
             output
                 .shapes
                 .iter()
+                .rev()
                 .find_map(|s| match &s.shape {
                     egui::Shape::Text(t) if t.galley.text() == label => {
                         Some(t.pos + t.galley.rect.center().to_vec2())
@@ -3116,6 +3133,33 @@ mod surface_palette_checks {
         let saved: surface_palette::Palette =
             eframe::get_value(&storage, SURFACE_PALETTE_KEY).unwrap();
         assert_eq!(saved, surface_palette::Palette::Contrast);
+        let output = frame(&mut viewer, vec![]);
+        let at = find(&output, "オンライン地図");
+        frame(
+            &mut viewer,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+        );
+        frame(&mut viewer, vec![button(at, false)]);
+        let output = frame(&mut viewer, vec![]);
+        let at = find(&output, "バイリニア");
+        frame(
+            &mut viewer,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+        );
+        frame(&mut viewer, vec![button(at, false)]);
+        let output = frame(&mut viewer, vec![]);
+        let at = find(&output, "輪郭優先（エミュレーター風）");
+        frame(
+            &mut viewer,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+        );
+        frame(&mut viewer, vec![button(at, false)]);
+        assert!(viewer.map_edge_filter);
+        viewer.save(&mut storage);
+        assert_eq!(
+            eframe::get_value::<bool>(&storage, "map_edge_filter"),
+            Some(true)
+        );
     }
 }
 

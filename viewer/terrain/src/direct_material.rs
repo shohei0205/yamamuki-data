@@ -13,6 +13,7 @@ pub struct Quad {
     pub tint: [f32; 4],
     pub shade: bool,
     pub gamma_shade: bool,
+    pub edge_filter: bool,
     pub border: bool,
 }
 /// 3D用の描画収集時だけ使うマーカー。通常の2D描画へは渡さない。
@@ -23,6 +24,7 @@ pub struct Capture {
     pub amount: f32,
     pub shade: bool,
     pub gamma_shade: bool,
+    pub edge_filter: bool,
 }
 pub fn capture(painter: &egui::Painter, command: Capture) {
     painter.add(egui::Shape::Callback(egui::PaintCallback {
@@ -122,10 +124,11 @@ impl Renderer {
                 label: Some("元タイル直接参照"),
                 source: wgpu::ShaderSource::Wgsl(
                     format!(
-                        "{}\n{}\n{}",
+                        "{}\n{}\n{}\n{}",
                         include_str!("direct_material.wgsl"),
                         include_str!("globe.wgsl"),
-                        include_str!("atmosphere.wgsl")
+                        include_str!("atmosphere.wgsl"),
+                        include_str!("edge_interpolation.wgsl")
                     )
                     .into(),
                 ),
@@ -334,6 +337,7 @@ impl Renderer {
                     f32::from(c.textures[1].is_some()),
                     f32::from(c.textures.iter().all(Option::is_none))
                         + 2. * f32::from(c.gamma_shade)
+                        + 8. * f32::from(c.edge_filter)
                         + 4. * f32::from(c.border),
                 ],
             });
@@ -817,6 +821,7 @@ mod tests {
                     tint: [0.3, 0.5, 0.8, 1.],
                     shade: false,
                     gamma_shade: false,
+                    edge_filter: false,
                     border: false,
                 });
             }
@@ -981,6 +986,7 @@ mod tests {
                     tint: [1.; 4],
                     shade: false,
                     gamma_shade: false,
+                    edge_filter: false,
                     border: false,
                 }
             })
@@ -1136,6 +1142,7 @@ mod tests {
             tint: [1.; 4],
             shade: false,
             gamma_shade: false,
+            edge_filter: false,
             border: false,
         };
         let shade = texture(
@@ -1155,7 +1162,7 @@ mod tests {
         let shade_view = shade.create_view(&Default::default());
         let gray = source((0..width).flat_map(|_| [64, 64, 64, 255]).collect());
         let mid = source((0..width).flat_map(|_| [188, 188, 188, 255]).collect());
-        for mode in 0..13 {
+        for mode in 0..14 {
             let mut q = match mode {
                 0 => quad(checker.clone(), checker.clone(), 1.),
                 1 => quad(black.clone(), white.clone(), 0.5),
@@ -1163,6 +1170,11 @@ mod tests {
                 7 => quad(mid.clone(), mid.clone(), 1.),
                 _ => quad(white.clone(), white.clone(), 1.),
             };
+            q.edge_filter = mode == 13;
+            if mode == 13 {
+                // 拡大時の補間経路でも単色が変色しないことを確認する。
+                q.uv = [egui::Rect::from_min_max(egui::pos2(0.25, 0.25), egui::pos2(0.5, 0.5)); 2];
+            }
             if (8..10).contains(&mode) {
                 q.border = true;
                 q.textures = [None, None];
@@ -1172,17 +1184,17 @@ mod tests {
                             2];
                 }
             }
-            camera.globe = mode >= 10;
+            camera.globe = (10..=12).contains(&mode);
             camera.height = if mode == 12 {
                 60000.
-            } else if mode >= 10 {
+            } else if (10..=12).contains(&mode) {
                 3000.
             } else {
                 0.
             };
             let coordinates = (0..width)
                 .map(|x| {
-                    if mode >= 10 {
+                    if (10..=12).contains(&mode) {
                         return [
                             ((if mode == 10 { 1. } else { 100000. }) / camera.scale()) as f32,
                             0.,
@@ -1309,7 +1321,7 @@ mod tests {
                         }
                     }
                     9 => 0,
-                    10 | 12 => 255,
+                    10 | 12 | 13 => 255,
                     _ => {
                         if x < width as usize / 2 {
                             0

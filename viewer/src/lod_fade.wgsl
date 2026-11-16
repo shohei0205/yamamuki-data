@@ -3,6 +3,7 @@ struct Vertex {
     @location(0) old_uv: vec2<f32>,
     @location(1) new_uv: vec2<f32>,
     @location(2) amount: f32,
+    @location(3) @interpolate(flat) edge_filter: f32,
 }
 
 @vertex
@@ -11,8 +12,9 @@ fn vertex(
     @location(1) old_uv: vec2<f32>,
     @location(2) new_uv: vec2<f32>,
     @location(3) amount: f32,
+    @location(4) edge_filter: f32,
 ) -> Vertex {
-    return Vertex(vec4<f32>(position, 0.0, 1.0), old_uv, new_uv, amount);
+    return Vertex(vec4<f32>(position, 0.0, 1.0), old_uv, new_uv, amount, edge_filter);
 }
 
 @group(0) @binding(0) var old_tile: texture_2d<f32>;
@@ -30,21 +32,21 @@ fn gamma(color: vec4<f32>) -> vec4<f32> {
 
 @fragment
 fn gamma_color(in: Vertex) -> @location(0) vec4<f32> {
-    let old = gamma(textureSample(old_tile, linear_sampler, in.old_uv));
-    let next = gamma(textureSample(new_tile, linear_sampler, in.new_uv));
+    let old = gamma(edge_sample(old_tile, linear_sampler, in.old_uv, in.edge_filter > .5));
+    let next = gamma(edge_sample(new_tile, linear_sampler, in.new_uv, in.edge_filter > .5));
     return mix(old, next, in.amount);
 }
 
 @fragment
 fn linear_color(in: Vertex) -> @location(0) vec4<f32> {
-    let old = textureSample(old_tile, linear_sampler, in.old_uv);
-    let next = textureSample(new_tile, linear_sampler, in.new_uv);
+    let old = edge_sample(old_tile, linear_sampler, in.old_uv, in.edge_filter > .5);
+    let next = edge_sample(new_tile, linear_sampler, in.new_uv, in.edge_filter > .5);
     return mix(old, next, in.amount);
 }
 
 fn shade(in: Vertex) -> f32 {
-    let old = textureSample(old_tile, linear_sampler, in.old_uv).rg;
-    let next = textureSample(new_tile, linear_sampler, in.new_uv).rg;
+    let old = edge_sample(old_tile, linear_sampler, in.old_uv, in.edge_filter > .5).rg;
+    let next = edge_sample(new_tile, linear_sampler, in.new_uv, in.edge_filter > .5).rg;
     return mix(old.g - old.r, next.g - next.r, in.amount);
 }
 
