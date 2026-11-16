@@ -126,7 +126,19 @@ struct Observer {
     saved_height: f64,
 }
 
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum SettingsSection {
+    #[default]
+    OnlineMap,
+    Surface,
+    Terrain,
+    Points,
+    Observer,
+}
+
 struct Viewer {
+    settings_open: bool,
+    settings_section: SettingsSection,
     snapshot_frozen: bool,
     snapshot_canvas: Option<[f32; 2]>,
     last_canvas_size: [f32; 2],
@@ -189,10 +201,102 @@ struct Viewer {
 }
 
 impl Viewer {
+    fn settings_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.settings_open;
+        egui::Window::new("設定")
+            .id(egui::Id::new("viewer-settings"))
+            .open(&mut open)
+            .default_width(540.)
+            .collapsible(false)
+            .vscroll(true)
+            .show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for (section, label) in [
+                        (SettingsSection::OnlineMap, "オンライン地図"),
+                        (SettingsSection::Surface, "地表"),
+                        (SettingsSection::Terrain, "地形"),
+                        (SettingsSection::Points, "地点"),
+                        (SettingsSection::Observer, "地点視点"),
+                    ] {
+                        ui.selectable_value(&mut self.settings_section, section, label);
+                    }
+                });
+                ui.separator();
+                match self.settings_section {
+                    SettingsSection::OnlineMap => {
+                        ui.checkbox(&mut self.map_borders, "タイル境界を表示");
+                        ui.strong("自動LOD");
+                        let maximum = self.lod_slider_max();
+                        lod_settings(ui, &mut self.lod, maximum);
+                    }
+                    SettingsSection::Surface => {
+                        ui.checkbox(&mut self.surface_borders, "タイル境界を表示");
+                        ui.strong("自動LOD");
+                        let maximum = self.surface_lod_slider_max();
+                        lod_settings(ui, &mut self.surface_lod, maximum);
+                        ui.separator();
+                        ui.strong("配色");
+                        if self.surface_palette.menu(ui) {
+                            for surface in &mut self.surfaces {
+                                surface.palette = self.surface_palette;
+                            }
+                        }
+                    }
+                    SettingsSection::Terrain => {
+                        if let Some(terrain) = &mut self.terrain {
+                            ui.strong("自動LOD");
+                            terrain.lod_controls(ui);
+                            ui.separator();
+                            terrain.display_controls(ui);
+                        } else {
+                            ui.label("地形SQLiteを開くと設定できます。");
+                        }
+                    }
+                    SettingsSection::Points => {
+                        ui.checkbox(&mut self.show_point_names, "地点名を常時表示")
+                            .on_hover_text("丸印の横に名前を表示します。重なる名前は省きます。");
+                    }
+                    SettingsSection::Observer => {
+                        if let Some(observer) = self.observer.as_mut() {
+                            if !observer.from_pin {
+                                ui.label(format!("地点標高 {:.1} m", observer.elevation));
+                            }
+                            if let Some(height) = observer.terrain_elevation {
+                                ui.label(format!("表示地形の標高 {height:.1} m"));
+                            } else {
+                                ui.label("地形標高を取得中");
+                            }
+                            ui.add(
+                                egui::Slider::new(&mut observer.eye_offset, 0.5..=200.)
+                                    .clamping(egui::SliderClamping::Never)
+                                    .text("加算する高さ（m）"),
+                            );
+                            let mut degrees = observer.fov.to_degrees();
+                            if ui
+                                .add(
+                                    egui::Slider::new(&mut degrees, 15.0..=100.0)
+                                        .text("視野角（度）"),
+                                )
+                                .changed()
+                            {
+                                observer.fov = degrees.to_radians();
+                            }
+                            ui.label("左ドラッグ：見回す ／ 右ドラッグ：左右で向き・上下で高さ ／ ホイール：視野角");
+                        } else {
+                            ui.label("「選択地点から見る」または「選択座標から見る」で地点視点にすると設定できます。");
+                        }
+                    }
+                }
+            });
+        self.settings_open = open;
+    }
+
     fn new(ctx: &egui::Context, client: reqwest::blocking::Client, file: Option<PathBuf>) -> Self {
         appearance::install(ctx);
         install_japanese_font(ctx);
         let mut viewer = Self {
+            settings_open: false,
+            settings_section: SettingsSection::default(),
             snapshot_frozen: false,
             snapshot_canvas: None,
             last_canvas_size: [800., 600.],
@@ -1390,130 +1494,65 @@ impl eframe::App for Viewer {
                         ui.spinner();
                         ui.label("データを読み込み中");
                     }
-                    ui.menu_button("オンライン地図の表示設定", |ui| {
-                        ui.checkbox(&mut self.map_borders, "タイル境界を表示");
-                        ui.strong("自動LOD");
-                        let maximum = self.lod_slider_max();
-                        lod_settings(ui, &mut self.lod, maximum);
-                    });
-                    ui.menu_button("地表の表示設定", |ui| {
-                        ui.checkbox(&mut self.surface_borders, "タイル境界を表示");
-                        ui.strong("自動LOD");
-                        let maximum = self.surface_lod_slider_max();
-                        lod_settings(ui, &mut self.surface_lod, maximum);
-                        ui.separator();
-                        ui.strong("配色");
-                        if self.surface_palette.menu(ui) {
-                            for surface in &mut self.surfaces {
-                                surface.palette = self.surface_palette;
-                            }
-                        }
-                    });
-                    if let Some(terrain) = &mut self.terrain {
-                        ui.menu_button("地形の表示設定", |ui| {
-                            ui.strong("自動LOD");
-                            terrain.lod_controls(ui);
-                            ui.separator();
-                            terrain.display_controls(ui);
-                        });
+                    if ui.button("設定").clicked() {
+                        self.settings_open = !self.settings_open;
                     }
-                    ui.menu_button("地点の表示設定", |ui| {
-                        ui.checkbox(&mut self.show_point_names, "地点名を常時表示")
-                            .on_hover_text("丸印の横に名前を表示します。重なる名前は省きます。");
-                    });
                     ui.menu_button("スナップショット", |ui| {
-                        if ui.button("即時保存（F8）").clicked() {self.quick_snapshot(ctx);ui.close_menu();}
+                        if ui.button("即時保存（F8）").clicked() {
+                            self.quick_snapshot(ctx);
+                            ui.close_menu();
+                        }
                         if ui.button("現在の表示を保存…").clicked() {
-                            if let Some(path)=rfd::FileDialog::new().add_filter("表示スナップショット",&["gz"]).set_file_name("viewer.snapshot.json.gz").save_file() {
-                                match self.save_snapshot(&path) {Ok(())=>self.snapshot_status=format!("保存しました: {}",path.display()),Err(e)=>self.error=Some(format!("{e:#}"))}
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("表示スナップショット", &["gz"])
+                                .set_file_name("viewer.snapshot.json.gz")
+                                .save_file()
+                            {
+                                match self.save_snapshot(&path) {
+                                    Ok(()) => {
+                                        self.snapshot_status =
+                                            format!("保存しました: {}", path.display())
+                                    }
+                                    Err(e) => self.error = Some(format!("{e:#}")),
+                                }
                             }
                             ui.close_menu();
                         }
                         if ui.button("読み込んで固定表示…").clicked() {
-                            if let Some(path)=rfd::FileDialog::new().add_filter("表示スナップショット",&["json","gz"]).pick_file() {
-                                let sender=self.snapshot_load(ctx,path);
-                                self.loading=Some(sender);
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("表示スナップショット", &["json", "gz"])
+                                .pick_file()
+                            {
+                                let sender = self.snapshot_load(ctx, path);
+                                self.loading = Some(sender);
                             }
                             ui.close_menu();
                         }
-                        if self.snapshot_frozen && ui.button("同じタイルを修正版で再分割").clicked() {
-                            if let Some(terrain)=&mut self.terrain {terrain.replan_frozen();}
-                            ctx.request_repaint();ui.close_menu();
+                        if self.snapshot_frozen && ui.button("同じタイルを修正版で再分割").clicked()
+                        {
+                            if let Some(terrain) = &mut self.terrain {
+                                terrain.replan_frozen();
+                            }
+                            ctx.request_repaint();
+                            ui.close_menu();
                         }
                         if self.snapshot_frozen && ui.button("固定を解除").clicked() {
                             self.resume_snapshot();
                             ui.close_menu();
                         }
-                        if !self.snapshot_status.is_empty() {ui.label(&self.snapshot_status);}
+                        if !self.snapshot_status.is_empty() {
+                            ui.label(&self.snapshot_status);
+                        }
                     });
-                    if self.snapshot_frozen {ui.colored_label(appearance::ACCENT,"表示固定中");}
-                    if self.observer.is_some() {
-                        if ui.button("俯瞰視点に戻る").clicked() {
-                            self.leave_observer();
-                        }
-                    } else {
-                        let available = self.selected.zip(self.points.as_ref()).is_some_and(
-                            |(index, points)| {
-                                points.point(index).elevation_m.is_some_and(f64::is_finite)
-                            },
-                        );
-                        if ui
-                            .add_enabled(available, egui::Button::new("選択地点から見る"))
-                            .on_hover_text("標高のある地点を選択してください")
-                            .clicked()
-                        {
-                            self.enter_observer();
-                        }
-                    }
-                    if self.observer.is_none() {
-                        if ui
-                            .add_enabled(
-                                self.map_pin.is_some() && self.pin_height_job.is_none(),
-                                egui::Button::new("選択座標から見る"),
-                            )
-                            .on_hover_text("地図をクリックして座標を選択してください")
-                            .clicked()
-                        {
-                            self.enter_pin_observer(ctx);
-                        }
-                        if self.pin_height_job.is_some() {
-                            ui.spinner();
-                            ui.label("標高を取得中");
-                        }
-                    }
-                    if let Some(observer) = self.observer.as_mut() {
-                        ui.menu_button("地点視点の設定", |ui| {
-                            if !observer.from_pin {
-                                ui.label(format!("地点標高 {:.1} m", observer.elevation));
-                            }
-                            if let Some(height) = observer.terrain_elevation {
-                                ui.label(format!("表示地形の標高 {height:.1} m"));
-                            } else {
-                                ui.label("地形標高を取得中");
-                            }
-                            ui.add(
-                                egui::Slider::new(&mut observer.eye_offset, 0.5..=200.)
-                                    .clamping(egui::SliderClamping::Never)
-                                    .text("加算する高さ（m）"),
-                            );
-                            let mut degrees = observer.fov.to_degrees();
-                            if ui
-                                .add(
-                                    egui::Slider::new(&mut degrees, 15.0..=100.0)
-                                        .text("視野角（度）"),
-                                )
-                                .changed()
-                            {
-                                observer.fov = degrees.to_radians();
-                            }
-                            ui.label("左ドラッグ：見回す ／ 右ドラッグ：左右で向き・上下で高さ ／ ホイール：視野角");
-                        });
+                    if self.snapshot_frozen {
+                        ui.colored_label(appearance::ACCENT, "表示固定中");
                     }
                 });
                 if let Some(error) = &self.error {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
             });
+        self.settings_window(ctx);
         egui::TopBottomPanel::bottom("credits")
             .frame(appearance::panel(appearance::CANVAS, 14, 5))
             .show(ctx, |ui| {
@@ -1814,6 +1853,45 @@ impl eframe::App for Viewer {
                     rect.right_top() + egui::vec2(-32., 32.),
                     egui::vec2(48., 48.),
                 );
+                let point_available =
+                    self.selected
+                        .zip(self.points.as_ref())
+                        .is_some_and(|(index, points)| {
+                            points.point(index).elevation_m.is_some_and(f64::is_finite)
+                        });
+                let coordinate_available = self.map_pin.is_some() && self.pin_height_job.is_none();
+                let view_actions = (self.observer.is_some()
+                    || point_available
+                    || coordinate_available)
+                    .then(|| {
+                        egui::Area::new(ui.id().with("map-view-actions"))
+                            .order(egui::Order::Foreground)
+                            .movable(false)
+                            .default_size(egui::Vec2::ZERO)
+                            .pivot(egui::Align2::RIGHT_TOP)
+                            .fixed_pos(egui::pos2(
+                                compass_rect.left() - 12.,
+                                compass_rect.top() + 8.,
+                            ))
+                            .show(ctx, |ui| {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if self.observer.is_some() {
+                                            (false, false, ui.button("俯瞰視点に戻る").clicked())
+                                        } else {
+                                            let point = point_available
+                                                && ui.button("選択地点から見る").clicked();
+                                            let coordinate = self.map_pin.is_some()
+                                                && self.pin_height_job.is_none()
+                                                && ui.button("選択座標から見る").clicked();
+                                            (point, coordinate, false)
+                                        }
+                                    },
+                                )
+                                .inner
+                            })
+                    });
                 let compass = ui
                     .interact(
                         compass_rect,
@@ -1968,10 +2046,22 @@ impl eframe::App for Viewer {
                     self.paint_base(ui, &painter, rect, self.view, dragging, frame, 0, None)
                 };
                 let click_position = response.interact_pointer_pos().filter(|pos| {
-                    !self.snapshot_frozen && response.clicked() && !compass_rect.contains(*pos)
+                    !self.snapshot_frozen
+                        && response.clicked()
+                        && !compass_rect.contains(*pos)
+                        && !view_actions
+                            .as_ref()
+                            .is_some_and(|actions| actions.response.rect.contains(*pos))
                 });
-                let marker_pointer = click_position
-                    .or_else(|| pointer.filter(|pos| !dragging && !compass_rect.contains(*pos)));
+                let marker_pointer = click_position.or_else(|| {
+                    pointer.filter(|pos| {
+                        !dragging
+                            && !compass_rect.contains(*pos)
+                            && !view_actions
+                                .as_ref()
+                                .is_some_and(|actions| actions.response.rect.contains(*pos))
+                    })
+                });
                 let marker_picked =
                     self.paint_markers(&painter, rect, marker_pointer, click_position.is_some());
                 if let Some(position) = click_position {
@@ -2090,6 +2180,15 @@ impl eframe::App for Viewer {
                         egui::StrokeKind::Inside,
                     );
                     painter.galley(position, label, appearance::INK);
+                }
+                let (from_point, from_coordinate, return_to_overview) =
+                    view_actions.map_or((false, false, false), |actions| actions.inner);
+                if from_point {
+                    self.enter_observer();
+                } else if from_coordinate {
+                    self.enter_pin_observer(ctx);
+                } else if return_to_overview {
+                    self.leave_observer();
                 }
                 paint_compass(
                     &painter,
@@ -2991,7 +3090,14 @@ mod surface_palette_checks {
         };
         frame(&mut viewer, vec![]);
         let output = frame(&mut viewer, vec![]);
-        let at = find(&output, "地表の表示設定");
+        let at = find(&output, "設定");
+        frame(
+            &mut viewer,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+        );
+        frame(&mut viewer, vec![button(at, false)]);
+        let output = frame(&mut viewer, vec![]);
+        let at = find(&output, "地表");
         frame(
             &mut viewer,
             vec![egui::Event::PointerMoved(at), button(at, true)],
