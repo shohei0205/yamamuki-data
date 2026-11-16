@@ -1,8 +1,11 @@
 //! 共通SQLiteの地形を制御点からGPUで描画する。
+pub mod snapshot;
 pub use yamamuki_terrain::{
     natural_local_gradient, natural_regional_gpu, natural_regional_surface,
 };
 mod catalog_cache;
+mod globe;
+mod gpu_profile;
 mod hit_test;
 pub use hit_test::Hit;
 pub mod direct_material;
@@ -40,6 +43,25 @@ enum Message {
     Ready(u64, usize, f64),
     Error(String),
 }
+fn same_meshes(a: &[Arc<shared_render::Tile>], b: &[Arc<shared_render::Tile>]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    if a.iter().zip(b).all(|(a, b)| Arc::ptr_eq(a, b)) {
+        return true;
+    }
+    let mut a = a
+        .iter()
+        .map(|v| Arc::as_ptr(v) as usize)
+        .collect::<Vec<_>>();
+    let mut b = b
+        .iter()
+        .map(|v| Arc::as_ptr(v) as usize)
+        .collect::<Vec<_>>();
+    a.sort_unstable();
+    b.sort_unstable();
+    a == b
+}
 fn drain_messages(receiver: &mpsc::Receiver<Message>) -> Vec<Message> {
     receiver.try_iter().collect()
 }
@@ -70,7 +92,7 @@ fn worker(
         let mut roots: VecDeque<_> = roots.into();
         let parallelism = std::thread::available_parallelism()
             .map_or(2, usize::from)
-            .clamp(1, 4);
+            .clamp(1, 8);
         let mut next = None;
         loop {
             let mut request = if let Some(request) = next.take() {
@@ -164,6 +186,20 @@ fn worker(
     }
 }
 type MeshKey = (Key, u32, shared_field::Field);
+type PlannedField = (Key, shared_field::Field, u32, f64, bool);
+// 曲面の完成まで必要な局所メッシュと、穴を塞ぐ元タイルの背景を一緒に保護する。
+fn preparing_meshes(
+    plan: impl IntoIterator<Item = (Key, shared_field::Field, u32)>,
+) -> HashSet<MeshKey> {
+    let mut protected = HashSet::new();
+    for (key, field, n) in plan {
+        protected.insert((key, n, field));
+        if field.depth > 0 {
+            protected.insert((key, 32, shared_field::Field::default()));
+        }
+    }
+    protected
+}
 struct RememberedScene {
     camera: selection::Camera,
     tiles: Vec<Arc<shared_render::Tile>>,
@@ -185,6 +221,7 @@ fn same_observer_direction(a: &selection::Camera, b: &selection::Camera) -> bool
         && a.viewport[1] <= b.viewport[1] * 1.05
 }
 struct App {
+    frozen_morph: Option<f32>,
     embedded_rect: Option<egui::Rect>,
     renderer: shared_render::Renderer,
     send: mpsc::Sender<Request>,
@@ -205,6 +242,7 @@ struct App {
     wanted: Vec<Key>,
     pending_roots: VecDeque<Key>,
     scene_pending: bool,
+    preparation: Option<(u64, Arc<Vec<PlannedField>>)>,
     version: u64,
     queued: bool,
     last_request: Instant,
@@ -255,6 +293,7 @@ impl App {
             std::thread::spawn(move || worker(worker_path, requests, messages, context));
         }
         let mut app = Self {
+            frozen_morph: None,
             embedded_rect: None,
             renderer: shared_render::Renderer::new(state, ctx),
             send,
@@ -275,6 +314,7 @@ impl App {
             wanted: Vec::new(),
             pending_roots: VecDeque::new(),
             scene_pending: false,
+            preparation: None,
             version: 0,
             queued: true,
             last_request: Instant::now() - Duration::from_secs(1),
@@ -408,17 +448,16 @@ impl App {
         field: shared_field::Field,
         sample_budget: u64,
     ) -> Option<Arc<shared_render::Tile>> {
-        let result = self
-            .local_gpu
-            .iter()
-            .filter(|((k, size, f), _)| {
-                *k == key
-                    && *size >= n
-                    && *f == field
-                    && u64::from(*size + 1).pow(2) <= sample_budget
-            })
-            .max_by_key(|((_, size, _), _)| *size)
-            .map(|(_, tile)| tile.clone());
+        // 同じ領域の候補は2の累乗の密度だけ。全キャッシュを毎区画走査しない。
+        let mut size = n.max(1).next_power_of_two();
+        let mut result = None;
+        while size <= 512 && u64::from(size + 1).pow(2) <= sample_budget {
+            if let Some(tile) = self.local_gpu.get(&(key, size, field)) {
+                result = Some(tile.clone());
+                break;
+            }
+            size *= 2;
+        }
         if let Some(tile) = &result {
             self.mesh_used.insert((key, tile.n, field), Instant::now());
         }
@@ -546,21 +585,43 @@ impl App {
             .collect::<HashSet<_>>();
         self.packets.retain(|k, _| k.0 == 6 || keep.contains(k));
     }
-    fn scene(&mut self) -> Result<bool> {
-        if self.remembered_until_selection.is_some() {
-            return Ok(false);
+    fn preparation_plan(&mut self) -> Arc<Vec<PlannedField>> {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        let c = &self.camera;
+        for v in [
+            c.center[0],
+            c.center[1],
+            c.height,
+            c.distance,
+            c.yaw,
+            c.pitch,
+            c.fov_y,
+            c.viewport[0],
+            c.viewport[1],
+            c.mesh_pixels,
+        ] {
+            v.to_bits().hash(&mut hash);
         }
-        if !self.previous.is_empty() && self.transition.elapsed() < Duration::from_millis(450) {
-            return Ok(false);
+        (c.observer, c.globe, self.resolution, self.wire).hash(&mut hash);
+        self.wanted.hash(&mut hash);
+        let mut roots = self
+            .packets
+            .keys()
+            .filter(|k| k.0 == 6)
+            .copied()
+            .collect::<Vec<_>>();
+        roots.sort();
+        roots.hash(&mut hash);
+        let stamp = hash.finish();
+        if let Some((id, plan)) = &self.preparation {
+            if *id == stamp {
+                return plan.clone();
+            }
         }
-        let mut uploaded = 0;
-        if self.transition.elapsed() >= Duration::from_millis(450) {
-            self.previous.clear();
-        }
-        let mut next = Vec::new();
-        let mut background = Vec::new();
-        let mut planned = Vec::new();
         let sample_budget = self.renderer.sample_budget();
+        let mut planned = Vec::new();
+
         for &key in &self.wanted {
             for field in self.fields(key) {
                 let (n, pixels) = self.desired_resolution(key, field);
@@ -598,10 +659,42 @@ impl App {
             };
             planned[i].2 /= 2;
         }
-        let protected = planned
+        let planned = Arc::new(planned);
+        self.preparation = Some((stamp, planned.clone()));
+        planned
+    }
+    fn scene(&mut self) -> Result<bool> {
+        self.renderer.begin_upload_batch();
+        let result = self.prepare_scene();
+        // 途中で不足・エラーになった場合も、準備済みの曲面は投入して次回へつなぐ。
+        self.renderer.flush_upload_batch();
+        result
+    }
+    fn prepare_scene(&mut self) -> Result<bool> {
+        let missing = self
+            .wanted
             .iter()
-            .map(|(k, f, n, _, _)| (*k, *n, *f))
-            .collect::<HashSet<_>>();
+            .any(|key| !self.packets.contains_key(key));
+        if missing && !self.loading {
+            self.queued = true;
+            self.ready_since = None;
+            self.status = "不足している地形タイルを再取得中".into();
+        }
+        if self.remembered_until_selection.is_some() {
+            return Ok(false);
+        }
+        // 復号や既存の遷移を待つ間にも、届いた曲面からGPU準備を進める。
+        let prepare_started = Instant::now();
+        let mut uploaded = 0;
+        let mut incomplete = missing;
+        if self.transition.elapsed() >= Duration::from_millis(450) {
+            self.previous.clear();
+        }
+        let mut next = Vec::new();
+        let mut background = Vec::new();
+        let sample_budget = self.renderer.sample_budget();
+        let planned = self.preparation_plan();
+        let protected = preparing_meshes(planned.iter().map(|(k, f, n, _, _)| (*k, *f, *n)));
         self.trim_gpu_cache(&protected);
         let mut background_keys = HashSet::new();
         let mut remaining_samples = sample_budget;
@@ -609,47 +702,38 @@ impl App {
             .iter()
             .map(|(_, _, n, _, _)| u64::from(*n + 1).pow(2))
             .sum::<u64>();
-        for (key, field, n, _, is_background) in planned {
+        for (key, field, n, _, is_background) in planned.iter().copied() {
             let samples = u64::from(n + 1).pow(2);
             required_samples -= samples;
             let available_samples = remaining_samples.saturating_sub(required_samples);
+            if !self.packets.contains_key(&key) {
+                incomplete = true;
+                continue;
+            }
             if field.depth > 0 && background_keys.insert(key) {
                 if !self.gpu.contains_key(&(key, 32)) {
-                    if uploaded >= 4 {
-                        return Ok(false);
+                    if uploaded >= 16
+                        || (uploaded > 0 && prepare_started.elapsed() >= Duration::from_millis(8))
+                    {
+                        incomplete = true;
+                        continue;
                     }
                     uploaded += 1;
                 }
                 let Some(base) = self.tile(key, 32)? else {
-                    return Ok(false);
+                    incomplete = true;
+                    continue;
                 };
                 background.push(base);
             }
-            if field.depth > 0 {
-                if let Some(tile) = self.cached_local(key, n, field, available_samples) {
-                    remaining_samples =
-                        remaining_samples.saturating_sub(u64::from(tile.n + 1).pow(2));
-                    if is_background {
-                        background.push(tile);
-                    } else {
-                        next.push(tile);
-                    }
-                    continue;
-                }
-                if uploaded >= 4 {
-                    return Ok(false);
-                }
-                uploaded += 1;
-                let Some(packet) = self.packets.get(&key) else {
-                    return Ok(false);
-                };
-                if !self.renderer.can_upload(n) {
-                    return Ok(false);
-                }
-                let tile = self.renderer.upload_field(packet, n, field)?;
-                remaining_samples = remaining_samples.saturating_sub(samples);
-                self.mesh_used.insert((key, n, field), Instant::now());
-                self.local_gpu.insert((key, n, field), tile.clone());
+            let cached = if field.depth > 0 {
+                self.cached_local(key, n, field, available_samples)
+            } else {
+                self.gpu.get(&(key, n)).cloned()
+            };
+            if let Some(tile) = cached {
+                self.mesh_used.insert((key, tile.n, field), Instant::now());
+                remaining_samples = remaining_samples.saturating_sub(u64::from(tile.n + 1).pow(2));
                 if is_background {
                     background.push(tile);
                 } else {
@@ -657,34 +741,48 @@ impl App {
                 }
                 continue;
             }
-            if !self.gpu.contains_key(&(key, n)) {
-                if uploaded >= 4 {
-                    return Ok(false);
-                }
-                uploaded += 1;
+            if uploaded >= 16
+                || (uploaded > 0 && prepare_started.elapsed() >= Duration::from_millis(8))
+                || !self.renderer.can_upload(n)
+            {
+                incomplete = true;
+                continue;
             }
-            if let Some(tile) = self.tile(key, n)? {
-                remaining_samples = remaining_samples.saturating_sub(samples);
-                if is_background {
-                    background.push(tile);
-                } else {
-                    next.push(tile);
-                }
+            uploaded += 1;
+            let tile = if field.depth > 0 {
+                let packet = self.packets.get(&key).unwrap();
+                let tile = self.renderer.upload_field(packet, n, field)?;
+                self.mesh_used.insert((key, n, field), Instant::now());
+                self.local_gpu.insert((key, n, field), tile.clone());
+                tile
             } else {
-                return Ok(false);
+                let Some(tile) = self.tile(key, n)? else {
+                    incomplete = true;
+                    continue;
+                };
+                tile
+            };
+            remaining_samples = remaining_samples.saturating_sub(samples);
+            if is_background {
+                background.push(tile);
+            } else {
+                next.push(tile);
             }
         }
+        if incomplete {
+            return Ok(false);
+        }
+        // 同じ評価区画の順番だけが変わっても、再遷移やその完了待ちを発生させない。
+        let changed = !same_meshes(&self.shown, &next);
+        if changed
+            && !self.previous.is_empty()
+            && self.transition.elapsed() < Duration::from_millis(450)
+        {
+            return Ok(false);
+        }
+        // 全領域が揃ってから背景と本体を同時に切り替え、準備途中の穴を作らない。
         self.local_background = background;
-        let changed = self.shown.len() != next.len()
-            || self
-                .shown
-                .iter()
-                .zip(&next)
-                .any(|(a, b)| !Arc::ptr_eq(a, b));
         if changed {
-            if !self.previous.is_empty() && self.transition.elapsed() < Duration::from_millis(450) {
-                return Ok(false);
-            }
             self.previous = std::mem::replace(&mut self.shown, next);
             self.transition = Instant::now();
         }
@@ -780,7 +878,7 @@ impl App {
         }
     }
 
-    fn open(&mut self, ctx: &egui::Context) {
+    fn start_worker(&mut self, ctx: &egui::Context) {
         let (send, requests) = mpsc::channel();
         let (messages, receive) = mpsc::channel();
         let path = PathBuf::from(&self.path);
@@ -788,6 +886,9 @@ impl App {
         std::thread::spawn(move || worker(path, requests, messages, context));
         self.send = send;
         self.receive = receive;
+    }
+    fn open(&mut self, ctx: &egui::Context) {
+        self.start_worker(ctx);
         self.catalog.clear();
         self.packets.clear();
         self.gpu.clear();
@@ -803,6 +904,7 @@ impl App {
         self.wanted.clear();
         self.pending_roots.clear();
         self.scene_pending = false;
+        self.preparation = None;
         self.queued = true;
         self.loading = true;
         self.ready_since = None;
@@ -822,132 +924,135 @@ fn refinement_spacing(idle: Duration, pixels_per_point: f32) -> f64 {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        self.update_landcover();
+        if self.frozen_morph.is_none() {
+            self.update_landcover();
+        }
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32();
         self.last_frame = now;
         if dt > 0. {
             self.fps = self.fps * 0.9 + 0.1 / dt;
         }
-        let dropped = ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone()));
-        if let Some(path) = dropped.filter(|_| self.embedded_rect.is_none()) {
-            self.path = path.to_string_lossy().into();
-            self.open(ctx);
-        }
-        let idle = now.duration_since(self.last_interaction);
-        let spacing = refinement_spacing(idle, ctx.pixels_per_point());
-        // 先の段階を完成させてから細かくする。操作の再開時はすぐ軽い設定へ戻す。
-        if !self.path.is_empty()
-            && spacing != self.camera.mesh_pixels
-            && (spacing > self.camera.mesh_pixels || !self.scene_pending)
-        {
-            self.camera.mesh_pixels = spacing;
-            self.scene_pending = true;
-        }
-        let mut scene_changed = false;
-        // 通知はArc参照だけなので全件取り込み、GPUへの転送件数は別に制限する。
-        for message in drain_messages(&self.receive) {
-            match message {
-                Message::Catalog(catalog, generation, credits) => {
-                    let maximum = catalog.keys().map(|k| k.0).max().unwrap_or(6);
-                    self.camera.maximum = if self.camera.auto {
-                        maximum
-                    } else {
-                        self.camera.maximum.min(maximum)
-                    };
-                    if self.smoke.is_some() {
-                        if let Some(z) = std::env::var("YAMAMUKI_TERRAIN_CHECK_LEVEL")
-                            .ok()
-                            .and_then(|v| v.parse::<u32>().ok())
-                            .filter(|z| catalog.keys().any(|k| k.0 == *z))
-                        {
-                            self.camera.maximum = z;
-                            self.camera.auto = false;
-                        }
-                    }
-                    self.catalog = catalog;
-                    self.generation = generation;
-                    self.credits = credits;
-                    self.queued = true;
-                }
-                Message::Packet(version, packet, root) => {
-                    let key = packet.key;
-                    self.packets.insert(key, packet);
-                    if root {
-                        scene_changed |= self.camera.projected(key).0;
-                        if !self.roots.iter().any(|t| t.key == key)
-                            && !self.pending_roots.contains(&key)
-                        {
-                            self.pending_roots.push_back(key);
-                        }
-                    } else if version == self.version || self.wanted.contains(&key) {
-                        scene_changed = true;
-                    }
-                }
-                Message::Selected(version, keys) => {
-                    if version == self.version {
-                        if self
-                            .remembered_until_selection
-                            .is_some_and(|v| version >= v)
-                        {
-                            self.remembered_until_selection = None;
-                        }
-                        self.wanted = keys;
-                        scene_changed = true;
-                    }
-                }
-                Message::Ready(version, n, seconds) => {
-                    if version == self.version {
-                        self.loading = false;
-                        self.status =
-                            format!("読込完了 {n}タイル ／ 復号・補助情報 {:0.2}秒", seconds);
-                        self.ready_since = Some(now);
+        if self.frozen_morph.is_none() {
+            let dropped = ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone()));
+            if let Some(path) = dropped.filter(|_| self.embedded_rect.is_none()) {
+                self.path = path.to_string_lossy().into();
+                self.open(ctx);
+            }
+            let idle = now.duration_since(self.last_interaction);
+            let spacing = refinement_spacing(idle, ctx.pixels_per_point());
+            // 先の段階を完成させてから細かくする。操作の再開時はすぐ軽い設定へ戻す。
+            if !self.path.is_empty()
+                && spacing != self.camera.mesh_pixels
+                && (spacing > self.camera.mesh_pixels || !self.scene_pending)
+            {
+                self.camera.mesh_pixels = spacing;
+                self.scene_pending = true;
+            }
+            let mut scene_changed = false;
+            // 通知はArc参照だけなので全件取り込み、GPUへの転送件数は別に制限する。
+            for message in drain_messages(&self.receive) {
+                match message {
+                    Message::Catalog(catalog, generation, credits) => {
+                        let maximum = catalog.keys().map(|k| k.0).max().unwrap_or(6);
+                        self.camera.maximum = if self.camera.auto {
+                            maximum
+                        } else {
+                            self.camera.maximum.min(maximum)
+                        };
                         if self.smoke.is_some() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                            if let Some(z) = std::env::var("YAMAMUKI_TERRAIN_CHECK_LEVEL")
+                                .ok()
+                                .and_then(|v| v.parse::<u32>().ok())
+                                .filter(|z| catalog.keys().any(|k| k.0 == *z))
+                            {
+                                self.camera.maximum = z;
+                                self.camera.auto = false;
+                            }
                         }
-                        scene_changed = true;
+                        self.catalog = catalog;
+                        self.generation = generation;
+                        self.credits = credits;
+                        self.queued = true;
+                    }
+                    Message::Packet(version, packet, root) => {
+                        let key = packet.key;
+                        self.packets.insert(key, packet);
+                        if root {
+                            scene_changed |= self.camera.projected(key).0;
+                            if !self.roots.iter().any(|t| t.key == key)
+                                && !self.pending_roots.contains(&key)
+                            {
+                                self.pending_roots.push_back(key);
+                            }
+                        } else if version == self.version || self.wanted.contains(&key) {
+                            scene_changed = true;
+                        }
+                    }
+                    Message::Selected(version, keys) => {
+                        if version == self.version {
+                            if self
+                                .remembered_until_selection
+                                .is_some_and(|v| version >= v)
+                            {
+                                self.remembered_until_selection = None;
+                            }
+                            self.wanted = keys;
+                            scene_changed = true;
+                        }
+                    }
+                    Message::Ready(version, n, seconds) => {
+                        if version == self.version {
+                            self.loading = false;
+                            self.status =
+                                format!("読込完了 {n}タイル ／ 復号・補助情報 {:0.2}秒", seconds);
+                            self.ready_since = Some(now);
+                            if self.smoke.is_some() {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                            }
+                            scene_changed = true;
+                        }
+                    }
+                    Message::Error(error) => {
+                        self.remembered_until_selection = None;
+                        eprintln!("地形読込: {error}");
+                        self.loading = false;
+                        self.status = error;
                     }
                 }
-                Message::Error(error) => {
-                    self.remembered_until_selection = None;
-                    eprintln!("地形読込: {error}");
-                    self.loading = false;
-                    self.status = error;
-                }
             }
-        }
-        for _ in 0..4 {
-            let Some(key) = self.pending_roots.pop_front() else {
-                break;
-            };
-            match self.tile(key, 32) {
-                Ok(Some(tile)) => self.roots.push(tile),
-                Err(e) => self.status = format!("{e:#}"),
-                _ => {
-                    self.pending_roots.push_front(key);
+            for _ in 0..4 {
+                let Some(key) = self.pending_roots.pop_front() else {
                     break;
+                };
+                match self.tile(key, 32) {
+                    Ok(Some(tile)) => self.roots.push(tile),
+                    Err(e) => self.status = format!("{e:#}"),
+                    _ => {
+                        self.pending_roots.push_front(key);
+                        break;
+                    }
                 }
             }
-        }
-        if scene_changed {
-            self.scene_pending = true;
-        }
-        if self.scene_pending
-            || (!self.previous.is_empty()
-                && self.transition.elapsed() >= Duration::from_millis(450))
-        {
-            match self.scene() {
-                Ok(done) => self.scene_pending = !done,
-                Err(e) => {
-                    self.status = format!("{e:#}");
-                    self.loading = false;
-                    self.scene_pending = false;
+            if scene_changed {
+                self.scene_pending = true;
+            }
+            if self.scene_pending
+                || (!self.previous.is_empty()
+                    && self.transition.elapsed() >= Duration::from_millis(450))
+            {
+                match self.scene() {
+                    Ok(done) => self.scene_pending = !done,
+                    Err(e) => {
+                        self.status = format!("{e:#}");
+                        self.loading = false;
+                        self.scene_pending = false;
+                    }
                 }
             }
-        }
-        let mut changed = false;
-        if self.embedded_rect.is_none() {
-            egui::TopBottomPanel::top("settings").show(ctx,|ui|{
+            let mut changed = false;
+            if self.embedded_rect.is_none() {
+                egui::TopBottomPanel::top("settings").show(ctx,|ui|{
             ui.horizontal_wrapped(|ui|{
                 ui.strong("山むき・データビューワ／地形");
                 for (label,name) in [("全国","national"),("富士山","fuji"),("槍ヶ岳","yari"),("筑波山","tsukuba")] {
@@ -1003,21 +1108,23 @@ impl eframe::App for App {
                 triangles,patches,extra_bytes as f64/1048576.,
                 self.shown.iter().map(|t|t.compressed_bytes as f64).sum::<f64>()/1048576.));
         });
-        }
-        if changed {
-            self.last_interaction = now;
-            self.settled = false;
-            self.queued = true;
-        }
-        if self.camera.auto
-            && !self.settled
-            && self.last_interaction.elapsed() >= Duration::from_secs(3)
-        {
-            self.settled = true;
-            self.queued = true;
+            }
+            if changed {
+                self.last_interaction = now;
+                self.settled = false;
+                self.queued = true;
+            }
+            if self.camera.auto
+                && !self.settled
+                && self.last_interaction.elapsed() >= Duration::from_secs(3)
+            {
+                self.settled = true;
+                self.queued = true;
+            }
         }
         let time = ctx.input(|i| i.time).to_bits();
-        let fresh_input = self.embedded_rect.is_none() && time != self.input_stamp;
+        let fresh_input =
+            self.frozen_morph.is_none() && self.embedded_rect.is_none() && time != self.input_stamp;
         self.input_stamp = time;
         let mut draw = |ui: &mut egui::Ui| {
             let (rect, response) = ui.allocate_exact_size(
@@ -1029,7 +1136,7 @@ impl eframe::App for App {
                 },
             );
             let viewport = [rect.width() as f64, rect.height() as f64];
-            if self.camera.viewport != viewport {
+            if self.frozen_morph.is_none() && self.camera.viewport != viewport {
                 self.camera.viewport = viewport;
                 self.queued = true;
             }
@@ -1080,7 +1187,7 @@ impl eframe::App for App {
                     } else {
                         1.
                     };
-                    t * t * (3. - 2. * t)
+                    self.frozen_morph.unwrap_or(t * t * (3. - 2. * t))
                 },
                 self.resolution == 0,
                 rect,
@@ -1111,6 +1218,9 @@ impl eframe::App for App {
                 .show(ctx, draw);
         }
 
+        if self.frozen_morph.is_some() {
+            return;
+        }
         if self.zoom_probe.is_some() {
             let begin = self.zoom_probe.as_ref().unwrap().1;
             if begin.is_none() && !self.loading && !self.scene_pending && !self.shown.is_empty() {
@@ -1168,12 +1278,22 @@ impl eframe::App for App {
             self.queued = false;
             self.last_request = now;
             self.ready_since = None;
-            let _ = self.send.send(Request {
-                version: self.version,
-                camera: self.camera.clone(),
-                prefer_finer: !self.settled,
-                resident: self.packets.keys().copied().collect(),
-            });
+            if self
+                .send
+                .send(Request {
+                    version: self.version,
+                    camera: self.camera.clone(),
+                    prefer_finer: !self.settled,
+                    resident: self.packets.keys().copied().collect(),
+                })
+                .is_err()
+            {
+                // 復号エラー等でワーカーが終了していても、次の操作を永久に待たせない。
+                // 表示済みメッシュは保ち、元データを読み出すスレッドだけを再開する。
+                self.start_worker(ctx);
+                self.queued = true;
+                self.status = "地形の読み込み処理を再開中".into();
+            }
         }
         if self.smoke.is_some()
             && (self
@@ -1221,9 +1341,10 @@ impl eframe::App for App {
         if self.smoke.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
-        if self.last_interaction.elapsed() < Duration::from_millis(1200)
-            || self.camera.mesh_pixels
-                > refinement_spacing(Duration::from_millis(1200), ctx.pixels_per_point())
+        if !self.path.is_empty()
+            && (self.last_interaction.elapsed() < Duration::from_millis(1200)
+                || self.camera.mesh_pixels
+                    > refinement_spacing(Duration::from_millis(1200), ctx.pixels_per_point()))
         {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -1271,11 +1392,25 @@ impl Projection {
         let back = c.back();
         let right = glam::DVec3::new(c.yaw.cos(), 0., -c.yaw.sin());
         let up = back.cross(right);
-        let d = glam::DVec3::new(
-            (world[0] * shared_data::WORLD - c.center[0]) * c.scale(),
-            height - c.height,
-            (world[1] * shared_data::WORLD - c.center[1]) * c.scale(),
-        );
+        let d = if c.globe {
+            globe::local(c.center, world.map(|v| v * shared_data::WORLD), height)
+                - glam::DVec3::Y * c.height
+        } else {
+            glam::DVec3::new(
+                (world[0] * shared_data::WORLD - c.center[0]) * c.scale(),
+                height - c.height,
+                (world[1] * shared_data::WORLD - c.center[1]) * c.scale(),
+            )
+        };
+        if c.globe {
+            let point = d + glam::DVec3::Y * c.height;
+            let eye = back * c.distance + glam::DVec3::Y * c.height;
+            if let Some(hit) = globe::intersect(eye, point - eye, 0.) {
+                if hit.distance(eye) + 1. < point.distance(eye) {
+                    return None;
+                }
+            }
+        }
         let depth = c.distance - d.dot(back);
         if !depth.is_finite() || depth <= (c.distance / 10000.).max(0.2) || depth > c.far_depth() {
             return None;
@@ -1318,6 +1453,32 @@ impl Projection {
                     let x = rect.width() as f64 * (col as f64 / 8. - 0.5);
                     let y = rect.height() as f64 * (row as f64 / 8. - 0.5);
                     let ray = right * (x * f) - up * (y * f) - back;
+                    if c.globe {
+                        let origin = back * c.distance + glam::DVec3::Y * c.height;
+                        // 視点を内包する高い標高球面の、地球の裏側の交点は視野に含めない。
+                        if (origin + glam::DVec3::Y * globe::RADIUS).length()
+                            <= globe::RADIUS + height
+                        {
+                            continue;
+                        }
+                        if let Some(p) = globe::intersect(
+                            back * c.distance + glam::DVec3::Y * c.height,
+                            ray,
+                            height,
+                        ) {
+                            let mut world = globe::world(c.center, p);
+                            // 範囲計算中は注視点から連続した経度に保ち、取得するときに分割する。
+                            world[0] = c.center[0]
+                                + (world[0] - c.center[0] + shared_data::WORLD / 2.)
+                                    .rem_euclid(shared_data::WORLD)
+                                - shared_data::WORLD / 2.;
+                            for axis in 0..2 {
+                                bounds[axis] = bounds[axis].min(world[axis]);
+                                bounds[axis + 2] = bounds[axis + 2].max(world[axis]);
+                            }
+                        }
+                        continue;
+                    }
                     if ray.y.abs() < 1e-9 {
                         continue;
                     }
@@ -1353,6 +1514,11 @@ impl Projection {
         let ray = right * ((p.x - rect.center().x) as f64 * f)
             - up * ((p.y - rect.center().y) as f64 * f)
             - back;
+        if c.globe {
+            let origin = back * c.distance + glam::DVec3::Y * c.height;
+            let p = globe::intersect(origin, ray, c.height)?;
+            return Some(globe::world(c.center, p).map(|v| v / shared_data::WORLD));
+        }
         if ray.y >= -1e-9 {
             return None;
         }
@@ -1363,7 +1529,7 @@ impl Projection {
         ])
     }
 }
-fn observer_material_bands(
+fn projected_material_bands(
     c: &selection::Camera,
     rect: egui::Rect,
     minimum_span: f64,
@@ -1395,7 +1561,9 @@ fn observer_material_bands(
             center[1] + radius,
         ];
         // 内側の境界（半径の半分）を基準に、横方向の2画素に必要な密度を確保する。
-        let distance = (radius * shared_data::WORLD * c.scale() / 2.).max(1.);
+        let horizontal = radius * shared_data::WORLD * c.scale() / 2.;
+        let vertical = eye[2] - eye[2].clamp(-500., 4500.);
+        let distance = horizontal.hypot(vertical).max(1.);
         let zoom = (shared_data::WORLD * c.scale() * rect.height() as f64
             / (1024. * c.tan_half_fov() * distance))
             .log2();
@@ -1431,10 +1599,15 @@ impl TerrainView {
         let mut app = App::new(ctx, state.clone(), PathBuf::new(), None, "national", None);
         app.shown = vec![app.renderer.upload(&Packet::flat()?, 1)?];
         app.camera.height = 0.;
+        app.camera.globe = true;
         app.camera.auto = false;
         app.resolution = 0;
         app.loading = false;
         app.queued = false;
+        app.settled = true;
+        app.scene_pending = false;
+        app.camera.mesh_pixels =
+            refinement_spacing(Duration::from_millis(1200), ctx.pixels_per_point());
         Ok(Self {
             label: String::new(),
             app,
@@ -1457,11 +1630,17 @@ impl TerrainView {
                     .to_string_lossy()
                     .into_owned()
             });
+        let mut app = App::new(ctx, state.clone(), path, None, "national", None);
+        app.camera.globe = true;
         Ok(Self {
             label,
-            app: App::new(ctx, state.clone(), path, None, "national", None),
+            app,
             automatic_maximum: None,
         })
+    }
+    /// GPUへ最初の地形メッシュを描画したか。ファイルのメタデータ取得とは区別する。
+    pub fn has_drawn_terrain(&self) -> bool {
+        !self.app.path.is_empty() && self.app.renderer.has_drawn_mesh()
     }
     pub fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         hit_test::poll(
@@ -1505,8 +1684,10 @@ impl TerrainView {
             tilt,
             [rect.width() as f64, rect.height() as f64],
         ) {
-            self.app.queued = true;
-            self.app.settled = false;
+            if !self.app.path.is_empty() {
+                self.app.queued = true;
+                self.app.settled = false;
+            }
             self.app.last_interaction = Instant::now();
         }
     }
@@ -1674,6 +1855,7 @@ impl TerrainView {
         fov: f64,
         rect: egui::Rect,
     ) -> f64 {
+        let before = self.app.camera.clone();
         if self.app.camera.set_observer(
             world.map(|v| v * shared_data::WORLD),
             height,
@@ -1682,10 +1864,14 @@ impl TerrainView {
             fov,
             [rect.width() as f64, rect.height() as f64],
         ) {
-            self.app.restore_remembered_scene();
-            self.app.queued = true;
-            self.app.settled = false;
-            self.app.last_interaction = Instant::now();
+            // 方角だけなら全方位の準備を中断せず、そのまま描画方向だけ変える。
+            if !self.app.path.is_empty() && !before.same_preparation(&self.app.camera) {
+                self.app.restore_remembered_scene();
+                self.app.queued = true;
+                self.app.scene_pending = true;
+                self.app.settled = false;
+                self.app.last_interaction = Instant::now();
+            }
         }
         let c = &self.app.camera;
         (shared_data::WORLD * c.scale() * c.viewport[1]
@@ -1831,15 +2017,29 @@ impl TerrainView {
         wire_control(ui, &mut self.app.wire);
         ui.small(&self.app.status);
     }
-    /// 景色モードでは、一枚の広域範囲で中景全体のLODを落とさない。
+    /// 俯瞰・景色とも、一枚の広域範囲で中景全体のLODを落とさない。
     /// 距離が2倍になるごとに、投影画素密度に対応する一段粗い画像へ移る。
-    pub fn observer_material_regions(
+    pub fn projected_material_regions(
         &self,
         rect: egui::Rect,
         minimum_span: f64,
     ) -> Vec<([f64; 4], f64)> {
         let regions = self.material_regions(rect, minimum_span);
-        observer_material_bands(&self.app.camera, rect, minimum_span, regions)
+        if !self.app.camera.observer && self.app.camera.pitch >= std::f64::consts::FRAC_PI_3 {
+            let c = &self.app.camera;
+            let zoom = (shared_data::WORLD * c.scale() * f64::from(rect.height())
+                / (512. * c.tan_half_fov() * c.distance))
+                .log2();
+            // 視野全体は同じLODにするが、視野外の常駐背景まで詳細画像で埋めない。
+            let overview = (f64::from(rect.width().max(rect.height()))
+                / (256.
+                    * (regions[0][2] - regions[0][0]).max(regions[0][3] - regions[0][1])
+                    * 1.02))
+                .log2()
+                .min(zoom);
+            return vec![(regions[0], overview), (regions[2], zoom)];
+        }
+        projected_material_bands(&self.app.camera, rect, minimum_span, regions)
     }
 
     pub fn material_regions(&self, rect: egui::Rect, minimum_span: f64) -> [[f64; 4]; 3] {
@@ -1857,8 +2057,9 @@ impl TerrainView {
             .chain(&self.app.shown)
             .chain(&self.app.previous)
         {
+            // 標高0mの一枚の平面は全世界を覆うが、全世界分の画像は要求しない。
             let b = shared_data::bounds(tile.key);
-            if camera.visible_depth(b).is_some() {
+            if !self.app.path.is_empty() && camera.visible_depth(b).is_some() {
                 for axis in 0..2 {
                     far[axis] = far[axis].min(b[axis]);
                     far[axis + 2] = far[axis + 2].max(b[axis + 2]);
@@ -1876,6 +2077,13 @@ impl TerrainView {
             far[axis + 2] = far[axis + 2].max(mid[axis + 2]);
         }
         [far, near, mid].map(|b| b.map(|v| v / shared_data::WORLD))
+    }
+    pub fn material_parts(&self, area: [f64; 4]) -> Vec<[f64; 4]> {
+        if self.app.camera.globe {
+            globe::texture_parts(area)
+        } else {
+            vec![area]
+        }
     }
     pub fn set_direct_materials(&mut self, commands: Vec<direct_material::Quad>) {
         self.app.renderer.direct = Some(commands);
@@ -2145,7 +2353,7 @@ mod projection_tests {
         let cy = center[1] / shared_data::WORLD;
         let area = |r: f64| [cx - r, cy - r, cx + r, cy + r];
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200., 800.));
-        let bands = observer_material_bands(
+        let bands = projected_material_bands(
             &camera,
             rect,
             0.00002,
@@ -2161,6 +2369,131 @@ mod projection_tests {
         // 近景の外に出ても、数km先にz8等の広域密度を使わない。
         assert!(bands[4].1 > 14.);
         assert!(bands.last().unwrap().0[0] <= area(0.01)[0]);
+    }
+    #[test]
+    fn tilted_orbit_uses_projected_density_beyond_the_near_texture() {
+        let camera = selection::Camera {
+            center: [35231276.17590823, 15878191.672569184],
+            height: 500.,
+            distance: 4652.565323126368,
+            yaw: 1.2048033475875854,
+            pitch: 0.3329332629826407,
+            viewport: [2686., 1562.8125],
+            ..Default::default()
+        };
+        let projection = Projection {
+            camera: camera.clone(),
+        };
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2686., 1562.8125));
+        let near = projection.near_material_bounds(0.00004);
+        let mid = projection.material_bounds(rect);
+        let bands = projected_material_bands(&camera, rect, 0.00004, [mid, near, mid]);
+        let eye = camera.eye();
+        let back = camera.back();
+        let p = [
+            (eye[0] - back.x * 12000. / camera.scale()) / shared_data::WORLD,
+            (eye[1] - back.z * 12000. / camera.scale()) / shared_data::WORLD,
+        ];
+        assert!(
+            !(p[0] >= near[0] && p[0] <= near[2] && p[1] >= near[1] && p[1] <= near[3]),
+            "中景の点を検証できていない"
+        );
+        let chosen = bands[1..]
+            .iter()
+            .find(|(b, _)| p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3])
+            .unwrap()
+            .1;
+        let old = (2686. / (256. * (mid[2] - mid[0]).max(mid[3] - mid[1]) * 1.02)).log2();
+        assert!(
+            chosen >= old + 1.,
+            "中景全体の面積に引きずられている: old={old}, selected={chosen}"
+        );
+        eprintln!("提供視点の中景: 旧z{old:.2} → 距離別z{chosen:.2}");
+        // 高空の俯瞰では、近景の小さな範囲を理由に最高LODを要求しない。
+        let mut high = camera;
+        high.distance = 2_000_000.;
+        high.pitch = 1.4;
+        let high_bands = projected_material_bands(&high, rect, 0.00004, [mid, near, mid]);
+        assert!(high_bands[1].1 < 10.);
+    }
+    #[test]
+    fn provided_globe_view_keeps_texture_coverage_across_the_date_line() {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1955.2188, 1326.8125));
+        let mut c = selection::Camera {
+            height: 0.,
+            globe: true,
+            ..Default::default()
+        };
+        c.set_map_view(
+            [0.8569477284471069, 0.40443680425979317],
+            3.444444410337342,
+            0.,
+            0.,
+            [rect.width() as f64, rect.height() as f64],
+        );
+        let p = Projection { camera: c };
+        let mut b = p.material_bounds(rect);
+        let n = p.near_material_bounds(0.0001);
+        for axis in 0..2 {
+            b[axis] = b[axis].min(n[axis]);
+            b[axis + 2] = b[axis + 2].max(n[axis + 2]);
+        }
+        let parts = globe::texture_parts(b);
+        let mut wrapped = 0;
+        for row in 0..64 {
+            for col in 0..96 {
+                let pixel = egui::pos2(
+                    (col as f32 + 0.5) * rect.width() / 96.,
+                    (row as f32 + 0.5) * rect.height() / 64.,
+                );
+                if let Some(w) = p.world_at(rect, pixel) {
+                    if !(0. ..=1.).contains(&w[1]) {
+                        continue;
+                    }
+                    if w[0] < 0.2 {
+                        wrapped += 1;
+                    }
+                    assert!(
+                        parts
+                            .iter()
+                            .any(|b| w[0] >= b[0] && w[0] <= b[2] && w[1] >= b[1] && w[1] <= b[3]),
+                        "表示中の球面を画像取得範囲が覆っていない: {w:?} / {parts:?}"
+                    );
+                }
+            }
+        }
+        assert!(wrapped > 0, "日付変更線の先を検証していない");
+    }
+    #[test]
+    fn sea_level_plane_uses_the_same_camera_for_pan_zoom_orbit_and_picking() {
+        let rect = egui::Rect::from_min_size(egui::pos2(40., 70.), egui::vec2(1600., 1000.));
+        let center = selection::lonlat(138.7274, 35.3606).map(|v| v / shared_data::WORLD);
+        let mut camera = selection::Camera {
+            height: 0.,
+            ..Default::default()
+        };
+        for zoom in [6., 12., 18., 24.] {
+            for tilt in [0., 0.5, 1.2] {
+                for yaw in [0., 1.4, 3.] {
+                    camera.set_map_view(center, zoom, yaw, tilt, [1600., 1000.]);
+                    let projection = Projection {
+                        camera: camera.clone(),
+                    };
+                    assert!(
+                        projection
+                            .screen(rect, center, 0.)
+                            .unwrap()
+                            .distance(rect.center())
+                            < 0.001
+                    );
+                    for pixel in [rect.center(), rect.center() + egui::vec2(150., 200.)] {
+                        let world = projection.world_at(rect, pixel).unwrap();
+                        assert!(projection.screen(rect, world, 0.).unwrap().distance(pixel) < 0.1);
+                    }
+                    assert_eq!(camera.height, 0.);
+                }
+            }
+        }
     }
     #[test]
     fn observer_rotation_and_zoom_keep_the_eye_at_the_selected_point() {
@@ -2340,9 +2673,15 @@ mod wire_menu_tests {
 #[cfg(test)]
 mod remembered_scene_tests {
     use super::*;
-    fn app() -> Option<App> {
+    pub(super) fn app() -> Option<App> {
+        app_with_backend(eframe::wgpu::Backends::all())
+    }
+    pub(super) fn app_with_backend(backends: eframe::wgpu::Backends) -> Option<App> {
         use eframe::wgpu;
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends,
+            ..Default::default()
+        });
         let adapter = pollster::block_on(instance.request_adapter(&Default::default()))?;
         let (device, queue) =
             pollster::block_on(adapter.request_device(&Default::default(), None)).unwrap();
@@ -2410,6 +2749,165 @@ mod remembered_scene_tests {
         assert_eq!(app.remembered.len(), 2);
         let _ = app.renderer.state.device.poll(eframe::wgpu::Maintain::Wait);
     }
+    #[test]
+    fn preparation_plan_is_reused_until_the_camera_or_targets_change() {
+        let Some(mut app) = app() else {
+            return;
+        };
+        app.resolution = 0;
+        app.wanted = vec![(13, 7220, 3200)];
+        let first = app.preparation_plan();
+        assert!(
+            Arc::ptr_eq(&first, &app.preparation_plan()),
+            "転送を小分けに進める間に同じ計画を作り直している"
+        );
+        app.camera.distance *= 2.;
+        let moved = app.preparation_plan();
+        assert!(!Arc::ptr_eq(&first, &moved));
+        app.wanted.push((13, 7221, 3200));
+        let changed = app.preparation_plan();
+        assert!(!Arc::ptr_eq(&moved, &changed));
+        app.camera.mesh_pixels *= 0.5;
+        let refined = app.preparation_plan();
+        assert!(!Arc::ptr_eq(&changed, &refined));
+    }
+    #[test]
+    fn resident_evicted_after_request_is_requested_again_and_scene_recovers() -> Result<()> {
+        let Some(mut app) = app() else {
+            return Ok(());
+        };
+        let old = Packet::constant_plane((13, 7220, 3200), 1500.)?;
+        app.shown = vec![app.renderer.upload(&old, 1)?];
+        let key = (13, 7221, 3200);
+        app.wanted = vec![key];
+        app.loading = false;
+        app.queued = false;
+        app.ready_since = Some(Instant::now());
+        app.resolution = 0;
+        assert!(!app.scene()?);
+        assert!(app.queued && app.ready_since.is_none());
+        assert_eq!(app.shown[0].key, old.key, "復帰まで直前の地形を維持");
+        app.loading = true;
+        app.queued = false;
+        assert!(!app.scene()?);
+        assert!(!app.queued, "取得中の要求を再送して中断させない");
+        app.packets
+            .insert(key, Arc::new(Packet::constant_plane(key, 1500.)?));
+        let _ = app.renderer.state.device.poll(eframe::wgpu::Maintain::Wait);
+        assert!(app.scene()?);
+        assert_eq!(app.shown[0].key, key, "不足分の到着後に新しい地形へ進む");
+        Ok(())
+    }
+    #[test]
+    fn reordered_cached_fields_do_not_restart_the_transition() -> Result<()> {
+        let Some(mut app) = app() else {
+            return Ok(());
+        };
+        let mut tiles = Vec::new();
+        for key in [(13, 7220, 3200), (13, 7221, 3200)] {
+            let packet = Arc::new(Packet::constant_plane(key, 1500.)?);
+            let tile = app.renderer.upload(&packet, 32)?;
+            app.packets.insert(key, packet);
+            app.gpu.insert((key, 32), tile.clone());
+            app.wanted.push(key);
+            tiles.push(tile);
+        }
+        app.shown = tiles.iter().rev().cloned().collect();
+        app.resolution = 0;
+        app.transition = Instant::now() - Duration::from_secs(2);
+        let before = app.transition;
+        assert!(app.scene()?);
+        assert!(app.previous.is_empty());
+        assert_eq!(app.transition, before);
+        assert!(Arc::ptr_eq(&app.shown[0], &tiles[1]));
+        Ok(())
+    }
+    #[test]
+    fn arrived_tiles_prepare_during_missing_data_and_active_transition() -> Result<()> {
+        let Some(mut app) = app() else {
+            return Ok(());
+        };
+        let missing = (13, 7220, 3200);
+        let arrived = (13, 7221, 3200);
+        let old = app
+            .renderer
+            .upload(&Packet::constant_plane((13, 7219, 3200), 1500.)?, 1)?;
+        app.shown = vec![old.clone()];
+        app.previous = vec![old.clone()];
+        app.local_background = vec![old.clone()];
+        app.transition = Instant::now();
+        app.loading = true;
+        app.resolution = 0;
+        app.wanted = vec![missing, arrived];
+        app.packets
+            .insert(arrived, Arc::new(Packet::constant_plane(arrived, 1500.)?));
+        assert!(!app.scene()?);
+        assert!(
+            app.gpu.contains_key(&(arrived, 32)),
+            "未着の先頭タイルや遷移完了を待っている"
+        );
+        assert!(Arc::ptr_eq(&app.shown[0], &old));
+        assert!(
+            Arc::ptr_eq(&app.local_background[0], &old),
+            "準備途中で背景だけが切り替わった"
+        );
+        Ok(())
+    }
+    #[test]
+    fn cached_fields_choose_the_smallest_sufficient_grid() -> Result<()> {
+        let Some(mut app) = app() else {
+            return Ok(());
+        };
+        let key = (13, 7220, 3200);
+        let field = shared_field::Field {
+            depth: 1,
+            x: 0,
+            y: 0,
+        };
+        let packet = Packet::constant_plane(key, 1500.)?;
+        let a = app.renderer.upload_field(&packet, 32, field)?;
+        let b = app.renderer.upload_field(&packet, 64, field)?;
+        app.local_gpu.insert((key, 32, field), a.clone());
+        app.local_gpu.insert((key, 64, field), b.clone());
+        assert!(Arc::ptr_eq(
+            &app.cached_local(key, 16, field, 1000000).unwrap(),
+            &a
+        ));
+        assert!(Arc::ptr_eq(
+            &app.cached_local(key, 64, field, 1000000).unwrap(),
+            &b
+        ));
+        Ok(())
+    }
+    #[test]
+    fn memory_pressure_keeps_background_needed_by_the_incomplete_scene() -> Result<()> {
+        let Some(mut app) = app() else {
+            return Ok(());
+        };
+        let field = shared_field::Field {
+            depth: 1,
+            x: 0,
+            y: 0,
+        };
+        let key = (13, 7220, 3200);
+        let other = (13, 7221, 3200);
+        for (k, n) in [(key, 32), (key, 16), (other, 16)] {
+            let mut tile = app.renderer.upload(&Packet::constant_plane(k, 1500.)?, n)?;
+            Arc::get_mut(&mut tile).unwrap().bytes = 200 * 1024 * 1024;
+            app.gpu.insert((k, n), tile);
+            app.mesh_used
+                .insert((k, n, shared_field::Field::default()), Instant::now());
+        }
+        let _ = app.renderer.state.device.poll(eframe::wgpu::Maintain::Wait);
+        app.trim_gpu_cache(&preparing_meshes([(key, field, 128)]));
+        assert!(
+            app.gpu.contains_key(&(key, 32)),
+            "準備途中の背景が毎回消されるとGPU準備が完了しない"
+        );
+        assert!(app.gpu.len() < 3, "未使用のメッシュは整理する");
+        Ok(())
+    }
+
     #[test]
     fn memory_pressure_evicts_oldest_unused_mesh_only() {
         let Some(mut app) = app() else {

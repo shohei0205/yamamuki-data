@@ -219,13 +219,13 @@ struct Tree<'a> {
 }
 impl Tree<'_> {
     fn candidates(&self, ids: &[usize]) -> Vec<usize> {
-        let mut s = BTreeSet::new();
+        let mut points = Vec::with_capacity(ids.len() * 3);
         for &t in ids {
-            for &i in &self.m.base.topology.triangles[t * 3..t * 3 + 3] {
-                s.insert(i);
-            }
+            points.extend_from_slice(&self.m.base.topology.triangles[t * 3..t * 3 + 3]);
         }
-        s.into_iter().collect()
+        points.sort_unstable();
+        points.dedup();
+        points
     }
     fn intersect(&self, ids: &[usize], r: [f64; 4]) -> Vec<usize> {
         ids.iter()
@@ -239,6 +239,68 @@ impl Tree<'_> {
             .collect()
     }
     fn visit(&mut self, ids: &[usize], r: [f64; 4], depth: usize) -> Result<u32> {
+        let ids = self.intersect(ids, r);
+        let candidates = self.candidates(&ids);
+        self.visit_prepared(&ids, candidates, r, depth)
+    }
+    // 子矩形への交差判定と候補作成の結果を、そのまま再帰へ渡す。
+    fn visit_prepared(
+        &mut self,
+        ids: &[usize],
+        candidates: Vec<usize>,
+        r: [f64; 4],
+        depth: usize,
+    ) -> Result<u32> {
+        let index = self.nodes.len();
+        self.nodes.push([u32::MAX; 8]);
+        ensure!(
+            self.nodes.len() <= 4000000,
+            "GPU探索木が安全上限を超えました"
+        );
+        if candidates.len() > 48 && depth < 16 {
+            let (mx, my) = ((r[0] + r[2]) * 0.5, (r[1] + r[3]) * 0.5);
+            let rs = [
+                [r[0], r[1], mx, my],
+                [mx, r[1], r[2], my],
+                [r[0], my, mx, r[3]],
+                [mx, my, r[2], r[3]],
+            ];
+            let child = rs
+                .iter()
+                .map(|&r| self.intersect(&ids, r))
+                .collect::<Vec<_>>();
+            // 4分割しても候補が平均25%以上減らなければ、リストを複製しない。
+            // GPUの256点上限を超える場合だけは必ず分割する。
+            let child_candidates = child.iter().map(|v| self.candidates(v)).collect::<Vec<_>>();
+            let child_counts = child_candidates.iter().map(Vec::len).sum::<usize>();
+            let worthwhile = candidates.len() > 256 || child_counts < candidates.len() * 3;
+            if worthwhile {
+                for (i, candidates) in child_candidates.into_iter().enumerate() {
+                    self.nodes[index][i] =
+                        self.visit_prepared(&child[i], candidates, rs[i], depth + 1)?;
+                }
+                return Ok(index as u32);
+            }
+        }
+        ensure!(candidates.len() <= 256, "GPU候補数が256を超えました");
+        let offset = if let Some(&offset) = self.lists.get(&candidates) {
+            offset
+        } else {
+            let offset = self.refs.len() as u32;
+            self.refs.extend_from_slice(&candidates);
+            self.lists.insert(candidates.clone(), offset);
+            offset
+        };
+        self.nodes[index][4] = offset;
+        self.nodes[index][5] = candidates.len() as u32;
+        self.nodes[index][6] = 0;
+        self.nodes[index][7] = 0;
+        self.leaf_counts.push(candidates.len());
+
+        Ok(index as u32)
+    }
+    #[cfg(test)]
+    fn visit_reference(&mut self, ids: &[usize], r: [f64; 4], depth: usize) -> Result<u32> {
         let ids = self.intersect(ids, r);
         let candidates = self.candidates(&ids);
         let index = self.nodes.len();
@@ -268,7 +330,7 @@ impl Tree<'_> {
             let worthwhile = candidates.len() > 256 || child_counts < candidates.len() * 3;
             if worthwhile {
                 for i in 0..4 {
-                    self.nodes[index][i] = self.visit(&child[i], rs[i], depth + 1)?;
+                    self.nodes[index][i] = self.visit_reference(&child[i], rs[i], depth + 1)?;
                 }
                 return Ok(index as u32);
             }
@@ -421,6 +483,17 @@ mod tests {
         let ids = (0..m.base.circles.len()).collect::<Vec<_>>();
         tree.visit(&ids, rect, 0).unwrap();
         assert!(tree.nodes.len() < 5000);
+        let mut reference = Tree {
+            m: &m,
+            nodes: Vec::new(),
+            refs: Vec::new(),
+            leaf_counts: Vec::new(),
+            lists: HashMap::new(),
+        };
+        reference.visit_reference(&ids, rect, 0).unwrap();
+        assert_eq!(tree.nodes, reference.nodes, "探索木の内容が変わりました");
+        assert_eq!(tree.refs, reference.refs, "候補点の内容が変わりました");
+        assert_eq!(tree.leaf_counts, reference.leaf_counts);
         let mut w = Work::default();
         for y in 0..17 {
             for x in 0..17 {

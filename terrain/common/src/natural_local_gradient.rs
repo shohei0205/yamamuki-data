@@ -24,15 +24,13 @@ pub fn local_gradients(m: &Fast) -> Vec<[f64; 2]> {
                 }
                 // 共円四角形の対角線はVoronoi辺の長さが0で、選び方が一意でない。
                 // その辺を傾きの近傍から除き、部分集合の再三角化にも依存させない。
-                let common = m.base.incident[i]
+                let mut common = m.base.incident[i]
                     .iter()
                     .copied()
-                    .filter(|t| m.base.incident[j].contains(t))
-                    .take(2)
-                    .collect::<Vec<_>>();
-                if common.len() == 2 {
-                    let a = m.base.circles[common[0]];
-                    let b = m.base.circles[common[1]];
+                    .filter(|t| m.base.incident[j].contains(t));
+                if let (Some(a), Some(b)) = (common.next(), common.next()) {
+                    let a = m.base.circles[a];
+                    let b = m.base.circles[b];
                     if (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) <= 1e-14 * r2.max(1.) {
                         continue;
                     }

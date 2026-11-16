@@ -12,6 +12,7 @@ mod markers;
 mod point_detail;
 mod point_list;
 mod points;
+mod snapshot;
 mod surface;
 mod surface_palette;
 mod surface_shade;
@@ -47,12 +48,22 @@ const NORMAL_WINDOW_SIZE_KEY: &str = "normal_window_size";
 const NORMAL_WINDOW_POSITION_KEY: &str = "normal_window_position";
 
 enum OpenedFile {
+    Snapshot(Box<snapshot::Prepared>),
     Terrain(PathBuf),
+    TerrainReady(
+        Box<yamamuki_terrain_view::TerrainView>,
+        Option<surface::Source>,
+    ),
     Points(Points),
     Surface(surface::Source),
 }
 
 fn read_file(path: PathBuf) -> Result<OpenedFile> {
+    if path.to_string_lossy().ends_with(".snapshot.json")
+        || path.to_string_lossy().ends_with(".snapshot.json.gz")
+    {
+        return snapshot::prepare(&path).map(|v| OpenedFile::Snapshot(Box::new(v)));
+    }
     if points::is_sqlite(&path) {
         if yamamuki_terrain_view::is_terrain(&path)? {
             return Ok(OpenedFile::Terrain(path));
@@ -99,7 +110,7 @@ fn observer_height(point: f64, terrain: Option<f64>, from_pin: bool, offset: f64
     ground + offset
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Observer {
     from_pin: bool,
     point_index: Option<usize>,
@@ -116,6 +127,12 @@ struct Observer {
 }
 
 struct Viewer {
+    snapshot_frozen: bool,
+    snapshot_canvas: Option<[f32; 2]>,
+    last_canvas_size: [f32; 2],
+    snapshot_status: String,
+    snapshot_jobs: Vec<mpsc::Receiver<Result<PathBuf>>>,
+    snapshot_notice: Option<(String, std::time::Instant)>,
     observer: Option<Observer>,
     pin_height_job: Option<([f64; 2], mpsc::Receiver<Result<f64>>)>,
     map_pin_elevation: Option<([f64; 2], f64)>,
@@ -133,6 +150,7 @@ struct Viewer {
     show_terrain: bool,
     terrain_info: Option<terrain_info::Info>,
     flat_terrain: Option<yamamuki_terrain_view::TerrainView>,
+    flat_loading: Option<mpsc::Receiver<Result<yamamuki_terrain_view::TerrainView>>>,
     normal_window_size: egui::Vec2,
     normal_window_position: Option<Pos2>,
     startup_expanded_rect: Option<Rect>,
@@ -142,6 +160,8 @@ struct Viewer {
     map_source: map::Source,
     lod: map::Lod,
     surface_lod: map::Lod,
+    map_borders: bool,
+    surface_borders: bool,
     surface_palette: surface_palette::Palette,
     lod_renderer: Option<lod_fade::Renderer>,
     show_online_map: bool,
@@ -162,7 +182,6 @@ struct Viewer {
     surfaces: Vec<surface::Surface>,
     loading_surface: Option<mpsc::Receiver<Result<surface::Source>>>,
     error: Option<String>,
-    fit_pending: bool,
     marks: Vec<Mark>,
     marker_mesh: Option<Arc<egui::Mesh>>,
     marker_sprites: Option<markers::Sprites>,
@@ -174,6 +193,12 @@ impl Viewer {
         appearance::install(ctx);
         install_japanese_font(ctx);
         let mut viewer = Self {
+            snapshot_frozen: false,
+            snapshot_canvas: None,
+            last_canvas_size: [800., 600.],
+            snapshot_status: String::new(),
+            snapshot_jobs: Vec::new(),
+            snapshot_notice: None,
             observer: None,
             pin_height_job: None,
             map_pin_elevation: None,
@@ -187,6 +212,7 @@ impl Viewer {
             show_terrain: true,
             terrain_info: None,
             flat_terrain: None,
+            flat_loading: None,
             normal_window_size: DEFAULT_WINDOW_SIZE,
             normal_window_position: None,
             startup_expanded_rect: None,
@@ -200,6 +226,8 @@ impl Viewer {
             map_source: map::Source::Gsi,
             lod: map::Lod::default(),
             surface_lod: map::Lod::default(),
+            map_borders: false,
+            surface_borders: false,
             surface_palette: surface_palette::Palette::default(),
             lod_renderer: None,
             show_online_map: true,
@@ -220,7 +248,6 @@ impl Viewer {
             surfaces: Vec::new(),
             loading_surface: None,
             error: None,
-            fit_pending: false,
             marks: Vec::new(),
             marker_mesh: None,
             marker_sprites: None,
@@ -289,6 +316,9 @@ impl Viewer {
     }
 
     fn open(&mut self, ctx: &egui::Context, path: PathBuf) {
+        if self.snapshot_frozen {
+            self.resume_snapshot();
+        }
         let (send, receive) = mpsc::channel();
         let ctx = ctx.clone();
         self.loading = Some((path.clone(), receive));
@@ -301,6 +331,9 @@ impl Viewer {
     }
 
     fn open_surface(&mut self, ctx: &egui::Context, path: PathBuf) {
+        if self.snapshot_frozen {
+            self.resume_snapshot();
+        }
         let (send, receive) = mpsc::channel();
         let ctx = ctx.clone();
         self.loading_surface = Some(receive);
@@ -361,45 +394,62 @@ impl Viewer {
         let path = path.clone();
         self.loading = None;
         match result {
+            Ok(OpenedFile::Snapshot(prepared)) => {
+                if let Err(error) = self.restore_snapshot(ctx, state, *prepared) {
+                    self.error = Some(format!("{error:#}"));
+                }
+            }
             Ok(OpenedFile::Terrain(path)) => {
                 self.leave_observer();
                 self.pin_height_job = None;
-                let combined_surface = surface::Source::open(path.clone()).ok();
-                let terrain_info = terrain_info::Info::new(ctx, path.clone());
-                let result = state
-                    .ok_or_else(|| anyhow::anyhow!("地形表示にはGPU描画が必要です"))
-                    .and_then(|state| yamamuki_terrain_view::TerrainView::new(ctx, state, path));
-                match result {
-                    Ok(mut view) => {
-                        self.terrain_info = Some(terrain_info);
-                        if let Some(path) = self.terrain_overlay.take() {
-                            self.open_surface(ctx, path);
-                        }
-                        if let Some(output) = self.terrain_capture.take() {
-                            view.capture(output);
-                            if std::env::var("YAMAMUKI_TERRAIN_CHECK_MAP").as_deref() == Ok("none")
-                            {
-                                self.show_online_map = false;
-                            }
-                            self.view.center = points::project(35.3606, 138.7274);
-                            self.view.zoom = std::env::var("YAMAMUKI_TERRAIN_CHECK_ZOOM")
-                                .ok()
-                                .and_then(|v| v.parse().ok())
-                                .unwrap_or(10.5);
-                            self.view.orientation = map::Orientation::default();
-                            let tilt = std::env::var("YAMAMUKI_TERRAIN_CHECK_TILT")
-                                .ok()
-                                .and_then(|v| v.parse::<f32>().ok())
-                                .unwrap_or(0.6);
-                            self.view.orientation.orbit(egui::vec2(0., -tilt / 0.006));
-                        }
-                        self.terrain = Some(view);
-                        if let Some(source) = combined_surface {
-                            self.add_surface(ctx, source);
-                            self.show_online_map = false;
-                        }
+                if let Some(state) = state.cloned() {
+                    let (send, receive) = mpsc::channel();
+                    self.loading = Some((path.clone(), receive));
+                    let ctx = ctx.clone();
+                    std::thread::spawn(move || {
+                        let started = std::time::Instant::now();
+                        let combined_surface = surface::Source::open(path.clone()).ok();
+                        let result = yamamuki_terrain_view::TerrainView::new(&ctx, &state, path)
+                            .map(|view| OpenedFile::TerrainReady(Box::new(view), combined_surface));
+                        diagnostics::record(&format!(
+                            "地形ファイルの表示準備: {:.2}ms",
+                            started.elapsed().as_secs_f64() * 1000.
+                        ));
+                        let _ = send.send(result);
+                        ctx.request_repaint();
+                    });
+                } else {
+                    self.error = Some("地形表示にはGPU描画が必要です".into());
+                }
+            }
+            Ok(OpenedFile::TerrainReady(view, combined_surface)) => {
+                let mut view = *view;
+                let terrain_info = terrain_info::Info::new(ctx, path);
+                self.terrain_info = Some(terrain_info);
+                if let Some(path) = self.terrain_overlay.take() {
+                    self.open_surface(ctx, path);
+                }
+                if let Some(output) = self.terrain_capture.take() {
+                    view.capture(output);
+                    if std::env::var("YAMAMUKI_TERRAIN_CHECK_MAP").as_deref() == Ok("none") {
+                        self.show_online_map = false;
                     }
-                    Err(error) => self.error = Some(format!("{error:#}")),
+                    self.view.center = points::project(35.3606, 138.7274);
+                    self.view.zoom = std::env::var("YAMAMUKI_TERRAIN_CHECK_ZOOM")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(10.5);
+                    self.view.orientation = map::Orientation::default();
+                    let tilt = std::env::var("YAMAMUKI_TERRAIN_CHECK_TILT")
+                        .ok()
+                        .and_then(|v| v.parse::<f32>().ok())
+                        .unwrap_or(0.6);
+                    self.view.orientation.orbit(egui::vec2(0., -tilt / 0.006));
+                }
+                self.terrain = Some(view);
+                if let Some(source) = combined_surface {
+                    self.add_surface(ctx, source);
+                    self.show_online_map = false;
                 }
             }
             Ok(OpenedFile::Surface(source)) => {
@@ -431,7 +481,6 @@ impl Viewer {
                 self.selected = None;
                 self.marker_popup = false;
                 self.map_pin = None;
-                self.fit_pending = true;
                 self.mark_view = None;
             }
             Err(error) => self.error = Some(format!("{error:#}")),
@@ -450,7 +499,6 @@ impl Viewer {
         self.source = None;
         self.location_job = None;
         self.show_point_file_info = false;
-        self.fit_pending = false;
         self.selected = None;
         self.marker_popup = false;
         self.detail = point_detail::Detail::default();
@@ -464,19 +512,15 @@ impl Viewer {
     fn active_terrain(&self) -> Option<&yamamuki_terrain_view::TerrainView> {
         if self.show_terrain && self.terrain.is_some() {
             self.terrain.as_ref()
-        } else if self.observer.is_some() {
-            self.flat_terrain.as_ref()
         } else {
-            None
+            self.flat_terrain.as_ref()
         }
     }
     fn active_terrain_mut(&mut self) -> Option<&mut yamamuki_terrain_view::TerrainView> {
         if self.show_terrain && self.terrain.is_some() {
             self.terrain.as_mut()
-        } else if self.observer.is_some() {
-            self.flat_terrain.as_mut()
         } else {
-            None
+            self.flat_terrain.as_mut()
         }
     }
     fn select_map_pin(&mut self, ctx: &egui::Context, world: Option<[f64; 2]>) {
@@ -486,6 +530,7 @@ impl Viewer {
         self.pin_height_job = world.and_then(|world| {
             self.terrain
                 .as_ref()
+                .filter(|_| self.show_terrain)
                 .map(|terrain| (world, terrain.request_elevation(ctx, world)))
         });
     }
@@ -573,7 +618,6 @@ impl Viewer {
             saved_view: self.view,
             saved_height: terrain.map_or(0., |t| t.camera_height()),
         });
-        self.fit_pending = false;
         self.map_pin = None;
         self.marker_popup = false;
         self.mark_view = None;
@@ -710,6 +754,7 @@ impl Viewer {
                     map::Tiles::new(ctx, self.client.clone(), self.map_source),
                 );
             }
+            self.tiles[0].borders = self.map_borders;
             self.tiles[0].select_material_pass(material_pass);
             self.tiles[0].paint(
                 ui,
@@ -726,6 +771,7 @@ impl Viewer {
         };
         let mut has_base = self.show_online_map;
         for surface in self.surfaces.iter_mut().filter(|surface| surface.enabled) {
+            surface.borders = self.surface_borders;
             surface.select_material_pass(material_pass);
             surface.paint(
                 ui,
@@ -779,77 +825,66 @@ impl Viewer {
             .max_by(f64::total_cmp)
             .unwrap_or(18.);
         let minimum_span = terrain_material::minimum_span(size as f64, density);
-        let areas = self
+        // 俯瞰でも広域の中景一枚からLODを決めず、投影密度に応じた距離帯を使う。
+        let areas: Vec<([f64; 4], Option<f64>)> = self
             .active_terrain()
             .unwrap()
-            .material_regions(rect, minimum_span);
-        let observer_bands = self.observer.is_some().then(|| {
-            self.active_terrain()
-                .unwrap()
-                .observer_material_regions(rect, minimum_span)
-        });
-        let areas: Vec<([f64; 4], Option<f64>)> = observer_bands.map_or_else(
-            || areas.into_iter().map(|a| (a, None)).collect(),
-            |v| v.into_iter().map(|(a, z)| (a, Some(z))).collect(),
-        );
+            .projected_material_regions(rect, minimum_span)
+            .into_iter()
+            .map(|(area, zoom)| (area, Some(zoom)))
+            .collect();
         let mut batches = vec![Vec::new(); areas.len()];
         let mut failed = false;
         // 近景を先に取得し、粗い背景から詳細へ重ねる。
         for i in (1..areas.len()).chain(std::iter::once(0)) {
             let (area, zoom) = areas[i];
-            let view = terrain_material::map_view(area, size as f64);
-            let layer = egui::LayerId::new(
-                egui::Order::Background,
-                egui::Id::new(("terrain-material", i)),
-            );
-            let painter = egui::Painter::new(ui.ctx().clone(), layer, material_rect);
-            failed |= self.paint_base(
-                ui,
-                &painter,
-                material_rect,
-                view,
-                dragging,
-                frame,
-                i + 1,
-                zoom,
-            );
-            let shapes = ui.ctx().graphics_mut(|graphics| {
-                let list = graphics.entry(layer);
-                let shapes = list.all_entries().cloned().collect::<Vec<_>>();
-                *list = Default::default();
-                shapes
-            });
-            let ready = (!self.show_online_map
-                || self
-                    .tiles
-                    .first()
-                    .is_some_and(|tiles| tiles.material_ready()))
-                && self
-                    .surfaces
-                    .iter()
-                    .filter(|surface| surface.enabled && surface.has_enabled_layers())
-                    .all(|surface| surface.material_ready());
-            let [a, b] = view.area(material_rect);
-            // 未完了の近・中景で、取得済みの遠景を空白色へ戻さない。
-            if i == 0 || ready {
-                batches[i].push(yamamuki_terrain_view::direct_material::Quad {
-                    bounds: [a[0], a[1], b[0], b[1]],
-                    uv: [lod_fade::FULL_UV; 2],
-                    textures: [None, None],
-                    amount: 1.,
-                    tint: appearance::CANVAS.to_array().map(|v| f32::from(v) / 255.),
-                    shade: false,
-                    gamma_shade: false,
+            let parts = self.active_terrain().unwrap().material_parts(area);
+            for (part, area) in parts.into_iter().enumerate() {
+                let view = terrain_material::map_view(area, size as f64);
+                let layer = egui::LayerId::new(
+                    egui::Order::Background,
+                    egui::Id::new(("terrain-material", i, part)),
+                );
+                let painter = egui::Painter::new(ui.ctx().clone(), layer, material_rect);
+                failed |= self.paint_base(
+                    ui,
+                    &painter,
+                    material_rect,
+                    view,
+                    dragging,
+                    frame,
+                    (i + 1) * 3 + part,
+                    zoom,
+                );
+                let shapes = ui.ctx().graphics_mut(|graphics| {
+                    let list = graphics.entry(layer);
+                    let shapes = list.all_entries().cloned().collect::<Vec<_>>();
+                    *list = Default::default();
+                    shapes
                 });
+                let [a, b] = view.area(material_rect);
+                // 背景は最遠景だけに置く。近・中景の矩形で元タイルを隠さない。
+                if i == 0 {
+                    batches[i].push(yamamuki_terrain_view::direct_material::Quad {
+                        bounds: [a[0], a[1], b[0], b[1]],
+                        uv: [lod_fade::FULL_UV; 2],
+                        textures: [None, None],
+                        amount: 1.,
+                        tint: appearance::CANVAS.to_array().map(|v| f32::from(v) / 255.),
+                        shade: false,
+                        gamma_shade: false,
+                        border: false,
+                    });
+                }
+                batches[i].extend(terrain_material::collect(
+                    ui.ctx(),
+                    state,
+                    self.lod_renderer.as_ref().unwrap(),
+                    shapes,
+                    &view,
+                    material_rect,
+                ));
             }
-            batches[i].extend(terrain_material::collect(
-                ui.ctx(),
-                state,
-                self.lod_renderer.as_ref().unwrap(),
-                shapes,
-                &view,
-                material_rect,
-            ));
         }
         // 全範囲で使うタイルを同じフレームとして保護し、最後に一度だけ整理する。
         if self.show_online_map {
@@ -1176,6 +1211,8 @@ impl eframe::App for Viewer {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, MAP_SOURCE_KEY, &self.map_source);
         eframe::set_value(storage, LOD_KEY, &self.lod);
+        eframe::set_value(storage, "map_borders", &self.map_borders);
+        eframe::set_value(storage, "surface_borders", &self.surface_borders);
         eframe::set_value(storage, SURFACE_LOD_KEY, &self.surface_lod);
         eframe::set_value(storage, SURFACE_PALETTE_KEY, &self.surface_palette);
         eframe::set_value(storage, POINT_NAMES_KEY, &self.show_point_names);
@@ -1190,9 +1227,66 @@ impl eframe::App for Viewer {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        FIRST_FRAME_MS.get_or_init(|| {
+            let elapsed = STARTUP_STARTED
+                .get_or_init(std::time::Instant::now)
+                .elapsed()
+                .as_secs_f64()
+                * 1000.;
+            diagnostics::record(&format!("最初のUIフレーム: {elapsed:.2}ms"));
+            elapsed
+        });
+        // 手元の起動・読み込み時間検査。GPU準備後のファイル追加も分けて測る。
+        if let Some(output) = std::env::var_os("YAMAMUKI_STARTUP_CHECK_OUTPUT") {
+            static FILE_STARTED: std::sync::OnceLock<std::time::Instant> =
+                std::sync::OnceLock::new();
+            let file = std::env::var_os("YAMAMUKI_STARTUP_CHECK_TERRAIN");
+            if self.flat_terrain.is_some()
+                && self.flat_loading.is_none()
+                && self.loading.is_none()
+                && self.terrain.is_none()
+                && FILE_STARTED.get().is_none()
+            {
+                if let Some(file) = &file {
+                    let _ = FILE_STARTED.set(std::time::Instant::now());
+                    self.show_terrain = true;
+                    self.open(ctx, PathBuf::from(file));
+                }
+            }
+            let mesh_ready = self.terrain.as_ref().is_some_and(|t| t.has_drawn_terrain());
+            if (self.flat_terrain.is_some() || self.terrain.is_some())
+                && self.flat_loading.is_none()
+                && self.loading.is_none()
+                && (file.is_none() || mesh_ready)
+            {
+                let result = serde_json::json!({"first_frame_ms": FIRST_FRAME_MS.get(),
+                    "gpu_ready_ms": STARTUP_STARTED.get().map(|s| s.elapsed().as_secs_f64()*1000.),
+                    "first_terrain_ms": FILE_STARTED.get().map(|s| s.elapsed().as_secs_f64()*1000.)});
+                let _ = std::fs::write(output, serde_json::to_vec_pretty(&result).unwrap());
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+        self.snapshot_shortcut(ctx);
         self.track_window_geometry(ctx);
         self.poll_file(ctx, frame.wgpu_render_state());
         self.poll_surface(ctx);
+        if let Some(receiver) = &self.flat_loading {
+            match receiver.try_recv() {
+                Ok(Ok(flat)) => {
+                    self.flat_terrain = Some(flat);
+                    self.flat_loading = None;
+                }
+                Ok(Err(error)) => {
+                    self.error = Some(format!("平面の準備に失敗: {error:#}"));
+                    self.flat_loading = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.flat_loading = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
         if let Some(receiver) = &self.location_job {
             match receiver.try_recv() {
                 Ok(Ok(locations)) => {
@@ -1297,11 +1391,13 @@ impl eframe::App for Viewer {
                         ui.label("データを読み込み中");
                     }
                     ui.menu_button("オンライン地図の表示設定", |ui| {
+                        ui.checkbox(&mut self.map_borders, "タイル境界を表示");
                         ui.strong("自動LOD");
                         let maximum = self.lod_slider_max();
                         lod_settings(ui, &mut self.lod, maximum);
                     });
                     ui.menu_button("地表の表示設定", |ui| {
+                        ui.checkbox(&mut self.surface_borders, "タイル境界を表示");
                         ui.strong("自動LOD");
                         let maximum = self.surface_lod_slider_max();
                         lod_settings(ui, &mut self.surface_lod, maximum);
@@ -1325,6 +1421,32 @@ impl eframe::App for Viewer {
                         ui.checkbox(&mut self.show_point_names, "地点名を常時表示")
                             .on_hover_text("丸印の横に名前を表示します。重なる名前は省きます。");
                     });
+                    ui.menu_button("スナップショット", |ui| {
+                        if ui.button("即時保存（F8）").clicked() {self.quick_snapshot(ctx);ui.close_menu();}
+                        if ui.button("現在の表示を保存…").clicked() {
+                            if let Some(path)=rfd::FileDialog::new().add_filter("表示スナップショット",&["gz"]).set_file_name("viewer.snapshot.json.gz").save_file() {
+                                match self.save_snapshot(&path) {Ok(())=>self.snapshot_status=format!("保存しました: {}",path.display()),Err(e)=>self.error=Some(format!("{e:#}"))}
+                            }
+                            ui.close_menu();
+                        }
+                        if ui.button("読み込んで固定表示…").clicked() {
+                            if let Some(path)=rfd::FileDialog::new().add_filter("表示スナップショット",&["json","gz"]).pick_file() {
+                                let sender=self.snapshot_load(ctx,path);
+                                self.loading=Some(sender);
+                            }
+                            ui.close_menu();
+                        }
+                        if self.snapshot_frozen && ui.button("同じタイルを修正版で再分割").clicked() {
+                            if let Some(terrain)=&mut self.terrain {terrain.replan_frozen();}
+                            ctx.request_repaint();ui.close_menu();
+                        }
+                        if self.snapshot_frozen && ui.button("固定を解除").clicked() {
+                            self.resume_snapshot();
+                            ui.close_menu();
+                        }
+                        if !self.snapshot_status.is_empty() {ui.label(&self.snapshot_status);}
+                    });
+                    if self.snapshot_frozen {ui.colored_label(appearance::ACCENT,"表示固定中");}
                     if self.observer.is_some() {
                         if ui.button("俯瞰視点に戻る").clicked() {
                             self.leave_observer();
@@ -1583,7 +1705,6 @@ impl eframe::App for Viewer {
                     }
                     if let Some(index) = selected {
                         self.selected = Some(index);
-                        self.fit_pending = false;
                         let point = points.point(index);
                         self.view.center = points::project(point.latitude, point.longitude);
                     }
@@ -1639,7 +1760,6 @@ impl eframe::App for Viewer {
                     }
                     self.list.reveal(target);
                     self.selected = Some(target);
-                    self.fit_pending = false;
                     let point = points.point(target);
                     self.view.center = points::project(point.latitude, point.longitude);
                     ctx.request_repaint();
@@ -1647,22 +1767,48 @@ impl eframe::App for Viewer {
                 None => {}
             }
         }
-        self.refresh_observer_point();
-        self.update_observer_height(ctx);
+        if !self.snapshot_frozen {
+            self.refresh_observer_point();
+        }
+        if !self.snapshot_frozen {
+            self.update_observer_height(ctx);
+        }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(appearance::CANVAS).inner_margin(8))
             .show(ctx, |ui| {
                 let (response, painter) =
                     ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
-                let rect = response.rect;
-                if self.fit_pending
-                    && let Some(points) = &self.points
-                {
-                    self.view.fit(rect, points.bounds);
-                    self.fit_pending = false;
+                let mut rect = response.rect;
+                if self.snapshot_frozen {
+                    if let Some(size) = self.snapshot_canvas {
+                        rect.set_width(size[0]);
+                        rect.set_height(size[1]);
+                    }
+                } else {
+                    self.last_canvas_size = [rect.width(), rect.height()];
                 }
                 for surface in &mut self.surfaces {
                     surface.fit_view(&mut self.view, rect);
+                }
+                if (!self.show_terrain || self.terrain.is_none())
+                    && self.flat_terrain.is_none()
+                    && self.flat_loading.is_none()
+                {
+                    if let Some(state) = frame.wgpu_render_state().cloned() {
+                        let (send, receive) = mpsc::channel();
+                        self.flat_loading = Some(receive);
+                        let ctx = ctx.clone();
+                        std::thread::spawn(move || {
+                            let started = std::time::Instant::now();
+                            let result = yamamuki_terrain_view::TerrainView::flat(&ctx, &state);
+                            diagnostics::record(&format!(
+                                "平面のGPU表示準備: {:.2}ms",
+                                started.elapsed().as_secs_f64() * 1000.
+                            ));
+                            let _ = send.send(result);
+                            ctx.request_repaint();
+                        });
+                    }
                 }
                 let compass_rect = Rect::from_center_size(
                     rect.right_top() + egui::vec2(-32., 32.),
@@ -1689,7 +1835,7 @@ impl eframe::App for Viewer {
                 }
                 let dragging = response.dragged();
                 let rotating = response.dragged_by(egui::PointerButton::Secondary);
-                if dragging {
+                if !self.snapshot_frozen && dragging {
                     let d = ctx.input(|input| {
                         if response.drag_started() {
                             input
@@ -1704,54 +1850,72 @@ impl eframe::App for Viewer {
                         }
                     });
                     if let Some(observer) = self.observer.as_mut() {
-                        observer.yaw -= f64::from(d.x) * 0.006;
+                        let sensitivity = observer_drag_sensitivity(observer.fov);
+                        observer.yaw -= f64::from(d.x) * sensitivity;
                         if rotating {
                             // 上へドラッグすると視点を上げる。見上げ・見下ろしは左ドラッグで行う。
                             observer.eye_offset -= f64::from(d.y);
                         } else {
                             observer.pitch =
-                                (observer.pitch + f64::from(d.y) * 0.006).clamp(-1.5, 1.5);
+                                (observer.pitch + f64::from(d.y) * sensitivity).clamp(-1.5, 1.5);
                         }
                     } else if rotating {
                         self.view.orientation.orbit(d);
                     } else if response.dragged_by(egui::PointerButton::Primary) {
-                        self.view.pan(d);
+                        if let Some(terrain) = self.active_terrain() {
+                            let projection = terrain.projection();
+                            let pointer = response.interact_pointer_pos().unwrap_or(rect.center());
+                            if let (Some(before), Some(after)) = (
+                                projection.world_at(rect, pointer - d),
+                                projection.world_at(rect, pointer),
+                            ) {
+                                for axis in 0..2 {
+                                    self.view.center[axis] =
+                                        (self.view.center[axis] + before[axis] - after[axis])
+                                            .clamp(0., 1.);
+                                }
+                            }
+                        } else {
+                            self.view.pan(d);
+                        }
                     }
                 }
                 let pointer = response.hover_pos();
                 if let Some(pointer) = pointer {
                     let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
-                    if scroll != 0. {
+                    if !self.snapshot_frozen && scroll != 0. {
                         if let Some(observer) = self.observer.as_mut() {
                             observer.fov = (observer.fov * (-f64::from(scroll) * 0.002).exp())
                                 .clamp(15f64.to_radians(), 100f64.to_radians());
-                        } else if self.show_terrain && self.terrain.is_some() {
-                            let terrain = self.terrain.as_mut().unwrap();
+                        } else if self.active_terrain().is_some() {
+                            let center = self.view.center;
+                            let zoom = self.view.zoom;
                             let (yaw, tilt) = self.view.orientation.angles();
-                            terrain.set_map_camera(
-                                self.view.center,
-                                self.view.zoom,
-                                yaw,
-                                tilt,
-                                rect,
-                            );
-                            let anchor = terrain.projection().world_at(rect, pointer);
+                            self.active_terrain_mut()
+                                .unwrap()
+                                .set_map_camera(center, zoom, yaw, tilt, rect);
+                            let anchor = self
+                                .active_terrain()
+                                .unwrap()
+                                .projection()
+                                .world_at(rect, pointer);
                             // 2Dの逆投影を混ぜず、3Dの同じ注視平面上で拡縮する。
                             self.view.zoom_at_terrain(
                                 rect,
                                 rect.center(),
                                 f64::from(scroll) / 180.,
                             );
-                            terrain.set_map_camera(
-                                self.view.center,
-                                self.view.zoom,
-                                yaw,
-                                tilt,
-                                rect,
-                            );
-                            if let (Some(anchor), Some(after)) =
-                                (anchor, terrain.projection().world_at(rect, pointer))
-                            {
+                            let zoom = self.view.zoom;
+                            self.active_terrain_mut()
+                                .unwrap()
+                                .set_map_camera(center, zoom, yaw, tilt, rect);
+                            if let (Some(anchor), Some(after)) = (
+                                anchor,
+                                self.active_terrain()
+                                    .unwrap()
+                                    .projection()
+                                    .world_at(rect, pointer),
+                            ) {
                                 for axis in 0..2 {
                                     self.view.center[axis] =
                                         (self.view.center[axis] + anchor[axis] - after[axis])
@@ -1764,50 +1928,37 @@ impl eframe::App for Viewer {
                     }
                 }
                 painter.rect_filled(rect, 0., appearance::CANVAS);
-                if self.observer.is_some()
-                    && (!self.show_terrain || self.terrain.is_none())
-                    && self.flat_terrain.is_none()
-                {
-                    if let Some(state) = frame.wgpu_render_state() {
-                        match yamamuki_terrain_view::TerrainView::flat(ctx, state) {
-                            Ok(flat) => self.flat_terrain = Some(flat),
-                            Err(error) => {
-                                self.error = Some(format!("景色の平面を準備できません: {error:#}"));
-                                self.leave_observer();
-                            }
-                        }
-                    }
-                }
                 let failed = if self.active_terrain().is_some() {
-                    if let Some(observer) = self
-                        .observer
-                        .as_ref()
-                        .filter(|observer| observer.terrain_elevation.is_some())
-                        .cloned()
-                    {
-                        self.view.center = observer.world;
-                        self.view.zoom = self.active_terrain_mut().unwrap().set_observer_camera(
-                            observer.world,
-                            observer_height(
-                                observer.elevation,
-                                observer.terrain_elevation,
-                                observer.from_pin,
-                                observer.eye_offset,
-                            ),
-                            observer.yaw,
-                            observer.pitch,
-                            observer.fov,
-                            rect,
-                        );
-                    } else {
-                        let (yaw, tilt) = self.view.orientation.angles();
-                        self.terrain.as_mut().unwrap().set_map_camera(
-                            self.view.center,
-                            self.view.zoom,
-                            yaw,
-                            tilt,
-                            rect,
-                        );
+                    if !self.snapshot_frozen {
+                        if let Some(observer) = self
+                            .observer
+                            .as_ref()
+                            .filter(|observer| observer.terrain_elevation.is_some())
+                            .cloned()
+                        {
+                            self.view.center = observer.world;
+                            self.view.zoom =
+                                self.active_terrain_mut().unwrap().set_observer_camera(
+                                    observer.world,
+                                    observer_height(
+                                        observer.elevation,
+                                        observer.terrain_elevation,
+                                        observer.from_pin,
+                                        observer.eye_offset,
+                                    ),
+                                    observer.yaw,
+                                    observer.pitch,
+                                    observer.fov,
+                                    rect,
+                                );
+                        } else {
+                            let (yaw, tilt) = self.view.orientation.angles();
+                            let center = self.view.center;
+                            let zoom = self.view.zoom;
+                            self.active_terrain_mut()
+                                .unwrap()
+                                .set_map_camera(center, zoom, yaw, tilt, rect);
+                        }
                     }
                     let failed = self.terrain_base(ui, frame, rect, dragging);
                     self.active_terrain_mut().unwrap().show(ui, frame, rect);
@@ -1816,9 +1967,9 @@ impl eframe::App for Viewer {
                 } else {
                     self.paint_base(ui, &painter, rect, self.view, dragging, frame, 0, None)
                 };
-                let click_position = response
-                    .interact_pointer_pos()
-                    .filter(|pos| response.clicked() && !compass_rect.contains(*pos));
+                let click_position = response.interact_pointer_pos().filter(|pos| {
+                    !self.snapshot_frozen && response.clicked() && !compass_rect.contains(*pos)
+                });
                 let marker_pointer = click_position
                     .or_else(|| pointer.filter(|pos| !dragging && !compass_rect.contains(*pos)));
                 let marker_picked =
@@ -2149,6 +2300,14 @@ fn run() -> Result<()> {
                 .storage
                 .and_then(|storage| eframe::get_value(storage, LOD_KEY))
                 .unwrap_or_default();
+            viewer.map_borders = cc
+                .storage
+                .and_then(|s| eframe::get_value(s, "map_borders"))
+                .unwrap_or(false);
+            viewer.surface_borders = cc
+                .storage
+                .and_then(|s| eframe::get_value(s, "surface_borders"))
+                .unwrap_or(false);
             viewer.surface_lod = cc
                 .storage
                 .and_then(|storage| eframe::get_value(storage, SURFACE_LOD_KEY))
@@ -2176,7 +2335,10 @@ fn run() -> Result<()> {
     .map_err(|error| anyhow::anyhow!("{error}"))
 }
 
+static STARTUP_STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+static FIRST_FRAME_MS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
 fn main() -> Result<()> {
+    let _ = STARTUP_STARTED.set(std::time::Instant::now());
     diagnostics::install();
     let result = run();
     if let Err(error) = &result {
@@ -2200,9 +2362,32 @@ fn main() -> Result<()> {
     result
 }
 
+// 同じドラッグ量で画面上の移動量が大きく変わらないよう、投影倍率に合わせる。
+fn observer_drag_sensitivity(fov: f64) -> f64 {
+    0.006 * (fov * 0.5).tan() / (45f64.to_radians() * 0.5).tan()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observer_drag_slows_down_with_zoom_without_changing_direction() {
+        let normal = observer_drag_sensitivity(45f64.to_radians());
+        let zoomed = observer_drag_sensitivity(15f64.to_radians());
+        assert!((normal - 0.006).abs() < 1e-12);
+        assert!(zoomed > 0. && zoomed < normal / 3.);
+        for degrees in [15f64, 30., 45., 75., 100.] {
+            let fov = degrees.to_radians();
+            // 投影後の見かけの速度を視野角によらず一定にする。
+            assert!(
+                (observer_drag_sensitivity(fov) / (fov / 2.).tan()
+                    - normal / (45f64.to_radians() / 2.).tan())
+                .abs()
+                    < 1e-12
+            );
+        }
+    }
 
     #[test]
     fn observer_can_start_without_terrain_or_with_terrain_hidden() {

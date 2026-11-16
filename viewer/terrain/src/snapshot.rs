@@ -1,0 +1,961 @@
+//! 描画途中のメッシュ集合も含め、SQLiteから同じ曲面を固定再生する。
+use super::*;
+use serde::{Deserialize, Serialize};
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub version: u32,
+    pub path: PathBuf,
+    pub file_bytes: u64,
+    pub generation: String,
+    camera: selection::Camera,
+    meshes: Vec<Mesh>,
+    counts: [usize; 4],
+    settings: [f32; 3],
+    smooth: bool,
+    wire: u32,
+    borders: bool,
+    colors: bool,
+    join: bool,
+    morph: f32,
+    resolution: u32,
+    layout: Option<shared_render::LayoutSnapshot>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct Mesh {
+    key: Key,
+    n: u32,
+    field: shared_field::Field,
+}
+pub struct Prepared {
+    snapshot: Snapshot,
+    packets: HashMap<Key, Arc<Packet>>,
+}
+impl Snapshot {
+    pub fn prepare(self) -> Result<Prepared> {
+        anyhow::ensure!(self.version == 1, "未対応の地形スナップショットです");
+        anyhow::ensure!(
+            std::fs::metadata(&self.path)?.len() == self.file_bytes,
+            "元の地形SQLiteのサイズが変わっています"
+        );
+        anyhow::ensure!(
+            self.meshes.len() <= 16384
+                && self
+                    .counts
+                    .iter()
+                    .try_fold(0usize, |a, b| a.checked_add(*b))
+                    == Some(self.meshes.len()),
+            "メッシュ構成が不正です"
+        );
+        let mut db = Database::open(&self.path)?;
+        anyhow::ensure!(
+            self.generation.is_empty() || db.generation == self.generation,
+            "地形データの版が変わっています"
+        );
+        let mut packets = HashMap::new();
+        for mesh in &self.meshes {
+            anyhow::ensure!(
+                mesh.n.is_power_of_two() && mesh.n <= 512 && mesh.field.depth <= 24,
+                "メッシュ分割が不正です"
+            );
+            anyhow::ensure!(
+                mesh.field.x < (2u32 << mesh.field.depth)
+                    && mesh.field.y < (2u32 << mesh.field.depth)
+                    && mesh.field.x % 2 == 0
+                    && mesh.field.y % 2 == 0,
+                "評価区画が不正です"
+            );
+            if !packets.contains_key(&mesh.key) {
+                packets.insert(mesh.key, db.packet(mesh.key)?);
+            }
+        }
+        if let Some(layout) = &self.layout {
+            anyhow::ensure!(
+                layout.plans.len() == self.counts[..3].iter().sum::<usize>()
+                    && layout.camera.iter().all(|v| v.is_finite())
+                    && layout.pixels_per_point.is_finite()
+                    && layout.pixels_per_point > 0.
+                    && layout.pixels_per_point <= 8.,
+                "描画計画が不正です"
+            );
+            anyhow::ensure!(
+                self.camera
+                    .viewport
+                    .iter()
+                    .all(|v| v.is_finite() && *v >= 1. && *v <= 32768.),
+                "描画サイズが不正です"
+            );
+            for p in &layout.plans {
+                anyhow::ensure!(p.patches.len() <= 1_048_576, "描画パッチが多すぎます");
+                for patch in &p.patches {
+                    anyhow::ensure!(
+                        patch
+                            .bounds
+                            .iter()
+                            .chain(&patch.edges)
+                            .chain(&patch.origins)
+                            .chain(&patch.lines)
+                            .all(|v| v.is_finite())
+                            && patch.bounds[2] > 0.
+                            && patch.bounds[3] >= 1.
+                            && patch.bounds[3] <= 512.
+                            && (patch.bounds[3] as u32).is_power_of_two(),
+                        "パッチ形状が不正です"
+                    );
+                }
+                for (n, r) in &p.groups {
+                    anyhow::ensure!(
+                        n.is_power_of_two()
+                            && *n <= 512
+                            && r.start <= r.end
+                            && r.end as usize <= p.patches.len(),
+                        "描画範囲が不正です"
+                    );
+                }
+            }
+        }
+        Ok(Prepared {
+            snapshot: self,
+            packets,
+        })
+    }
+}
+impl TerrainView {
+    pub fn snapshot(&self) -> Result<Snapshot> {
+        let a = &self.app;
+        let path = PathBuf::from(&a.path).canonicalize()?;
+        let (tiles, primary, current, layout) = a
+            .renderer
+            .snapshot_display()
+            .ok_or_else(|| anyhow::anyhow!("描画が完了してから保存してください"))?;
+        let lists = [
+            &tiles[..primary],
+            &tiles[primary..current],
+            &tiles[0..0],
+            &tiles[current..],
+        ];
+        Ok(Snapshot {
+            version: 1,
+            file_bytes: std::fs::metadata(&path)?.len(),
+            path,
+            camera: layout.render_camera.clone(),
+            generation: a.generation.clone(),
+            counts: lists.map(|v| v.len()),
+            meshes: lists
+                .into_iter()
+                .flatten()
+                .map(|m| Mesh {
+                    key: m.key,
+                    n: m.n,
+                    field: m.field,
+                })
+                .collect(),
+            settings: a.settings,
+            smooth: a.smooth,
+            wire: a.wire,
+            borders: a.borders,
+            colors: a.colors,
+            join: a.join,
+            morph: layout.morph,
+            resolution: a.resolution,
+            layout: Some(layout),
+        })
+    }
+    pub fn from_snapshot(
+        ctx: &egui::Context,
+        state: &eframe::egui_wgpu::RenderState,
+        prepared: Prepared,
+    ) -> Result<Self> {
+        let s = prepared.snapshot;
+        let bytes = s
+            .meshes
+            .iter()
+            .map(|m| u64::from(m.n + 1).pow(2) * 32)
+            .sum::<u64>();
+        anyhow::ensure!(
+            bytes <= u64::from(state.device.limits().max_storage_buffer_binding_size),
+            "このGPUでは保存時のメッシュを再現できません"
+        );
+        let mut view = Self::new(ctx, state, s.path.clone())?;
+        view.app.generation = s.generation;
+        view.app.packets = prepared.packets;
+        let mut meshes = Vec::new();
+        for m in &s.meshes {
+            while !view.app.renderer.can_upload(m.n) {
+                let _ = state.device.poll(eframe::wgpu::Maintain::Wait);
+            }
+            let tile = if m.field.depth == 0 {
+                if let Some(tile) = view.app.gpu.get(&(m.key, m.n)) {
+                    tile.clone()
+                } else {
+                    let tile =
+                        view.app
+                            .renderer
+                            .upload_field(&view.app.packets[&m.key], m.n, m.field)?;
+                    view.app.gpu.insert((m.key, m.n), tile.clone());
+                    tile
+                }
+            } else if let Some(tile) = view.app.local_gpu.get(&(m.key, m.n, m.field)) {
+                tile.clone()
+            } else {
+                let tile =
+                    view.app
+                        .renderer
+                        .upload_field(&view.app.packets[&m.key], m.n, m.field)?;
+                view.app
+                    .local_gpu
+                    .insert((m.key, m.n, m.field), tile.clone());
+                tile
+            };
+            meshes.push(tile);
+        }
+        let mut at = 0;
+        let mut take = |n: usize| {
+            let v = meshes[at..at + n].to_vec();
+            at += n;
+            v
+        };
+        view.app.shown = take(s.counts[0]);
+        view.app.local_background = take(s.counts[1]);
+        view.app.roots = take(s.counts[2]);
+        view.app.previous = take(s.counts[3]);
+        view.app.camera = s.camera;
+        view.app.settings = s.settings;
+        view.app.smooth = s.smooth;
+        view.app.wire = s.wire;
+        view.app.borders = s.borders;
+        view.app.colors = s.colors;
+        view.app.join = s.join;
+        view.app.resolution = s.resolution;
+        view.app.frozen_morph = Some(s.morph);
+        view.app.renderer.frozen_layout = s.layout;
+        view.app.queued = false;
+        view.app.loading = false;
+        view.app.status = "スナップショットを固定表示中".into();
+        Ok(view)
+    }
+    pub fn replan_frozen(&mut self) {
+        if let Some(layout) = &mut self.app.renderer.frozen_layout {
+            layout.force_replan = true;
+            layout.clipped_background = true;
+        }
+    }
+    pub fn freeze_current(&mut self) {
+        self.app.frozen_morph = Some(1.);
+        self.app.queued = false;
+    }
+    pub fn unfreeze(&mut self) {
+        self.app.frozen_morph = None;
+        self.app.renderer.frozen_layout = None;
+        self.app.previous.clear();
+        self.app.transition = Instant::now() - Duration::from_secs(1);
+        if !self.app.path.is_empty() {
+            self.app.queued = true;
+            self.app.scene_pending = true;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn draw(view: &mut TerrainView) -> Result<Vec<u8>> {
+        draw_inner(view, true)
+    }
+    fn draw_inner(view: &mut TerrainView, readback: bool) -> Result<Vec<u8>> {
+        use eframe::egui_wgpu::{RenderState, ScreenDescriptor};
+        let a = &mut view.app;
+        let state: RenderState = a.renderer.state.clone();
+        let rect = egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(a.camera.viewport[0] as f32, a.camera.viewport[1] as f32),
+        );
+        let ppp = a
+            .renderer
+            .frozen_layout
+            .as_ref()
+            .map_or(1., |s| s.pixels_per_point);
+        let size = a
+            .renderer
+            .frozen_layout
+            .as_ref()
+            .filter(|s| s.render_size.iter().all(|v| *v > 0))
+            .map(|s| s.render_size)
+            .unwrap_or([
+                (rect.width() * ppp).round() as u32,
+                (rect.height() * ppp).round() as u32,
+            ]);
+        let [width, height] = size;
+        let row = (width * 16).div_ceil(256) * 256;
+        let callback = a.renderer.frame(
+            a.shown.clone(),
+            a.local_background.iter().chain(&a.roots).cloned().collect(),
+            &a.camera,
+            a.settings,
+            a.smooth,
+            a.wire,
+            a.borders,
+            a.colors,
+            a.join,
+            a.previous.clone(),
+            a.frozen_morph.unwrap_or(0.37),
+            a.resolution == 0,
+            rect,
+            1.,
+            false,
+            false,
+            true,
+        );
+        let jobs = [egui::ClippedPrimitive {
+            clip_rect: rect,
+            primitive: egui::epaint::Primitive::Callback(callback),
+        }];
+        let mut encoder = state.device.create_command_encoder(&Default::default());
+        let commands = state.renderer.write().update_buffers(
+            &state.device,
+            &state.queue,
+            &mut encoder,
+            &jobs,
+            &ScreenDescriptor {
+                size_in_pixels: [width, height],
+                pixels_per_point: 1.,
+            },
+        );
+        if !readback {
+            state
+                .queue
+                .submit(commands.into_iter().chain([encoder.finish()]));
+            let _ = state.device.poll(eframe::wgpu::Maintain::Wait);
+            return Ok(Vec::new());
+        }
+        let buffer = state.device.create_buffer(&eframe::wgpu::BufferDescriptor {
+            label: None,
+            size: u64::from(row) * u64::from(height),
+            usage: eframe::wgpu::BufferUsages::MAP_READ | eframe::wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            eframe::wgpu::TexelCopyTextureInfo {
+                texture: &a.renderer.positions,
+                mip_level: 0,
+                origin: eframe::wgpu::Origin3d::ZERO,
+                aspect: eframe::wgpu::TextureAspect::All,
+            },
+            eframe::wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: eframe::wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: None,
+                },
+            },
+            eframe::wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        state
+            .queue
+            .submit(commands.into_iter().chain([encoder.finish()]));
+        let (send, receive) = mpsc::channel();
+        buffer
+            .slice(..)
+            .map_async(eframe::wgpu::MapMode::Read, move |v| send.send(v).unwrap());
+        let _ = state.device.poll(eframe::wgpu::Maintain::Wait);
+        receive.recv()??;
+        let bytes = buffer.slice(..).get_mapped_range();
+        Ok(bytes
+            .chunks_exact(row as usize)
+            .flat_map(|r| r[..(width * 16) as usize].iter().copied())
+            .collect())
+    }
+    #[test]
+    #[ignore = "実データの視点変更時の取得・GPU準備・切替待ちを計測する"]
+    fn benchmark_external_mesh_switch_latency() -> Result<()> {
+        let path = std::env::var("YAMAMUKI_SNAPSHOT_TEST_INPUT")?;
+        let snapshot: Snapshot = serde_json::from_reader(std::fs::File::open(path)?)?;
+        let app =
+            crate::remembered_scene_tests::app_with_backend(eframe::wgpu::Backends::DX12).unwrap();
+        let mut replay = TerrainView::from_snapshot(
+            &egui::Context::default(),
+            &app.renderer.state,
+            snapshot.prepare()?,
+        )?;
+        if let Some(layout) = &mut replay.app.renderer.frozen_layout {
+            layout.force_replan = true;
+            layout.clipped_background = true;
+        }
+        let a = &mut replay.app;
+        let mut db = Database::open(std::path::Path::new(&a.path))?;
+        a.catalog = db.catalog.clone();
+        a.wanted = selection::select(&a.catalog, &a.camera);
+        a.remembered_until_selection = None;
+        a.loading = true;
+        a.previous = a.shown.clone();
+        a.transition = std::time::Instant::now();
+        let all_started = std::time::Instant::now();
+        let parallelism = std::thread::available_parallelism()
+            .map_or(2, usize::from)
+            .clamp(1, 8);
+        let (cpu_ms, gpu_ms, frames) = if std::env::var_os("YAMAMUKI_MESH_PIPELINED").is_some() {
+            // 取得とGPU準備を実際に重ねる。現在の表示は全領域が揃うまで維持する。
+            let keys = a.wanted.clone();
+            for key in &keys {
+                a.packets.remove(key);
+            }
+            let (send, receive) = std::sync::mpsc::channel();
+            let job = std::thread::spawn(move || -> Result<f64> {
+                let started = std::time::Instant::now();
+                for batch in keys.chunks(parallelism) {
+                    db.packet_batch(batch, &|p| {
+                        let _ = send.send(p);
+                    })?;
+                }
+                Ok(started.elapsed().as_secs_f64() * 1000.)
+            });
+            let mut frames = 0;
+            loop {
+                for p in receive.try_iter() {
+                    a.packets.insert(p.key, p);
+                }
+                if job.is_finished() {
+                    a.loading = false;
+                }
+                if a.scene()? {
+                    break;
+                }
+                let _ = a.renderer.state.device.poll(eframe::wgpu::Maintain::Wait);
+                frames += 1;
+                anyhow::ensure!(frames < 1000, "準備が完了しません");
+                std::thread::sleep(std::time::Duration::from_millis(16));
+            }
+            let cpu_ms = job.join().unwrap()?;
+            (cpu_ms, all_started.elapsed().as_secs_f64() * 1000., frames)
+        } else {
+            let mut loaded = Vec::new();
+            for batch in a.wanted.chunks(parallelism) {
+                let packets = std::sync::Mutex::new(Vec::new());
+                db.packet_batch(batch, &|p| packets.lock().unwrap().push(p))?;
+                loaded.extend(packets.into_inner().unwrap());
+            }
+            let mut stages = [0.; 4];
+            for p in &loaded {
+                for (sum, ms) in stages.iter_mut().zip(p.timings_ms) {
+                    *sum += ms;
+                }
+            }
+            eprintln!(
+                "CPUステージの合計（並列前）復号/三角形/勾配/補助: {stages:?}ms / {parallelism}並列"
+            );
+            let cpu_ms = all_started.elapsed().as_secs_f64() * 1000.;
+            for packet in loaded {
+                a.packets.insert(packet.key, packet);
+            }
+            a.loading = false;
+            let start = std::time::Instant::now();
+            let mut frames = 0;
+            while !a.scene()? {
+                let _ = a.renderer.state.device.poll(eframe::wgpu::Maintain::Wait);
+                frames += 1;
+                anyhow::ensure!(frames < 1000, "準備が完了しません");
+                std::thread::sleep(std::time::Duration::from_millis(16));
+            }
+            (cpu_ms, start.elapsed().as_secs_f64() * 1000., frames)
+        };
+        let _ = a.renderer.state.device.poll(eframe::wgpu::Maintain::Wait);
+        let planned = a.preparation_plan();
+        let samples = planned
+            .iter()
+            .map(|(_, _, n, _, _)| u64::from(*n + 1).pow(2))
+            .sum::<u64>();
+        eprintln!(
+            "表示切替: {}タイル / {}評価区画 / {samples}点 / CPU復号・補助={cpu_ms:.2}ms / GPU準備・遷移待ち={:.2}ms / 全体={:.2}ms / {frames}フレーム",
+            a.wanted.len(),
+            planned.len(),
+            gpu_ms,
+            all_started.elapsed().as_secs_f64() * 1000.
+        );
+        let draw_started = std::time::Instant::now();
+        draw_inner(&mut replay, false)?;
+        eprintln!(
+            "準備後の初回描画完了={:.2}ms / 全体={:.2}ms / 描画量={:?}",
+            draw_started.elapsed().as_secs_f64() * 1000.,
+            all_started.elapsed().as_secs_f64() * 1000.,
+            replay.app.renderer.metrics()
+        );
+        Ok(())
+    }
+    #[test]
+    #[ignore = "実データの切替後もアトラスに古い高さが混入しないことをGPUで検証する"]
+    fn external_scene_switch_preserves_surface_positions() -> Result<()> {
+        let path = std::env::var("YAMAMUKI_SNAPSHOT_TEST_INPUT")?;
+        let mut snapshot: Snapshot = serde_json::from_reader(std::fs::File::open(path)?)?;
+        snapshot.camera.viewport = [512., 320.];
+        if let Some(layout) = &mut snapshot.layout {
+            layout.force_replan = true;
+            layout.clipped_background = true;
+            layout.render_size = [512, 320];
+            layout.pixels_per_point = 1.;
+        }
+        let app =
+            crate::remembered_scene_tests::app_with_backend(eframe::wgpu::Backends::DX12).unwrap();
+        let mut replay = TerrainView::from_snapshot(
+            &egui::Context::default(),
+            &app.renderer.state,
+            snapshot.prepare()?,
+        )?;
+        replay.app.previous.clear();
+        replay.app.frozen_morph = Some(1.);
+        let tiles = replay.app.shown.clone();
+        let reference = draw(&mut replay)?;
+        replay.app.previous = tiles.clone();
+        replay.app.shown = tiles.iter().step_by(2).cloned().collect();
+        replay.app.frozen_morph = Some(0.5);
+        draw_inner(&mut replay, false)?;
+        replay.app.previous.clear();
+        replay.app.shown = tiles;
+        replay.app.frozen_morph = Some(1.);
+        let restored = draw(&mut replay)?;
+        let a: &[f32] = bytemuck::cast_slice(&reference);
+        let b: &[f32] = bytemuck::cast_slice(&restored);
+        anyhow::ensure!(a.len() == b.len(), "描画サイズが変化しました");
+        for (a, b) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+            anyhow::ensure!((a[3] == 0.) == (b[3] == 0.), "切替で穴が生じました");
+            anyhow::ensure!(
+                a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 0.02),
+                "アトラス再利用で位置が変わりました: {a:?} / {b:?}"
+            );
+        }
+        eprintln!(
+            "メッシュの半数を外して再追加: {}画素の位置・高さが一致",
+            a.len() / 4
+        );
+        Ok(())
+    }
+    #[test]
+    #[ignore = "共有バッファの切替と連続描画を実データで計測する"]
+    fn benchmark_external_scene_switching() -> Result<()> {
+        let path = std::env::var("YAMAMUKI_SNAPSHOT_TEST_INPUT")?;
+        let mut snapshot: Snapshot = serde_json::from_reader(std::fs::File::open(path)?)?;
+        if let Some(s) = &mut snapshot.layout {
+            s.force_replan = true;
+            s.clipped_background = true;
+        }
+        let app =
+            crate::remembered_scene_tests::app_with_backend(eframe::wgpu::Backends::DX12).unwrap();
+        let mut replay = TerrainView::from_snapshot(
+            &egui::Context::default(),
+            &app.renderer.state,
+            snapshot.prepare()?,
+        )?;
+        let distance = replay.app.camera.distance;
+        let shown = replay.app.shown.clone();
+        for (i, factor) in [1., 1., 2., 2., 4., 4., 1., 1.].into_iter().enumerate() {
+            replay.app.camera.distance = distance * factor;
+            if i == 2 {
+                replay.app.previous = shown.clone();
+                replay.app.frozen_morph = Some(0.5);
+            }
+            if i == 3 {
+                replay.app.previous.clear();
+                replay.app.frozen_morph = Some(1.);
+            }
+            if let Some(layout) = &mut replay.app.renderer.frozen_layout {
+                layout.force_replan = true;
+            }
+            // 分割計画の100ms抑制に左右されず、各距離で同じ計画を比較する。
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            let started = std::time::Instant::now();
+            let _ = draw_inner(&mut replay, false)?;
+            eprintln!(
+                "frame={i} distance={factor} 完了={:.2}ms CPU={:?} 描画={:?}",
+                started.elapsed().as_secs_f64() * 1000.,
+                replay.app.renderer.prepare_stats(),
+                replay.app.renderer.metrics()
+            );
+        }
+        for mode in ["nojoin", "quarter_pixels"] {
+            replay.app.join = mode != "nojoin";
+            if mode == "quarter_pixels" {
+                if let Some(layout) = &mut replay.app.renderer.frozen_layout {
+                    layout.render_size = layout.render_size.map(|v| (v / 2).max(1));
+                }
+            }
+            for _ in 0..2 {
+                let started = std::time::Instant::now();
+                let _ = draw_inner(&mut replay, false)?;
+                eprintln!(
+                    "mode={mode} 完了={:.2}ms CPU={:?}",
+                    started.elapsed().as_secs_f64() * 1000.,
+                    replay.app.renderer.prepare_stats()
+                );
+            }
+        }
+        Ok(())
+    }
+    #[test]
+    fn shared_control_buffers_keep_local_field_coordinates() -> Result<()> {
+        let backend = if cfg!(windows) {
+            eframe::wgpu::Backends::DX12
+        } else {
+            eframe::wgpu::Backends::PRIMARY
+        };
+        let Some(mut app) = crate::remembered_scene_tests::app_with_backend(backend) else {
+            return Ok(());
+        };
+        let key = (13, 7220, 3200);
+        let field = crate::shared_field::Field {
+            depth: 1,
+            x: 2,
+            y: 2,
+        };
+        let mut packet = crate::shared_data::Packet::constant_plane(key, 1500.)?;
+        for v in &mut packet.vertices {
+            v[2] = v[0] / packet.side as f32 * 1000.;
+        }
+        let tile = app.renderer.upload_field(&packet, 32, field)?;
+        app.camera.center = tile.origin.map(|v| v + tile.side / 2.);
+        app.camera.height = 750.;
+        app.camera.distance = 10000.;
+        app.camera.pitch = 1.56;
+        app.camera.globe = false;
+        app.camera.viewport = [64., 64.];
+        app.shown = vec![tile];
+        app.resolution = 0;
+        app.frozen_morph = Some(1.);
+        let mut view = TerrainView {
+            label: String::new(),
+            app,
+            automatic_maximum: None,
+        };
+        let pixels = draw(&mut view)?;
+        let p = &bytemuck::cast_slice::<u8, f32>(&pixels)[(32 * 64 + 32) * 4..][..4];
+        let height = p[3].abs() - 10000.;
+        anyhow::ensure!(
+            p[3] != 0. && (650. ..850.).contains(&height),
+            "局所領域の制御点座標がずれています: {p:?}"
+        );
+        Ok(())
+    }
+    #[test]
+    fn sea_level_plane_covers_the_screen_at_every_camera_zoom() -> Result<()> {
+        let backend = if cfg!(windows) {
+            eframe::wgpu::Backends::DX12
+        } else {
+            eframe::wgpu::Backends::PRIMARY
+        };
+        let Some(app) = crate::remembered_scene_tests::app_with_backend(backend) else {
+            return Ok(());
+        };
+        let mut flat = TerrainView::flat(&egui::Context::default(), &app.renderer.state)?;
+        flat.app.camera.globe = false;
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(256., 128.));
+        let center = crate::selection::lonlat(138.7274, 35.3606).map(|v| v / shared_data::WORLD);
+        for zoom in [6., 12., 18., 22.] {
+            for tilt in [0., 1.] {
+                flat.set_map_camera(center, zoom, 0.7, tilt, rect);
+                let bytes = draw(&mut flat)?;
+                let positions = bytemuck::cast_slice::<u8, f32>(&bytes);
+                let holes = positions.chunks_exact(4).filter(|p| p[3] == 0.).count();
+                anyhow::ensure!(holes == 0, "平面に穴: z{zoom}, tilt={tilt}, holes={holes}");
+                anyhow::ensure!(
+                    !flat.app.queued && flat.app.settled && !flat.app.scene_pending,
+                    "平面が地形生成を待機している"
+                );
+            }
+        }
+        let actual = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1233.1875, 1306.));
+        flat.set_map_camera(
+            [0.8915569358014047, 0.3926204566666444],
+            6.370769965648648,
+            0.6374623_f64.atan2(0.7704815),
+            0.76122254_f64.acos(),
+            actual,
+        );
+        let regions = flat.material_regions(actual, 0.0001);
+        anyhow::ensure!(
+            regions[0] == regions[2],
+            "平面の画像範囲が視野外へ広がっている"
+        );
+        let bytes = draw(&mut flat)?;
+        let holes = bytemuck::cast_slice::<u8, f32>(&bytes)
+            .chunks_exact(4)
+            .filter(|p| p[3] == 0.)
+            .count();
+        anyhow::ensure!(holes == 0, "提供スナップショットの平面に穴: {holes}");
+        let positions = bytemuck::cast_slice::<u8, f32>(&bytes);
+        for (x, y) in [(100, 100), (600, 600), (1000, 1000)] {
+            let q = &positions[((y * 1233 + x) * 4)..((y * 1233 + x) * 4 + 4)];
+            let world = [
+                q[0] as f64 / shared_data::WORLD + flat.app.camera.center[0] / shared_data::WORLD,
+                q[1] as f64 / shared_data::WORLD + flat.app.camera.center[1] / shared_data::WORLD,
+            ];
+            let screen = flat.projection().screen(actual, world, 0.).unwrap();
+            anyhow::ensure!(
+                screen.distance(egui::pos2(x as f32 + 0.5, y as f32 + 0.5)) < 2.,
+                "GPU地理座標が投影と不一致: {x},{y} → {screen:?}, q={q:?}"
+            );
+        }
+
+        flat.set_observer_camera(center, 2., 1., 0., 45_f64.to_radians(), rect);
+        flat.freeze_current();
+        flat.unfreeze();
+        anyhow::ensure!(
+            !flat.app.queued && !flat.app.scene_pending && flat.app.shown.len() == 1,
+            "平面の景色・固定解除が地形読み込みを開始している"
+        );
+        Ok(())
+    }
+    #[test]
+    fn globe_gpu_matches_cpu_picking_space_and_close_up() -> Result<()> {
+        let backend = if cfg!(windows) {
+            eframe::wgpu::Backends::DX12
+        } else {
+            eframe::wgpu::Backends::PRIMARY
+        };
+        let Some(app) = crate::remembered_scene_tests::app_with_backend(backend) else {
+            return Ok(());
+        };
+        let mut globe = TerrainView::flat(&egui::Context::default(), &app.renderer.state)?;
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(384., 256.));
+        let center = crate::selection::lonlat(138.7274, 35.3606).map(|v| v / shared_data::WORLD);
+        for zoom in [1., 5., 12., 22.] {
+            for tilt in [0., 0.5, 1.2] {
+                globe.set_map_camera(center, zoom, 0.7, tilt, rect);
+                let bytes = draw(&mut globe)?;
+                let p = bytemuck::cast_slice::<u8, f32>(&bytes);
+                for y in (4..256).step_by(16) {
+                    for x in (4..384).step_by(16) {
+                        let pixel = egui::pos2(x as f32 + 0.5, y as f32 + 0.5);
+                        let hit = globe.projection().world_at(rect, pixel);
+                        let q = &p[(y * 384 + x) * 4..(y * 384 + x) * 4 + 4];
+                        anyhow::ensure!(
+                            hit.is_some() == (q[3] != 0.),
+                            "球面と宇宙の判定不一致 z{zoom} tilt{tilt} pixel={pixel:?}"
+                        );
+                        if hit.is_some() {
+                            let w = [
+                                q[0] as f64 / shared_data::WORLD + center[0],
+                                q[1] as f64 / shared_data::WORLD + center[1],
+                            ];
+                            let screen = globe.projection().screen(rect, w, 0.).unwrap();
+                            anyhow::ensure!(
+                                screen.distance(pixel) < 2.,
+                                "球面座標ずれ z{zoom} tilt{tilt}: {pixel:?} → {screen:?}, q={q:?}, expected={hit:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        for tilt in [0., 0.1, 0.3, 0.5] {
+            globe.set_map_camera(center, 15.888889, 0., tilt, rect);
+            let regions = globe.projected_material_regions(rect, 0.0001);
+            anyhow::ensure!(
+                (regions.last().unwrap().0[2] - regions.last().unwrap().0[0]) * shared_data::WORLD
+                    < 20000.,
+                "近景の画像取得範囲が地球の裏側へ広がっている"
+            );
+            anyhow::ensure!(
+                (regions.last().unwrap().1 - 15.888889).abs() < 1e-6 && regions[0].1 <= 15.888889,
+                "緩い傾きで中央以外のLODが低下している"
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    #[ignore = "実際の表示スナップショットをGPU描画して位置バッファを保存する"]
+    fn reproduce_external_snapshot() -> Result<()> {
+        let path = std::env::var("YAMAMUKI_SNAPSHOT_TEST_INPUT")?;
+        let out = PathBuf::from(std::env::var("YAMAMUKI_SNAPSHOT_TEST_OUTPUT")?);
+        let mut snapshot: Snapshot = serde_json::from_reader(std::fs::File::open(path)?)?;
+        if std::env::var_os("YAMAMUKI_SNAPSHOT_REPLAN").is_some() {
+            if let Some(s) = &mut snapshot.layout {
+                s.force_replan = true;
+                s.clipped_background = true;
+            }
+        }
+        let backend = if std::env::var("YAMAMUKI_SNAPSHOT_BACKEND").as_deref() == Ok("dx12") {
+            eframe::wgpu::Backends::DX12
+        } else {
+            eframe::wgpu::Backends::all()
+        };
+        let Some(app) = crate::remembered_scene_tests::app_with_backend(backend) else {
+            anyhow::bail!("GPUが必要です");
+        };
+        let prepared = snapshot.prepare()?;
+        let mut replay =
+            TerrainView::from_snapshot(&egui::Context::default(), &app.renderer.state, prepared)?;
+        if std::env::var_os("YAMAMUKI_SNAPSHOT_RELOAD").is_some() {
+            let mut db = Database::open(std::path::Path::new(&replay.app.path))?;
+            replay.app.wanted = selection::select(&db.catalog, &replay.app.camera);
+            replay.app.catalog = db.catalog.clone();
+            for key in replay.app.wanted.clone() {
+                replay.app.packets.insert(key, db.packet(key)?);
+            }
+            replay.app.remembered_until_selection = None;
+            let started = std::time::Instant::now();
+            let plan = replay.app.preparation_plan();
+            let cold = started.elapsed();
+            let cached = std::time::Instant::now();
+            for _ in 0..100 {
+                std::hint::black_box(replay.app.preparation_plan());
+            }
+            eprintln!(
+                "準備計画: {}区画 初回={:.3}ms 再利用平均={:.3}ms",
+                plan.len(),
+                cold.as_secs_f64() * 1000.,
+                cached.elapsed().as_secs_f64() * 10.
+            );
+            let mut done = false;
+            for i in 0..1000 {
+                done = replay.app.scene()?;
+                let _ = replay
+                    .app
+                    .renderer
+                    .state
+                    .device
+                    .poll(eframe::wgpu::Maintain::Wait);
+                if i % 25 == 0 || done {
+                    eprintln!(
+                        "再準備 フレーム={i} 完了={done} 全体メッシュ={} 局所メッシュ={} 元タイル={}",
+                        replay.app.gpu.len(),
+                        replay.app.local_gpu.len(),
+                        replay.app.packets.len()
+                    );
+                }
+                if done {
+                    break;
+                }
+            }
+            anyhow::ensure!(done, "GPU曲面の準備が完了しません");
+            replay
+                .app
+                .renderer
+                .frozen_layout
+                .as_mut()
+                .unwrap()
+                .force_replan = true;
+            replay.app.previous.clear();
+            replay.app.frozen_morph = Some(1.);
+        }
+        let layout = replay.app.renderer.frozen_layout.as_ref().unwrap();
+        let [width, height] = if layout.render_size.iter().all(|v| *v > 0) {
+            layout.render_size
+        } else {
+            [
+                (replay.app.camera.viewport[0] as f32 * layout.pixels_per_point).round() as u32,
+                (replay.app.camera.viewport[1] as f32 * layout.pixels_per_point).round() as u32,
+            ]
+        };
+        let bytes = draw(&mut replay)?;
+        eprintln!("再現描画量: {:?}", replay.app.renderer.metrics());
+        if std::env::var_os("YAMAMUKI_SNAPSHOT_REQUIRE_CLOSED").is_some() {
+            let pixels = bytemuck::cast_slice::<u8, f32>(&bytes);
+            let holes = pixels
+                .chunks_exact(4)
+                .skip(width as usize * 8)
+                .filter(|p| p[3] == 0.)
+                .count();
+            anyhow::ensure!(
+                holes == 0,
+                "再現画像の地形内に{holes}画素の穴が残っています"
+            );
+        }
+
+        std::fs::write(out.with_extension("positions.bin"), &bytes)?;
+        let mut image = Vec::new();
+        for p in bytemuck::cast_slice::<u8, f32>(&bytes).chunks_exact(4) {
+            if p[3] == 0. {
+                image.extend([235, 244, 252, 255]);
+            } else {
+                let h = ((p[3].abs() - 10000.) / 4000.).clamp(0., 1.);
+                let shade = p[2].clamp(0., 1.);
+                image.extend(
+                    [
+                        (70. + 150. * h) * shade,
+                        (130. + 50. * h) * shade,
+                        (60. + 80. * h) * shade,
+                        255.,
+                    ]
+                    .map(|v| v as u8),
+                );
+            }
+        }
+        let mut encoder = png::Encoder::new(
+            std::io::BufWriter::new(std::fs::File::create(&out)?),
+            width,
+            height,
+        );
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header()?.write_image_data(&image)?;
+        eprintln!("スナップショット再現: {width}x{height}, {}", out.display());
+        Ok(())
+    }
+    #[test]
+    fn snapshot_replays_the_same_gpu_positions_and_keeps_transition_fixed() -> Result<()> {
+        let Some(mut app) = crate::remembered_scene_tests::app() else {
+            return Ok(());
+        };
+        let path = std::env::temp_dir().join(format!(
+            "terrain-snapshot-{}-{}.sqlite3",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let mut conn = yamamuki_data_sqlite::rusqlite::Connection::open(&path)?;
+        yamamuki_data_sqlite::initialize(&conn)?;
+        yamamuki_terrain::fixture::create(&mut conn)?;
+        drop(conn);
+        let mut db = Database::open(&path)?;
+        let key = *db.catalog.keys().max_by_key(|k| k.0).unwrap();
+        let packet = db.packet(key)?;
+        let fresh = app.renderer.upload(&packet, 16)?;
+        let old = app.renderer.upload(&packet, 8)?;
+        app.camera.center = [
+            packet.origin[0] + packet.side / 2.,
+            packet.origin[1] + packet.side / 2.,
+        ];
+        app.camera.distance = 10000.;
+        app.camera.height = 500.;
+        app.camera.viewport = [64., 64.];
+        app.shown = vec![fresh];
+        app.previous = vec![old];
+        app.path = path.to_string_lossy().into();
+        app.generation = db.generation.clone();
+        let mut source = TerrainView {
+            label: "試験".into(),
+            app,
+            automatic_maximum: None,
+        };
+        let before = draw(&mut source)?;
+        assert!(
+            bytemuck::cast_slice::<u8, f32>(&before)
+                .chunks_exact(4)
+                .any(|p| p[3] != 0.),
+            "地形を描画できていない"
+        );
+        let captured = source.snapshot()?;
+        assert_eq!(captured.morph, 0.37);
+        assert_eq!(captured.counts, [1, 0, 0, 1]);
+        let bytes = serde_json::to_vec(&captured)?;
+        let decoded: Snapshot = serde_json::from_slice(&bytes)?;
+        let prepared = decoded.prepare()?;
+        let state = source.app.renderer.state.clone();
+        let mut replay = TerrainView::from_snapshot(&egui::Context::default(), &state, prepared)?;
+        let after = draw(&mut replay)?;
+        assert_eq!(before, after, "保存前後のGPU位置・陰影・高さが違う");
+        assert_eq!(replay.app.frozen_morph, Some(0.37));
+        replay.app.transition = Instant::now() - Duration::from_secs(30);
+        assert_eq!(after, draw(&mut replay)?, "時間経過で固定表示が変わった");
+        replay.unfreeze();
+        assert!(replay.app.frozen_morph.is_none());
+        drop(db);
+        drop(source);
+        drop(replay);
+        let _ = std::fs::remove_file(path);
+        Ok(())
+    }
+}

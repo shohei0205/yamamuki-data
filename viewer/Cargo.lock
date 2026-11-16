@@ -4679,6 +4679,7 @@ dependencies = [
  "naga",
  "png 0.18.1",
  "pollster",
+ "serde",
  "serde_json",
  "wgpu",
  "yamamuki-data-sqlite",

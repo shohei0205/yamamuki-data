@@ -142,6 +142,7 @@ pub struct Database {
 }
 impl Database {
     pub fn open(path: &Path) -> Result<Self> {
+        let started = std::time::Instant::now();
         let mut db = yamamuki_terrain::sqlite::Database::open_metadata(path)?;
         crate::catalog_cache::load(&mut db, path)?;
         let catalog = db
@@ -151,6 +152,11 @@ impl Database {
             .collect();
         let generation = db.generation.clone();
         let credits = db.credits.clone();
+        eprintln!(
+            "地形SQLite索引: {}タイル / {:.2}ms",
+            db.catalog.len(),
+            started.elapsed().as_secs_f64() * 1000.
+        );
         Ok(Self {
             db,
             catalog,
@@ -360,6 +366,21 @@ fn prepare_packet(
 #[cfg(test)]
 mod benchmarks {
     use super::*;
+    #[test]
+    #[ignore = "全国SQLiteの索引とGPU初期化の時間を実測する"]
+    fn benchmark_open_national_database() -> Result<()> {
+        let path = std::env::var("YAMAMUKI_TERRAIN_BENCH_DB")?;
+        for i in 0..2 {
+            let started = std::time::Instant::now();
+            let db = Database::open(Path::new(&path))?;
+            eprintln!(
+                "SQLite open {i}: {}タイル / {:.2}ms",
+                db.catalog.len(),
+                started.elapsed().as_secs_f64() * 1000.
+            );
+        }
+        Ok(())
+    }
     #[test]
     #[ignore = "実データの並列準備を手元で計測する"]
     fn benchmark_parallel_packet_preparation() -> Result<()> {

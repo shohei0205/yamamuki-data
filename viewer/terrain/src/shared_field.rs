@@ -3,7 +3,9 @@ use crate::{
     selection::Camera,
     shared_data::{Key, bounds},
 };
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Field {
     pub depth: u32,
     pub x: u32,
@@ -17,7 +19,7 @@ impl Field {
     }
     pub fn pixels(self, key: Key, camera: &Camera) -> Option<f64> {
         let b = self.world_bounds(key);
-        let depth = camera.visible_depth(b)?;
+        let depth = camera.preparation_depth(b)?;
         Some(
             (b[2] - b[0]) * camera.scale() * camera.viewport[1]
                 / (2. * camera.tan_half_fov() * depth),

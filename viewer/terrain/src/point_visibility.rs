@@ -22,33 +22,78 @@ struct Pending {
     buffer: wgpu::Buffer,
     receive: Option<mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
 }
+/// 地点の照会が来るまで重いGPUプログラムを作らず、作成中もUIを止めない。
+#[derive(Default)]
+pub struct LazyRenderer {
+    pipeline: std::sync::OnceLock<std::sync::Arc<Renderer>>,
+    started: std::sync::atomic::AtomicBool,
+}
+impl LazyRenderer {
+    pub fn ready_or_start(
+        self: &std::sync::Arc<Self>,
+        device: &wgpu::Device,
+        state: &Mutex<State>,
+        ctx: &egui::Context,
+    ) -> Option<std::sync::Arc<Renderer>> {
+        if let Some(renderer) = self.pipeline.get() {
+            return Some(renderer.clone());
+        }
+        let needed = state
+            .lock()
+            .unwrap()
+            .request
+            .as_ref()
+            .is_some_and(|r| !r.points.is_empty());
+        if needed && !self.started.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            let this = self.clone();
+            let device = device.clone();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let started = std::time::Instant::now();
+                let renderer = Renderer::new(&device);
+                let _ = this.pipeline.set(std::sync::Arc::new(renderer));
+                eprintln!(
+                    "地点投影GPU初期化: {:.2}ms",
+                    started.elapsed().as_secs_f64() * 1000.
+                );
+                ctx.request_repaint();
+            });
+        }
+        None
+    }
+}
 pub struct Renderer {
     pipeline: wgpu::ComputePipeline,
 }
 pub fn shader() -> String {
     let source = include_str!("shared_render.wgsl");
-    let begin = source.find("fn sampleAt(").unwrap();
+    let begin = source.find("struct Varying {").unwrap();
     let end = source.find("@vertex fn vs(").unwrap();
     format!(
-        "{}\n{}",
+        "{}\n{}\n{}",
         include_str!("point_visibility.wgsl"),
-        &source[begin..end]
+        &source[begin..end],
+        include_str!("globe.wgsl")
     )
 }
 impl Renderer {
     pub fn new(device: &wgpu::Device) -> Self {
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("地点の地形高と遮蔽"),
-            source: wgpu::ShaderSource::Wgsl(shader().into()),
+        let module = crate::gpu_profile::timed("地点の地形高と遮蔽", || {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("地点の地形高と遮蔽"),
+                source: wgpu::ShaderSource::Wgsl(shader().into()),
+            })
         });
         Self {
-            pipeline: device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("地点の地形高と遮蔽"),
-                layout: None,
-                module: &module,
-                entry_point: Some("query"),
-                compilation_options: Default::default(),
-                cache: None,
+            pipeline: crate::gpu_profile::timed("地点の地形高と遮蔽", || {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("地点の地形高と遮蔽"),
+                    layout: None,
+                    module: &module,
+                    entry_point: Some("query"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
             }),
         }
     }
@@ -62,6 +107,7 @@ impl Renderer {
         records: &wgpu::Buffer,
         links: &wgpu::Buffer,
         view: &wgpu::Buffer,
+        patches: &wgpu::Buffer,
     ) {
         let mut state = state.lock().unwrap();
         if state.pending.is_some() {
@@ -103,6 +149,7 @@ impl Renderer {
             (4, view),
             (5, &input),
             (6, &output),
+            (7, patches),
         ] {
             entries.push(wgpu::BindGroupEntry {
                 binding,
@@ -242,6 +289,16 @@ pub fn query(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "地点用GPUプログラムの作成時間を個別に計測する"]
+    fn benchmark_point_program_compilation() {
+        let Some(app) =
+            crate::remembered_scene_tests::app_with_backend(eframe::wgpu::Backends::DX12)
+        else {
+            return;
+        };
+        let _ = super::Renderer::new(&app.renderer.state.device);
+    }
     #[test]
     fn shader_is_valid() {
         let module = naga::front::wgsl::parse_str(&shader()).unwrap();

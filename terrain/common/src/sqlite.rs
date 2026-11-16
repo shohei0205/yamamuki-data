@@ -255,21 +255,36 @@ impl Database {
         if let Some(points) = self.cache.get(&key) {
             return Ok(points.clone());
         }
-        self.check_dependencies(key, &mut HashSet::new(), 0)?;
-        let result = self.restore(key, &mut HashSet::new(), 0)?;
+        // 依存検査で読んだ圧縮BLOBを復号にも使い、同じタイルを二度読まない。
+        let mut tiles = HashMap::new();
+        self.check_dependencies(key, &mut HashSet::new(), 0, &mut tiles)?;
+        let result = self.restore(key, &mut HashSet::new(), 0, &mut tiles)?;
         if self.cache.values().map(|p| p.len() * 12).sum::<usize>() > 256 * 1024 * 1024 {
             self.cache.retain(|k, _| k.0 == 6);
         }
         Ok(result)
     }
-    fn check_dependencies(&self, key: Key, deps: &mut HashSet<Key>, depth: usize) -> Result<()> {
+    fn check_dependencies(
+        &self,
+        key: Key,
+        deps: &mut HashSet<Key>,
+        depth: usize,
+        tiles: &mut HashMap<Key, Tile>,
+    ) -> Result<()> {
         ensure!(depth <= 2, "地形の差分依存が深すぎます");
         deps.insert(key);
         ensure!(deps.len() <= 16, "地形の依存数が多すぎます");
-        let tile = self.tile(key)?;
-        for parent in tile.parents {
+        let parents = if let Some(tile) = tiles.get(&key) {
+            tile.parents.clone()
+        } else {
+            let tile = self.tile(key)?;
+            let parents = tile.parents.clone();
+            tiles.insert(key, tile);
+            parents
+        };
+        for parent in parents {
             ensure!(parent.0 < key.0, "親は粗いズームでなければなりません");
-            self.check_dependencies(parent, deps, depth + 1)?;
+            self.check_dependencies(parent, deps, depth + 1, tiles)?;
         }
         Ok(())
     }
@@ -278,6 +293,7 @@ impl Database {
         key: Key,
         deps: &mut HashSet<Key>,
         depth: usize,
+        tiles: &mut HashMap<Key, Tile>,
     ) -> Result<Arc<Vec<[i32; 3]>>> {
         if let Some(points) = self.cache.get(&key) {
             return Ok(points.clone());
@@ -285,11 +301,17 @@ impl Database {
         ensure!(depth < 3, "地形の差分依存が深すぎます");
         deps.insert(key);
         ensure!(deps.len() <= 16, "地形の依存数が多すぎます");
-        let tile = self.tile(key)?;
+        let tile = tiles
+            .remove(&key)
+            .context("依存検査済みの地形タイルがありません")?;
         let mut parents = Vec::new();
         for parent in tile.parents {
             ensure!(parent.0 < key.0, "親タイルは粗いズームでなければなりません");
-            parents.push(self.restore(parent, deps, depth + 1)?.as_ref().clone());
+            parents.push(
+                self.restore(parent, deps, depth + 1, tiles)?
+                    .as_ref()
+                    .clone(),
+            );
         }
         let points = natural_codec::decode_global(&tile.controls, tile.origin, &parents)?;
         ensure!(

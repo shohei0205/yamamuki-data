@@ -1,6 +1,32 @@
 //! 2Dのタイル選択・合成順を引き継ぎ、元テクスチャを地形へ直接渡す。
 use eframe::{egui, egui_wgpu::RenderState};
 use yamamuki_terrain_view::direct_material::{Capture, Quad};
+pub struct BorderCapture {
+    pub rect: egui::Rect,
+    pub color: egui::Color32,
+}
+pub fn tile_border(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    view: &crate::map::View,
+    tile: crate::map::Tile,
+    material: bool,
+    color: egui::Color32,
+) {
+    let corners = view.tile_corners(rect, tile);
+    if material {
+        let rect = egui::Rect::from_points(&corners);
+        painter.add(egui::Shape::Callback(egui::PaintCallback {
+            rect,
+            callback: std::sync::Arc::new(BorderCapture { rect, color }),
+        }));
+    } else {
+        painter.add(egui::Shape::closed_line(
+            corners.to_vec(),
+            egui::Stroke::new(1.5_f32, color),
+        ));
+    }
+}
 const COVERAGE_MARGIN: f64 = 1.02;
 /// 0は通常の2D、2は3D近景。画像合成用の倍率をLOD選択へ混ぜない。
 pub fn lod_zoom(screen_zoom: f64, material_zoom: f64, pass: usize) -> f64 {
@@ -75,11 +101,23 @@ pub fn collect(
                         tint: color,
                         shade: false,
                         gamma_shade: false,
+                        border: false,
                     });
                 }
             }
             egui::epaint::Primitive::Callback(callback) => {
-                if let Some(c) = callback.callback.downcast_ref::<Capture>() {
+                if let Some(c) = callback.callback.downcast_ref::<BorderCapture>() {
+                    result.push(Quad {
+                        bounds: world_rect(view, rect, c.rect),
+                        uv: [crate::lod_fade::FULL_UV; 2],
+                        textures: [None, None],
+                        amount: 1.,
+                        tint: c.color.to_array().map(|v| v as f32 / 255.),
+                        shade: false,
+                        gamma_shade: false,
+                        border: true,
+                    });
+                } else if let Some(c) = callback.callback.downcast_ref::<Capture>() {
                     result.push(Quad {
                         bounds: world_rect(view, rect, c.rect),
                         uv: c.uv,
@@ -88,50 +126,36 @@ pub fn collect(
                         tint: [1.; 4],
                         shade: c.shade,
                         gamma_shade: c.gamma_shade,
+                        border: false,
                     });
                 }
             }
         }
     }
+    // 取得範囲はタイルを選ぶためだけに使い、元タイルの途中でLODを切らない。
     result
         .into_iter()
-        .filter_map(|mut q| {
-            let area = q.bounds;
-            let clip = world_rect(view, rect, rect);
-            let cropped = [
-                area[0].max(clip[0]),
-                area[1].max(clip[1]),
-                area[2].min(clip[2]),
-                area[3].min(clip[3]),
-            ];
-            if cropped[0] >= cropped[2] || cropped[1] >= cropped[3] {
-                return None;
-            }
-            for uv in &mut q.uv {
-                let origin = uv.min;
-                let size = uv.size();
-                let at = |x: f64, y: f64| {
-                    origin
-                        + size
-                            * egui::vec2(
-                                ((x - area[0]) / (area[2] - area[0])) as f32,
-                                ((y - area[1]) / (area[3] - area[1])) as f32,
-                            )
-                };
-                *uv = egui::Rect::from_min_max(
-                    at(cropped[0], cropped[1]),
-                    at(cropped[2], cropped[3]),
-                );
-            }
-            q.bounds = cropped;
-            Some(q)
-        })
+        .filter(|q| intersects_view(q.bounds, world_rect(view, rect, rect)))
         .collect()
+}
+
+fn intersects_view(tile: [f64; 4], view: [f64; 4]) -> bool {
+    tile[0] < view[2] && tile[2] > view[0] && tile[1] < view[3] && tile[3] > view[1]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lod_regions_select_whole_tiles_including_partial_intersections() {
+        let tile = [0.25, 0.25, 0.5, 0.5];
+        // 詳細描画範囲が元タイルの中央で終わっても、タイル全体を採用する。
+        assert!(intersects_view(tile, [0.3, 0.3, 0.4, 0.4]));
+        assert!(intersects_view(tile, [0.49, 0.49, 0.6, 0.6]));
+        assert!(!intersects_view(tile, [0.5, 0.25, 0.75, 0.5]));
+        assert!(!intersects_view(tile, [0., 0., 0.2, 0.2]));
+    }
+
     #[test]
     fn image_rectangles_keep_source_uv_and_native_gutter() {
         let mut mesh = egui::Mesh::with_texture(egui::TextureId::User(17));

@@ -13,6 +13,7 @@ pub struct Quad {
     pub tint: [f32; 4],
     pub shade: bool,
     pub gamma_shade: bool,
+    pub border: bool,
 }
 /// 3D用の描画収集時だけ使うマーカー。通常の2D描画へは渡さない。
 pub struct Capture {
@@ -37,6 +38,8 @@ struct Params {
     uv1: [f32; 4],
     tint: [f32; 4],
     settings: [f32; 4],
+    earth: [f32; 4],
+    eye: [f32; 4],
 }
 #[derive(Default)]
 struct Cache {
@@ -114,9 +117,19 @@ impl Renderer {
                 resource: wgpu::BindingResource::Sampler(&sampler),
             }],
         });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("元タイル直接参照"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("direct_material.wgsl").into()),
+        let shader = crate::gpu_profile::timed("元タイル直接参照", || {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("元タイル直接参照"),
+                source: wgpu::ShaderSource::Wgsl(
+                    format!(
+                        "{}\n{}\n{}",
+                        include_str!("direct_material.wgsl"),
+                        include_str!("globe.wgsl"),
+                        include_str!("atmosphere.wgsl")
+                    )
+                    .into(),
+                ),
+            })
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
@@ -124,33 +137,35 @@ impl Renderer {
             push_constant_ranges: &[],
         });
         let pipeline = |entry, color, mask| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs"),
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                primitive: Default::default(),
-                depth_stencil: None,
-                multisample: Default::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(entry),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                        blend: Some(wgpu::BlendState {
-                            color,
-                            alpha: wgpu::BlendComponent::OVER,
-                        }),
-                        write_mask: mask,
-                    })],
-                }),
-                multiview: None,
-                cache: None,
+            crate::gpu_profile::timed(entry, || {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(entry),
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs"),
+                        buffers: &[],
+                        compilation_options: Default::default(),
+                    },
+                    primitive: Default::default(),
+                    depth_stencil: None,
+                    multisample: Default::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some(entry),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                            blend: Some(wgpu::BlendState {
+                                color,
+                                alpha: wgpu::BlendComponent::OVER,
+                            }),
+                            write_mask: mask,
+                        })],
+                    }),
+                    multiview: None,
+                    cache: None,
+                })
             })
         };
         let blend = |src_factor, dst_factor| wgpu::BlendComponent {
@@ -212,6 +227,32 @@ impl Renderer {
         size: [u32; 2],
         commands: &[Quad],
     ) {
+        self.render_region(
+            device,
+            queue,
+            encoder,
+            target_texture,
+            lighting_source,
+            positions,
+            camera,
+            size,
+            commands,
+            true,
+        );
+    }
+    fn render_region(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target_texture: &wgpu::Texture,
+        lighting_source: &wgpu::Texture,
+        positions: &wgpu::TextureView,
+        camera: &Camera,
+        size: [u32; 2],
+        commands: &[Quad],
+        restrict_pixels: bool,
+    ) {
         let _ = device.poll(wgpu::Maintain::Poll);
         // 地形へ貼れない画面外・遠方の画像は、GPU設定を作る前に除く。
         let commands = commands
@@ -265,7 +306,9 @@ impl Renderer {
             .chain(std::iter::once(None))
             .enumerate()
         {
-            let params = command.map_or(Params::zeroed(), |c| Params {
+            let mut params = command.map_or(Params::zeroed(), |c| Params {
+                earth: [0.; 4],
+                eye: [0.; 4],
                 area: [
                     (c.bounds[0] * WORLD - camera.center[0]) as f32,
                     (c.bounds[1] * WORLD - camera.center[1]) as f32,
@@ -290,9 +333,26 @@ impl Renderer {
                     f32::from(c.textures[0].is_some()),
                     f32::from(c.textures[1].is_some()),
                     f32::from(c.textures.iter().all(Option::is_none))
-                        + 2. * f32::from(c.gamma_shade),
+                        + 2. * f32::from(c.gamma_shade)
+                        + 4. * f32::from(c.border),
                 ],
             });
+            if command.is_none() && camera.globe {
+                let latitude = crate::globe::latitude(camera.center[1]);
+                let back = camera.back();
+                params.earth = [
+                    latitude.sin() as f32,
+                    latitude.cos() as f32,
+                    crate::globe::RADIUS as f32,
+                    1.,
+                ];
+                params.eye = [
+                    (back.x * camera.distance) as f32,
+                    (camera.height + back.y * camera.distance) as f32,
+                    (back.z * camera.distance) as f32,
+                    camera.scale() as f32,
+                ];
+            }
             let at = i * stride as usize;
             bytes[at..at + std::mem::size_of::<Params>()]
                 .copy_from_slice(bytemuck::bytes_of(&params));
@@ -337,7 +397,11 @@ impl Renderer {
                 cache.groups_created += 1;
             }
             let clip = command.map_or([0, 0, size[0], size[1]], |c| {
-                scissor(c.bounds, camera, size)
+                if restrict_pixels {
+                    scissor(c.bounds, camera, size)
+                } else {
+                    [0, 0, size[0], size[1]]
+                }
             });
             draws.push((
                 cache.groups[&key].clone(),
@@ -411,6 +475,9 @@ impl Renderer {
 use bytemuck::Zeroable;
 /// 可視標高範囲の投影を囲み、各タイルで画面全体を塗らない。
 fn scissor(bounds: [f64; 4], c: &Camera, size: [u32; 2]) -> [u32; 4] {
+    if c.globe {
+        return globe_scissor(bounds, c, size);
+    }
     let back = c.back();
     let right = glam::DVec3::new(c.yaw.cos(), 0., -c.yaw.sin());
     let up = back.cross(right);
@@ -447,9 +514,386 @@ fn scissor(bounds: [f64; 4], c: &Camera, size: [u32; 2]) -> [u32; 4] {
     [l, t, r - l, b - t]
 }
 
+// 球面を包む箱を投影し、極側や日付変更線でも曲がった辺を切らない。
+fn globe_scissor(bounds: [f64; 4], c: &Camera, size: [u32; 2]) -> [u32; 4] {
+    use glam::DVec3;
+    let area = bounds.map(|v| v * WORLD);
+    let span = (area[2] - area[0]).abs().max((area[3] - area[1]).abs());
+    if span > crate::globe::RADIUS * 0.5 {
+        return [0, 0, size[0], size[1]];
+    }
+    let mut lower = DVec3::splat(f64::INFINITY);
+    let mut upper = DVec3::splat(f64::NEG_INFINITY);
+    const STEPS: u32 = 4;
+    for y in 0..=STEPS {
+        for x in 0..=STEPS {
+            let world = [
+                area[0] + (area[2] - area[0]) * x as f64 / STEPS as f64,
+                area[1] + (area[3] - area[1]) * y as f64 / STEPS as f64,
+            ];
+            for h in [-500., 4500.] {
+                let p = crate::globe::local(c.center, world, h);
+                lower = lower.min(p);
+                upper = upper.max(p);
+            }
+        }
+    }
+    // 格子点の間の球面の膨らみと、Mercator緯度の非線形な変化も含める。
+    let dx = (area[2] - area[0]) / STEPS as f64;
+    let dy = (area[3] - area[1]) / STEPS as f64;
+    let padding = (dx * dx + dy * dy) / crate::globe::RADIUS + 0.1;
+    lower -= DVec3::splat(padding);
+    upper += DVec3::splat(padding);
+    let back = c.back();
+    let right = DVec3::new(c.yaw.cos(), 0., -c.yaw.sin());
+    let up = back.cross(right);
+    let mut min = [f64::INFINITY; 2];
+    let mut max = [f64::NEG_INFINITY; 2];
+    for x in [lower.x, upper.x] {
+        for y in [lower.y, upper.y] {
+            for z in [lower.z, upper.z] {
+                let d = DVec3::new(x, y - c.height, z);
+                let depth = c.distance - d.dot(back);
+                if depth <= 0. {
+                    return [0, 0, size[0], size[1]];
+                }
+                let scale = size[1] as f64 / (2. * c.tan_half_fov() * depth);
+                let p = [
+                    size[0] as f64 / 2. + d.dot(right) * scale,
+                    size[1] as f64 / 2. - d.dot(up) * scale,
+                ];
+                for i in 0..2 {
+                    min[i] = min[i].min(p[i]);
+                    max[i] = max[i].max(p[i]);
+                }
+            }
+        }
+    }
+    let l = (min[0].floor() - 2.).clamp(0., size[0] as f64) as u32;
+    let t = (min[1].floor() - 2.).clamp(0., size[1] as f64) as u32;
+    let r = (max[0].ceil() + 2.).clamp(l as f64, size[0] as f64) as u32;
+    let b = (max[1].ceil() + 2.).clamp(t as f64, size[1] as f64) as u32;
+    [l, t, r - l, b - t]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn globe_tile_scissors_cover_curved_edges_without_shading_the_whole_frame() {
+        let mut c = Camera::default();
+        c.globe = true;
+        let size = [3357, 1953];
+        c.center = [35572623.49885807, 15783474.539974594];
+        c.height = 500.;
+        c.distance = 867787.0600352235;
+        c.yaw = 0.02880050428211689;
+        c.pitch = 1.1057327250626425;
+        c.viewport = size.map(f64::from);
+        let back = c.back();
+        let right = glam::DVec3::new(c.yaw.cos(), 0., -c.yaw.sin());
+        let up = back.cross(right);
+        let mut pixels = 0u64;
+        let mut tiles = 0u64;
+        for z in [6, 8, 10] {
+            let side = WORLD / 2f64.powi(z);
+            let cx = (c.center[0] / side) as i32;
+            let cy = (c.center[1] / side) as i32;
+            for y in cy - 2..=cy + 2 {
+                for x in cx - 2..=cx + 2 {
+                    let bounds = [
+                        x as f64 * side / WORLD,
+                        y as f64 * side / WORLD,
+                        (x + 1) as f64 * side / WORLD,
+                        (y + 1) as f64 * side / WORLD,
+                    ];
+                    let clip = scissor(bounds, &c, size);
+                    pixels += u64::from(clip[2]) * u64::from(clip[3]);
+                    tiles += 1;
+                    for iy in 0..=16 {
+                        for ix in 0..=16 {
+                            for h in [-500., 0., 2500., 4500.] {
+                                let world = [
+                                    (x as f64 + ix as f64 / 16.) * side,
+                                    (y as f64 + iy as f64 / 16.) * side,
+                                ];
+                                let d = crate::globe::local(c.center, world, h)
+                                    - glam::DVec3::Y * c.height;
+                                let depth = c.distance - d.dot(back);
+                                if depth <= 0. {
+                                    continue;
+                                }
+                                let scale = size[1] as f64 / (2. * c.tan_half_fov() * depth);
+                                let p = [
+                                    size[0] as f64 / 2. + d.dot(right) * scale,
+                                    size[1] as f64 / 2. - d.dot(up) * scale,
+                                ];
+                                if p[0] >= 0.
+                                    && p[0] < size[0] as f64
+                                    && p[1] >= 0.
+                                    && p[1] < size[1] as f64
+                                {
+                                    assert!(
+                                        p[0] >= clip[0] as f64
+                                            && p[0] < (clip[0] + clip[2]) as f64
+                                            && p[1] >= clip[1] as f64
+                                            && p[1] < (clip[1] + clip[3]) as f64,
+                                        "球面の端が欠ける: z{z}, p={p:?}, clip={clip:?}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            pixels < tiles * u64::from(size[0]) * u64::from(size[1]) / 5,
+            "元タイルごとに全面を描画している"
+        );
+    }
+    #[test]
+    fn globe_scissors_remain_conservative_near_the_horizon_poles_and_date_line() {
+        let size = [1280, 800];
+        for center in [[0.885, 0.395], [0.99999, 0.4], [0.5, 0.0001], [0.5, 0.9999]] {
+            for (distance, z) in [(100., 18), (10000., 13), (867787., 8), (3000000., 5)] {
+                for pitch in [0.1, 0.8, 1.56] {
+                    let mut c = Camera::default();
+                    c.globe = true;
+                    c.center = center.map(|v| v * WORLD);
+                    c.height = 1000.;
+                    c.distance = distance;
+                    c.pitch = pitch;
+                    c.yaw = 0.7;
+                    c.viewport = size.map(f64::from);
+                    let n = 2f64.powi(z);
+                    let x = (center[0] * n).floor();
+                    let y = (center[1] * n).floor();
+                    let area = [x / n, y / n, (x + 1.) / n, (y + 1.) / n];
+                    let clip = scissor(area, &c, size);
+                    let back = c.back();
+                    let right = glam::DVec3::new(c.yaw.cos(), 0., -c.yaw.sin());
+                    let up = back.cross(right);
+                    for iy in 0..=12 {
+                        for ix in 0..=12 {
+                            for h in [-500., 0., 4500.] {
+                                let w = [
+                                    (x + ix as f64 / 12.) / n * WORLD,
+                                    (y + iy as f64 / 12.) / n * WORLD,
+                                ];
+                                let d =
+                                    crate::globe::local(c.center, w, h) - glam::DVec3::Y * c.height;
+                                let depth = c.distance - d.dot(back);
+                                if depth <= 0. {
+                                    continue;
+                                }
+                                let scale = size[1] as f64 / (2. * c.tan_half_fov() * depth);
+                                let p = [
+                                    size[0] as f64 / 2. + d.dot(right) * scale,
+                                    size[1] as f64 / 2. - d.dot(up) * scale,
+                                ];
+                                if p[0] >= 0.
+                                    && p[0] < size[0] as f64
+                                    && p[1] >= 0.
+                                    && p[1] < size[1] as f64
+                                {
+                                    assert!(
+                                        p[0] >= clip[0] as f64
+                                            && p[0] < (clip[0] + clip[2]) as f64
+                                            && p[1] >= clip[1] as f64
+                                            && p[1] < (clip[1] + clip[3]) as f64,
+                                        "画像範囲を切り過ぎた: center={center:?} z{z} pitch={pitch} p={p:?} clip={clip:?}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    #[ignore = "全面描画とタイル別描画範囲を同じGPUで計測する"]
+    fn benchmark_globe_tile_scissors() -> anyhow::Result<()> {
+        let backend = if cfg!(windows) {
+            wgpu::Backends::DX12
+        } else {
+            wgpu::Backends::PRIMARY
+        };
+        let Some(app) = crate::remembered_scene_tests::app_with_backend(backend) else {
+            return Ok(());
+        };
+        let device = &app.renderer.state.device;
+        let queue = &app.renderer.state.queue;
+        let renderer = Renderer::new(device);
+        let size = [1280, 768];
+        let mut camera = Camera::default();
+        camera.globe = true;
+        camera.center = [35572623.49885807, 15783474.539974594];
+        camera.height = 500.;
+        camera.distance = 867787.0600352235;
+        camera.yaw = 0.02880050428211689;
+        camera.pitch = 1.1057327250626425;
+        camera.viewport = size.map(f64::from);
+        let extent = wgpu::Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: 1,
+        };
+        let texture = |format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: extent,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let positions = texture(
+            wgpu::TextureFormat::Rgba32Float,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        // 実際の球面への投影と同じ地理座標を使う。
+        let projection = crate::Projection {
+            camera: camera.clone(),
+        };
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0] as f32, size[1] as f32));
+        let mut values = Vec::<[f32; 4]>::new();
+        for y in 0..size[1] {
+            for x in 0..size[0] {
+                values.push(
+                    projection
+                        .world_at(rect, egui::pos2(x as f32 + 0.5, y as f32 + 0.5))
+                        .map_or([0.; 4], |w| {
+                            [
+                                (w[0] * WORLD - camera.center[0]) as f32,
+                                (w[1] * WORLD - camera.center[1]) as f32,
+                                1.,
+                                10000.,
+                            ]
+                        }),
+                );
+            }
+        }
+        queue.write_texture(
+            positions.as_image_copy(),
+            bytemuck::cast_slice(&values),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size[0] * 16),
+                rows_per_image: None,
+            },
+            extent,
+        );
+        let view = positions.create_view(&Default::default());
+        let target = texture(
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
+        let lighting = texture(
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        let side = 1. / 256.;
+        let cx = (camera.center[0] / WORLD / side) as i32;
+        let cy = (camera.center[1] / WORLD / side) as i32;
+        let mut commands = Vec::new();
+        for y in cy - 8..=cy + 8 {
+            for x in cx - 10..=cx + 10 {
+                commands.push(Quad {
+                    bounds: [
+                        x as f64 * side,
+                        y as f64 * side,
+                        (x + 1) as f64 * side,
+                        (y + 1) as f64 * side,
+                    ],
+                    uv: [egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)); 2],
+                    textures: [None, None],
+                    amount: 1.,
+                    tint: [0.3, 0.5, 0.8, 1.],
+                    shade: false,
+                    gamma_shade: false,
+                    border: false,
+                });
+            }
+        }
+        let mut outputs = Vec::new();
+        for restricted in [false, true] {
+            let begin = std::time::Instant::now();
+            for _ in 0..12 {
+                let mut encoder = device.create_command_encoder(&Default::default());
+                {
+                    let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: None,
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &target.create_view(&Default::default()),
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        ..Default::default()
+                    });
+                }
+                renderer.render_region(
+                    device,
+                    queue,
+                    &mut encoder,
+                    &target,
+                    &lighting,
+                    &view,
+                    &camera,
+                    size,
+                    &commands,
+                    restricted,
+                );
+                queue.submit([encoder.finish()]);
+                let _ = device.poll(wgpu::Maintain::Wait);
+            }
+            eprintln!(
+                "描画範囲制限={restricted}: {:.2} ms/フレーム（{}タイル）",
+                begin.elapsed().as_secs_f64() * 1000. / 12.,
+                commands.len()
+            );
+            let bytes = u64::from(size[0]) * u64::from(size[1]) * 4;
+            let read = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            encoder.copy_texture_to_buffer(
+                target.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &read,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(size[0] * 4),
+                        rows_per_image: None,
+                    },
+                },
+                extent,
+            );
+            queue.submit([encoder.finish()]);
+            let (send, receive) = std::sync::mpsc::channel();
+            read.slice(..)
+                .map_async(wgpu::MapMode::Read, move |v| send.send(v).unwrap());
+            let _ = device.poll(wgpu::Maintain::Wait);
+            receive.recv()??;
+            outputs.push(read.slice(..).get_mapped_range().to_vec());
+        }
+        assert_eq!(
+            outputs[0], outputs[1],
+            "球面のタイル描画範囲を制限した結果、画像に欠けが生じた"
+        );
+        Ok(())
+    }
     #[test]
     #[ignore = "GPU設定の再利用を多数の連続描画で検証する"]
     fn continuous_drawing_reuses_gpu_descriptors_and_uniform_storage() {
@@ -537,6 +981,7 @@ mod tests {
                     tint: [1.; 4],
                     shade: false,
                     gamma_shade: false,
+                    border: false,
                 }
             })
             .collect::<Vec<_>>();
@@ -691,6 +1136,7 @@ mod tests {
             tint: [1.; 4],
             shade: false,
             gamma_shade: false,
+            border: false,
         };
         let shade = texture(
             wgpu::TextureFormat::Rg8Unorm,
@@ -709,16 +1155,41 @@ mod tests {
         let shade_view = shade.create_view(&Default::default());
         let gray = source((0..width).flat_map(|_| [64, 64, 64, 255]).collect());
         let mid = source((0..width).flat_map(|_| [188, 188, 188, 255]).collect());
-        for mode in 0..8 {
-            let q = match mode {
+        for mode in 0..13 {
+            let mut q = match mode {
                 0 => quad(checker.clone(), checker.clone(), 1.),
                 1 => quad(black.clone(), white.clone(), 0.5),
                 6 => quad(gray.clone(), gray.clone(), 1.),
                 7 => quad(mid.clone(), mid.clone(), 1.),
                 _ => quad(white.clone(), white.clone(), 1.),
             };
+            if (8..10).contains(&mode) {
+                q.border = true;
+                q.textures = [None, None];
+                if mode == 9 {
+                    q.uv =
+                        [egui::Rect::from_min_max(egui::pos2(0.25, 0.25), egui::pos2(0.75, 0.75));
+                            2];
+                }
+            }
+            camera.globe = mode >= 10;
+            camera.height = if mode == 12 {
+                60000.
+            } else if mode >= 10 {
+                3000.
+            } else {
+                0.
+            };
             let coordinates = (0..width)
                 .map(|x| {
+                    if mode >= 10 {
+                        return [
+                            ((if mode == 10 { 1. } else { 100000. }) / camera.scale()) as f32,
+                            0.,
+                            1.,
+                            if mode == 12 { 70000. } else { 11000. },
+                        ];
+                    }
                     [
                         (x as f32 + 0.5) / width as f32 * WORLD as f32,
                         WORLD as f32 / 2.,
@@ -809,6 +1280,13 @@ mod tests {
             rx.recv().unwrap().unwrap();
             let bytes = read.slice(..).get_mapped_range();
             for (x, pixel) in bytes.chunks_exact(4).enumerate() {
+                if mode == 11 {
+                    assert!(
+                        pixel[0] < 248 && pixel[2] > pixel[0] + 3,
+                        "遠景が青い霞になっていない: {pixel:?}"
+                    );
+                    continue;
+                }
                 let expected = match mode {
                     0 => {
                         if x % 2 == 0 {
@@ -823,6 +1301,15 @@ mod tests {
                     5 => 192,
                     6 => 32,
                     7 => 244,
+                    8 => {
+                        if x < 2 || x >= width as usize - 2 {
+                            255
+                        } else {
+                            0
+                        }
+                    }
+                    9 => 0,
+                    10 | 12 => 255,
                     _ => {
                         if x < width as usize / 2 {
                             0

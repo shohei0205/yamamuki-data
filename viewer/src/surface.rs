@@ -777,6 +777,7 @@ impl LayerStats {
 }
 
 pub struct Surface {
+    pub borders: bool,
     source: Source,
     layer_stats: HashMap<(i64, i64), LayerStats>,
     dataset: usize,
@@ -795,12 +796,36 @@ pub struct Surface {
     lod_fade: lod_fade::State<Key>,
     material_lods: Vec<lod_fade::State<Key>>,
     material_pass: usize,
-    material_ready: bool,
     shade_renderer: Option<surface_shade::Renderer>,
     error: Option<String>,
 }
 
 impl Surface {
+    pub(crate) fn snapshot(&self) -> crate::snapshot::SurfaceState {
+        crate::snapshot::SurfaceState {
+            path: self.source.path.clone(),
+            dataset: self.dataset,
+            enabled: self.enabled,
+            options: self.options.clone(),
+            palette: self.palette,
+        }
+    }
+    pub(crate) fn restore_options(&mut self, s: &crate::snapshot::SurfaceState) -> Result<()> {
+        anyhow::ensure!(
+            s.dataset < self.source.datasets.len(),
+            "地表データセット構成が変わっています"
+        );
+        anyhow::ensure!(
+            s.options.len() == self.source.datasets[s.dataset].layers.len(),
+            "地表レイヤー構成が変わっています"
+        );
+        self.dataset = s.dataset;
+        self.enabled = s.enabled;
+        self.options = s.options.clone();
+        self.palette = s.palette;
+        self.fit = false;
+        Ok(())
+    }
     pub fn new(ctx: &egui::Context, source: Source) -> Self {
         let (jobs, incoming) = mpsc::channel::<Key>();
         let (replies, outgoing) = mpsc::channel();
@@ -838,6 +863,7 @@ impl Surface {
         }
         let options = Self::default_options(&source.datasets[0]);
         Self {
+            borders: false,
             source,
             layer_stats: HashMap::new(),
             dataset: 0,
@@ -856,7 +882,6 @@ impl Surface {
             lod_fade: lod_fade::State::default(),
             material_lods: (0..4).map(|_| Default::default()).collect(),
             material_pass: 0,
-            material_ready: false,
             shade_renderer: None,
             error: None,
         }
@@ -1016,9 +1041,6 @@ impl Surface {
         }
     }
 
-    pub fn material_ready(&self) -> bool {
-        self.material_ready
-    }
     pub fn finish_material_frame(&mut self) {
         while self.cache_bytes > CACHE_BYTES || self.cache.len() > 512 {
             let Some(key) = self
@@ -1061,7 +1083,6 @@ impl Surface {
     ) {
         let set = &self.source.datasets[self.dataset];
         self.frame = ui.ctx().cumulative_pass_nr();
-        self.material_ready = false;
         let limit = if dragging { 1 } else { PENDING };
         let mut received = 0;
         for (key, result) in self.replies.try_iter().take(limit) {
@@ -1134,6 +1155,7 @@ impl Surface {
             .collect();
         let mut shade_tiles = Vec::new();
         let mut images = Vec::new();
+        let mut border_tiles = Vec::new();
         if let Some(finest) = levels.iter().flatten().max().copied() {
             let draw_zoom = (scale / 384.).log2().ceil().clamp(0., 30.) as u32;
             let z = finest.min(draw_zoom);
@@ -1181,7 +1203,6 @@ impl Surface {
                 }
             }
 
-            self.material_ready = !waiting && received == 0;
             if let Some(target) = visible.first() {
                 let mut target = target.clone();
                 target.tile.x = 0;
@@ -1205,6 +1226,21 @@ impl Surface {
                 self.lod_fade
                     .update(target.clone(), !waiting && received == 0, fade, now);
                 let current = self.lod_fade.current.as_ref().unwrap_or(&target);
+                if self.borders {
+                    border_tiles = view
+                        .tiles_at(rect, current.tile.z)
+                        .into_iter()
+                        .filter(|tile| {
+                            let key = Key {
+                                tile: *tile,
+                                ..current.clone()
+                            };
+                            self.cache.get(&key).is_some_and(|e| {
+                                !e.failed && (e.image.is_some() || !e.shades.is_empty())
+                            })
+                        })
+                        .collect();
+                }
                 if let (Some((state, renderer)), Some((old, amount))) =
                     (fade_backend, self.lod_fade.blend(ui.ctx(), now))
                     && lod_fade::can_blend(old.tile.z, current.tile.z, lod_zoom)
@@ -1308,6 +1344,16 @@ impl Surface {
         }
         for (tile, uv, image) in images {
             view.paint_tile_uv(painter, rect, tile, image, uv);
+        }
+        for tile in border_tiles {
+            crate::terrain_material::tile_border(
+                painter,
+                rect,
+                view,
+                tile,
+                self.material_pass != 0,
+                egui::Color32::from_rgb(0, 210, 235),
+            );
         }
         if self.material_pass == 0 {
             self.finish_material_frame();

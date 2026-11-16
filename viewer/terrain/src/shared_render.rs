@@ -21,9 +21,14 @@ struct View {
     settings: [f32; 4],
     flags: [u32; 4],
     extra: [u32; 4],
+    earth: [f32; 4],
+    eye: [f32; 4],
+    frame: [f32; 4],
 }
 struct SourceBuffers {
     sections: Vec<wgpu::Buffer>,
+    vertices: wgpu::Buffer,
+    triangles: wgpu::Buffer,
     bytes: usize,
 }
 #[derive(Default)]
@@ -33,8 +38,9 @@ struct UploadBudget {
 }
 impl UploadBudget {
     fn available(&self, n: u32) -> bool {
-        self.jobs.load(Ordering::Acquire) < 4
-            && self.samples.load(Ordering::Acquire) + (n as usize + 1).pow(2) <= (513usize).pow(2)
+        self.jobs.load(Ordering::Acquire) < 16
+            && self.samples.load(Ordering::Acquire) + (n as usize + 1).pow(2)
+                <= 4 * (513usize).pow(2)
     }
     fn start(&self, n: u32) {
         self.jobs.fetch_add(1, Ordering::AcqRel);
@@ -55,12 +61,13 @@ pub struct Tile {
     pub n: u32,
     pub origin: [f64; 2],
     pub side: f64,
+    pub field: crate::shared_field::Field,
     local: bool,
     compute: wgpu::BindGroup,
     _sources: Arc<SourceBuffers>,
     view: wgpu::Buffer,
     output: wgpu::Buffer,
-    density: Vec<u32>,
+    seam_band: f32,
     vertices: wgpu::Buffer,
     triangles: wgpu::Buffer,
     triangle_indices: u32,
@@ -219,18 +226,35 @@ impl LandcoverGpu {
         self.group = Self::bind(device, &self.layout, &self.sampler, &self.uniform, textures);
     }
 }
+#[derive(Clone)]
+struct SharedPipelines {
+    compute: wgpu::ComputePipeline,
+    pipeline: wgpu::RenderPipeline,
+    fallback: wgpu::RenderPipeline,
+    control: wgpu::RenderPipeline,
+    control_fallback: wgpu::RenderPipeline,
+    globe_pipeline: wgpu::RenderPipeline,
+    indices: Arc<std::collections::HashMap<u32, wgpu::Buffer>>,
+    direct_renderer: Arc<crate::direct_material::Renderer>,
+    point_renderer: Arc<crate::point_visibility::LazyRenderer>,
+    landcover_layout: wgpu::BindGroupLayout,
+}
+#[derive(Default)]
+struct PipelineCache(Arc<std::sync::OnceLock<SharedPipelines>>);
 pub struct Renderer {
     pub state: RenderState,
     sources: std::collections::HashMap<Key, Weak<SourceBuffers>>,
     uploads: Arc<UploadBudget>,
+    upload_batch: Option<wgpu::CommandEncoder>,
+    upload_batch_sizes: Vec<u32>,
     wake: egui::Context,
     landcover: LandcoverGpu,
     pub direct: Option<Vec<crate::direct_material::Quad>>,
     pub point_state: Arc<std::sync::Mutex<crate::point_visibility::State>>,
     pub hit_state: Arc<std::sync::Mutex<crate::hit_test::State>>,
-    point_renderer: Arc<crate::point_visibility::Renderer>,
+    point_renderer: Arc<crate::point_visibility::LazyRenderer>,
     direct_renderer: Arc<crate::direct_material::Renderer>,
-    positions: wgpu::Texture,
+    pub(crate) positions: wgpu::Texture,
     positions_view: wgpu::TextureView,
     lighting_source: wgpu::Texture,
     pub texture: egui::TextureId,
@@ -244,6 +268,8 @@ pub struct Renderer {
     fallback: wgpu::RenderPipeline,
     control: wgpu::RenderPipeline,
     control_fallback: wgpu::RenderPipeline,
+    globe_pipeline: wgpu::RenderPipeline,
+    pub(crate) frozen_layout: Option<LayoutSnapshot>,
 }
 fn storage_layout(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
@@ -263,20 +289,179 @@ struct Record {
     bounds: [f32; 4],
     data: [u32; 4],
     neighbors: [u32; 4],
+    tile: [f32; 4],
+    draw: [u32; 4],
+}
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct LayoutSnapshot {
+    pub plans: Vec<crate::shared_patches::Plan>,
+    pub camera: [f64; 10],
+    pub render_camera: Camera,
+    pub morph: f32,
+    pub pixels_per_point: f32,
+    #[serde(default)]
+    pub render_size: [u32; 2],
+    #[serde(default)]
+    pub clipped_background: bool,
+    #[serde(default)]
+    pub force_replan: bool,
+}
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct PrepareStats {
+    pub rebuild_ms: f64,
+    pub plan_ms: f64,
+    pub prepare_ms: f64,
+    pub atlas_copy_bytes: u64,
+    pub allocations: usize,
+    pub bind_groups: usize,
 }
 struct CachedScene {
+    stats: PrepareStats,
+    owner_texture: egui::TextureId,
+    clipped_background: bool,
+    plans_uploaded: bool,
     tiles: Vec<Arc<Tile>>,
+    primary: usize,
+    current: usize,
+    render_camera: Camera,
+    morph: f32,
+    pixels_per_point: f32,
     _atlas: wgpu::Buffer,
     _links: wgpu::Buffer,
     metadata: wgpu::Buffer,
     bindings: Vec<wgpu::BindGroup>,
     patches: Vec<wgpu::Buffer>,
+    point_patches: wgpu::Buffer,
     records: Vec<Record>,
     plans: Vec<crate::shared_patches::Plan>,
     last_plan: std::time::Instant,
     camera: [f64; 10],
     triangles: u64,
     visible_patches: usize,
+}
+fn install_snapshot_layout(cache: &mut CachedScene, layout: &LayoutSnapshot, _: &wgpu::Queue) {
+    if cache.plans.is_empty() && layout.plans.len() == cache.patches.len() {
+        cache.plans = layout.plans.clone();
+        cache.camera = layout.camera;
+        cache.plans_uploaded = false;
+    }
+}
+fn source_seam_band(packet: &Packet) -> f32 {
+    let density = packet.density.iter().copied().max().unwrap_or(1).max(1) as f64;
+    (2. * packet.side / (32. * density.sqrt()))
+        .min(packet.side / 8.)
+        .max(1.) as f32
+}
+// 同じ曲面は遷移前後でも一度だけ格納し、残る曲面の番地を維持する。
+struct AtlasPlan {
+    offsets: Vec<u32>,
+    copies: Vec<usize>,
+    bytes: u64,
+    reuse: bool,
+}
+fn plan_atlas(
+    entries: &[(usize, u32)],
+    old: &[(usize, u32, u32)],
+    capacity: u64,
+    limit: u64,
+) -> AtlasPlan {
+    use std::collections::HashMap;
+    let old = old
+        .iter()
+        .map(|&(id, offset, size)| (id, (offset, size)))
+        .collect::<HashMap<_, _>>();
+    let mut placed = HashMap::new();
+    let mut ranges = Vec::new();
+    for &(id, size) in entries {
+        if let Some(&(offset, old_size)) = old.get(&id) {
+            if size == old_size && placed.insert(id, offset).is_none() {
+                ranges.push((offset, offset + size));
+            }
+        }
+    }
+    ranges.sort_unstable();
+    let mut offsets = Vec::new();
+    let mut copies = Vec::new();
+    for (i, &(id, size)) in entries.iter().enumerate() {
+        let offset = if let Some(&offset) = placed.get(&id) {
+            offset
+        } else {
+            let mut offset = 0;
+            for &(start, end) in &ranges {
+                if offset + size <= start {
+                    break;
+                }
+                offset = offset.max(end);
+            }
+            placed.insert(id, offset);
+            ranges.push((offset, offset + size));
+            ranges.sort_unstable();
+            copies.push(i);
+            offset
+        };
+        offsets.push(offset);
+    }
+    let mut used = ranges
+        .iter()
+        .map(|r| u64::from(r.1) * 32)
+        .max()
+        .unwrap_or(32);
+    if used > limit {
+        // 断片化した場合だけ詰め直す。既存バッファと別のバッファへコピーする。
+        placed.clear();
+        let mut cursor = 0;
+        for (i, &(id, size)) in entries.iter().enumerate() {
+            offsets[i] = *placed.entry(id).or_insert_with(|| {
+                let offset = cursor;
+                cursor += size;
+                offset
+            });
+        }
+        used = u64::from(cursor) * 32;
+    }
+    let reuse = used <= capacity && ranges.iter().all(|r| u64::from(r.1) * 32 <= limit);
+    let bytes = if reuse {
+        capacity
+    } else {
+        used.next_power_of_two().min(limit).max(used)
+    };
+    if !reuse {
+        let mut seen = std::collections::HashSet::new();
+        copies = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &(id, _))| seen.insert(id).then_some(i))
+            .collect();
+    }
+    AtlasPlan {
+        offsets,
+        copies,
+        bytes,
+        reuse,
+    }
+}
+fn shared_buffer(
+    device: &wgpu::Device,
+    old: Option<&wgpu::Buffer>,
+    bytes: u64,
+    label: &str,
+) -> (wgpu::Buffer, bool) {
+    if let Some(old) = old.filter(|b| b.size() >= bytes) {
+        return (old.clone(), true);
+    }
+    (
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: bytes
+                .max(32)
+                .saturating_mul(if label == "局所接合候補" { 4 } else { 2 })
+                .next_power_of_two()
+                .min(u64::from(device.limits().max_storage_buffer_binding_size)),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }),
+        false,
+    )
 }
 fn atlas_fits(current: u64, previous: u64, limit: u32) -> bool {
     current.saturating_add(previous).saturating_mul(32) <= u64::from(limit)
@@ -340,107 +525,225 @@ fn target(device: &wgpu::Device, size: [u32; 2], depth: bool) -> wgpu::Texture {
         view_formats: &[],
     })
 }
+fn render_shader_source() -> String {
+    format!(
+        "{}\n{}\n{}",
+        include_str!("shared_render.wgsl"),
+        include_str!("globe.wgsl"),
+        include_str!("atmosphere.wgsl")
+    )
+}
 impl Renderer {
     pub fn new(state: RenderState, ctx: &egui::Context) -> Self {
+        let started = std::time::Instant::now();
         let d = &state.device;
-        let source = include_str!("sibson_gpu_controls.wgsl");
-        let shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Sibson GPU"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
-        });
-        let compute = d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("制御点から曲面を評価"),
-            layout: None,
-            module: &shader,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        let render_shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("共有曲面描画"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shared_render.wgsl").into()),
-        });
-        let bind_layout = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("共有曲面描画データ"),
-            entries: &[
-                storage_layout(0),
-                storage_layout(2),
-                storage_layout(3),
-                storage_layout(4),
-                storage_layout(5),
-                storage_layout(6),
-                storage_layout(7),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let landcover = LandcoverGpu::new(d);
-        let direct_renderer = Arc::new(crate::direct_material::Renderer::new(d));
-        let layout = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[&bind_layout, &landcover.layout],
-            push_constant_ranges: &[],
-        });
-        let mut descriptor = wgpu::RenderPipelineDescriptor {
-            label: Some("全国共有曲面"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &render_shader,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState {
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::GreaterEqual,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &render_shader,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[
-                    Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                    Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba32Float,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                ],
-            }),
-            multiview: None,
-            cache: None,
+        let mut landcover = LandcoverGpu::new(d);
+        let cache = {
+            let mut renderer = state.renderer.write();
+            if renderer.callback_resources.get::<PipelineCache>().is_none() {
+                renderer.callback_resources.insert(PipelineCache::default());
+            }
+            renderer
+                .callback_resources
+                .get::<PipelineCache>()
+                .unwrap()
+                .0
+                .clone()
         };
-        let pipeline = d.create_render_pipeline(&descriptor);
-        let fallback = pipeline.clone();
-        descriptor.vertex.entry_point = Some("control_vs");
-        descriptor.fragment.as_mut().unwrap().entry_point = Some("control_fs");
-        descriptor.depth_stencil.as_mut().unwrap().bias = wgpu::DepthBiasState {
-            constant: 2,
-            slope_scale: 1.,
-            clamp: 0.,
-        };
-        let control = d.create_render_pipeline(&descriptor);
-        let control_fallback = control.clone();
+        let shared = cache
+            .get_or_init(|| {
+                std::thread::scope(|scope| {
+                    // 独立したプログラムは並列に準備し、UI側の描画ロックは保持しない。
+                    let compute_job = scope.spawn(|| {
+                        let source = include_str!("sibson_gpu_controls.wgsl");
+                        let shader = crate::gpu_profile::timed("Sibson GPU", || {
+                            d.create_shader_module(wgpu::ShaderModuleDescriptor {
+                                label: Some("Sibson GPU"),
+                                source: wgpu::ShaderSource::Wgsl(source.into()),
+                            })
+                        });
+                        let compute =
+                            crate::gpu_profile::timed("制御点から曲面を評価", || {
+                                d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                                    label: Some("制御点から曲面を評価"),
+                                    layout: None,
+                                    module: &shader,
+                                    entry_point: Some("main"),
+                                    compilation_options: Default::default(),
+                                    cache: None,
+                                })
+                            });
+                        compute
+                    });
+                    let direct_job =
+                        scope.spawn(|| Arc::new(crate::direct_material::Renderer::new(d)));
+                    let render_shader = crate::gpu_profile::timed("共有曲面描画", || {
+                        d.create_shader_module(wgpu::ShaderModuleDescriptor {
+                            label: Some("共有曲面描画"),
+                            source: wgpu::ShaderSource::Wgsl(render_shader_source().into()),
+                        })
+                    });
+                    let bind_layout =
+                        d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                            label: Some("共有曲面描画データ"),
+                            entries: &[
+                                storage_layout(0),
+                                storage_layout(2),
+                                storage_layout(3),
+                                storage_layout(4),
+                                storage_layout(5),
+                                storage_layout(6),
+                                storage_layout(7),
+                                wgpu::BindGroupLayoutEntry {
+                                    binding: 1,
+                                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                                    ty: wgpu::BindingType::Buffer {
+                                        ty: wgpu::BufferBindingType::Uniform,
+                                        has_dynamic_offset: false,
+                                        min_binding_size: None,
+                                    },
+                                    count: None,
+                                },
+                            ],
+                        });
+                    let layout = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: None,
+                        bind_group_layouts: &[&bind_layout, &landcover.layout],
+                        push_constant_ranges: &[],
+                    });
+                    let mut descriptor = wgpu::RenderPipelineDescriptor {
+                        label: Some("全国共有曲面"),
+                        layout: Some(&layout),
+                        vertex: wgpu::VertexState {
+                            module: &render_shader,
+                            entry_point: Some("vs"),
+                            compilation_options: Default::default(),
+                            buffers: &[],
+                        },
+                        primitive: wgpu::PrimitiveState {
+                            cull_mode: None,
+                            ..Default::default()
+                        },
+                        depth_stencil: Some(wgpu::DepthStencilState {
+                            format: wgpu::TextureFormat::Depth32Float,
+                            depth_write_enabled: true,
+                            depth_compare: wgpu::CompareFunction::GreaterEqual,
+                            stencil: Default::default(),
+                            bias: Default::default(),
+                        }),
+                        multisample: Default::default(),
+                        fragment: Some(wgpu::FragmentState {
+                            module: &render_shader,
+                            entry_point: Some("fs"),
+                            compilation_options: Default::default(),
+                            targets: &[
+                                Some(wgpu::ColorTargetState {
+                                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                                    blend: None,
+                                    write_mask: wgpu::ColorWrites::ALL,
+                                }),
+                                Some(wgpu::ColorTargetState {
+                                    format: wgpu::TextureFormat::Rgba32Float,
+                                    blend: None,
+                                    write_mask: wgpu::ColorWrites::ALL,
+                                }),
+                            ],
+                        }),
+                        multiview: None,
+                        cache: None,
+                    };
+                    let pipeline =
+                        crate::gpu_profile::timed("地形曲面・頂点/画素", || {
+                            d.create_render_pipeline(&descriptor)
+                        });
+                    let fallback = pipeline.clone();
+                    descriptor.vertex.entry_point = Some("control_vs");
+                    descriptor.fragment.as_mut().unwrap().entry_point = Some("control_fs");
+                    descriptor.depth_stencil.as_mut().unwrap().bias = wgpu::DepthBiasState {
+                        constant: 2,
+                        slope_scale: 1.,
+                        clamp: 0.,
+                    };
+                    let control = crate::gpu_profile::timed("制御点ワイヤー", || {
+                        d.create_render_pipeline(&descriptor)
+                    });
+                    let control_fallback = control.clone();
+                    descriptor.vertex.entry_point = Some("globe_vs");
+                    descriptor.fragment.as_mut().unwrap().entry_point = Some("globe_fs");
+                    descriptor
+                        .depth_stencil
+                        .as_mut()
+                        .unwrap()
+                        .depth_write_enabled = false;
+                    descriptor.depth_stencil.as_mut().unwrap().depth_compare =
+                        wgpu::CompareFunction::GreaterEqual;
+                    descriptor.depth_stencil.as_mut().unwrap().bias = Default::default();
+                    let globe_pipeline = crate::gpu_profile::timed("地球・空・大気", || {
+                        d.create_render_pipeline(&descriptor)
+                    });
+                    eprintln!(
+                        "地形GPU初期化: 描画まで {:.2}ms",
+                        started.elapsed().as_secs_f64() * 1000.
+                    );
+                    let indices = Arc::new(
+                        (0..=9)
+                            .map(|level| {
+                                let n = 1u32 << level;
+                                let mut ids = Vec::with_capacity((6 * n * n) as usize);
+                                for y in 0..n {
+                                    for x in 0..n {
+                                        let a = y * (n + 1) + x;
+                                        ids.extend([a, a + 1, a + n + 2, a, a + n + 2, a + n + 1]);
+                                    }
+                                }
+                                (
+                                    n,
+                                    d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                        label: Some("共有分割テンプレート"),
+                                        contents: bytemuck::cast_slice(&ids),
+                                        usage: wgpu::BufferUsages::INDEX,
+                                    }),
+                                )
+                            })
+                            .collect(),
+                    );
+                    SharedPipelines {
+                        compute: compute_job
+                            .join()
+                            .expect("曲面評価プログラムの準備が停止しました"),
+                        pipeline,
+                        fallback,
+                        control,
+                        control_fallback,
+                        globe_pipeline,
+                        indices,
+                        direct_renderer: direct_job
+                            .join()
+                            .expect("画像合成プログラムの準備が停止しました"),
+                        point_renderer: Arc::default(),
+                        landcover_layout: landcover.layout.clone(),
+                    }
+                })
+            })
+            .clone();
+        let SharedPipelines {
+            compute,
+            pipeline,
+            fallback,
+            control,
+            control_fallback,
+            globe_pipeline,
+            indices,
+            direct_renderer,
+            point_renderer,
+            landcover_layout,
+        } = shared;
+        landcover.layout = landcover_layout;
+        landcover.refresh(d);
+        eprintln!(
+            "地形GPU初期化: 共用プログラム準備 {:.2}ms",
+            started.elapsed().as_secs_f64() * 1000.
+        );
         let size = [1, 1];
         let color = target(d, size, false);
         let depth = target(d, size, true);
@@ -449,40 +752,21 @@ impl Renderer {
             &color.create_view(&Default::default()),
             wgpu::FilterMode::Linear,
         );
-        let indices = Arc::new(
-            (0..=9)
-                .map(|level| {
-                    let n = 1u32 << level;
-                    let mut ids = Vec::with_capacity((6 * n * n) as usize);
-                    for y in 0..n {
-                        for x in 0..n {
-                            let a = y * (n + 1) + x;
-                            ids.extend([a, a + 1, a + n + 2, a, a + n + 2, a + n + 1]);
-                        }
-                    }
-                    (
-                        n,
-                        d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("共有分割テンプレート"),
-                            contents: bytemuck::cast_slice(&ids),
-                            usage: wgpu::BufferUsages::INDEX,
-                        }),
-                    )
-                })
-                .collect(),
-        );
         let positions = position_target(d, size);
         let positions_view = positions.create_view(&Default::default());
         Self {
+            frozen_layout: None,
             sources: Default::default(),
             uploads: Default::default(),
+            upload_batch: None,
+            upload_batch_sizes: Vec::new(),
             wake: ctx.clone(),
             indices,
             landcover,
             direct: None,
             point_state: Default::default(),
             hit_state: Default::default(),
-            point_renderer: Arc::new(crate::point_visibility::Renderer::new(d)),
+            point_renderer,
             direct_renderer,
             positions,
             positions_view,
@@ -498,6 +782,7 @@ impl Renderer {
             fallback,
             control,
             control_fallback,
+            globe_pipeline,
         }
     }
     pub fn set_external_materials(
@@ -588,6 +873,24 @@ impl Renderer {
         self.landcover.refresh(&self.state.device);
     }
 
+    #[cfg(test)]
+    pub(crate) fn prepare_stats(&self) -> PrepareStats {
+        self.state
+            .renderer
+            .read()
+            .callback_resources
+            .get::<CachedScene>()
+            .map(|c| c.stats)
+            .unwrap_or_default()
+    }
+    pub fn has_drawn_mesh(&self) -> bool {
+        self.state
+            .renderer
+            .read()
+            .callback_resources
+            .get::<CachedScene>()
+            .is_some_and(|c| c.owner_texture == self.texture && c.triangles > 0)
+    }
     pub fn metrics(&self) -> (u64, usize, usize) {
         let renderer = self.state.renderer.read();
         renderer
@@ -608,10 +911,62 @@ impl Renderer {
             })
             .unwrap_or((0, 0, 0))
     }
+    pub(crate) fn snapshot_display(
+        &self,
+    ) -> Option<(Vec<Arc<Tile>>, usize, usize, LayoutSnapshot)> {
+        let renderer = self.state.renderer.read();
+        renderer
+            .callback_resources
+            .get::<CachedScene>()
+            .filter(|c| c.owner_texture == self.texture)
+            .map(|c| {
+                (
+                    c.tiles.clone(),
+                    c.primary,
+                    c.current,
+                    LayoutSnapshot {
+                        plans: c.plans.clone(),
+                        camera: c.camera,
+                        render_camera: c.render_camera.clone(),
+                        morph: c.morph,
+                        pixels_per_point: c.pixels_per_point,
+                        render_size: self.size,
+                        clipped_background: c.clipped_background,
+                        force_replan: false,
+                    },
+                )
+            })
+    }
     pub fn sample_budget(&self) -> u64 {
         // 新旧曲面を同時に保持し、残り1/8を背景と接続用に残す。
         (u64::from(self.state.device.limits().max_storage_buffer_binding_size) / 32 * 7 / 8 / 2)
             .min(2_000_000)
+    }
+    pub fn begin_upload_batch(&mut self) {
+        debug_assert!(self.upload_batch.is_none());
+        self.upload_batch = Some(self.state.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("曲面評価をまとめて準備"),
+            },
+        ));
+    }
+    pub fn flush_upload_batch(&mut self) {
+        let Some(encoder) = self.upload_batch.take() else {
+            return;
+        };
+        let sizes = std::mem::take(&mut self.upload_batch_sizes);
+        if sizes.is_empty() {
+            return;
+        }
+        self.state.queue.submit([encoder.finish()]);
+        let uploads = self.uploads.clone();
+        let ctx = self.wake.clone();
+        self.state.queue.on_submitted_work_done(move || {
+            for n in sizes {
+                uploads.finish(n);
+            }
+            ctx.request_repaint();
+        });
     }
     pub fn can_upload(&self, n: u32) -> bool {
         let _ = self.state.device.poll(wgpu::Maintain::Poll);
@@ -637,30 +992,12 @@ impl Renderer {
         field: crate::shared_field::Field,
     ) -> anyhow::Result<Arc<Tile>> {
         let [ox, oy, side] = field.relative(p.side);
-        let vertices = p
-            .vertices
-            .iter()
-            .map(|v| [v[0] - ox as f32, v[1] - oy as f32, v[2], v[3]])
-            .collect::<Vec<_>>();
-        let mut density = vec![0u32; 1024];
-        for v in &vertices {
-            if v[0] >= 0. && v[1] >= 0. && v[0] as f64 <= side && v[1] as f64 <= side {
-                let x = (v[0] as f64 / side * 32.).floor().clamp(0., 31.) as usize;
-                let y = (v[1] as f64 / side * 32.).floor().clamp(0., 31.) as usize;
-                density[y * 32 + x] += 1;
-            }
-        }
         let d = &self.state.device;
         let limit = d.limits().max_storage_buffer_binding_size as usize;
         anyhow::ensure!(
             p.sections.iter().all(|v| v.len().max(4) <= limit),
             "GPU補助情報が機器の上限を超えます"
         );
-        let density = if field.depth == 0 {
-            p.density.clone()
-        } else {
-            density
-        };
         let sources = if let Some(buffers) = self.sources.get(&p.key).and_then(Weak::upgrade) {
             buffers
         } else {
@@ -676,7 +1013,19 @@ impl Renderer {
                         })
                     })
                     .collect(),
-                bytes: p.sections.iter().map(|b| b.len().max(4)).sum(),
+                vertices: d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("共有する制御点XYZ"),
+                    contents: bytemuck::cast_slice(&p.vertices),
+                    usage: wgpu::BufferUsages::STORAGE,
+                }),
+                triangles: d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("共有する制御点TIN"),
+                    contents: bytemuck::cast_slice(&p.triangles),
+                    usage: wgpu::BufferUsages::STORAGE,
+                }),
+                bytes: p.sections.iter().map(|b| b.len().max(4)).sum::<usize>()
+                    + p.vertices.len() * 16
+                    + p.triangles.len() * 4,
             });
             self.sources.insert(p.key, Arc::downgrade(&buffers));
             buffers
@@ -751,36 +1100,28 @@ impl Renderer {
         });
         let tile = Arc::new(Tile {
             key: p.key,
-            bytes: p.vertices.len() * 16
-                + p.triangles.len() * 4
-                + size as usize
-                + std::mem::size_of::<View>()
-                + 64,
+            bytes: size as usize + std::mem::size_of::<View>() + 64,
             controls: p.controls,
             compressed_bytes: p.compressed_bytes,
             n,
             origin: [p.origin[0] + ox, p.origin[1] + oy],
             side,
+            field,
             local: field.depth > 0,
             compute,
-            _sources: sources,
+            _sources: sources.clone(),
             view,
             output,
-            density,
-            vertices: d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("制御点XYZ"),
-                contents: bytemuck::cast_slice(&vertices),
-                usage: wgpu::BufferUsages::STORAGE,
-            }),
-            triangles: d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("制御点TIN"),
-                contents: bytemuck::cast_slice(&p.triangles),
-                usage: wgpu::BufferUsages::STORAGE,
-            }),
+            seam_band: source_seam_band(p),
+            vertices: sources.vertices.clone(),
+            triangles: sources.triangles.clone(),
             triangle_indices: p.triangles.len() as u32,
         });
-        let mut encoder = d.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("曲面生成"),
+        let batching = self.upload_batch.is_some();
+        let mut encoder = self.upload_batch.take().unwrap_or_else(|| {
+            d.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("曲面生成"),
+            })
         });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -792,13 +1133,18 @@ impl Renderer {
             pass.dispatch_workgroups((tile.n + 1).div_ceil(8), (tile.n + 1).div_ceil(8), 1);
         }
         self.uploads.start(n);
-        self.state.queue.submit([encoder.finish()]);
-        let uploads = self.uploads.clone();
-        let ctx = self.wake.clone();
-        self.state.queue.on_submitted_work_done(move || {
-            uploads.finish(n);
-            ctx.request_repaint();
-        });
+        if batching {
+            self.upload_batch = Some(encoder);
+            self.upload_batch_sizes.push(n);
+        } else {
+            self.state.queue.submit([encoder.finish()]);
+            let uploads = self.uploads.clone();
+            let ctx = self.wake.clone();
+            self.state.queue.on_submitted_work_done(move || {
+                uploads.finish(n);
+                ctx.request_repaint();
+            });
+        }
         Ok(tile)
     }
     pub fn frame(
@@ -821,6 +1167,10 @@ impl Renderer {
         landcover_animate: bool,
         landcover_bilinear: bool,
     ) -> egui::PaintCallback {
+        let ppp = self
+            .frozen_layout
+            .as_ref()
+            .map_or(ppp, |s| s.pixels_per_point);
         let tiles: Vec<_> = tiles
             .into_iter()
             .filter(|t| {
@@ -867,6 +1217,10 @@ impl Renderer {
                 .cmp(&a.key.0)
                 .then_with(|| a.side.total_cmp(&b.side))
         });
+        // 遷移が終わった旧曲面は、次の取得完了を待たず描画と接合候補から外す。
+        if morph >= 1. {
+            previous.clear();
+        }
         previous.retain(|t| {
             camera
                 .visible_depth([
@@ -898,10 +1252,21 @@ impl Renderer {
             previous.clear();
             morph = 1.;
         }
-        let size = [
-            (rect.width() * ppp).max(1.) as u32,
-            (rect.height() * ppp).max(1.) as u32,
-        ];
+        let size = if let Some(layout) = &self.frozen_layout {
+            if layout.render_size.iter().all(|v| *v > 0) {
+                layout.render_size
+            } else {
+                [
+                    (rect.width() * ppp).round().max(1.) as u32,
+                    (rect.height() * ppp).round().max(1.) as u32,
+                ]
+            }
+        } else {
+            [
+                (rect.width() * ppp).max(1.) as u32,
+                (rect.height() * ppp).max(1.) as u32,
+            ]
+        };
         if size != self.size {
             self.state.renderer.write().free_texture(&self.texture);
             self.color = target(&self.state.device, size, false);
@@ -919,10 +1284,16 @@ impl Renderer {
         Callback::new_paint_callback(
             rect,
             Frame {
+                owner_texture: self.texture,
+                frozen_layout: self.frozen_layout.clone(),
                 point_state: self.point_state.clone(),
                 hit_state: self.hit_state.clone(),
                 hit_texture: self.positions.clone(),
-                point_renderer: self.point_renderer.clone(),
+                point_renderer: self.point_renderer.ready_or_start(
+                    &self.state.device,
+                    &self.point_state,
+                    &self.wake,
+                ),
                 direct: self.direct.clone(),
                 direct_renderer: self.direct_renderer.clone(),
                 positions: self.positions_view.clone(),
@@ -964,15 +1335,17 @@ impl Renderer {
                 fallback: self.fallback.clone(),
                 control: self.control.clone(),
                 control_fallback: self.control_fallback.clone(),
+                globe_pipeline: self.globe_pipeline.clone(),
             },
         )
     }
 }
 struct Frame {
+    owner_texture: egui::TextureId,
     hit_state: Arc<std::sync::Mutex<crate::hit_test::State>>,
     hit_texture: wgpu::Texture,
     point_state: Arc<std::sync::Mutex<crate::point_visibility::State>>,
-    point_renderer: Arc<crate::point_visibility::Renderer>,
+    point_renderer: Option<Arc<crate::point_visibility::Renderer>>,
     direct: Option<Vec<crate::direct_material::Quad>>,
     direct_renderer: Arc<crate::direct_material::Renderer>,
     positions: wgpu::TextureView,
@@ -1005,6 +1378,8 @@ struct Frame {
     fallback: wgpu::RenderPipeline,
     control: wgpu::RenderPipeline,
     control_fallback: wgpu::RenderPipeline,
+    globe_pipeline: wgpu::RenderPipeline,
+    frozen_layout: Option<LayoutSnapshot>,
 }
 impl CallbackTrait for Frame {
     fn prepare(
@@ -1015,6 +1390,8 @@ impl CallbackTrait for Frame {
         encoder: &mut wgpu::CommandEncoder,
         resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
+        let prepare_started = std::time::Instant::now();
+        let mut stats = PrepareStats::default();
         // 描画が続く間も、完了済みのバインドグループやバッファを回収する。
         let _ = device.poll(wgpu::Maintain::Poll);
         let camera = &self.camera;
@@ -1041,7 +1418,7 @@ impl CallbackTrait for Frame {
                         f32::from(self.landcover_water_only)
                     },
                     f32::from(!self.landcover_bilinear),
-                    f32::from(self.direct.is_some()),
+                    f32::from(self.direct.is_some() || camera.globe),
                 ],
             }),
         );
@@ -1080,7 +1457,10 @@ impl CallbackTrait for Frame {
         }
         let current = self.tiles.len() + self.roots.len();
         let rebuild = resources.get::<CachedScene>().is_none_or(|cache| {
-            cache.tiles.len() != all.len()
+            cache.owner_texture != self.owner_texture
+                || cache.primary != self.tiles.len()
+                || cache.current != current
+                || cache.tiles.len() != all.len()
                 || cache
                     .tiles
                     .iter()
@@ -1088,10 +1468,33 @@ impl CallbackTrait for Frame {
                     .any(|(a, b)| !Arc::ptr_eq(a, b))
         });
         if rebuild {
+            let rebuild_started = std::time::Instant::now();
+            let old = resources
+                .get::<CachedScene>()
+                .filter(|c| c.owner_texture == self.owner_texture);
+            let entries = all
+                .iter()
+                .map(|t| (Arc::as_ptr(t) as usize, (t.n + 1).pow(2)))
+                .collect::<Vec<_>>();
+            let old_entries = old
+                .map(|c| {
+                    c.tiles
+                        .iter()
+                        .zip(&c.records)
+                        .map(|(t, r)| (Arc::as_ptr(t) as usize, r.data[0], (t.n + 1).pow(2)))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let allocation = plan_atlas(
+                &entries,
+                &old_entries,
+                old.map_or(0, |c| c._atlas.size()),
+                u64::from(device.limits().max_storage_buffer_binding_size),
+            );
             let mut records = Vec::<Record>::new();
-            let mut count = 0u32;
             for (i, t) in all.iter().enumerate() {
                 records.push(Record {
+                    draw: [0; 4],
                     bounds: [
                         (t.origin[0] - camera.center[0]) as f32,
                         (t.origin[1] - camera.center[1]) as f32,
@@ -1102,16 +1505,40 @@ impl CallbackTrait for Frame {
                             0.
                         },
                     ],
-                    data: [count, t.n, t.key.0, 0],
-                    neighbors: [0, 0, 0, 0],
+                    data: [allocation.offsets[i], t.n, t.key.0, 0],
+                    neighbors: [0, t.seam_band.to_bits(), 0, 0],
+                    tile: {
+                        let b = crate::shared_data::bounds(t.key);
+                        [
+                            (b[0] - camera.center[0]) as f32,
+                            (b[1] - camera.center[1]) as f32,
+                            (b[2] - b[0]) as f32,
+                            t.seam_band,
+                        ]
+                    },
                 });
-                count += (t.n + 1).pow(2);
             }
             let mut links = Vec::<u32>::new();
             for i in 0..records.len() {
                 let a = records[i].bounds;
                 records[i].neighbors[0] = links.len() as u32;
                 for (j, b) in records.iter().enumerate() {
+                    // GPUで必ず除外される重なった代替面を候補へ入れない。
+                    // 大きな代替面の接合幅が詳細面の高速経路まで無効にするのも防ぐ。
+                    let own = records[i];
+                    let overlap = (0..2).all(|axis| {
+                        (own.tile[axis] + own.tile[2]).min(b.tile[axis] + b.tile[2])
+                            - own.tile[axis].max(b.tile[axis])
+                            > 0.01
+                    });
+                    if i < current
+                        && j < current
+                        && b.bounds[3] > 0.
+                        && overlap
+                        && (own.bounds[3] == 0. || b.bounds[2] > own.bounds[2] * 1.001)
+                    {
+                        continue;
+                    }
                     let pad = (a[2] / 8.)
                         .min(2. * a[2] / all[i].n as f32)
                         .max((b.bounds[2] / 8.).min(2. * b.bounds[2] / all[j].n as f32))
@@ -1124,7 +1551,16 @@ impl CallbackTrait for Frame {
                         links.push(j as u32);
                     }
                 }
+                let begin = records[i].neighbors[0] as usize;
+                // 元タイルごとに並べ、カメラに合わせて分割した領域を重複加算しない。
+                links[begin..].sort_by_key(|&j| (j as usize >= current, all[j as usize].key));
                 records[i].data[3] = links.len() as u32 - records[i].neighbors[0];
+                // 境界から十分離れた頂点は、隣接タイルの探索を省ける。
+                let pad = links[begin..]
+                    .iter()
+                    .map(|&j| all[j as usize].seam_band)
+                    .fold(all[i].seam_band, f32::max);
+                records[i].draw[3] = pad.to_bits();
             }
             // 背景の被覆判定には、細分化された全パッチでなく外側の矩形だけを渡す。
             for i in 0..current {
@@ -1165,40 +1601,91 @@ impl CallbackTrait for Frame {
                 records[i].neighbors[3] = chosen.len() as u32;
                 links.extend(chosen.into_iter().map(|j| j as u32));
             }
-            let atlas = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("共有曲面アトラス"),
-                size: u64::from(count) * 32,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            for (t, r) in all.iter().zip(&records) {
+            // 元タイル単位で不要な候補群を一度に飛ばすための終端表。
+            for i in 0..records.len() {
+                let start = records[i].neighbors[0] as usize;
+                let count = records[i].data[3] as usize;
+                records[i].neighbors[1] = links.len() as u32;
+                let mut begin = 0;
+                while begin < count {
+                    let first = links[start + begin] as usize;
+                    let mut end = begin + 1;
+                    while end < count {
+                        let id = links[start + end] as usize;
+                        if all[id].key != all[first].key || (id >= current) != (first >= current) {
+                            break;
+                        }
+                        end += 1;
+                    }
+                    links.extend(std::iter::repeat_n(end as u32, end - begin));
+                    begin = end;
+                }
+            }
+            let atlas = if allocation.reuse {
+                old.unwrap()._atlas.clone()
+            } else {
+                stats.allocations += 1;
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("共有曲面アトラス"),
+                    size: allocation.bytes,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            };
+            for &i in &allocation.copies {
+                let t = &all[i];
+                let bytes = u64::from((t.n + 1).pow(2)) * 32;
                 encoder.copy_buffer_to_buffer(
                     &t.output,
                     0,
                     &atlas,
-                    u64::from(r.data[0]) * 32,
-                    u64::from((t.n + 1).pow(2)) * 32,
+                    u64::from(records[i].data[0]) * 32,
+                    bytes,
                 );
+                stats.atlas_copy_bytes += bytes;
             }
-            let metadata = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("曲面接合情報"),
-                contents: bytemuck::cast_slice(&records),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-            let refs = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("局所接合候補"),
-                contents: bytemuck::cast_slice(&links),
-                usage: wgpu::BufferUsages::STORAGE,
-            });
+            let (metadata, metadata_reused) = shared_buffer(
+                device,
+                old.map(|c| &c.metadata),
+                std::mem::size_of_val(records.as_slice()) as u64,
+                "曲面接合情報",
+            );
+            let (refs, refs_reused) = shared_buffer(
+                device,
+                old.map(|c| &c._links),
+                std::mem::size_of_val(links.as_slice()) as u64,
+                "局所接合候補",
+            );
+            stats.allocations += usize::from(!metadata_reused) + usize::from(!refs_reused);
+            queue.write_buffer(&metadata, 0, bytemuck::cast_slice(&records));
+            queue.write_buffer(&refs, 0, bytemuck::cast_slice(&links));
+            let shared_reused = allocation.reuse && metadata_reused && refs_reused;
             let mut bindings = Vec::new();
             let mut patches = Vec::new();
             for tile in &all[..current] {
-                let patch = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("画面分割パッチ"),
-                    size: 1024 * std::mem::size_of::<crate::shared_patches::Patch>() as u64,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
+                let previous = old.and_then(|c| {
+                    c.tiles[..c.current]
+                        .iter()
+                        .position(|t| Arc::ptr_eq(tile, t))
+                        .map(|i| (c, i))
                 });
+                let patch = if let Some((c, i)) = previous {
+                    c.patches[i].clone()
+                } else {
+                    stats.allocations += 1;
+                    device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("画面分割パッチ"),
+                        size: 16 * std::mem::size_of::<crate::shared_patches::Patch>() as u64,
+                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    })
+                };
+                if let Some((c, i)) = previous.filter(|_| shared_reused) {
+                    bindings.push(c.bindings[i].clone());
+                    patches.push(patch);
+                    continue;
+                }
+                stats.bind_groups += 1;
                 bindings.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("GPUパッチと接合"),
                     layout: &self.pipeline.get_bind_group_layout(0),
@@ -1239,13 +1726,35 @@ impl CallbackTrait for Frame {
                 }));
                 patches.push(patch);
             }
+            let point_patches = if let Some(old) = old {
+                old.point_patches.clone()
+            } else {
+                stats.allocations += 1;
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("地点投影用の共有描画パッチ"),
+                    size: 64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            };
+            stats.rebuild_ms = rebuild_started.elapsed().as_secs_f64() * 1000.;
             resources.insert(CachedScene {
+                stats,
+                owner_texture: self.owner_texture,
+                clipped_background: false,
+                plans_uploaded: false,
                 tiles: all.clone(),
+                primary: self.tiles.len(),
+                current,
+                render_camera: camera.clone(),
+                morph: self.morph,
+                pixels_per_point: self.size[0] as f32 / camera.viewport[0] as f32,
                 _atlas: atlas,
                 _links: refs,
                 metadata,
                 bindings,
                 patches,
+                point_patches,
                 records,
                 plans: Vec::new(),
                 last_plan: std::time::Instant::now() - std::time::Duration::from_secs(1),
@@ -1267,41 +1776,164 @@ impl CallbackTrait for Frame {
             camera.fov_y,
             camera.height,
         ];
-        if cache.plans.is_empty()
+        if let Some(layout) = self.frozen_layout.as_ref().filter(|s| !s.force_replan) {
+            install_snapshot_layout(cache, layout, queue);
+            cache.clipped_background = layout.clipped_background;
+        } else if !cache.clipped_background
+            || cache.plans.is_empty()
             || (pose != cache.camera
                 && cache.last_plan.elapsed() >= std::time::Duration::from_millis(100))
         {
             let inputs = all[..current]
                 .iter()
-                .map(|t| crate::shared_patches::Input {
-                    origin: t.origin,
-                    side: t.side,
-                    n: t.n,
-                    density: t.density.clone(),
+                .enumerate()
+                .map(|(i, t)| {
+                    let covered_by = if i < self.tiles.len() {
+                        Vec::new()
+                    } else {
+                        all[..current]
+                            .iter()
+                            .enumerate()
+                            .filter(|(j, b)| {
+                                *j != i
+                                    && (*j < self.tiles.len()
+                                        || b.key.0 > t.key.0
+                                        || (b.key.0 == t.key.0 && b.side < t.side))
+                                    && b.origin[0] < t.origin[0] + t.side
+                                    && b.origin[0] + b.side > t.origin[0]
+                                    && b.origin[1] < t.origin[1] + t.side
+                                    && b.origin[1] + b.side > t.origin[1]
+                            })
+                            .map(|(_, b)| {
+                                [
+                                    b.origin[0],
+                                    b.origin[1],
+                                    b.origin[0] + b.side,
+                                    b.origin[1] + b.side,
+                                ]
+                            })
+                            .collect()
+                    };
+                    crate::shared_patches::Input {
+                        origin: t.origin,
+                        side: t.side,
+                        n: t.n,
+                        covered_by,
+                    }
                 })
                 .collect::<Vec<_>>();
-            cache.plans = crate::shared_patches::plan(&inputs[..self.tiles.len()], camera);
-            cache.plans.extend(crate::shared_patches::plan(
-                &inputs[self.tiles.len()..],
-                camera,
-            ));
-            for (plan, buffer) in cache.plans.iter().zip(&cache.patches) {
-                queue.write_buffer(buffer, 0, bytemuck::cast_slice(&plan.patches));
-            }
+            // 読み込み途中の背景も同じ計画に含め、境界の頂点を共通の格子へそろえる。
+            let plan_started = std::time::Instant::now();
+            cache.plans = crate::shared_patches::plan(&inputs, camera);
+            stats.plan_ms = plan_started.elapsed().as_secs_f64() * 1000.;
+            cache.plans_uploaded = false;
+            cache.clipped_background = true;
             cache.last_plan = std::time::Instant::now();
             cache.camera = pose;
+        }
+        if !cache.plans_uploaded {
+            let all_patches = cache
+                .plans
+                .iter()
+                .flat_map(|p| p.patches.iter().copied())
+                .collect::<Vec<_>>();
+            let bytes = bytemuck::cast_slice(&all_patches);
+            if bytes.len() as u64 > cache.point_patches.size() {
+                cache.point_patches = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("地点投影用の共有描画パッチ"),
+                    size: (bytes.len() as u64).next_power_of_two(),
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            if !bytes.is_empty() {
+                queue.write_buffer(&cache.point_patches, 0, bytes);
+            }
+            let mut offset = 0;
+            for (r, p) in cache.records.iter_mut().zip(&cache.plans) {
+                r.draw = [offset, p.patches.len() as u32, 4, r.draw[3]];
+                offset += p.patches.len() as u32;
+            }
+            for (i, plan) in cache.plans.iter().enumerate() {
+                let size = (plan.patches.len().max(1)
+                    * std::mem::size_of::<crate::shared_patches::Patch>())
+                    as u64;
+                if size > cache.patches[i].size() {
+                    stats.allocations += 1;
+                    stats.bind_groups += 1;
+                    let patch = device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("境界分割パッチ"),
+                        size: size.next_power_of_two(),
+                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    let tile = &all[i];
+                    let buffers = [
+                        &tile.output,
+                        &tile.view,
+                        &patch,
+                        &cache._atlas,
+                        &cache.metadata,
+                        &cache._links,
+                        &tile.vertices,
+                        &tile.triangles,
+                    ];
+                    let entries = buffers
+                        .iter()
+                        .enumerate()
+                        .map(|(binding, b)| wgpu::BindGroupEntry {
+                            binding: binding as u32,
+                            resource: b.as_entire_binding(),
+                        })
+                        .collect::<Vec<_>>();
+                    cache.bindings[i] = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("境界分割の描画情報"),
+                        layout: &self.pipeline.get_bind_group_layout(0),
+                        entries: &entries,
+                    });
+                    cache.patches[i] = patch;
+                }
+                if !plan.patches.is_empty() {
+                    queue.write_buffer(&cache.patches[i], 0, bytemuck::cast_slice(&plan.patches));
+                }
+            }
+            cache.plans_uploaded = true;
         }
         for (r, t) in cache.records.iter_mut().zip(&all) {
             r.bounds[0] = (t.origin[0] - camera.center[0]) as f32;
             r.bounds[1] = (t.origin[1] - camera.center[1]) as f32;
+            let b = crate::shared_data::bounds(t.key);
+            r.tile[0] = (b[0] - camera.center[0]) as f32;
+            r.tile[1] = (b[1] - camera.center[1]) as f32;
         }
+        cache.render_camera = camera.clone();
+        cache.morph = self.morph;
+        cache.pixels_per_point = self.size[0] as f32 / camera.viewport[0] as f32;
         queue.write_buffer(&cache.metadata, 0, bytemuck::cast_slice(&cache.records));
         for (i, tile) in all[..current].iter().enumerate() {
             let u = View {
+                earth: [
+                    latitude.sin() as f32,
+                    latitude.cos() as f32,
+                    crate::globe::RADIUS as f32,
+                    f32::from(camera.globe),
+                ],
+                eye: [
+                    eye.x as f32,
+                    eye.y as f32,
+                    eye.z as f32,
+                    camera.height as f32,
+                ],
+                frame: [
+                    self.size[0] as f32,
+                    self.size[1] as f32,
+                    camera.tan_half_fov() as f32,
+                    camera.center[0] as f32,
+                ],
                 matrix: (projection * view).to_cols_array_2d(),
                 offset: [
-                    ((tile.origin[0] - camera.center[0]) * scale as f64) as f32,
-                    ((tile.origin[1] - camera.center[1]) * scale as f64) as f32,
+                    (cache.camera[0] - camera.center[0]) as f32,
+                    (cache.camera[1] - camera.center[1]) as f32,
                     scale,
                     0.,
                 ],
@@ -1316,7 +1948,11 @@ impl CallbackTrait for Frame {
                     current as u32,
                     u32::from(self.tin),
                     u32::from(self.join),
-                    u32::from(self.borders) | u32::from(self.colors) * 2,
+                    u32::from(self.borders)
+                        | u32::from(self.colors) * 2
+                        | u32::from(!cache.clipped_background) * 4
+                        | u32::from(cache.clipped_background) * 8
+                        | u32::from(cache.clipped_background) * 16,
                 ],
             };
             queue.write_buffer(&tile.view, 0, bytemuck::bytes_of(&u));
@@ -1376,6 +2012,11 @@ impl CallbackTrait for Frame {
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(1, &self.landcover_group, &[]);
+        if camera.globe && !cache.bindings.is_empty() {
+            pass.set_pipeline(&self.globe_pipeline);
+            pass.set_bind_group(0, &cache.bindings[0], &[]);
+            pass.draw(0..3, 0..1);
+        }
         for (i, plan) in cache.plans.iter().enumerate() {
             let fallback = i >= self.tiles.len();
             pass.set_bind_group(0, &cache.bindings[i], &[]);
@@ -1390,7 +2031,7 @@ impl CallbackTrait for Frame {
                     pass.draw_indexed(0..6 * n * n, 0, range.clone());
                 }
             }
-            if self.tin || self.wire >= 3 {
+            if (self.tin || self.wire >= 3) && !(camera.globe && all[i].key == (0, 0, 0)) {
                 pass.set_pipeline(if fallback {
                     &self.control_fallback
                 } else {
@@ -1400,7 +2041,8 @@ impl CallbackTrait for Frame {
             }
         }
         drop(pass);
-        if let Some(commands) = &self.direct {
+        if self.direct.is_some() || camera.globe {
+            let commands = self.direct.as_deref().unwrap_or(&[]);
             self.direct_renderer.render(
                 device,
                 queue,
@@ -1413,9 +2055,9 @@ impl CallbackTrait for Frame {
                 commands,
             );
         }
-        if let Some(tile) = all.first() {
+        if let (Some(tile), Some(point_renderer)) = (all.first(), self.point_renderer.as_ref()) {
             // メッシュ描画後の位置情報と、同じ曲面・境界・モーフの補間を使う。
-            self.point_renderer.encode(
+            point_renderer.encode(
                 device,
                 encoder,
                 &self.point_state,
@@ -1424,9 +2066,25 @@ impl CallbackTrait for Frame {
                 &cache.metadata,
                 &cache._links,
                 &tile.view,
+                &cache.point_patches,
             );
         }
         crate::hit_test::encode(&self.hit_state, device, encoder, &self.hit_texture, camera);
+        stats.prepare_ms = prepare_started.elapsed().as_secs_f64() * 1000.;
+        if std::env::var_os("YAMAMUKI_TERRAIN_PROFILE").is_some()
+            && (rebuild || stats.prepare_ms >= 16.)
+        {
+            eprintln!(
+                "地形準備: 全体={:.2}ms 再構築={:.2}ms 分割={:.2}ms 転送={}bytes 確保={} 描画設定={}",
+                stats.prepare_ms,
+                stats.rebuild_ms,
+                stats.plan_ms,
+                stats.atlas_copy_bytes,
+                stats.allocations,
+                stats.bind_groups
+            );
+        }
+        cache.stats = stats;
         Vec::new()
     }
     fn paint(
@@ -1440,6 +2098,61 @@ impl CallbackTrait for Frame {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn renderer_reuses_programs_for_flat_and_terrain_views() {
+        let backend = if cfg!(windows) {
+            wgpu::Backends::DX12
+        } else {
+            wgpu::Backends::PRIMARY
+        };
+        let Some(app) = crate::remembered_scene_tests::app_with_backend(backend) else {
+            return;
+        };
+        let started = std::time::Instant::now();
+        let renderer = super::Renderer::new(
+            app.renderer.state.clone(),
+            &eframe::egui::Context::default(),
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            &renderer.indices,
+            &app.renderer.indices
+        ));
+        assert!(std::sync::Arc::ptr_eq(
+            &renderer.direct_renderer,
+            &app.renderer.direct_renderer
+        ));
+        assert!(std::sync::Arc::ptr_eq(
+            &renderer.point_renderer,
+            &app.renderer.point_renderer
+        ));
+        eprintln!(
+            "GPUプログラム再利用: {:.2}ms",
+            started.elapsed().as_secs_f64() * 1000.
+        );
+    }
+    #[test]
+    fn atlas_reuses_slots_and_uploads_only_new_meshes() {
+        let plan = super::plan_atlas(&[(2, 4), (3, 4), (2, 4)], &[(1, 0, 4), (2, 4, 4)], 256, 512);
+        assert!(plan.reuse);
+        assert_eq!(plan.offsets, [4, 0, 4]);
+        assert_eq!(plan.copies, [1]);
+        assert_eq!(plan.bytes, 256);
+    }
+    #[test]
+    fn atlas_copies_identical_transition_fields_only_once() {
+        let plan = super::plan_atlas(&[(1, 4), (1, 4)], &[], 0, 512);
+        assert_eq!(plan.offsets, [0, 0]);
+        assert_eq!(plan.copies, [0]);
+        assert_eq!(plan.bytes, 128);
+    }
+    #[test]
+    fn fragmented_atlas_is_compacted_without_overwriting_retained_fields() {
+        let plan = super::plan_atlas(&[(1, 4), (2, 4), (3, 8)], &[(1, 0, 4), (2, 8, 4)], 512, 512);
+        assert!(!plan.reuse);
+        assert_eq!(plan.offsets, [0, 4, 8]);
+        assert_eq!(plan.copies, [0, 1, 2]);
+        assert_eq!(plan.bytes, 512);
+    }
+    #[test]
     fn transition_atlas_respects_actual_gpu_binding_limit() {
         let limit = 128 * 1024 * 1024;
         assert!(super::atlas_fits(2_000_000, 2_000_000, limit));
@@ -1451,16 +2164,21 @@ mod tests {
     fn pending_gpu_work_cannot_grow_without_completion() {
         let budget = super::UploadBudget::default();
         assert!(budget.available(512));
-        budget.start(512);
-        assert!(!budget.available(32));
-        budget.finish(512);
-        assert!(budget.available(512));
         for _ in 0..4 {
+            assert!(budget.available(512));
+            budget.start(512);
+        }
+        assert!(!budget.available(32));
+        for _ in 0..4 {
+            budget.finish(512);
+        }
+        assert!(budget.available(512));
+        for _ in 0..16 {
             assert!(budget.available(32));
             budget.start(32);
         }
         assert!(!budget.available(32));
-        for _ in 0..4 {
+        for _ in 0..16 {
             budget.finish(32);
         }
         assert!(budget.available(512));
@@ -1468,10 +2186,10 @@ mod tests {
     #[test]
     fn shared_gpu_shaders_validate() {
         for source in [
-            include_str!("sibson_gpu_controls.wgsl"),
-            include_str!("shared_render.wgsl"),
+            include_str!("sibson_gpu_controls.wgsl").to_string(),
+            super::render_shader_source(),
         ] {
-            let module = naga::front::wgsl::parse_str(source).expect("WGSL parse");
+            let module = naga::front::wgsl::parse_str(&source).expect("WGSL parse");
             naga::valid::Validator::new(
                 naga::valid::ValidationFlags::all(),
                 naga::valid::Capabilities::all(),
@@ -1503,7 +2221,7 @@ mod gpu_tests {
         let (d, q) = pollster::block_on(adapter.request_device(&Default::default(), None)).unwrap();
         let shader = format!(
             "{}\n{}",
-            include_str!("shared_render.wgsl"),
+            super::render_shader_source(),
             r#"
  @group(0) @binding(8) var<storage,read_write> result:array<vec4<f32>>;
  @compute @workgroup_size(1)fn check(@builtin(global_invocation_id)id:vec3<u32>){
@@ -1512,18 +2230,23 @@ mod gpu_tests {
  }
  "#
         );
-        let module = d.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: None,
-            source: wgpu::ShaderSource::Wgsl(shader.into()),
+        let module = crate::gpu_profile::timed("shared_render.rs:d.create_shader_module", || {
+            d.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Wgsl(shader.into()),
+            })
         });
-        let pipeline = d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: None,
-            layout: None,
-            module: &module,
-            entry_point: Some("check"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
+        let pipeline =
+            crate::gpu_profile::timed("shared_render.rs:d.create_compute_pipeline", || {
+                d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: None,
+                    layout: None,
+                    module: &module,
+                    entry_point: Some("check"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            });
         let make = |bytes: &[u8], usage| {
             d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
@@ -1545,6 +2268,8 @@ mod gpu_tests {
         .enumerate()
         {
             records.push(Record {
+                draw: [0; 4],
+                tile: [x, 0., 100., 12.5],
                 bounds: [x, 0., 100., 0.],
                 data: [atlas.len() as u32, n, 8, 4],
                 neighbors: [links.len() as u32, 0, 0, 0],
@@ -1577,6 +2302,9 @@ mod gpu_tests {
         });
         for amount in [0., 0.25, 0.5, 0.75, 1.] {
             let view = View {
+                earth: [0.; 4],
+                eye: [0.; 4],
+                frame: [0.; 4],
                 matrix: Mat4::IDENTITY.to_cols_array_2d(),
                 offset: [0.; 4],
                 settings: [100., 0.25, 1., amount],
@@ -1640,6 +2368,290 @@ mod gpu_tests {
 #[cfg(test)]
 mod control_compute_tests {
     use super::*;
+    #[test]
+    fn seam_height_does_not_depend_on_the_number_of_local_fields() -> anyhow::Result<()> {
+        let backend = if cfg!(windows) {
+            wgpu::Backends::DX12
+        } else {
+            wgpu::Backends::PRIMARY
+        };
+        let Some(app) = crate::remembered_scene_tests::app_with_backend(backend) else {
+            return Ok(());
+        };
+        let device = &app.renderer.state.device;
+        let queue = &app.renderer.state.queue;
+        let shader = crate::gpu_profile::timed(
+            "評価区画数によらない接合の検査",
+            || {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("評価区画数によらない接合の検査"),
+            source: wgpu::ShaderSource::Wgsl(format!(
+                "{}\n@group(0) @binding(8) var<storage,read_write> result:array<vec4<f32>>;\n@compute @workgroup_size(1) fn probe(){{result[0]=vec4(blend(vec2(99.,50.),0u,false),1.);result[1]=vec4(blend(vec2(50.,50.),0u,false),1.);}}",
+                render_shader_source()).into()),
+        })
+            },
+        );
+        let pipeline =
+            crate::gpu_profile::timed("shared_render.rs:device.create_compute_pipeline", || {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: None,
+                    layout: None,
+                    module: &shader,
+                    entry_point: Some("probe"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            });
+        let mut heights = Vec::new();
+        for configuration in 0..3 {
+            let mut fields = vec![([0., 0., 100., 0.], [0., 0., 100., 25.], 100.)];
+            if configuration == 2 {
+                // 元タイルは詳細面に重なるが、局所区画だけを見ると隣接している背景。
+                fields.push(([100., 0., 50., 1.], [-100., -100., 400., 50.], 10000.));
+            } else if configuration == 1 {
+                for x in [100., 150.] {
+                    for y in [0., 50.] {
+                        fields.push(([x, y, 50., 0.], [100., 0., 100., 25.], 200.));
+                    }
+                }
+            } else {
+                fields.push(([100., 0., 100., 0.], [100., 0., 100., 25.], 200.));
+            }
+            let mut atlas = Vec::<[f32; 8]>::new();
+            let mut records = Vec::new();
+            for (bounds, tile, height) in &fields {
+                records.push(Record {
+                    draw: [0, 0, 0, 25f32.to_bits()],
+                    bounds: *bounds,
+                    tile: *tile,
+                    data: [atlas.len() as u32, 1, 13, fields.len() as u32],
+                    neighbors: [0; 4],
+                });
+                atlas.extend([[*height, 0., 0., 1., *height, 0., 0., 1.]; 4]);
+            }
+            let mut view = <View as bytemuck::Zeroable>::zeroed();
+            view.extra = [fields.len() as u32, 0, 1, 8];
+            let make = |contents: &[u8], usage| {
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents,
+                    usage,
+                })
+            };
+            let buffers = [
+                (
+                    1,
+                    make(bytemuck::bytes_of(&view), wgpu::BufferUsages::UNIFORM),
+                ),
+                (
+                    3,
+                    make(bytemuck::cast_slice(&atlas), wgpu::BufferUsages::STORAGE),
+                ),
+                (
+                    4,
+                    make(bytemuck::cast_slice(&records), wgpu::BufferUsages::STORAGE),
+                ),
+                (
+                    5,
+                    make(
+                        bytemuck::cast_slice(&(0..fields.len() as u32).collect::<Vec<_>>()),
+                        wgpu::BufferUsages::STORAGE,
+                    ),
+                ),
+                (
+                    8,
+                    make(
+                        &[0u8; 32],
+                        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                    ),
+                ),
+            ];
+            let entries = buffers
+                .iter()
+                .map(|(binding, b)| wgpu::BindGroupEntry {
+                    binding: *binding,
+                    resource: b.as_entire_binding(),
+                })
+                .collect::<Vec<_>>();
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &entries,
+            });
+            let read = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: 32,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &group, &[]);
+                pass.dispatch_workgroups(1, 1, 1);
+            }
+            encoder.copy_buffer_to_buffer(&buffers[4].1, 0, &read, 0, 32);
+            queue.submit([encoder.finish()]);
+            let (send, receive) = std::sync::mpsc::channel();
+            read.slice(..)
+                .map_async(wgpu::MapMode::Read, move |v| send.send(v).unwrap());
+            let _ = device.poll(wgpu::Maintain::Wait);
+            receive.recv()??;
+            let bytes = read.slice(..).get_mapped_range();
+            let values = bytemuck::cast_slice::<u8, f32>(&bytes);
+            assert!(
+                (values[4] - 100.).abs() < 0.0001,
+                "境界から離れた頂点の高速経路で標高が変わった: {values:?}"
+            );
+            heights.push(values[0]);
+        }
+        assert!(
+            heights[0] > 140. && heights[0] < 160.,
+            "接合されていない: {heights:?}"
+        );
+        assert!(
+            (heights[0] - heights[1]).abs() < 0.0001,
+            "評価区画の分割で地形が動いた: {heights:?}"
+        );
+        assert!(
+            (heights[2] - 100.).abs() < 0.0001,
+            "重なった背景の局所区画が詳細面に混ざった: {heights:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn marker_height_uses_the_drawn_triangle_instead_of_bilinear_field() -> anyhow::Result<()> {
+        let backend = if cfg!(windows) {
+            wgpu::Backends::DX12
+        } else {
+            wgpu::Backends::PRIMARY
+        };
+        let Some(app) = crate::remembered_scene_tests::app_with_backend(backend) else {
+            return Ok(());
+        };
+        let device = &app.renderer.state.device;
+        let queue = &app.renderer.state.queue;
+        let module = crate::gpu_profile::timed(
+            "shared_render.rs:device.create_shader_module",
+            || {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label:Some("地点の実描画標高の検査"),
+            source:wgpu::ShaderSource::Wgsl(format!("{}\n@compute @workgroup_size(1) fn probe(){{let m=meshHeight(vec2(50.),0u);result[0]=vec4(m,surface(vec2(50.),0u).x,1.);}}",crate::point_visibility::shader()).into()),
+        })
+            },
+        );
+        let pipeline =
+            crate::gpu_profile::timed("shared_render.rs:device.create_compute_pipeline", || {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: None,
+                    layout: None,
+                    module: &module,
+                    entry_point: Some("probe"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            });
+        let atlas = [100f32, 100., 100., 300.].map(|h| [h, 0., 0., 1., h, 0., 0., 1.]);
+        let record = Record {
+            bounds: [0., 0., 100., 0.],
+            data: [0, 1, 13, 1],
+            neighbors: [0; 4],
+            tile: [0., 0., 100., 25.],
+            draw: [0, 1, 4, 0],
+        };
+        let patch = crate::shared_patches::Patch {
+            bounds: [0., 0., 100., 1.],
+            edges: [0.; 4],
+            origins: [0.; 4],
+            lines: [0., 100., 0., 100.],
+        };
+        let mut view = <View as bytemuck::Zeroable>::zeroed();
+        view.offset[2] = 1.;
+        view.settings = [100., 0., 1., 1.];
+        view.extra = [1, 0, 0, 8];
+        let make = |bytes: &[u8], usage| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytes,
+                usage,
+            })
+        };
+        let buffers = [
+            (
+                1,
+                make(bytemuck::cast_slice(&atlas), wgpu::BufferUsages::STORAGE),
+            ),
+            (
+                2,
+                make(bytemuck::bytes_of(&record), wgpu::BufferUsages::STORAGE),
+            ),
+            (
+                3,
+                make(bytemuck::bytes_of(&0u32), wgpu::BufferUsages::STORAGE),
+            ),
+            (
+                4,
+                make(bytemuck::bytes_of(&view), wgpu::BufferUsages::UNIFORM),
+            ),
+            (
+                6,
+                make(
+                    &[0u8; 16],
+                    wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                ),
+            ),
+            (
+                7,
+                make(bytemuck::bytes_of(&patch), wgpu::BufferUsages::STORAGE),
+            ),
+        ];
+        let entries = buffers
+            .iter()
+            .map(|(binding, b)| wgpu::BindGroupEntry {
+                binding: *binding,
+                resource: b.as_entire_binding(),
+            })
+            .collect::<Vec<_>>();
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &entries,
+        });
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 16,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&buffers[4].1, 0, &read, 0, 16);
+        queue.submit([encoder.finish()]);
+        let (send, receive) = std::sync::mpsc::channel();
+        read.slice(..)
+            .map_async(wgpu::MapMode::Read, move |v| send.send(v).unwrap());
+        let _ = device.poll(wgpu::Maintain::Wait);
+        receive.recv()??;
+        let bytes = read.slice(..).get_mapped_range();
+        let actual = bytemuck::cast_slice::<u8, f32>(&bytes);
+        assert!(
+            (actual[0] - 200.).abs() < 0.001 && actual[1] == 1.,
+            "実際の三角形上に地点を置けていない: {actual:?}"
+        );
+        assert!(
+            (actual[2] - 150.).abs() < 0.001,
+            "比較用の数式上の曲面が不正: {actual:?}"
+        );
+        Ok(())
+    }
+
     #[test]
     fn gpu_sibson_reproduces_affine_height_and_normal() {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -1721,18 +2733,26 @@ mod control_compute_tests {
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            let shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: None,
-                source: wgpu::ShaderSource::Wgsl(include_str!("sibson_gpu_controls.wgsl").into()),
-            });
-            let pipeline = d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: None,
-                layout: None,
-                module: &shader,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
+            let shader =
+                crate::gpu_profile::timed("shared_render.rs:d.create_shader_module", || {
+                    d.create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: None,
+                        source: wgpu::ShaderSource::Wgsl(
+                            include_str!("sibson_gpu_controls.wgsl").into(),
+                        ),
+                    })
+                });
+            let pipeline =
+                crate::gpu_profile::timed("shared_render.rs:d.create_compute_pipeline", || {
+                    d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: None,
+                        layout: None,
+                        module: &shader,
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    })
+                });
             let entries = [
                 &controls[0],
                 &controls[1],
@@ -1813,7 +2833,12 @@ mod upload_roundtrip_tests {
         };
         let (device, queue) =
             pollster::block_on(adapter.request_device(&Default::default(), None)).unwrap();
-        let shader=device.create_shader_module(wgpu::ShaderModuleDescriptor{label:None,source:wgpu::ShaderSource::Wgsl("struct P {depth:vec4<f32>} @group(0) @binding(0) var<uniform> p:P; struct V{@builtin(position) position:vec4<f32>,@location(0) color:vec4<f32>} @vertex fn vs(@builtin(vertex_index)i:u32,@builtin(instance_index)j:u32)->V {let q=array<vec2<f32>,3>(vec2(-1.,-1.),vec2(3.,-1.),vec2(-1.,3.));return V(vec4(q[i],p.depth[j],1.),select(vec4(1.,0.,0.,1.),vec4(0.,0.,1.,1.),j==1u));} @fragment fn fs(v:V)->@location(0)vec4<f32>{return v.color;}".into())});
+        let shader = crate::gpu_profile::timed(
+            "shared_render.rs:device.create_shader_module",
+            || {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor{label:None,source:wgpu::ShaderSource::Wgsl("struct P {depth:vec4<f32>} @group(0) @binding(0) var<uniform> p:P; struct V{@builtin(position) position:vec4<f32>,@location(0) color:vec4<f32>} @vertex fn vs(@builtin(vertex_index)i:u32,@builtin(instance_index)j:u32)->V {let q=array<vec2<f32>,3>(vec2(-1.,-1.),vec2(3.,-1.),vec2(-1.,3.));return V(vec4(q[i],p.depth[j],1.),select(vec4(1.,0.,0.,1.),vec4(0.,0.,1.,1.),j==1u));} @fragment fn fs(v:V)->@location(0)vec4<f32>{return v.color;}".into())})
+            },
+        );
         for distance in [1000f32, 10000., 100000.] {
             for reverse in [false, true] {
                 let projection = if reverse {
@@ -1835,41 +2860,46 @@ mod upload_roundtrip_tests {
                 } else {
                     wgpu::TextureFormat::Depth24PlusStencil8
                 };
-                let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: None,
-                    layout: None,
-                    vertex: wgpu::VertexState {
-                        module: &shader,
-                        entry_point: Some("vs"),
-                        compilation_options: Default::default(),
-                        buffers: &[],
+                let pipeline = crate::gpu_profile::timed(
+                    "shared_render.rs:device.create_render_pipeline",
+                    || {
+                        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                            label: None,
+                            layout: None,
+                            vertex: wgpu::VertexState {
+                                module: &shader,
+                                entry_point: Some("vs"),
+                                compilation_options: Default::default(),
+                                buffers: &[],
+                            },
+                            primitive: Default::default(),
+                            depth_stencil: Some(wgpu::DepthStencilState {
+                                format,
+                                depth_write_enabled: true,
+                                depth_compare: if reverse {
+                                    wgpu::CompareFunction::GreaterEqual
+                                } else {
+                                    wgpu::CompareFunction::LessEqual
+                                },
+                                stencil: Default::default(),
+                                bias: Default::default(),
+                            }),
+                            multisample: Default::default(),
+                            fragment: Some(wgpu::FragmentState {
+                                module: &shader,
+                                entry_point: Some("fs"),
+                                compilation_options: Default::default(),
+                                targets: &[Some(wgpu::ColorTargetState {
+                                    format: wgpu::TextureFormat::Rgba8Unorm,
+                                    blend: None,
+                                    write_mask: wgpu::ColorWrites::ALL,
+                                })],
+                            }),
+                            multiview: None,
+                            cache: None,
+                        })
                     },
-                    primitive: Default::default(),
-                    depth_stencil: Some(wgpu::DepthStencilState {
-                        format,
-                        depth_write_enabled: true,
-                        depth_compare: if reverse {
-                            wgpu::CompareFunction::GreaterEqual
-                        } else {
-                            wgpu::CompareFunction::LessEqual
-                        },
-                        stencil: Default::default(),
-                        bias: Default::default(),
-                    }),
-                    multisample: Default::default(),
-                    fragment: Some(wgpu::FragmentState {
-                        module: &shader,
-                        entry_point: Some("fs"),
-                        compilation_options: Default::default(),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: wgpu::TextureFormat::Rgba8Unorm,
-                            blend: None,
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                    }),
-                    multiview: None,
-                    cache: None,
-                });
+                );
                 let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: None,
                     layout: &pipeline.get_bind_group_layout(0),
@@ -1970,6 +3000,265 @@ mod upload_roundtrip_tests {
         }
     }
     #[test]
+    fn partial_seam_preserves_xy_and_follows_coarse_edge_on_gpu() -> anyhow::Result<()> {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let Some(adapter) = pollster::block_on(instance.request_adapter(&Default::default()))
+        else {
+            eprintln!("GPUがないためGPU試験を省略します");
+            return Ok(());
+        };
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default(), None))?;
+        let view = View {
+            earth: [0.; 4],
+            eye: [0.; 4],
+            frame: [0.; 4],
+            matrix: Mat4::IDENTITY.to_cols_array_2d(),
+            offset: [0., 0., 1., 0.],
+            settings: [2., 0., 1., 0.25],
+            flags: [8, 1, 0, 0],
+            extra: [2, 0, 0, 0],
+        };
+        let patches = [
+            crate::shared_patches::Patch {
+                bounds: [0., 0., 1., 4.],
+                edges: [0.5; 4],
+                origins: [0.; 4],
+                lines: [0., 1., 0., 1.],
+            },
+            // 粗い辺の途中にある短い辺。従来は始点のY=.25がY=.5へ移動した。
+            crate::shared_patches::Patch {
+                bounds: [0., 0.25, 0.25, 1.],
+                edges: [0.5; 4],
+                origins: [0.; 4],
+                lines: [0., 0.25, 0.25, 0.5],
+            },
+        ];
+        let mut patches = patches.to_vec();
+        patches.push(crate::shared_patches::Patch {
+            bounds: [0., 0.25, 0.25, 1.],
+            edges: [16., 16., 0., 0.],
+            origins: [-8.; 4],
+            lines: [0., 0.25, 0.25, 0.5],
+        });
+        patches.push(crate::shared_patches::Patch {
+            bounds: [8., 8.25, 0.25, 1.],
+            edges: [0.5, 0., 0., 0.],
+            origins: [0.; 4],
+            lines: [0., 0.25, 0.25, 0.5],
+        });
+        let mut atlas = Vec::<[f32; 8]>::new();
+        for y in 0..=8 {
+            for _ in 0..=8 {
+                let height = (y as f32 / 4.).powi(2);
+                atlas.push([height, 0., y as f32 / 2., 0., height, 0., y as f32 / 2., 0.]);
+            }
+        }
+        // 細タイル外の参照先は標高3の背景であり、細タイル端の傾きを延長しない。
+        let records = [
+            Record {
+                draw: [0; 4],
+                tile: [0., 0., 2., 0.25],
+                bounds: [0., 0., 2., 0.],
+                data: [0, 8, 6, 3],
+                neighbors: [0; 4],
+            },
+            Record {
+                draw: [0; 4],
+                tile: [-8., -8., 16., 2.],
+                bounds: [-8., -8., 16., 1.],
+                data: [81, 1, 0, 3],
+                neighbors: [0; 4],
+            },
+        ];
+        let mut records = records.to_vec();
+        records.push(Record {
+            draw: [0; 4],
+            tile: [0., 0., 2., 0.25],
+            bounds: [0., 0., 2., 0.],
+            data: [85, 1, 6, 3],
+            neighbors: [0; 4],
+        });
+        atlas.extend([[3., 0., 0., 0., 3., 0., 0., 0.]; 4]);
+        // 旧LODは大きく高さが違う。境界だけは途中の補間率でも新面と一致させる。
+        atlas.extend([[50., 0., 0., 0., 50., 0., 0., 0.]; 4]);
+        let make = |label, bytes: &[u8], usage| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: bytes,
+                usage,
+            })
+        };
+        let buffers = [
+            (
+                1,
+                make(
+                    "境界試験の視点",
+                    bytemuck::bytes_of(&view),
+                    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                ),
+            ),
+            (
+                2,
+                make(
+                    "部分接合パッチ",
+                    bytemuck::cast_slice(&patches),
+                    wgpu::BufferUsages::STORAGE,
+                ),
+            ),
+            (
+                3,
+                make(
+                    "曲がった曲面",
+                    bytemuck::cast_slice(&atlas),
+                    wgpu::BufferUsages::STORAGE,
+                ),
+            ),
+            (
+                4,
+                make(
+                    "曲面範囲",
+                    bytemuck::cast_slice(&records),
+                    wgpu::BufferUsages::STORAGE,
+                ),
+            ),
+            (
+                5,
+                make(
+                    "接合参照",
+                    bytemuck::cast_slice(&[0u32, 1, 2]),
+                    wgpu::BufferUsages::STORAGE,
+                ),
+            ),
+            (
+                8,
+                make(
+                    "接合頂点出力",
+                    &[0u8; 64],
+                    wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                ),
+            ),
+        ];
+        let source = format!(
+            "{}\n@group(0) @binding(8) var<storage,read_write> result:array<vec4<f32>>;\n@compute @workgroup_size(1) fn probe(){{if (view.extra.w&8u)!=0u{{result[0]=vec4(boundarySample(vec2(0.,0.25)),1.);return;}}if view.flags.w==1u{{result[3]=vec4(gridVertex(0u,3u).position,1.);return;}}result[0]=vec4(gridVertex(5u,0u).position,1.);result[1]=vec4(gridVertex(0u,1u).position,1.);result[2]=vec4(gridVertex(0u,2u).position,1.);}}",
+            super::render_shader_source()
+        );
+        let module =
+            crate::gpu_profile::timed("実描画シェーダーの境界頂点試験", || {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("実描画シェーダーの境界頂点試験"),
+                    source: wgpu::ShaderSource::Wgsl(source.into()),
+                })
+            });
+        let pipeline =
+            crate::gpu_profile::timed("shared_render.rs:device.create_compute_pipeline", || {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: None,
+                    layout: None,
+                    module: &module,
+                    entry_point: Some("probe"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            });
+        let entries = buffers
+            .iter()
+            .map(|(binding, buffer)| wgpu::BindGroupEntry {
+                binding: *binding,
+                resource: buffer.as_entire_binding(),
+            })
+            .collect::<Vec<_>>();
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &entries,
+        });
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&buffers[5].1, 0, &read, 0, 64);
+        queue.submit([encoder.finish()]);
+        let mut other = view;
+        other.flags[3] = 1;
+        other.offset = [0., 0., 1., 0.];
+        queue.write_buffer(&buffers[0].1, 0, bytemuck::bytes_of(&other));
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&buffers[5].1, 0, &read, 0, 64);
+        queue.submit([encoder.finish()]);
+        let (send, receive) = std::sync::mpsc::channel();
+        read.slice(..)
+            .map_async(wgpu::MapMode::Read, move |v| send.send(v).unwrap());
+        let _ = device.poll(wgpu::Maintain::Wait);
+        receive.recv()??;
+        let data = read.slice(..).get_mapped_range();
+        let points = bytemuck::cast_slice::<u8, [f32; 4]>(&data);
+        for point in &points[..2] {
+            assert!(
+                (point[0]).abs() < 1e-6 && (point[2] - 0.25).abs() < 1e-6,
+                "境界のXYが動いた: {point:?}"
+            );
+            assert!(
+                (point[1] - 0.125).abs() < 1e-6,
+                "粗い辺の線分に載っていない: {point:?}"
+            );
+        }
+        assert!(
+            (points[2][1] - 3.).abs() < 1e-6,
+            "細タイル外へ傾きを延長して壁ができた: {:?}",
+            points[2]
+        );
+        assert_eq!(points[0], points[3], "異LOD側の境界頂点が一致しない");
+        drop(data);
+        read.unmap();
+        for morph in [0., 0.25, 0.5, 1.] {
+            let mut uniform = view;
+            uniform.extra[3] = 8;
+            uniform.settings[3] = morph;
+            queue.write_buffer(&buffers[0].1, 0, bytemuck::bytes_of(&uniform));
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &group, &[]);
+                pass.dispatch_workgroups(1, 1, 1);
+            }
+            encoder.copy_buffer_to_buffer(&buffers[5].1, 0, &read, 0, 64);
+            queue.submit([encoder.finish()]);
+            let (send, receive) = std::sync::mpsc::channel();
+            read.slice(..)
+                .map_async(wgpu::MapMode::Read, move |r| send.send(r).unwrap());
+            let _ = device.poll(wgpu::Maintain::Wait);
+            receive.recv()??;
+            let data = read.slice(..).get_mapped_range();
+            let v = bytemuck::cast_slice::<u8, f32>(&data);
+            let expected = 50. * (1. - morph) + 0.0625 * morph;
+            assert!(
+                (v[0] - expected).abs() < 1e-5,
+                "境界だけが先に新しい高さへ飛んだ: {morph} {}",
+                v[0]
+            );
+            drop(data);
+            read.unmap();
+        }
+        Ok(())
+    }
+    #[test]
     fn coarse_background_cannot_cover_sky_above_loaded_fine_ground() -> anyhow::Result<()> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let Some(adapter) = pollster::block_on(instance.request_adapter(&Default::default()))
@@ -1991,125 +3280,160 @@ mod upload_roundtrip_tests {
         };
         let ctx = egui::Context::default();
         let mut renderer = Renderer::new(state.clone(), &ctx);
-        let fine = renderer.upload(&Packet::constant_plane((6, 56, 25), 1500.)?, 1)?;
-        let coarse = renderer.upload(&Packet::constant_plane((0, 0, 0), 2000.)?, 1)?;
-        let mut camera = Camera::default();
-        camera.set_observer(
-            [
-                fine.origin[0] + fine.side / 2.,
-                fine.origin[1] + fine.side / 2.,
-            ],
-            1502.,
-            0.,
-            0.,
-            0.8,
-            [64., 64.],
-        );
-        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64., 64.));
-        for tin in [true, false] {
-            let callback = renderer.frame(
-                vec![fine.clone()],
-                vec![coarse.clone()],
-                &camera,
-                [0.25, 1., 0.],
-                true,
-                0,
-                false,
-                false,
-                false,
-                Vec::new(),
-                1.,
-                tin,
-                rect,
-                1.,
-                false,
-                false,
-                true,
-            );
-            let jobs = vec![egui::ClippedPrimitive {
-                clip_rect: rect,
-                primitive: egui::epaint::Primitive::Callback(callback),
-            }];
-            let mut encoder = state.device.create_command_encoder(&Default::default());
-            let commands = state.renderer.write().update_buffers(
-                &state.device,
-                &state.queue,
-                &mut encoder,
-                &jobs,
-                &ScreenDescriptor {
-                    size_in_pixels: [64, 64],
-                    pixels_per_point: 1.,
-                },
-            );
-            let buffer = state.device.create_buffer(&wgpu::BufferDescriptor {
-                label: None,
-                size: 512,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            encoder.copy_texture_to_buffer(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &renderer.positions,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d { x: 32, y: 16, z: 0 },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &buffer,
-                    layout: wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(256),
-                        rows_per_image: None,
+        for lower_background in [false, true] {
+            let fine = renderer.upload(
+                &Packet::constant_plane(
+                    if lower_background {
+                        (13, 7220, 3200)
+                    } else {
+                        (6, 56, 25)
                     },
-                },
-                wgpu::Extent3d {
-                    width: 1,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-            );
-            encoder.copy_texture_to_buffer(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &renderer.positions,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d { x: 32, y: 48, z: 0 },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &buffer,
-                    layout: wgpu::TexelCopyBufferLayout {
-                        offset: 256,
-                        bytes_per_row: Some(256),
-                        rows_per_image: None,
+                    1500.,
+                )?,
+                1,
+            )?;
+            let coarse = renderer.upload(
+                &Packet::constant_plane(
+                    if lower_background {
+                        (5, 28, 12)
+                    } else {
+                        (0, 0, 0)
                     },
-                },
-                wgpu::Extent3d {
-                    width: 1,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
+                    if lower_background { 500. } else { 2000. },
+                )?,
+                if lower_background { 32 } else { 1 },
+            )?;
+            let mut camera = Camera::default();
+            camera.set_observer(
+                [
+                    fine.origin[0] + fine.side / 2.,
+                    fine.origin[1]
+                        + if lower_background {
+                            fine.side + 1000.
+                        } else {
+                            fine.side / 2.
+                        },
+                ],
+                if lower_background { 2000. } else { 1502. },
+                0.,
+                if lower_background { 0.6 } else { 0. },
+                0.8,
+                [64., 64.],
             );
-            state.queue.submit(
-                commands
-                    .into_iter()
-                    .chain(std::iter::once(encoder.finish())),
-            );
-            let (send, receive) = std::sync::mpsc::channel();
-            buffer
-                .slice(..)
-                .map_async(wgpu::MapMode::Read, move |v| send.send(v).unwrap());
-            let _ = state.device.poll(wgpu::Maintain::Wait);
-            receive.recv()?.map_err(|e| anyhow::anyhow!(e))?;
-            let range = buffer.slice(..).get_mapped_range();
-            let pixel = bytemuck::cast_slice::<u8, f32>(&range);
-            assert_eq!(pixel[3], 0., "粗い背景が上空に描画されている: {pixel:?}");
-            assert!(
-                (pixel[67] - 11500.).abs() < 0.1,
-                "細かい地面が消えている: {}",
-                pixel[67]
-            );
-            drop(range);
-            buffer.unmap();
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64., 64.));
+            for tin in [false, true] {
+                let callback = renderer.frame(
+                    vec![fine.clone()],
+                    vec![coarse.clone()],
+                    &camera,
+                    [0.25, 1., 0.],
+                    true,
+                    0,
+                    false,
+                    false,
+                    false,
+                    Vec::new(),
+                    1.,
+                    tin,
+                    rect,
+                    1.,
+                    false,
+                    false,
+                    true,
+                );
+                let jobs = vec![egui::ClippedPrimitive {
+                    clip_rect: rect,
+                    primitive: egui::epaint::Primitive::Callback(callback),
+                }];
+                let mut encoder = state.device.create_command_encoder(&Default::default());
+                let commands = state.renderer.write().update_buffers(
+                    &state.device,
+                    &state.queue,
+                    &mut encoder,
+                    &jobs,
+                    &ScreenDescriptor {
+                        size_in_pixels: [64, 64],
+                        pixels_per_point: 1.,
+                    },
+                );
+                let buffer = state.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: None,
+                    size: 512,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &renderer.positions,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x: 32, y: 16, z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(256),
+                            rows_per_image: None,
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &renderer.positions,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x: 32, y: 48, z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 256,
+                            bytes_per_row: Some(256),
+                            rows_per_image: None,
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                state.queue.submit(
+                    commands
+                        .into_iter()
+                        .chain(std::iter::once(encoder.finish())),
+                );
+                let (send, receive) = std::sync::mpsc::channel();
+                buffer
+                    .slice(..)
+                    .map_async(wgpu::MapMode::Read, move |v| send.send(v).unwrap());
+                let _ = state.device.poll(wgpu::Maintain::Wait);
+                receive.recv()?.map_err(|e| anyhow::anyhow!(e))?;
+                let range = buffer.slice(..).get_mapped_range();
+                let pixel = bytemuck::cast_slice::<u8, f32>(&range);
+                if lower_background {
+                    assert!(
+                        pixel[67] >= 10499.9 && pixel[67] <= 11500.1,
+                        "詳細面の手前で低い背景まで消え、隙間になった: {} (TIN={tin})",
+                        pixel[67]
+                    );
+                } else {
+                    assert_eq!(pixel[3], 0., "粗い背景が上空に描画されている: {pixel:?}");
+                    assert!(
+                        (pixel[67] - 11500.).abs() < 0.1,
+                        "細かい地面が消えている: {}",
+                        pixel[67]
+                    );
+                }
+                drop(range);
+                buffer.unmap();
+            }
         }
         Ok(())
     }
@@ -2133,7 +3457,7 @@ mod upload_roundtrip_tests {
             target_format: format,
             renderer: Arc::new(egui::epaint::mutex::RwLock::new(ui)),
         };
-        let mut renderer = Renderer::new(state.clone(), &egui::Context::default());
+        let mut renderer = Renderer::new(state.clone(), &eframe::egui::Context::default());
         let tile = renderer.upload(&Packet::flat()?, 1)?;
         let buffer = state.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -2194,7 +3518,7 @@ mod upload_roundtrip_tests {
             target_format: format,
             renderer: Arc::new(egui::epaint::mutex::RwLock::new(ui)),
         };
-        let mut renderer = Renderer::new(state, &egui::Context::default());
+        let mut renderer = Renderer::new(state, &eframe::egui::Context::default());
         let mut camera = Camera {
             height: 1800.,
             ..Default::default()

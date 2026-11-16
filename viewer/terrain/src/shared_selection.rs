@@ -2,7 +2,7 @@ use crate::shared_data::{ERRORS, Key, WORLD};
 use glam::DVec3;
 use std::collections::{BTreeSet, HashMap};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Camera {
     pub center: [f64; 2],
     pub height: f64,
@@ -16,6 +16,10 @@ pub struct Camera {
     /// 描画・曲面評価の目標間隔。カメラ停止後に段階的に小さくする（論理px）。
     pub mesh_pixels: f64,
     pub fov_y: f64,
+    /// 展望では読み込みと曲面評価を全方位で準備し、描画時だけ視野で絞る。
+    pub observer: bool,
+    #[serde(default)]
+    pub globe: bool,
 }
 impl Default for Camera {
     fn default() -> Self {
@@ -31,6 +35,8 @@ impl Default for Camera {
             lod_quality: 2.0,
             mesh_pixels: 3.0,
             fov_y: std::f64::consts::FRAC_PI_4,
+            observer: false,
+            globe: false,
         }
     }
 }
@@ -57,15 +63,19 @@ impl Camera {
             .cos();
         let distance = (WORLD / (256. * zoom.exp2()) * viewport[1] * scale
             / (2. * (std::f64::consts::PI / 8.).tan()))
-        .min(10_000_000.);
+        .min(200_000_000.);
         let pitch = (std::f64::consts::FRAC_PI_2 - tilt).clamp(0.05, 1.56);
-        let changed = self.fov_y != std::f64::consts::FRAC_PI_4
+        let changed = self.observer
+            || self.fov_y != std::f64::consts::FRAC_PI_4
             || self.center != next
             || self.distance != distance
             || self.yaw != yaw
-            || self.pitch != pitch;
+            || self.pitch != pitch
+            || self.viewport != viewport;
+        self.observer = false;
         self.fov_y = std::f64::consts::FRAC_PI_4;
         self.center = next;
+        self.viewport = viewport;
         self.distance = distance;
         self.yaw = yaw;
         self.pitch = pitch;
@@ -93,6 +103,7 @@ impl Camera {
         viewport: [f64; 2],
     ) -> bool {
         let before = (
+            self.observer,
             self.center,
             self.height,
             self.yaw,
@@ -101,6 +112,7 @@ impl Camera {
             self.viewport,
             self.distance,
         );
+        self.observer = true;
         self.yaw = yaw;
         self.pitch = pitch.clamp(-1.5, 1.5);
         self.fov_y = fov.clamp(15f64.to_radians(), 100f64.to_radians());
@@ -119,6 +131,7 @@ impl Camera {
         self.height = height - back.y * self.distance;
         before
             != (
+                self.observer,
                 self.center,
                 self.height,
                 self.yaw,
@@ -159,6 +172,9 @@ impl Camera {
         (horizon * 1.15).max(self.distance * 8.).max(10000.)
     }
     pub fn visible_depth(&self, bounds: [f64; 4]) -> Option<f64> {
+        if self.globe && bounds[2] - bounds[0] > crate::globe::RADIUS * 0.5 {
+            return Some(0.2);
+        }
         let right = DVec3::new(self.yaw.cos(), 0., -self.yaw.sin());
         let back = self.back();
         let up = back.cross(right);
@@ -167,17 +183,37 @@ impl Camera {
         let aspect = self.viewport[0] / self.viewport[1];
         let near = (self.distance / 10000.).max(0.2);
         let mut minimum = f64::INFINITY;
+        let curvature_pad = if self.globe {
+            (bounds[2] - bounds[0]).powi(2) / crate::globe::RADIUS
+        } else {
+            0.
+        };
         // 箱の中心ではなく面を切り、カメラを内包するタイルも評価する。
         let vertices: [[f64; 3]; 8] = std::array::from_fn(|i| {
-            let d = DVec3::new(
-                (bounds[if i & 1 == 0 { 0 } else { 2 }] - self.center[0]) * scale,
-                if i & 4 == 0 {
-                    -500. - self.height
-                } else {
-                    4500. - self.height
-                },
-                (bounds[if i & 2 == 0 { 1 } else { 3 }] - self.center[1]) * scale,
-            );
+            let d = if self.globe {
+                crate::globe::local(
+                    self.center,
+                    [
+                        bounds[if i & 1 == 0 { 0 } else { 2 }],
+                        bounds[if i & 2 == 0 { 1 } else { 3 }],
+                    ],
+                    if i & 4 == 0 {
+                        -500. - curvature_pad
+                    } else {
+                        4500. + curvature_pad
+                    },
+                ) - DVec3::Y * self.height
+            } else {
+                DVec3::new(
+                    (bounds[if i & 1 == 0 { 0 } else { 2 }] - self.center[0]) * scale,
+                    if i & 4 == 0 {
+                        -500. - self.height
+                    } else {
+                        4500. - self.height
+                    },
+                    (bounds[if i & 2 == 0 { 1 } else { 3 }] - self.center[1]) * scale,
+                )
+            };
             [d.dot(right), d.dot(up), self.distance - d.dot(back)]
         });
         let planes: [[f64; 4]; 6] = [
@@ -249,8 +285,38 @@ impl Camera {
         }
         minimum.is_finite().then_some(minimum.max(near))
     }
+    pub(crate) fn same_preparation(&self, other: &Self) -> bool {
+        self.observer
+            && other.observer
+            && self
+                .eye()
+                .iter()
+                .zip(other.eye())
+                .all(|(a, b)| (*a - b).abs() < 0.01)
+            && self.fov_y == other.fov_y
+            && self.viewport == other.viewport
+            && self.maximum == other.maximum
+            && self.auto == other.auto
+            && self.lod_quality == other.lod_quality
+            && self.mesh_pixels == other.mesh_pixels
+    }
+    pub(crate) fn preparation_depth(&self, bounds: [f64; 4]) -> Option<f64> {
+        if !self.observer {
+            return self.visible_depth(bounds);
+        }
+        let eye = self.eye();
+        let scale = (std::f64::consts::PI * (1. - 2. * eye[1] / WORLD))
+            .sinh()
+            .atan()
+            .cos();
+        let dx = (eye[0] - eye[0].clamp(bounds[0], bounds[2])) * scale;
+        let dy = (eye[1] - eye[1].clamp(bounds[1], bounds[3])) * scale;
+        let dz = eye[2] - eye[2].clamp(0., 4500.);
+        let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+        (distance <= self.far_depth()).then_some(distance.max(0.2))
+    }
     pub(crate) fn projected(&self, key: Key) -> (bool, f64) {
-        let depth = self.visible_depth(crate::shared_data::bounds(key));
+        let depth = self.preparation_depth(crate::shared_data::bounds(key));
         (
             depth.is_some(),
             ERRORS[(key.0.clamp(6, 13) - 6) as usize] * self.viewport[1]
@@ -259,6 +325,8 @@ impl Camera {
     }
 }
 pub fn select(catalog: &HashMap<Key, usize>, camera: &Camera) -> Vec<Key> {
+    let face_budget = if camera.observer { 500_000 } else { 250_000 };
+    let tile_budget = if camera.observer { 192 } else { 96 };
     let mut selected: BTreeSet<_> = catalog
         .keys()
         .filter(|k| k.0 == if camera.auto { 6 } else { camera.maximum } && camera.projected(**k).0)
@@ -283,8 +351,8 @@ pub fn select(catalog: &HashMap<Key, usize>, camera: &Camera) -> Vec<Key> {
                 .collect();
             let cost: usize = children.iter().map(|k| catalog[k]).sum();
             if children.is_empty()
-                || faces - catalog[&key] + cost > 250000
-                || selected.len() - 1 + children.len() > 96
+                || faces - catalog[&key] + cost > face_budget
+                || selected.len() - 1 + children.len() > tile_budget
             {
                 blocked.insert(key);
                 continue;
@@ -293,7 +361,7 @@ pub fn select(catalog: &HashMap<Key, usize>, camera: &Camera) -> Vec<Key> {
             selected.remove(&key);
             selected.extend(children);
         }
-        balance_neighbors(&mut selected, catalog, camera, 250000, 96);
+        balance_neighbors(&mut selected, catalog, camera, face_budget, tile_budget);
     }
     selected.into_iter().collect()
 }
@@ -388,6 +456,53 @@ pub fn stale_zoom_would_coarsen(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn observer_prepares_all_directions_without_changing_draw_culling() {
+        let world = lonlat(138.727, 35.36);
+        let side = WORLD / 64.;
+        let root = (6, (world[0] / side) as i32, (world[1] / side) as i32);
+        let catalog = (6..=9)
+            .flat_map(|z| {
+                let k = 1 << (z - 6);
+                (0..k).flat_map(move |y| {
+                    (0..k).map(move |x| ((z, root.1 * k + x, root.2 * k + y), 1))
+                })
+            })
+            .collect::<HashMap<_, _>>();
+        let mut camera = Camera::default();
+        camera.set_observer(world, 1502., 0., 0., 0.8, [1200., 800.]);
+        let expected = select(&catalog, &camera);
+        assert!(!expected.is_empty());
+        let behind = [
+            world[0] - 1000.,
+            world[1] + 20000.,
+            world[0] + 1000.,
+            world[1] + 22000.,
+        ];
+        assert!(camera.visible_depth(behind).is_none());
+        assert!(camera.preparation_depth(behind).is_some());
+        for yaw in [1., 2., 3., 4., 5., 6.] {
+            let before = camera.clone();
+            camera.set_observer(world, 1502., yaw, 0.3, 0.8, [1200., 800.]);
+            assert!(before.same_preparation(&camera), "回転で準備し直している");
+            assert_eq!(
+                expected,
+                select(&catalog, &camera),
+                "方角で準備対象が変わる"
+            );
+        }
+        let beyond = camera.far_depth() + 100000.;
+        assert!(
+            camera
+                .preparation_depth([
+                    world[0] + beyond,
+                    world[1] + beyond,
+                    world[0] + beyond + 100.,
+                    world[1] + beyond + 100.
+                ])
+                .is_none()
+        );
+    }
     #[test]
     fn quality_slider_refines_auto_lod_but_does_not_change_fixed_level() {
         let mut camera = Camera::default();

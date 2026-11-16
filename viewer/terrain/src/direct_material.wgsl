@@ -1,4 +1,4 @@
-struct Params { area:vec4<f32>, uv0:vec4<f32>, uv1:vec4<f32>, tint:vec4<f32>, settings:vec4<f32> }
+struct Params { area:vec4<f32>, uv0:vec4<f32>, uv1:vec4<f32>, tint:vec4<f32>, settings:vec4<f32>, earth:vec4<f32>, eye:vec4<f32> }
 @group(0) @binding(0) var positions:texture_2d<f32>;
 @group(0) @binding(1) var oldTile:texture_2d<f32>;
 @group(0) @binding(2) var newTile:texture_2d<f32>;
@@ -11,7 +11,8 @@ struct Params { area:vec4<f32>, uv0:vec4<f32>, uv1:vec4<f32>, tint:vec4<f32>, se
 fn linear(c:vec3<f32>)->vec3<f32>{return select(pow((c+vec3(.055))/1.055,vec3(2.4)),c/12.92,c<=vec3(.04045));}
 fn gamma(c:vec3<f32>)->vec3<f32>{return select(1.055*pow(max(c,vec3(0.)),vec3(1./2.4))-.055,c*12.92,c<vec3(.0031308));}
 fn coordinate(p:vec4<f32>)->vec2<f32>{
- let q=textureLoad(positions,vec2<i32>(p.xy),0);
+ let pixel=clamp(vec2<i32>(p.xy),vec2(0),vec2<i32>(textureDimensions(positions))-vec2(1));
+ let q=textureLoad(positions,pixel,0);
  if q.w<=0. {discard;}
  let uv=(q.xy-params.area.xy)/params.area.zw;
  if any(uv<vec2(0.))||any(uv>=vec2(1.)){discard;}
@@ -19,6 +20,12 @@ fn coordinate(p:vec4<f32>)->vec2<f32>{
 }
 @fragment fn color(@builtin(position)p:vec4<f32>)->@location(0)vec4<f32>{
  let uv=coordinate(p);
+ if (u32(params.settings.w)&4u)!=0u {
+  let tileUV=params.uv0.xy+uv*params.uv0.zw;
+  let edge=min(tileUV,vec2(1.)-tileUV)/max(fwidth(tileUV),vec2(1e-8));
+  if min(edge.x,edge.y)>1.75 {discard;}
+  return vec4(linear(params.tint.rgb),params.tint.a);
+ }
  if (u32(params.settings.w)&1u)!=0u {return vec4(linear(params.tint.rgb),params.tint.a);}
  var a=textureSampleLevel(oldTile,linearSampler,params.uv0.xy+uv*params.uv0.zw,0.);
  var b=textureSampleLevel(newTile,linearSampler,params.uv1.xy+uv*params.uv1.zw,0.);
@@ -40,5 +47,10 @@ fn difference(p:vec4<f32>)->f32{
  let pixel=vec2<i32>(p.xy);
  let q=textureLoad(positions,pixel,0); if q.w==0.{discard;}
  let color=textureLoad(lightingSource,pixel,0);
- return vec4(linear(clamp(gamma(color.rgb)*q.z,vec3(0.),vec3(1.))),color.a);
+ var shaded=linear(clamp(gamma(color.rgb)*q.z,vec3(0.),vec3(1.)));
+ if params.earth.w>0. {
+  let point=earthPosition(q.xy,abs(q.w)-10000.,params.earth,params.eye.w);
+  shaded=airHaze(shaded,params.eye.xyz,point,params.earth.z);
+ }
+ return vec4(shaded,color.a);
 }

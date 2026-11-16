@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const MIN_ZOOM: f64 = 5.;
+pub const MIN_ZOOM: f64 = 0.;
 pub const MAX_ZOOM: f64 = 18.;
 pub const TILE_SIZE: usize = 256;
 const MAX_PENDING: usize = 6;
@@ -116,6 +116,15 @@ impl Source {
         }
     }
 
+    /// 提供元に存在しない粗いズームは要求しない。
+    pub fn min_tile_zoom(self) -> u32 {
+        match self {
+            Self::Blank | Self::Relief => 5,
+            Self::Slope => 3,
+            Self::Gsi | Self::Pale | Self::Photo | Self::Hillshade => 2,
+            _ => 0,
+        }
+    }
     pub fn max_tile_zoom(self) -> u32 {
         match self {
             Self::Blank => 14,
@@ -131,6 +140,7 @@ impl Source {
         target
             .min(self.max_tile_zoom())
             .min(lod.max_level.unwrap_or(u32::MAX))
+            .max(self.min_tile_zoom())
     }
 
     fn tile_endpoint(self) -> (&'static str, &'static str) {
@@ -155,7 +165,11 @@ impl Source {
         let format = if extension == "jpg" { "JPEG" } else { "PNG" };
         ui.set_max_width(360.);
         ui.strong(self.label());
-        ui.label(format!("ビューワでの取得上限 z{}", self.max_tile_zoom()));
+        ui.label(format!(
+            "取得範囲 z{}〜z{}",
+            self.min_tile_zoom(),
+            self.max_tile_zoom()
+        ));
         ui.label(format!("画像形式 {format}"));
         ui.separator();
         self.attribution(ui, tile_zoom);
@@ -331,7 +345,7 @@ pub fn check() -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Orientation {
     rotation: egui::emath::Rot2,
     vertical_scale: f32,
@@ -376,7 +390,7 @@ impl Orientation {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct View {
     pub center: [f64; 2],
     pub zoom: f64,
@@ -536,6 +550,7 @@ enum Cached {
 type Reply = (Tile, Result<Option<LoadedTile>>);
 
 pub struct Tiles {
+    pub borders: bool,
     pub source: Source,
     cancelled: Arc<AtomicBool>,
     queue: mpsc::Sender<Tile>,
@@ -546,7 +561,6 @@ pub struct Tiles {
     lod: lod_fade::State<u32>,
     material_lods: Vec<lod_fade::State<u32>>,
     material_pass: usize,
-    material_ready: bool,
 }
 
 impl Tiles {
@@ -574,6 +588,7 @@ impl Tiles {
             });
         }
         Self {
+            borders: false,
             source,
             cancelled,
             queue,
@@ -584,13 +599,9 @@ impl Tiles {
             lod: lod_fade::State::default(),
             material_lods: (0..4).map(|_| Default::default()).collect(),
             material_pass: 0,
-            material_ready: false,
         }
     }
 
-    pub fn material_ready(&self) -> bool {
-        self.material_ready
-    }
     pub fn finish_material_frame(&mut self) {
         trim_cache(&mut self.cache, MAX_CACHE, self.frame);
     }
@@ -617,7 +628,6 @@ impl Tiles {
         fade_backend: lod_fade::Backend<'_>,
     ) -> bool {
         self.frame = ui.ctx().cumulative_pass_nr();
-        self.material_ready = false;
         let limit = if dragging { 1 } else { MAX_PENDING };
         let mut processed = 0;
         // 取得とPNGの展開はワーカーで行う。ドラッグ中はGPUへ渡すタイル数を抑える。
@@ -676,7 +686,6 @@ impl Tiles {
         }
         let now = ui.input(|input| input.time);
         let ready = tiles.iter().all(|tile| self.cache.contains_key(tile));
-        self.material_ready = ready && processed == 0;
         if ready && processed != 0 {
             ui.ctx().request_repaint();
         }
@@ -762,6 +771,20 @@ impl Tiles {
                 }
             }
         }
+        if self.borders {
+            for tile in view.tiles_at(rect, current) {
+                if matches!(self.cache.get(&tile), Some((Cached::Texture(_, _), _))) {
+                    crate::terrain_material::tile_border(
+                        painter,
+                        rect,
+                        view,
+                        tile,
+                        self.material_pass != 0,
+                        egui::Color32::from_rgb(240, 95, 35),
+                    );
+                }
+            }
+        }
         if self.material_pass == 0 {
             trim_cache(&mut self.cache, cache_limit, self.frame);
         }
@@ -794,11 +817,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn distant_materials_and_low_lod_limits_use_the_first_available_source_zoom() {
+        for (source, minimum) in [
+            (Source::Relief, 5),
+            (Source::Blank, 5),
+            (Source::Slope, 3),
+            (Source::Hillshade, 2),
+            (Source::Gsi, 2),
+            (Source::Pale, 2),
+            (Source::Photo, 2),
+            (Source::OpenStreetMap, 0),
+        ] {
+            assert_eq!(source.tile_zoom(1., Lod::default()), minimum.max(1));
+            assert_eq!(
+                source.tile_zoom(
+                    6.37,
+                    Lod {
+                        max_level: Some(1),
+                        bias: -4.
+                    }
+                ),
+                minimum.max(1)
+            );
+        }
+        assert_eq!(Source::Relief.tile_zoom(4.9, Lod::default()), 5);
+        assert_eq!(
+            Source::Relief.tile_zoom(
+                6.37,
+                Lod {
+                    max_level: None,
+                    bias: -0.5
+                }
+            ),
+            5
+        );
+    }
+    #[test]
     fn material_ranges_keep_each_others_tiles_across_zoom_frames() {
         let ctx = egui::Context::default();
         let (queue, _jobs) = mpsc::channel();
         let (_send, replies) = mpsc::channel();
         let mut tiles = Tiles {
+            borders: false,
             source: Source::Gsi,
             cancelled: Arc::default(),
             queue,
@@ -809,7 +869,6 @@ mod tests {
             lod: Default::default(),
             material_lods: (0..4).map(|_| Default::default()).collect(),
             material_pass: 0,
-            material_ready: false,
         };
         let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(2048., 2048.));
         let views = [0.25, 0.5, 0.75].map(|x| View {
@@ -831,7 +890,11 @@ mod tests {
                     for (i, view) in views.iter().enumerate() {
                         tiles.select_material_pass(i + 1);
                         tiles.paint(ui, ui.painter(), rect, view, false, 10, 10., None);
-                        assert!(tiles.material_ready());
+                        assert!(
+                            view.tiles_at(rect, 10)
+                                .iter()
+                                .all(|tile| tiles.cache.contains_key(tile))
+                        );
                     }
                     tiles.finish_material_frame();
                 });
@@ -937,7 +1000,7 @@ mod tests {
         lod.max_level = Some(17);
         assert_eq!(Source::Blank.tile_zoom(16., lod), 14);
         lod.bias = -4.;
-        assert_eq!(Source::Gsi.tile_zoom(2., lod), 0);
+        assert_eq!(Source::Gsi.tile_zoom(2., lod), 2);
     }
 
     #[test]
@@ -1095,6 +1158,7 @@ mod tests {
             .unwrap();
         }
         let mut tiles = Tiles {
+            borders: false,
             source: Source::Gsi,
             cancelled: Arc::default(),
             queue,
@@ -1105,7 +1169,6 @@ mod tests {
             lod: lod_fade::State::default(),
             material_lods: (0..4).map(|_| Default::default()).collect(),
             material_pass: 0,
-            material_ready: false,
         };
         let view = View {
             center: [0.5; 2],
