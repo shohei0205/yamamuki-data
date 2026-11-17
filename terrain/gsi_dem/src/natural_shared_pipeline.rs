@@ -64,6 +64,33 @@ struct Dem {
     order: VecDeque<(i32, i32)>,
 }
 impl Dem {
+    // 全レーンの不足PNGを一回の並列読み込みへ集約し、重なる画素配列は共有する。
+    fn read_groups(&mut self, groups: &[Vec<Input>]) -> Result<Vec<Vec<(Input, Arc<Vec<f64>>)>>> {
+        let mut unique = BTreeMap::new();
+        for i in groups.iter().flatten() {
+            if let Some(old) = unique.insert((i.x, i.y), i.clone()) {
+                ensure!(
+                    old.sha == i.sha,
+                    "同じDEM座標に異なる原本ハッシュがあります"
+                );
+            }
+        }
+        let requested = unique.into_values().collect::<Vec<_>>();
+        let arrays = self.read_many(&requested)?;
+        let loaded = requested
+            .iter()
+            .zip(arrays)
+            .map(|(i, a)| ((i.x, i.y), a))
+            .collect::<HashMap<_, _>>();
+        Ok(groups
+            .iter()
+            .map(|g| {
+                g.iter()
+                    .map(|i| (i.clone(), loaded[&(i.x, i.y)].clone()))
+                    .collect()
+            })
+            .collect())
+    }
     fn read_many(&mut self, inputs: &[Input]) -> Result<Vec<Arc<Vec<f64>>>> {
         let mut result = vec![None; inputs.len()];
         let mut missing = Vec::new();
@@ -2981,6 +3008,59 @@ fn configured_threads(default: usize) -> usize {
         .unwrap_or(default)
         .clamp(1, available)
 }
+/// 本番と分離した限定キューで、同じ削減・誤差証明を計測する。配布物は作らない。
+pub fn benchmark_prune(root: &Path, z: i64, limit: usize) -> Result<()> {
+    ensure!((6..=13).contains(&z), "比較対象のzは6〜13です");
+    let probe = Connection::open_with_flags(
+        root.join("work.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    for key in ["benchmark_only", "benchmark_prune_only"] {
+        ensure!(
+            probe
+                .query_row("SELECT value FROM meta WHERE key=?", [key], |r| r
+                    .get::<_, String>(0))
+                .optional()?
+                .as_deref()
+                == Some("true"),
+            "性能試験用コピーだけを指定できます: {key}"
+        );
+    }
+    let count: u64 = probe.query_row("SELECT count(*) FROM prune_queue WHERE z=?", [z], |r| {
+        r.get(0)
+    })?;
+    ensure!(
+        count > 0 && count <= 100000,
+        "性能試験のキューは1〜100000候補です"
+    );
+    drop(probe);
+    let lock = Connection::open(root.join("engine-lock.sqlite3"))?;
+    lock.busy_timeout(std::time::Duration::ZERO)?;
+    lock.execute_batch("CREATE TABLE IF NOT EXISTS lock(id INTEGER); BEGIN EXCLUSIVE")?;
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(configured_threads(12))
+        .build_global();
+    let (s, job, inputs) = initialize_internal(root, limit, &[], true)?;
+    let mut dem = Dem {
+        root: job["identity"]["cache"]
+            .as_str()
+            .context("元DEMキャッシュなし")?
+            .into(),
+        cache: HashMap::new(),
+        order: VecDeque::new(),
+    };
+    let error = LEVELS.iter().find(|v| v.0 == z).unwrap().1;
+    parallel_prune::run(
+        &s,
+        z,
+        if z == 13 { 13 } else { z + 1 },
+        error,
+        &inputs,
+        &mut dem,
+        root,
+        rayon::current_num_threads().min(inputs.len()),
+    )
+}
 pub fn execute(root: &Path, limit: usize, mode: &str, window: Vec<u32>) -> Result<()> {
     let workers = std::thread::available_parallelism()
         .map(|v| (v.get() / 2).max(1))
@@ -3384,6 +3464,60 @@ mod tests {
         assert!(circle_hits([0., 0., 4.], [-0.1, -0.1, 0.1, 0.1]));
         assert!(!circle_hits([0., 0., 4.], [1.8, 1.8, 2., 2.]));
         assert!(circle_hits([0., 0., 4.], [2., 0., 3., 1.]));
+    }
+    #[test]
+    fn benchmark_prune_refuses_a_normal_work_database() -> Result<()> {
+        let root = temporary();
+        fixture(&root)?;
+        let (store, _, _) = initialize(&root, 4096, &[14500, 6400, 14503, 6401])?;
+        let before = store.epoch(11)?;
+        let error = benchmark_prune(&root, 11, 4096).unwrap_err();
+        assert!(format!("{error:#}").contains("性能試験用コピーだけ"));
+        assert_eq!(store.epoch(11)?, before);
+        drop(store);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+    #[test]
+    fn grouped_dem_requests_keep_order_share_pixels_and_check_hashes() -> Result<()> {
+        let root = temporary();
+        fixture(&root)?;
+        let (_s, job, inputs) = initialize(&root, 4096, &[14500, 6400, 14503, 6401])?;
+        let mut dem = Dem {
+            root: job["identity"]["cache"].as_str().unwrap().into(),
+            cache: HashMap::new(),
+            order: VecDeque::new(),
+        };
+        let groups = vec![
+            vec![inputs[0].clone(), inputs[1].clone()],
+            vec![inputs[1].clone(), inputs[0].clone()],
+            Vec::new(),
+        ];
+        let got = dem.read_groups(&groups)?;
+        assert!(got[2].is_empty());
+        assert!(Arc::ptr_eq(&got[0][0].1, &got[1][1].1));
+        assert!(Arc::ptr_eq(&got[0][1].1, &got[1][0].1));
+        for (group, actual) in groups.iter().zip(&got) {
+            for (expected, (input, pixels)) in group.iter().zip(actual) {
+                assert_eq!((expected.x, expected.y), (input.x, input.y));
+                let reference = dem.read(expected)?;
+                assert!(
+                    reference
+                        .iter()
+                        .zip(pixels.iter())
+                        .all(|(a, b)| a.to_bits() == b.to_bits())
+                );
+            }
+        }
+        let mut changed = inputs[0].clone();
+        changed.sha = "wrong".into();
+        assert!(
+            dem.read_groups(&[vec![inputs[0].clone()], vec![changed]])
+                .is_err()
+        );
+        drop(_s);
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
     #[test]
     fn batched_dem_decode_is_bit_exact_and_reuses_cache() -> Result<()> {

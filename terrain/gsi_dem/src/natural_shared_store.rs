@@ -1687,15 +1687,21 @@ mod tests {
     }
     #[test]
     fn deletion_circle_certificates_reuse_and_invalidate() -> Result<()> {
+        for z in 6..=13 {
+            check_deletion_certificates(z)?;
+        }
+        Ok(())
+    }
+    fn check_deletion_certificates(z: i64) -> Result<()> {
         let s = Store::open(Path::new(":memory:"), 8192)?;
         let o = [35000000i32 * 16, 14000000i32 * 16];
         for (x, y) in [(-2000, -2000), (2000, -2000), (2000, 2000), (-2000, 2000)] {
-            s.insert(13, [o[0] + x * 16, o[1] + y * 16, 0], true)?;
+            s.insert(z, [o[0] + x * 16, o[1] + y * 16, 0], true)?;
         }
         for y in 0..20 {
             for x in 0..20 {
                 s.insert(
-                    13,
+                    z,
                     [
                         o[0] + x * 160 + (y * 7 + x * 3) % 11,
                         o[1] + y * 160 + (x * 5 + y * 3) % 13,
@@ -1705,11 +1711,11 @@ mod tests {
                 )?;
             }
         }
-        s.cache_level(13)?;
-        s.enable_deletion_certificates(13);
+        s.cache_level(z)?;
+        s.enable_deletion_certificates(z);
         let b = [35000040., 14000040., 35000140., 14000140.];
-        let first = s.patch(13, b)?;
-        let second = s.patch(13, b)?;
+        let first = s.patch(z, b)?;
+        let second = s.patch(z, b)?;
         assert!(s.certificate_stats()["hits"].as_u64().unwrap() > 0);
         let mut a = Work::default();
         let mut c = Work::default();
@@ -1719,7 +1725,7 @@ mod tests {
                 assert!((first.evaluate(q, &mut a)? - second.evaluate(q, &mut c)?).abs() < 1e-8);
             }
         }
-        s.insert(13, [o[0] + 1001, o[1] + 1003, 17], false)?;
+        s.insert(z, [o[0] + 1001, o[1] + 1003, 17], false)?;
         assert_eq!(s.certificate_stats()["z"].as_i64(), Some(-1));
         assert_eq!(s.certificate_stats()["entries"].as_u64(), Some(0));
         Ok(())

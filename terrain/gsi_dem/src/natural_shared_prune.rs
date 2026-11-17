@@ -641,6 +641,7 @@ pub(super) fn run(
     }
     let started = Instant::now();
     let mut prepare_seconds = 0.;
+    let mut restore_seconds = 0.;
     let mut evaluate_seconds = 0.;
     let mut save_seconds = 0.;
     let mut sync_seconds = 0.;
@@ -653,7 +654,7 @@ pub(super) fn run(
     let virtual_proofs = ((z == 13 || blocks_enabled)
         && std::env::var_os("TERRAIN_SERIAL_REMOVAL_PROOFS").is_none())
         || std::env::var_os("TERRAIN_PARALLEL_REMOVAL_PROOFS").is_some();
-    if z == 13 && virtual_proofs && std::env::var_os("TERRAIN_NO_SHARED_CIRCLES").is_none() {
+    if virtual_proofs && std::env::var_os("TERRAIN_NO_SHARED_CIRCLES").is_none() {
         s.enable_deletion_certificates(z);
     }
     let mut expanded_candidates = 0u64;
@@ -676,7 +677,8 @@ pub(super) fn run(
     )?;
     let mut is_active =
         s.db.prepare_cached("SELECT 1 FROM active WHERE z=? AND id=?")?;
-    while remaining > 0 {
+    let benchmark_limit=s.db.query_row("SELECT value FROM meta WHERE key='benchmark_candidate_limit' AND EXISTS(SELECT 1 FROM meta WHERE key='benchmark_only')", [], |r|r.get::<_,String>(0)).optional()?.and_then(|v|v.parse::<u64>().ok());
+    while remaining > 0 && benchmark_limit.is_none_or(|v| initial_remaining - remaining < v) {
         ensure!(
             !root.join("stop-requested").exists(),
             "停止要求を受けました。確定済みキューは保持されています"
@@ -712,44 +714,71 @@ pub(super) fn run(
                 continue;
             }
             let q = s.point(id)?;
-            if caches[stripe]
-                .as_ref()
-                .is_none_or(|p| p.epoch != epoch || !inside([q[0], q[1]], p.certified_bounds))
-            {
-                if let Some(previous) = caches[stripe].take() {
-                    while !parked[stripe].is_empty()
-                        && (parked[stripe].len() >= (16 * physical_threads / workers).max(1)
-                            || parked[stripe]
-                                .iter()
-                                .flatten()
-                                .map(|p| p.ids.len())
-                                .sum::<usize>()
-                                + previous.ids.len()
-                                > 131_072 * physical_threads / workers)
-                    {
-                        parked[stripe].remove(0);
-                    }
-                    parked[stripe].push(Some(previous));
-                }
-                let found = parked[stripe].iter().position(|p| {
-                    p.as_ref().is_some_and(|p| {
-                        (deferred_sync || p.epoch == epoch)
-                            && inside([q[0], q[1]], p.certified_bounds)
-                    })
-                });
-                let mut restored = found.and_then(|k| parked[stripe].remove(k));
-                if deferred_sync {
-                    journal.restore(epoch, &mut restored)?;
-                }
-                caches[stripe] = if restored.is_some() {
-                    restored
-                } else {
-                    cache_rebuilds += 1;
-                    missing.push((stripe, s.cache_region(z, [q[0], q[1]], expanded(q, z))?));
-                    None
-                };
-            }
             pending.push((stripe, sequence, id, q));
+        }
+        // SQLiteの読取りを終えてから、領域ごとの接続復元を独立に並列実行する。
+        // 同じ領域内の削除履歴は従来と同じ順で適用する。
+        let mut locations = vec![None; workers];
+        for &(stripe, _, _, q) in &pending {
+            locations[stripe] = Some(q);
+        }
+        let restore_started = Instant::now();
+        let restore = |(stripe, (cache, parked)): (
+            usize,
+            (&mut Option<Patch>, &mut Vec<Option<Patch>>),
+        )|
+         -> Result<()> {
+            let Some(q) = locations[stripe] else {
+                return Ok(());
+            };
+            if cache
+                .as_ref()
+                .is_some_and(|p| p.epoch == epoch && inside([q[0], q[1]], p.certified_bounds))
+            {
+                return Ok(());
+            }
+            if let Some(previous) = cache.take() {
+                while !parked.is_empty()
+                    && (parked.len() >= (16 * physical_threads / workers).max(1)
+                        || parked.iter().flatten().map(|p| p.ids.len()).sum::<usize>()
+                            + previous.ids.len()
+                            > 131_072 * physical_threads / workers)
+                {
+                    parked.remove(0);
+                }
+                parked.push(Some(previous));
+            }
+            let found = parked.iter().position(|p| {
+                p.as_ref().is_some_and(|p| {
+                    (deferred_sync || p.epoch == epoch) && inside([q[0], q[1]], p.certified_bounds)
+                })
+            });
+            let mut restored = found.and_then(|k| parked.remove(k));
+            if deferred_sync {
+                journal.restore(epoch, &mut restored)?;
+            }
+            *cache = restored;
+            Ok(())
+        };
+        if std::env::var_os("TERRAIN_SERIAL_PRUNE_CACHE_RESTORE").is_some() {
+            caches
+                .iter_mut()
+                .zip(parked.iter_mut())
+                .enumerate()
+                .try_for_each(restore)?;
+        } else {
+            caches
+                .par_iter_mut()
+                .zip(parked.par_iter_mut())
+                .enumerate()
+                .try_for_each(restore)?;
+        }
+        restore_seconds += restore_started.elapsed().as_secs_f64();
+        for &(stripe, _, _, q) in &pending {
+            if caches[stripe].is_none() {
+                cache_rebuilds += 1;
+                missing.push((stripe, s.cache_region(z, [q[0], q[1]], expanded(q, z))?));
+            }
         }
         if z == 13
             && !missing.is_empty()
@@ -812,6 +841,8 @@ pub(super) fn run(
         {
             let mut chosen = Vec::<[f64; 4]>::new();
             let mut block_jobs = Vec::new();
+            let coalesced_dem = std::env::var_os("TERRAIN_SERIAL_PRUNE_DEM_PREPARE").is_none();
+            let mut raster_requests = Vec::new();
             for &(stripe, sequence, id, q) in &pending {
                 if blocked[stripe] == Some(id) {
                     continue;
@@ -856,8 +887,13 @@ pub(super) fn run(
                     region_inputs.len() <= 196,
                     "まとめ評価の元DEMが範囲上限を超えました"
                 );
-                let arrays = dem.read_many(&region_inputs)?;
-                let rasters = region_inputs.into_iter().zip(arrays).collect();
+                let rasters = if coalesced_dem {
+                    raster_requests.push(region_inputs);
+                    Vec::new()
+                } else {
+                    let arrays = dem.read_many(&region_inputs)?;
+                    region_inputs.into_iter().zip(arrays).collect()
+                };
                 if let Some(p) = caches[stripe].as_mut() {
                     p.certified_bounds = b;
                 }
@@ -872,6 +908,12 @@ pub(super) fn run(
                     rasters,
                     witnesses: witnesses[stripe].clone(),
                 });
+            }
+            if coalesced_dem {
+                let rasters = dem.read_groups(&raster_requests)?;
+                for (job, rasters) in block_jobs.iter_mut().zip(rasters) {
+                    job.rasters = rasters;
+                }
             }
             prepare_seconds += phase.elapsed().as_secs_f64();
             let block_started = Instant::now();
@@ -925,7 +967,7 @@ pub(super) fn run(
                 turn = (turn + 1) % workers;
                 progress(
                     root,
-                    json!({"stage":"prune-parallel","z":z,"done":total-remaining,"total":total,"accepted":accepted,"workers":execution_threads,"lanes":workers,"complete":false,"profile":{"prepare_seconds":prepare_seconds,"evaluate_seconds":evaluate_seconds,"save_seconds":save_seconds,"sync_seconds":sync_seconds,"cache_rebuilds":cache_rebuilds,"dem":dem_profile(),"closed_circles":s.certificate_stats(),"block_candidates":block_candidates,"block_size":block_size,"blocks_enabled":blocks_enabled,"fused_preparation":true,"deferred_sync":deferred_sync,"elapsed_seconds":started.elapsed().as_secs_f64()}}),
+                    json!({"stage":"prune-parallel","z":z,"done":total-remaining,"total":total,"accepted":accepted,"workers":execution_threads,"lanes":workers,"complete":false,"profile":{"prepare_seconds":prepare_seconds,"restore_seconds":restore_seconds,"parallel_cache_restore":std::env::var_os("TERRAIN_SERIAL_PRUNE_CACHE_RESTORE").is_none(),"evaluate_seconds":evaluate_seconds,"save_seconds":save_seconds,"sync_seconds":sync_seconds,"cache_rebuilds":cache_rebuilds,"dem":dem_profile(),"closed_circles":s.certificate_stats(),"block_candidates":block_candidates,"block_size":block_size,"blocks_enabled":blocks_enabled,"fused_preparation":true,"coalesced_dem_preparation":std::env::var_os("TERRAIN_SERIAL_PRUNE_DEM_PREPARE").is_none(),"deferred_sync":deferred_sync,"elapsed_seconds":started.elapsed().as_secs_f64()}}),
                 )?;
                 continue;
             }
@@ -1198,7 +1240,7 @@ pub(super) fn run(
         if (total - remaining) % 32 < workers as u64 || remaining == 0 {
             progress(
                 root,
-                json!({"stage":"prune-parallel","z":z,"done":total-remaining,"total":total,"accepted":accepted,"workers":execution_threads,"lanes":workers,"complete":false,"profile":{"prepare_seconds":prepare_seconds,"evaluate_seconds":evaluate_seconds,"save_seconds":save_seconds,"sync_seconds":sync_seconds,"cache_rebuilds":cache_rebuilds,"dem":dem_profile(),"closed_circles":s.certificate_stats(),"preflight_rejections":preflight_rejections,"serial_candidates":serial_candidates,"expanded_candidates":expanded_candidates,"unaffected_regions":unaffected_regions,"early_rejections":early_rejections,"evaluated_candidates":evaluated_candidates,"elapsed_seconds":started.elapsed().as_secs_f64()}}),
+                json!({"stage":"prune-parallel","z":z,"done":total-remaining,"total":total,"accepted":accepted,"workers":execution_threads,"lanes":workers,"complete":false,"profile":{"prepare_seconds":prepare_seconds,"restore_seconds":restore_seconds,"parallel_cache_restore":std::env::var_os("TERRAIN_SERIAL_PRUNE_CACHE_RESTORE").is_none(),"evaluate_seconds":evaluate_seconds,"save_seconds":save_seconds,"sync_seconds":sync_seconds,"cache_rebuilds":cache_rebuilds,"dem":dem_profile(),"closed_circles":s.certificate_stats(),"preflight_rejections":preflight_rejections,"serial_candidates":serial_candidates,"expanded_candidates":expanded_candidates,"unaffected_regions":unaffected_regions,"early_rejections":early_rejections,"evaluated_candidates":evaluated_candidates,"elapsed_seconds":started.elapsed().as_secs_f64()}}),
             )?;
         }
     }
@@ -1218,7 +1260,7 @@ pub(super) fn run(
         } else {
             Value::Null
         };
-        let report = json!({"scope":"prune-only / limited real queue / no final audit","workers":execution_threads,"lanes":workers,"block_candidates":block_candidates,"block_size":block_size,"blocks_enabled":blocks_enabled,"fused_preparation":true,"deferred_sync":deferred_sync,"processed_candidates":initial_remaining,"accepted":accepted,"seconds":core_seconds,"quality_audit":quality,"prepare_seconds":prepare_seconds,"evaluate_seconds":evaluate_seconds,"save_seconds":save_seconds,"sync_seconds":sync_seconds,"preflight_rejections":preflight_rejections,"cache_rebuilds":cache_rebuilds,"dem":dem_profile(),"closed_circles":s.certificate_stats(),"national_complete":false,"distributable":false});
+        let report = json!({"scope":"prune-only / limited real queue / no final audit","workers":execution_threads,"lanes":workers,"block_candidates":block_candidates,"block_size":block_size,"blocks_enabled":blocks_enabled,"fused_preparation":true,"coalesced_dem_preparation":std::env::var_os("TERRAIN_SERIAL_PRUNE_DEM_PREPARE").is_none(),"deferred_sync":deferred_sync,"processed_candidates":initial_remaining-remaining,"remaining_candidates":remaining,"accepted":accepted,"seconds":core_seconds,"quality_audit":quality,"prepare_seconds":prepare_seconds,"restore_seconds":restore_seconds,"parallel_cache_restore":std::env::var_os("TERRAIN_SERIAL_PRUNE_CACHE_RESTORE").is_none(),"evaluate_seconds":evaluate_seconds,"save_seconds":save_seconds,"sync_seconds":sync_seconds,"preflight_rejections":preflight_rejections,"cache_rebuilds":cache_rebuilds,"dem":dem_profile(),"closed_circles":s.certificate_stats(),"national_complete":false,"distributable":false});
         fs::write(
             root.join("benchmark-prune.json"),
             serde_json::to_vec_pretty(&report)?,
@@ -1238,6 +1280,7 @@ pub(super) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn deferred_removal_journal_matches_eager_sync() -> Result<()> {
         let s = Store::open(Path::new(":memory:"), 4096)?;

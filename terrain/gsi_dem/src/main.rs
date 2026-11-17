@@ -18,6 +18,15 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// 性能試験用コピーの限定キューだけを削減する。本番DBは拒否する。
+    BenchmarkPrune {
+        #[arg(long)]
+        prepared: PathBuf,
+        #[arg(long)]
+        z: i64,
+        #[arg(long, default_value_t = 131072)]
+        local_point_limit: usize,
+    },
     Prepare {
         #[arg(long)]
         dem14: PathBuf,
@@ -198,6 +207,11 @@ fn qualify(prepared: &Path, pilots: &[PathBuf]) -> Result<()> {
 }
 fn main() -> Result<()> {
     match Args::parse().command {
+        Command::BenchmarkPrune {
+            prepared,
+            z,
+            local_point_limit,
+        } => natural_shared_pipeline::benchmark_prune(&prepared, z, local_point_limit),
         Command::Prepare { dem14, output } => prepare(&dem14, &output),
         Command::Run {
             prepared,

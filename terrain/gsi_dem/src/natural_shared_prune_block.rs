@@ -70,11 +70,18 @@ pub(super) fn evaluate(mut j: BlockJob, error: f64, root: &Path) -> Result<Block
         .map(|(i, a)| ((i.x, i.y), a))
         .collect::<HashMap<_, _>>();
     let started = Instant::now();
+    let budget = std::time::Duration::from_millis(
+        std::env::var("TERRAIN_PRUNE_BLOCK_MILLISECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(250)
+            .clamp(50, 5000),
+    );
     let direct = std::env::var_os("TERRAIN_SKIP_DIRECT_PRUNE").is_none();
     let mut w = Work::at_face(j.patch.hint_face);
     let mut direct_work = crate::natural_regional_surface::RemovalWork::default();
     for (n, (sequence, id, q, active)) in j.rows.into_iter().enumerate() {
-        if n >= 16 && started.elapsed() > std::time::Duration::from_millis(250) {
+        if n >= 16 && started.elapsed() > budget {
             break;
         }
         if n % 16 == 0 {

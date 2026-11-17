@@ -10,6 +10,7 @@ pub(super) struct Certificates {
     z: AtomicI64,
     shards: Vec<RwLock<HashSet<[i64; 3]>>>,
     count: AtomicUsize,
+    limit: usize,
     hits: AtomicU64,
     misses: AtomicU64,
 }
@@ -19,6 +20,11 @@ impl Certificates {
             z: AtomicI64::new(-1),
             shards: (0..64).map(|_| RwLock::new(HashSet::new())).collect(),
             count: AtomicUsize::new(0),
+            limit: std::env::var("TERRAIN_CIRCLE_CERTIFICATE_LIMIT")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(2_000_000)
+                .clamp(16384, 4_000_000),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
         }
@@ -59,7 +65,7 @@ impl Certificates {
             return;
         }
         let mut shard = self.shards[Self::slot(key)].write().unwrap();
-        if self.count.load(Relaxed) >= 500000 {
+        if self.count.load(Relaxed) >= self.limit {
             let n = shard.len();
             shard.clear();
             self.count.fetch_sub(n, Relaxed);
@@ -69,7 +75,7 @@ impl Certificates {
         }
     }
     pub(super) fn stats(&self) -> serde_json::Value {
-        serde_json::json!({"z":self.z.load(Relaxed),"entries":self.count.load(Relaxed),"hits":self.hits.load(Relaxed),"misses":self.misses.load(Relaxed),"limit":500000})
+        serde_json::json!({"z":self.z.load(Relaxed),"entries":self.count.load(Relaxed),"hits":self.hits.load(Relaxed),"misses":self.misses.load(Relaxed),"limit":self.limit})
     }
 }
 

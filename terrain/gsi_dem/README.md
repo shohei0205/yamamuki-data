@@ -110,6 +110,24 @@ SQLite・対応manifest・LICENSEを添付し、`地形：下書き Release 加�
 ```
 
 
+## 制御点削減の実行と計測
+
+削減候補は、互いに影響しない領域を複数レーンへ分けて並列評価する。休止した領域の接続復元も領域ごとに並列実行し、同一領域内では削除履歴の順序を維持する。各レーンの不足DEMを一括して読み込み、同じ画素配列を共有する。削除だけでは無効にならない外接円の証明を全レベルで再利用し、点の追加・復元・レベル変更では無効化する。
+
+`TERRAIN_PRUNE_THREADS` でスレッド数、`TERRAIN_PRUNE_LANE_FACTOR` でスレッド数に対する作業レーン数の倍率を指定できる。SQLiteへの確定保存と干渉する領域の調整は直列で行うため、増やせば必ず速くなるわけではない。既定の局所バッチ時間は250ms。証明キャッシュの既定上限は200万件で、`TERRAIN_CIRCLE_CERTIFICATE_LIMIT` で調整する。常駐メモリ等の上限検査は別に維持する。
+
+`progress.json` の `profile` に準備・評価・保存・同期の時間を出す。`restore_seconds` は準備時間に含まれる領域キャッシュ復元の内訳。`parallel_cache_restore` と `coalesced_dem_preparation` は実行方式を示す。
+
+削減だけの性能比較には、作業DBを独立した試験用フォルダーへコピーして使う。
+
+```powershell
+& $engine benchmark-prune --prepared build/terrain/prune-benchmark --z 11
+```
+
+このコマンドは `meta` に `benchmark_only=true` と `benchmark_prune_only=true` の両方がある試験DBだけを受け付ける。通常の全国生成DBは拒否する。試験コピーの `benchmark_candidate_limit` で候補数を制限できる。結果は `benchmark-prune.json` に保存し、配布可能な生成完了とは扱わない。`TERRAIN_PRUNE_BENCH_AUDIT=1` で変更の影響を受けたDEMの全画素を独立に再検査する。
+
+比較時だけ `TERRAIN_SERIAL_PRUNE_CACHE_RESTORE=1` で復元を直列へ、`TERRAIN_SERIAL_PRUNE_DEM_PREPARE=1` でDEM準備をレーン別へ戻せる。同一キュー・同一誤差・同一スレッド数で比較する。実際の生成へ適用する前に、同じ生成器で三地点の全レベル生成と全画素監査を通す。
+
 ## ビューワー
 
 正式ビューワーの「地形SQLiteを開く」、または以下で3D表示する。
