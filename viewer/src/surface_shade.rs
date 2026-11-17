@@ -4,6 +4,7 @@ use eframe::{
     egui_wgpu::{self, RenderState, wgpu},
 };
 use wgpu::util::DeviceExt;
+use yamamuki_terrain_view::direct_material::Interpolation;
 
 pub struct ShadeTexture {
     pub view: wgpu::TextureView,
@@ -201,7 +202,7 @@ impl Renderer {
                         amount: 1.,
                         shade: true,
                         gamma_shade: !self.srgb_target,
-                        edge_filter: false,
+                        edge_filter: Interpolation::Bilinear,
                     },
                 );
             }

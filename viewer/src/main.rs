@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 
+use yamamuki_terrain_view::direct_material::Interpolation;
 mod appearance;
 mod boundaries;
 mod diagnostics;
@@ -173,8 +174,9 @@ struct Viewer {
     lod: map::Lod,
     surface_lod: map::Lod,
     map_borders: bool,
-    map_edge_filter: bool,
+    map_edge_filter: Interpolation,
     surface_borders: bool,
+    surface_edge_filter: Interpolation,
     surface_palette: surface_palette::Palette,
     lod_renderer: Option<lod_fade::Renderer>,
     show_online_map: bool,
@@ -227,18 +229,27 @@ impl Viewer {
                     SettingsSection::OnlineMap => {
                         ui.checkbox(&mut self.map_borders, "タイル境界を表示");
                         egui::ComboBox::from_label("拡大時の補間")
-                            .selected_text(if self.map_edge_filter { "輪郭優先（エミュレーター風）" } else { "バイリニア" })
+                            .selected_text(self.map_edge_filter.label())
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.map_edge_filter, false, "バイリニア");
-                                ui.selectable_value(&mut self.map_edge_filter, true, "輪郭優先（エミュレーター風）");
+                                for mode in Interpolation::ALL {
+                                    ui.selectable_value(&mut self.map_edge_filter, mode, mode.label());
+                                }
                             });
-                        ui.small("輪郭優先は上下左右の色差から斜めの線をつなぐ独自方式です。縮小時は通常の補間を使います。");
+                        ui.small("RGB全成分から輪郭方向を求め、細線と色の面境界を滑らかにつなぎます。地図の種類によらず同じ補間を使います。");
                         ui.strong("自動LOD");
                         let maximum = self.lod_slider_max();
                         lod_settings(ui, &mut self.lod, maximum);
                     }
                     SettingsSection::Surface => {
                         ui.checkbox(&mut self.surface_borders, "タイル境界を表示");
+                        egui::ComboBox::from_label("拡大時の補間")
+                            .selected_text(self.surface_edge_filter.label())
+                            .show_ui(ui, |ui| {
+                                for mode in Interpolation::ALL {
+                                    ui.selectable_value(&mut self.surface_edge_filter, mode, mode.label());
+                                }
+                            });
+                        ui.small("各レイヤーを個別に補間してから、収録された描画順で合成します。");
                         ui.strong("自動LOD");
                         let maximum = self.surface_lod_slider_max();
                         lod_settings(ui, &mut self.surface_lod, maximum);
@@ -339,8 +350,9 @@ impl Viewer {
             lod: map::Lod::default(),
             surface_lod: map::Lod::default(),
             map_borders: false,
-            map_edge_filter: false,
+            map_edge_filter: Interpolation::Edge,
             surface_borders: false,
+            surface_edge_filter: Interpolation::Edge,
             surface_palette: surface_palette::Palette::default(),
             lod_renderer: None,
             show_online_map: true,
@@ -886,6 +898,7 @@ impl Viewer {
         let mut has_base = self.show_online_map;
         for surface in self.surfaces.iter_mut().filter(|surface| surface.enabled) {
             surface.borders = self.surface_borders;
+            surface.edge_filter = self.surface_edge_filter;
             surface.select_material_pass(material_pass);
             surface.paint(
                 ui,
@@ -987,7 +1000,7 @@ impl Viewer {
                         tint: appearance::CANVAS.to_array().map(|v| f32::from(v) / 255.),
                         shade: false,
                         gamma_shade: false,
-                        edge_filter: false,
+                        edge_filter: Interpolation::Bilinear,
                         border: false,
                     });
                 }
@@ -1329,6 +1342,7 @@ impl eframe::App for Viewer {
         eframe::set_value(storage, "map_borders", &self.map_borders);
         eframe::set_value(storage, "map_edge_filter", &self.map_edge_filter);
         eframe::set_value(storage, "surface_borders", &self.surface_borders);
+        eframe::set_value(storage, "surface_edge_filter", &self.surface_edge_filter);
         eframe::set_value(storage, SURFACE_LOD_KEY, &self.surface_lod);
         eframe::set_value(storage, SURFACE_PALETTE_KEY, &self.surface_palette);
         eframe::set_value(storage, POINT_NAMES_KEY, &self.show_point_names);
@@ -2418,11 +2432,15 @@ fn run() -> Result<()> {
             viewer.map_edge_filter = cc
                 .storage
                 .and_then(|s| eframe::get_value(s, "map_edge_filter"))
-                .unwrap_or(false);
+                .unwrap_or(Interpolation::Edge);
             viewer.surface_borders = cc
                 .storage
                 .and_then(|s| eframe::get_value(s, "surface_borders"))
                 .unwrap_or(false);
+            viewer.surface_edge_filter = cc
+                .storage
+                .and_then(|s| eframe::get_value(s, "surface_edge_filter"))
+                .unwrap_or(Interpolation::Edge);
             viewer.surface_lod = cc
                 .storage
                 .and_then(|storage| eframe::get_value(storage, SURFACE_LOD_KEY))
@@ -3075,6 +3093,10 @@ mod surface_palette_checks {
             .build()
             .unwrap();
         let mut viewer = Viewer::new(&ctx, client, None);
+        assert_eq!(viewer.map_edge_filter, Interpolation::Edge);
+        assert_eq!(viewer.surface_edge_filter, Interpolation::Edge);
+        viewer.map_edge_filter = Interpolation::Bilinear;
+        viewer.surface_edge_filter = Interpolation::Bilinear;
         let mut app_frame = eframe::Frame::_new_kittest();
         let mut frame = |viewer: &mut Viewer, events| {
             ctx.run(
@@ -3134,6 +3156,31 @@ mod surface_palette_checks {
             eframe::get_value(&storage, SURFACE_PALETTE_KEY).unwrap();
         assert_eq!(saved, surface_palette::Palette::Contrast);
         let output = frame(&mut viewer, vec![]);
+        let at = find(&output, "バイリニア");
+        frame(
+            &mut viewer,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+        );
+        frame(&mut viewer, vec![button(at, false)]);
+        let output = frame(&mut viewer, vec![]);
+        let at = find(&output, "輪郭優先");
+        frame(
+            &mut viewer,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+        );
+        frame(&mut viewer, vec![button(at, false)]);
+        assert_eq!(viewer.surface_edge_filter, Interpolation::Edge);
+        assert_eq!(
+            viewer.map_edge_filter,
+            Interpolation::Bilinear,
+            "地表と地図の設定が連動している"
+        );
+        viewer.save(&mut storage);
+        assert_eq!(
+            eframe::get_value::<Interpolation>(&storage, "surface_edge_filter"),
+            Some(Interpolation::Edge)
+        );
+        let output = frame(&mut viewer, vec![]);
         let at = find(&output, "オンライン地図");
         frame(
             &mut viewer,
@@ -3148,17 +3195,43 @@ mod surface_palette_checks {
         );
         frame(&mut viewer, vec![button(at, false)]);
         let output = frame(&mut viewer, vec![]);
-        let at = find(&output, "輪郭優先（エミュレーター風）");
+        let at = find(&output, "輪郭優先");
         frame(
             &mut viewer,
             vec![egui::Event::PointerMoved(at), button(at, true)],
         );
         frame(&mut viewer, vec![button(at, false)]);
-        assert!(viewer.map_edge_filter);
+        assert_eq!(viewer.map_edge_filter, Interpolation::Edge);
         viewer.save(&mut storage);
         assert_eq!(
-            eframe::get_value::<bool>(&storage, "map_edge_filter"),
-            Some(true)
+            eframe::get_value::<Interpolation>(&storage, "map_edge_filter"),
+            Some(Interpolation::Edge)
+        );
+        let output = frame(&mut viewer, vec![]);
+        let at = find(&output, "輪郭優先");
+        frame(
+            &mut viewer,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+        );
+        frame(&mut viewer, vec![button(at, false)]);
+        let output = frame(&mut viewer, vec![]);
+        let at = find(&output, "最近傍");
+        frame(
+            &mut viewer,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+        );
+        frame(&mut viewer, vec![button(at, false)]);
+        assert_eq!(viewer.map_edge_filter, Interpolation::Nearest);
+        assert_eq!(viewer.surface_edge_filter, Interpolation::Edge);
+        viewer.save(&mut storage);
+        assert_eq!(
+            eframe::get_value::<Interpolation>(&storage, "map_edge_filter"),
+            Some(Interpolation::Nearest)
+        );
+        eframe::set_value(&mut storage, "map_edge_filter", &false);
+        assert_eq!(
+            eframe::get_value::<Interpolation>(&storage, "map_edge_filter"),
+            Some(Interpolation::Bilinear)
         );
     }
 }

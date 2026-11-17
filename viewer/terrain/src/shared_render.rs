@@ -2043,7 +2043,13 @@ impl CallbackTrait for Frame {
         drop(pass);
         if self.direct.is_some() || camera.globe {
             let commands = self.direct.as_deref().unwrap_or(&[]);
-            self.direct_renderer.render(
+            let render = if all.len() == 1 && all[0].key == (0, 0, 0) {
+                crate::direct_material::Renderer::render_flat
+            } else {
+                crate::direct_material::Renderer::render
+            };
+            render(
+                &self.direct_renderer,
                 device,
                 queue,
                 encoder,

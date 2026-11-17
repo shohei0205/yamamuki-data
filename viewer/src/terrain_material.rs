@@ -1,5 +1,6 @@
 //! 2Dのタイル選択・合成順を引き継ぎ、元テクスチャを地形へ直接渡す。
 use eframe::{egui, egui_wgpu::RenderState};
+use yamamuki_terrain_view::direct_material::Interpolation;
 use yamamuki_terrain_view::direct_material::{Capture, Quad};
 pub struct BorderCapture {
     pub rect: egui::Rect,
@@ -101,7 +102,7 @@ pub fn collect(
                         tint: color,
                         shade: false,
                         gamma_shade: false,
-                        edge_filter: false,
+                        edge_filter: Interpolation::Bilinear,
                         border: false,
                     });
                 }
@@ -116,7 +117,7 @@ pub fn collect(
                         tint: c.color.to_array().map(|v| v as f32 / 255.),
                         shade: false,
                         gamma_shade: false,
-                        edge_filter: false,
+                        edge_filter: Interpolation::Bilinear,
                         border: true,
                     });
                 } else if let Some(c) = callback.callback.downcast_ref::<Capture>() {

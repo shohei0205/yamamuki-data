@@ -10,6 +10,7 @@ struct Page {
     texture: Mutex<TextureHandle>,
     slots: Mutex<[Option<u64>; GRID * GRID]>,
     size: [usize; 2],
+    gutter: usize,
     options: egui::TextureOptions,
     ctx: egui::Context,
 }
@@ -31,38 +32,54 @@ pub struct Image {
 // 隣接更新には外周だけを残し、全タイルの展開画像は保持しない。
 struct Edges {
     size: [usize; 2],
+    gutter: usize,
     top: Vec<egui::Color32>,
     bottom: Vec<egui::Color32>,
     left: Vec<egui::Color32>,
     right: Vec<egui::Color32>,
 }
 impl Edges {
-    fn new(image: &ColorImage) -> Self {
+    fn new(image: &ColorImage, gutter: usize) -> Self {
         let [w, h] = image.size;
+        let pixel = |x: usize, y: usize| image.pixels[y.min(h - 1) * w + x.min(w - 1)];
         Self {
             size: image.size,
-            top: image.pixels[..w].to_vec(),
-            bottom: image.pixels[(h - 1) * w..].to_vec(),
-            left: (0..h).map(|y| image.pixels[y * w]).collect(),
-            right: (0..h).map(|y| image.pixels[y * w + w - 1]).collect(),
+            gutter,
+            top: (0..gutter)
+                .flat_map(|y| (0..w).map(move |x| pixel(x, y)))
+                .collect(),
+            bottom: (0..gutter)
+                .flat_map(|y| (0..w).map(move |x| pixel(x, h.saturating_sub(gutter) + y)))
+                .collect(),
+            left: (0..h)
+                .flat_map(|y| (0..gutter).map(move |x| pixel(x, y)))
+                .collect(),
+            right: (0..h)
+                .flat_map(|y| (0..gutter).map(move |x| pixel(w.saturating_sub(gutter) + x, y)))
+                .collect(),
         }
     }
     fn patch(&self, dx: i32, dy: i32) -> Option<([usize; 2], ColorImage)> {
         let [w, h] = self.size;
+        let g = self.gutter;
         let (at, size, pixels) = match (dx, dy) {
-            (-1, 0) => ([0, 1], [1, h], self.right.clone()),
-            (1, 0) => ([w + 1, 1], [1, h], self.left.clone()),
-            (0, -1) => ([1, 0], [w, 1], self.bottom.clone()),
-            (0, 1) => ([1, h + 1], [w, 1], self.top.clone()),
+            (-1, 0) => ([0, g], [g, h], self.right.clone()),
+            (1, 0) => ([w + g, g], [g, h], self.left.clone()),
+            (0, -1) => ([g, 0], [w, g], self.bottom.clone()),
+            (0, 1) => ([g, h + g], [w, g], self.top.clone()),
             (-1 | 1, -1 | 1) => {
-                let row = if dy < 0 { &self.bottom } else { &self.top };
+                let rows = if dy < 0 { &self.bottom } else { &self.top };
+                let x0 = if dx < 0 { w.saturating_sub(g) } else { 0 };
+                let pixels = (0..g)
+                    .flat_map(|y| (0..g).map(move |x| rows[y * w + (x0 + x).min(w - 1)]))
+                    .collect();
                 (
                     [
-                        if dx < 0 { 0 } else { w + 1 },
-                        if dy < 0 { 0 } else { h + 1 },
+                        if dx < 0 { 0 } else { w + g },
+                        if dy < 0 { 0 } else { h + g },
                     ],
-                    [1, 1],
-                    vec![row[if dx < 0 { w - 1 } else { 0 }]],
+                    [g, g],
+                    pixels,
                 )
             }
             _ => return None,
@@ -72,23 +89,37 @@ impl Edges {
         Some((at, image))
     }
 }
-fn bordered(image: &ColorImage) -> ColorImage {
+fn bordered(image: &ColorImage, gutter: usize) -> ColorImage {
     let [w, h] = image.size;
-    let mut out = ColorImage::new([w + 2, h + 2], egui::Color32::TRANSPARENT);
-    for y in 0..h + 2 {
-        for x in 0..w + 2 {
-            out.pixels[y * (w + 2) + x] =
-                image.pixels[y.saturating_sub(1).min(h - 1) * w + x.saturating_sub(1).min(w - 1)];
+    let mut out = ColorImage::new([w + gutter * 2, h + gutter * 2], egui::Color32::TRANSPARENT);
+    for y in 0..out.size[1] {
+        for x in 0..out.size[0] {
+            out.pixels[y * out.size[0] + x] = image.pixels
+                [y.saturating_sub(gutter).min(h - 1) * w + x.saturating_sub(gutter).min(w - 1)];
         }
     }
     out
 }
+
 impl Image {
     pub fn load(
         ctx: &egui::Context,
         _name: impl Into<String>,
         image: ColorImage,
         options: egui::TextureOptions,
+    ) -> Self {
+        Self::load_with_gutter(ctx, _name, image, options, 1)
+    }
+    /// 5×5方向判定と3×3パッチ合成を隣接画像まで行うため、地図は3画素の余白を持つ。
+    pub fn load_map(ctx: &egui::Context, image: ColorImage) -> Self {
+        Self::load_with_gutter(ctx, "地図の元画像", image, egui::TextureOptions::LINEAR, 3)
+    }
+    fn load_with_gutter(
+        ctx: &egui::Context,
+        _name: impl Into<String>,
+        image: ColorImage,
+        options: egui::TextureOptions,
+        gutter: usize,
     ) -> Self {
         let pool = ctx.data_mut(|d| {
             d.get_temp_mut_or_default::<Arc<Mutex<Pool>>>(egui::Id::new("native-tile-atlas"))
@@ -99,7 +130,7 @@ impl Image {
         pool.pages.retain(|p| p.strong_count() > 0);
         let mut chosen = None;
         for page in pool.pages.iter().filter_map(Weak::upgrade) {
-            if page.size != image.size || page.options != options {
+            if page.size != image.size || page.options != options || page.gutter != gutter {
                 continue;
             }
             let mut slots = page.slots.lock().unwrap();
@@ -111,7 +142,7 @@ impl Image {
         }
         let (page, slot) = chosen.unwrap_or_else(|| {
             let size = image.size;
-            let full = [(size[0] + 2) * GRID, (size[1] + 2) * GRID];
+            let full = [(size[0] + gutter * 2) * GRID, (size[1] + gutter * 2) * GRID];
             let texture = ctx.load_texture(
                 "元解像度のタイル集約画像",
                 ColorImage::new(full, egui::Color32::TRANSPARENT),
@@ -123,29 +154,30 @@ impl Image {
                 texture: Mutex::new(texture),
                 slots: Mutex::new(slots),
                 size,
+                gutter,
                 options,
                 ctx: ctx.clone(),
             });
             pool.pages.push(Arc::downgrade(&page));
             (page, 0)
         });
-        let edges = Arc::new(Edges::new(&image));
+        let edges = Arc::new(Edges::new(&image, gutter));
         let [w, h] = image.size;
-        let x = slot % GRID * (w + 2);
-        let y = slot / GRID * (h + 2);
+        let x = slot % GRID * (w + gutter * 2);
+        let y = slot / GRID * (h + gutter * 2);
         page.texture
             .lock()
             .unwrap()
-            .set_partial([x, y], bordered(&image), options);
-        let full = [(w + 2) * GRID, (h + 2) * GRID];
+            .set_partial([x, y], bordered(&image, gutter), options);
+        let full = [(w + gutter * 2) * GRID, (h + gutter * 2) * GRID];
         let area = Rect::from_min_max(
             egui::pos2(
-                (x + 1) as f32 / full[0] as f32,
-                (y + 1) as f32 / full[1] as f32,
+                (x + gutter) as f32 / full[0] as f32,
+                (y + gutter) as f32 / full[1] as f32,
             ),
             egui::pos2(
-                (x + 1 + w) as f32 / full[0] as f32,
-                (y + 1 + h) as f32 / full[1] as f32,
+                (x + gutter + w) as f32 / full[0] as f32,
+                (y + gutter + h) as f32 / full[1] as f32,
             ),
         );
         Self {
@@ -156,7 +188,7 @@ impl Image {
     }
     /// 同じズームの隣接タイルの端を余白へ転送する。UVと画像IDは維持する。
     pub fn set_neighbor(&self, neighbor: &Self, dx: i32, dy: i32) {
-        if self.edges.size != neighbor.edges.size {
+        if self.edges.size != neighbor.edges.size || self.edges.gutter != neighbor.edges.gutter {
             return;
         }
         let Some(([px, py], image)) = neighbor.edges.patch(dx, dy) else {
@@ -164,7 +196,11 @@ impl Image {
         };
         let [w, h] = self.edges.size;
         let slot = self.lease.slot;
-        let at = [slot % GRID * (w + 2) + px, slot / GRID * (h + 2) + py];
+        let g = self.edges.gutter;
+        let at = [
+            slot % GRID * (w + g * 2) + px,
+            slot / GRID * (h + g * 2) + py,
+        ];
         self.lease
             .page
             .texture
@@ -268,7 +304,7 @@ mod tests {
     #[test]
     fn border_repeats_the_outermost_pixels() {
         let image = ColorImage::from_rgba_unmultiplied([2, 1], &[255, 0, 0, 255, 0, 0, 255, 255]);
-        let b = bordered(&image);
+        let b = bordered(&image, 1);
         assert_eq!(b.size, [4, 3]);
         for row in b.pixels.chunks_exact(4) {
             assert_eq!(
@@ -288,7 +324,7 @@ mod tests {
         for (i, pixel) in source.pixels.iter_mut().enumerate() {
             *pixel = egui::Color32::from_gray(i as u8 * 20);
         }
-        let edges = Edges::new(&source);
+        let edges = Edges::new(&source, 1);
         for (direction, at, indices) in [
             ((-1, 0), [0, 1], vec![2, 5, 8]),
             ((1, 0), [4, 1], vec![0, 3, 6]),
@@ -360,5 +396,71 @@ mod tests {
             };
             assert!(image.pixels.iter().all(|p| *p == expected));
         }
+    }
+    #[test]
+    fn map_three_pixel_gutters_copy_neighborhoods_and_keep_surface_pages_separate() {
+        let mut source = ColorImage::new([4, 4], egui::Color32::BLACK);
+        for (i, pixel) in source.pixels.iter_mut().enumerate() {
+            *pixel = egui::Color32::from_gray(i as u8 * 16);
+        }
+        let edges = Edges::new(&source, 3);
+        for (direction, at, size, indices) in [
+            (
+                (-1, 0),
+                [0, 3],
+                [3, 4],
+                vec![1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15],
+            ),
+            (
+                (1, 0),
+                [7, 3],
+                [3, 4],
+                vec![0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14],
+            ),
+            (
+                (0, -1),
+                [3, 0],
+                [4, 3],
+                vec![4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+            ),
+            (
+                (0, 1),
+                [3, 7],
+                [4, 3],
+                vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+            ),
+            (
+                (-1, -1),
+                [0, 0],
+                [3, 3],
+                vec![5, 6, 7, 9, 10, 11, 13, 14, 15],
+            ),
+            ((1, -1), [7, 0], [3, 3], vec![4, 5, 6, 8, 9, 10, 12, 13, 14]),
+            ((-1, 1), [0, 7], [3, 3], vec![1, 2, 3, 5, 6, 7, 9, 10, 11]),
+            ((1, 1), [7, 7], [3, 3], vec![0, 1, 2, 4, 5, 6, 8, 9, 10]),
+        ] {
+            let (position, patch) = edges.patch(direction.0, direction.1).unwrap();
+            assert_eq!(position, at);
+            assert_eq!(patch.size, size);
+            assert_eq!(
+                patch.pixels,
+                indices
+                    .into_iter()
+                    .map(|i| source.pixels[i])
+                    .collect::<Vec<_>>()
+            );
+        }
+        let ctx = egui::Context::default();
+        let map = Image::load_map(&ctx, source.clone());
+        let surface = Image::load(&ctx, "地表", source, egui::TextureOptions::LINEAR);
+        assert_ne!(map.id(), surface.id());
+        assert_eq!(
+            map.uv(crate::lod_fade::FULL_UV).min,
+            egui::pos2(3. / 40., 3. / 40.)
+        );
+        assert!(
+            (map.uv(crate::lod_fade::FULL_UV).size() - egui::vec2(4. / 40., 4. / 40.)).length()
+                < 1e-6
+        );
     }
 }

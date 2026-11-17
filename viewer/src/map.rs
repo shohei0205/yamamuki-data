@@ -13,6 +13,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use yamamuki_terrain_view::direct_material::Interpolation;
 
 pub const MIN_ZOOM: f64 = 0.;
 pub const MAX_ZOOM: f64 = 18.;
@@ -559,8 +560,32 @@ enum Cached {
 
 type Reply = (Tile, Result<Option<LoadedTile>>);
 
+#[derive(Default)]
+struct DrawHistory {
+    previous: HashMap<Tile, (Tile, u64)>,
+    fading: HashMap<Tile, (Tile, u64)>,
+    order: u64,
+}
+impl DrawHistory {
+    fn record(&mut self, region: Tile, source: Tile) {
+        self.order += 1;
+        self.previous.insert(region, (source, self.order));
+    }
+}
+// 最も細かい下地ではなく、最後に上へ描いた画像をフェード元に使う。
+fn displayed_sample(history: &HashMap<Tile, (Tile, u64)>, tile: Tile) -> Option<(Tile, Rect)> {
+    (0..=tile.z)
+        .filter_map(|z| {
+            let region = lod_fade::sample(tile, z, lod_fade::FULL_UV).0;
+            history
+                .get(&region)
+                .filter(|(source, _)| source.z <= tile.z)
+        })
+        .max_by_key(|(_, order)| *order)
+        .map(|(source, _)| lod_fade::sample(tile, source.z, lod_fade::FULL_UV))
+}
 pub struct Tiles {
-    pub edge_filter: bool,
+    pub edge_filter: Interpolation,
     pub borders: bool,
     pub source: Source,
     cancelled: Arc<AtomicBool>,
@@ -572,6 +597,7 @@ pub struct Tiles {
     lod: lod_fade::State<u32>,
     material_lods: Vec<lod_fade::State<u32>>,
     material_pass: usize,
+    draw_history: HashMap<usize, DrawHistory>,
 }
 
 impl Tiles {
@@ -599,7 +625,7 @@ impl Tiles {
             });
         }
         Self {
-            edge_filter: false,
+            edge_filter: Interpolation::Bilinear,
             borders: false,
             source,
             cancelled,
@@ -611,6 +637,7 @@ impl Tiles {
             lod: lod_fade::State::default(),
             material_lods: (0..4).map(|_| Default::default()).collect(),
             material_pass: 0,
+            draw_history: HashMap::new(),
         }
     }
 
@@ -678,15 +705,9 @@ impl Tiles {
             processed += 1;
             self.pending.remove(&tile);
             let entry = match result {
-                Ok(Some((image, expiry))) => Cached::Texture(
-                    crate::tile_atlas::Image::load(
-                        ui.ctx(),
-                        tile.url(self.source),
-                        image,
-                        egui::TextureOptions::LINEAR,
-                    ),
-                    expiry,
-                ),
+                Ok(Some((image, expiry))) => {
+                    Cached::Texture(crate::tile_atlas::Image::load_map(ui.ctx(), image), expiry)
+                }
                 Ok(None) => Cached::Missing,
                 Err(_) => Cached::Failed(Instant::now()),
             };
@@ -739,8 +760,26 @@ impl Tiles {
                 .lod
                 .current
                 .is_some_and(|old| lod_fade::can_blend(old, tile_zoom, lod_zoom));
+        let previous_sources = std::mem::take(
+            &mut self
+                .draw_history
+                .entry(self.material_pass)
+                .or_default()
+                .previous,
+        );
+        self.draw_history
+            .entry(self.material_pass)
+            .or_default()
+            .order = 0;
+        let previous_level = self.lod.current;
         self.lod
             .update(tile_zoom, ready && processed == 0, fade, now);
+        if previous_level != self.lod.current {
+            self.draw_history
+                .entry(self.material_pass)
+                .or_default()
+                .fading = previous_sources;
+        }
         let current = self.lod.current.unwrap_or(tile_zoom);
         if let (Some((state, renderer)), Some((&old, amount))) =
             (fade_backend, self.lod.blend(ui.ctx(), now))
@@ -748,6 +787,12 @@ impl Tiles {
             && current == tile_zoom
         {
             let textures = state.renderer.read();
+            let old_sources = self
+                .draw_history
+                .entry(self.material_pass)
+                .or_default()
+                .fading
+                .clone();
             let quads = view
                 .tiles_at(rect, old.max(current))
                 .into_iter()
@@ -759,6 +804,9 @@ impl Tiles {
                         && let Some(cached) = self.cached_ancestor_up_to(tile, current - 1)
                     {
                         old_sample = cached;
+                    }
+                    if let Some(displayed) = displayed_sample(&old_sources, tile) {
+                        old_sample = displayed;
                     }
                     let (old_tile, old_uv) = old_sample;
                     let (new_tile, new_uv) = new_sample;
@@ -779,6 +827,15 @@ impl Tiles {
                                 Cached::Failed(_) => (None, false, uv),
                             }
                         });
+                    let displayed = if new_ready && (amount >= 0.5 || !old_ready) {
+                        new_tile
+                    } else {
+                        old_tile
+                    };
+                    self.draw_history
+                        .entry(self.material_pass)
+                        .or_default()
+                        .record(tile, displayed);
                     lod_fade::Quad::new(tile, [old_uv, new_uv], [old, new], [old_ready, new_ready])
                         .map(|mut quad| {
                             quad.edge_filter = self.edge_filter;
@@ -798,7 +855,7 @@ impl Tiles {
         } else {
             let mut filtered = Vec::new();
             let mut paint = |tile: Tile, texture: &crate::tile_atlas::Image, uv: Rect| {
-                if self.edge_filter
+                if self.edge_filter != Interpolation::Bilinear
                     && let Some((state, renderer)) = fade_backend
                 {
                     let textures = state.renderer.read();
@@ -810,7 +867,7 @@ impl Tiles {
                             [true; 2],
                         )
                         .unwrap();
-                        quad.edge_filter = true;
+                        quad.edge_filter = self.edge_filter;
                         filtered.push(quad);
                     } else {
                         ui.ctx().request_repaint();
@@ -827,6 +884,10 @@ impl Tiles {
                         && Rect::from_points(&view.tile_corners(rect, tile)).intersects(rect)
                     {
                         *touched = self.frame;
+                        self.draw_history
+                            .entry(self.material_pass)
+                            .or_default()
+                            .record(tile, tile);
                         paint(tile, texture, lod_fade::FULL_UV);
                     }
                 }
@@ -837,6 +898,10 @@ impl Tiles {
                         self.cache.get_mut(&source)
                 {
                     *touched = self.frame;
+                    self.draw_history
+                        .entry(self.material_pass)
+                        .or_default()
+                        .record(tile, source);
                     paint(tile, texture, uv);
                 }
             }
@@ -959,7 +1024,7 @@ mod tests {
         let (queue, _jobs) = mpsc::channel();
         let (_send, replies) = mpsc::channel();
         let mut tiles = Tiles {
-            edge_filter: false,
+            edge_filter: Interpolation::Bilinear,
             borders: false,
             source: Source::Gsi,
             cancelled: Arc::default(),
@@ -971,6 +1036,7 @@ mod tests {
             lod: Default::default(),
             material_lods: (0..4).map(|_| Default::default()).collect(),
             material_pass: 0,
+            draw_history: HashMap::new(),
         };
         let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(2048., 2048.));
         let views = [0.25, 0.5, 0.75].map(|x| View {
@@ -1260,7 +1326,7 @@ mod tests {
             .unwrap();
         }
         let mut tiles = Tiles {
-            edge_filter: false,
+            edge_filter: Interpolation::Bilinear,
             borders: false,
             source: Source::Gsi,
             cancelled: Arc::default(),
@@ -1272,6 +1338,7 @@ mod tests {
             lod: lod_fade::State::default(),
             material_lods: (0..4).map(|_| Default::default()).collect(),
             material_pass: 0,
+            draw_history: HashMap::new(),
         };
         let view = View {
             center: [0.5; 2],
@@ -1410,12 +1477,234 @@ mod tests {
         assert_eq!(tiles_with_halo(vec![tile]).len(), 6);
     }
     #[test]
+    #[ignore = "実GPUで通常描画から地形へ渡す補間モードを確認する"]
+    fn gpu_settled_map_keeps_selected_interpolation() {
+        let ctx = egui::Context::default();
+        let instance = eframe::wgpu::Instance::default();
+        let adapter =
+            pollster::block_on(instance.request_adapter(&Default::default())).expect("GPU");
+        let (device, gpu_queue) =
+            pollster::block_on(adapter.request_device(&Default::default(), None)).unwrap();
+        let format = eframe::wgpu::TextureFormat::Rgba8Unorm;
+        let gpu_renderer = eframe::egui_wgpu::Renderer::new(&device, format, None, 1, false);
+        let state = eframe::egui_wgpu::RenderState {
+            adapter,
+            available_adapters: Vec::new(),
+            device,
+            queue: gpu_queue,
+            target_format: format,
+            renderer: Arc::new(eframe::epaint::mutex::RwLock::new(gpu_renderer)),
+        };
+        let renderer = lod_fade::Renderer::new(&state);
+        let (queue, _jobs) = mpsc::channel();
+        let (send, replies) = mpsc::channel();
+        let tile = Tile { z: 0, x: 0, y: 0 };
+        let image =
+            crate::tile_atlas::Image::load_map(&ctx, ColorImage::new([2, 2], egui::Color32::WHITE));
+        let mut tiles = Tiles {
+            edge_filter: Interpolation::Edge,
+            borders: false,
+            source: Source::Gsi,
+            cancelled: Arc::default(),
+            queue,
+            replies,
+            pending: HashSet::new(),
+            cache: HashMap::from([(tile, (Cached::Texture(image, None), 0))]),
+            frame: 0,
+            lod: Default::default(),
+            material_lods: (0..4).map(|_| Default::default()).collect(),
+            material_pass: 1,
+            draw_history: HashMap::new(),
+        };
+        let view = View {
+            center: [0.5, 0.5],
+            zoom: 1.,
+            orientation: Default::default(),
+        };
+        for mode in [Interpolation::Edge, Interpolation::Nearest] {
+            tiles.edge_filter = mode;
+            let mut captured = Vec::new();
+            for _ in 0..3 {
+                let output = ctx.run(egui::RawInput::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(256., 256.));
+                        tiles.paint(
+                            ui,
+                            ui.painter(),
+                            rect,
+                            &view,
+                            false,
+                            0,
+                            1.,
+                            Some((&state, &renderer)),
+                        );
+                    });
+                });
+                for (id, delta) in &output.textures_delta.set {
+                    state
+                        .renderer
+                        .write()
+                        .update_texture(&state.device, &state.queue, *id, delta);
+                }
+                captured = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| {
+                        if let egui::Shape::Callback(c) = &s.shape {
+                            c.callback
+                                .downcast_ref::<yamamuki_terrain_view::direct_material::Capture>()
+                                .map(|c| c.edge_filter)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+            }
+            assert!(!captured.is_empty(), "通常描画の命令が作られていない");
+            assert!(
+                captured.iter().all(|actual| *actual == mode),
+                "選択した{mode:?}が通常描画で上書きされた: {captured:?}"
+            );
+        }
+        // 子タイル到着フレームでは先にその画像が表示され、次のフレームから全体のフェードが始まる。
+        let child = Tile { z: 1, x: 0, y: 0 };
+        tiles.edge_filter = Interpolation::Bilinear;
+        tiles.lod = lod_fade::State::default();
+        tiles.lod.current = Some(0);
+        send.send((
+            child,
+            Ok(Some((ColorImage::new([2, 2], egui::Color32::BLACK), None))),
+        ))
+        .unwrap();
+        let close_view = View {
+            center: [0.25, 0.25],
+            zoom: 1.,
+            orientation: Default::default(),
+        };
+        let mut frame = || {
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    tiles.paint(
+                        ui,
+                        ui.painter(),
+                        Rect::from_min_size(Pos2::ZERO, egui::vec2(128., 128.)),
+                        &close_view,
+                        false,
+                        1,
+                        1.,
+                        Some((&state, &renderer)),
+                    );
+                });
+            });
+            for (id, delta) in &output.textures_delta.set {
+                state
+                    .renderer
+                    .write()
+                    .update_texture(&state.device, &state.queue, *id, delta);
+            }
+            output
+        };
+        frame();
+        let transition = frame();
+        let captures = transition
+            .shapes
+            .iter()
+            .filter_map(|s| {
+                if let egui::Shape::Callback(c) = &s.shape {
+                    c.callback
+                        .downcast_ref::<yamamuki_terrain_view::direct_material::Capture>()
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        assert!(!captures.is_empty(), "LOD切替の描画経路を通っていない");
+        assert!(
+            captures
+                .iter()
+                .all(|c| c.textures[0] == c.textures[1] && c.uv[0] == c.uv[1]),
+            "表示済みの細タイルがフェード開始時に粗タイルへ戻った"
+        );
+        drop(frame);
+        tiles.lod = lod_fade::State::default();
+        tiles.lod.current = Some(1);
+        send.send((
+            tile,
+            Ok(Some((ColorImage::new([2, 2], egui::Color32::WHITE), None))),
+        ))
+        .unwrap();
+        let wide_view = View {
+            center: [0.25, 0.25],
+            zoom: 0.,
+            orientation: Default::default(),
+        };
+        let mut wide_frame = || {
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    tiles.paint(
+                        ui,
+                        ui.painter(),
+                        Rect::from_min_size(Pos2::ZERO, egui::vec2(128., 128.)),
+                        &wide_view,
+                        false,
+                        0,
+                        0.,
+                        Some((&state, &renderer)),
+                    );
+                });
+            });
+            for (id, delta) in &output.textures_delta.set {
+                state
+                    .renderer
+                    .write()
+                    .update_texture(&state.device, &state.queue, *id, delta);
+            }
+            output
+        };
+        wide_frame();
+        let transition = wide_frame();
+        let captures = transition
+            .shapes
+            .iter()
+            .filter_map(|s| {
+                if let egui::Shape::Callback(c) = &s.shape {
+                    c.callback
+                        .downcast_ref::<yamamuki_terrain_view::direct_material::Capture>()
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        assert!(!captures.is_empty());
+        assert!(
+            captures
+                .iter()
+                .all(|c| c.textures[0] == c.textures[1] && c.uv[0] == c.uv[1]),
+            "粗タイルを表示した後に細い下地がフェード元として復活した"
+        );
+    }
+    #[test]
+    fn fade_origin_uses_foreground_instead_of_finer_hidden_underlay() {
+        let fine = Tile {
+            z: 12,
+            x: 3626,
+            y: 1617,
+        };
+        let coarse = lod_fade::sample(fine, 11, lod_fade::FULL_UV).0;
+        let mut history = DrawHistory::default();
+        history.record(fine, fine);
+        history.record(coarse, coarse);
+        assert_eq!(displayed_sample(&history.previous, fine).unwrap().0, coarse);
+        history.record(fine, fine);
+        assert_eq!(displayed_sample(&history.previous, fine).unwrap().0, fine);
+    }
+    #[test]
     fn pending_zoom_uses_finest_cached_parent_for_each_range_and_fade() {
         let ctx = egui::Context::default();
         let (queue, _jobs) = mpsc::channel();
         let (_send, replies) = mpsc::channel();
         let mut tiles = Tiles {
-            edge_filter: false,
+            edge_filter: Interpolation::Bilinear,
             borders: false,
             source: Source::Gsi,
             cancelled: Arc::default(),
@@ -1427,6 +1716,7 @@ mod tests {
             lod: Default::default(),
             material_lods: (0..4).map(|_| Default::default()).collect(),
             material_pass: 0,
+            draw_history: HashMap::new(),
         };
         let target = Tile {
             z: 12,

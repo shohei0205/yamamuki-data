@@ -2,6 +2,7 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use yamamuki_terrain_view::direct_material::Interpolation;
 #[derive(Serialize, Deserialize)]
 pub(crate) struct SurfaceState {
     pub path: PathBuf,
@@ -24,9 +25,11 @@ pub(crate) struct Snapshot {
     #[serde(default)]
     map_borders: bool,
     #[serde(default)]
-    map_edge_filter: bool,
+    map_edge_filter: Interpolation,
     #[serde(default)]
     surface_borders: bool,
+    #[serde(default)]
+    surface_edge_filter: Interpolation,
     palette: surface_palette::Palette,
     show_online_map: bool,
     show_terrain: bool,
@@ -123,6 +126,7 @@ impl Viewer {
             map_borders: self.map_borders,
             map_edge_filter: self.map_edge_filter,
             surface_borders: self.surface_borders,
+            surface_edge_filter: self.surface_edge_filter,
             palette: self.surface_palette,
             show_online_map: self.show_online_map,
             show_terrain: self.show_terrain,
@@ -340,6 +344,7 @@ impl Viewer {
         self.map_borders = s.map_borders;
         self.map_edge_filter = s.map_edge_filter;
         self.surface_borders = s.surface_borders;
+        self.surface_edge_filter = s.surface_edge_filter;
         self.surface_palette = s.palette;
         self.show_online_map = s.show_online_map;
         self.show_terrain = s.show_terrain;
@@ -416,8 +421,9 @@ mod tests {
         v.view.orientation.orbit(egui::vec2(14., -80.));
         v.show_online_map = false;
         v.map_borders = true;
-        v.map_edge_filter = true;
+        v.map_edge_filter = Interpolation::Edge;
         v.surface_borders = true;
+        v.surface_edge_filter = Interpolation::Nearest;
         v.lod.bias = 1.25;
         v.surface_lod.max_level = Some(9);
         v.map_pin = Some([0.875, 0.35]);
@@ -433,7 +439,8 @@ mod tests {
         assert_eq!(replay.lod, v.lod);
         assert_eq!(replay.surface_lod, v.surface_lod);
         assert!(replay.map_borders && replay.surface_borders);
-        assert!(replay.map_edge_filter);
+        assert_eq!(replay.map_edge_filter, Interpolation::Edge);
+        assert_eq!(replay.surface_edge_filter, Interpolation::Nearest);
         assert_eq!(replay.map_pin_elevation, v.map_pin_elevation);
         assert!(!replay.show_online_map);
         assert!(replay.snapshot_frozen);

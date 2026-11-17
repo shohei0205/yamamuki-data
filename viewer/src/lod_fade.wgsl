@@ -32,22 +32,31 @@ fn gamma(color: vec4<f32>) -> vec4<f32> {
 
 @fragment
 fn gamma_color(in: Vertex) -> @location(0) vec4<f32> {
-    let old = gamma(edge_sample(old_tile, linear_sampler, in.old_uv, in.edge_filter > .5));
-    let next = gamma(edge_sample(new_tile, linear_sampler, in.new_uv, in.edge_filter > .5));
+    let old_footprint=edge_footprint(old_tile,in.old_uv);
+    let new_footprint=edge_footprint(new_tile,in.new_uv);
+    if in.amount>=1. {return gamma(edge_resample(new_tile,linear_sampler,in.new_uv,u32(in.edge_filter),new_footprint));}
+    if in.amount<=0. {return gamma(edge_resample(old_tile,linear_sampler,in.old_uv,u32(in.edge_filter),old_footprint));}
+    let old = gamma(edge_resample(old_tile, linear_sampler, in.old_uv, u32(in.edge_filter),old_footprint));
+    let next = gamma(edge_resample(new_tile, linear_sampler, in.new_uv, u32(in.edge_filter),new_footprint));
+    return mix(old, next, in.amount);
+}
+
+fn sample_linear(in: Vertex) -> vec4<f32> {
+    let old_footprint=edge_footprint(old_tile,in.old_uv);
+    let new_footprint=edge_footprint(new_tile,in.new_uv);
+    if in.amount>=1. {return edge_resample(new_tile,linear_sampler,in.new_uv,u32(in.edge_filter),new_footprint);}
+    if in.amount<=0. {return edge_resample(old_tile,linear_sampler,in.old_uv,u32(in.edge_filter),old_footprint);}
+    let old = edge_resample(old_tile, linear_sampler, in.old_uv, u32(in.edge_filter),old_footprint);
+    let next = edge_resample(new_tile, linear_sampler, in.new_uv, u32(in.edge_filter),new_footprint);
     return mix(old, next, in.amount);
 }
 
 @fragment
-fn linear_color(in: Vertex) -> @location(0) vec4<f32> {
-    let old = edge_sample(old_tile, linear_sampler, in.old_uv, in.edge_filter > .5);
-    let next = edge_sample(new_tile, linear_sampler, in.new_uv, in.edge_filter > .5);
-    return mix(old, next, in.amount);
-}
+fn linear_color(in: Vertex) -> @location(0) vec4<f32> {return sample_linear(in);}
 
 fn shade(in: Vertex) -> f32 {
-    let old = edge_sample(old_tile, linear_sampler, in.old_uv, in.edge_filter > .5).rg;
-    let next = edge_sample(new_tile, linear_sampler, in.new_uv, in.edge_filter > .5).rg;
-    return mix(old.g - old.r, next.g - next.r, in.amount);
+    let color=sample_linear(in);
+    return color.g-color.r;
 }
 
 @fragment

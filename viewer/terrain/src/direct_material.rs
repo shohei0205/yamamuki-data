@@ -3,6 +3,60 @@ use crate::{selection::Camera, shared_data::WORLD};
 use eframe::{egui, wgpu};
 use std::sync::Arc;
 
+/// 拡大時の補間方式。GPUのモード値と対応する。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u32)]
+pub enum Interpolation {
+    #[default]
+    Bilinear = 0,
+    Edge = 1,
+    Nearest = 2,
+}
+impl Interpolation {
+    pub const ALL: [Self; 3] = [Self::Bilinear, Self::Edge, Self::Nearest];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bilinear => "バイリニア",
+            Self::Edge => "輪郭優先",
+            Self::Nearest => "最近傍",
+        }
+    }
+}
+impl serde::Serialize for Interpolation {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(match self {
+            Self::Bilinear => "bilinear",
+            Self::Edge => "edge",
+            Self::Nearest => "nearest",
+        })
+    }
+}
+impl From<bool> for Interpolation {
+    fn from(value: bool) -> Self {
+        if value { Self::Edge } else { Self::Bilinear }
+    }
+}
+// 保存済みのboolと旧スナップショットも、当時の見た目のまま復元する。
+impl<'de> serde::Deserialize<'de> for Interpolation {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Saved {
+            Legacy(bool),
+            Name(String),
+        }
+        match Saved::deserialize(d)? {
+            Saved::Legacy(v) => Ok(v.into()),
+            Saved::Name(v) => match v.as_str() {
+                "bilinear" => Ok(Self::Bilinear),
+                "edge" => Ok(Self::Edge),
+                "nearest" => Ok(Self::Nearest),
+                _ => Err(serde::de::Error::custom("未対応の補間方式")),
+            },
+        }
+    }
+}
+
 /// 2Dの描画命令から引き継ぐ元テクスチャ。座標は正規化Web Mercator。
 #[derive(Clone)]
 pub struct Quad {
@@ -13,7 +67,7 @@ pub struct Quad {
     pub tint: [f32; 4],
     pub shade: bool,
     pub gamma_shade: bool,
-    pub edge_filter: bool,
+    pub edge_filter: Interpolation,
     pub border: bool,
 }
 /// 3D用の描画収集時だけ使うマーカー。通常の2D描画へは渡さない。
@@ -24,7 +78,7 @@ pub struct Capture {
     pub amount: f32,
     pub shade: bool,
     pub gamma_shade: bool,
-    pub edge_filter: bool,
+    pub edge_filter: Interpolation,
 }
 pub fn capture(painter: &egui::Painter, command: Capture) {
     painter.add(egui::Shape::Callback(egui::PaintCallback {
@@ -241,6 +295,34 @@ impl Renderer {
             size,
             commands,
             true,
+            [-500., 4500.],
+        );
+    }
+    // 地形OFFでは0mの球面だけを囲み、存在しない山のために全画面を塗らない。
+    pub fn render_flat(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target_texture: &wgpu::Texture,
+        lighting_source: &wgpu::Texture,
+        positions: &wgpu::TextureView,
+        camera: &Camera,
+        size: [u32; 2],
+        commands: &[Quad],
+    ) {
+        self.render_region(
+            device,
+            queue,
+            encoder,
+            target_texture,
+            lighting_source,
+            positions,
+            camera,
+            size,
+            commands,
+            true,
+            [0., 0.],
         );
     }
     fn render_region(
@@ -255,6 +337,7 @@ impl Renderer {
         size: [u32; 2],
         commands: &[Quad],
         restrict_pixels: bool,
+        heights: [f64; 2],
     ) {
         let _ = device.poll(wgpu::Maintain::Poll);
         // 地形へ貼れない画面外・遠方の画像は、GPU設定を作る前に除く。
@@ -337,7 +420,7 @@ impl Renderer {
                     f32::from(c.textures[1].is_some()),
                     f32::from(c.textures.iter().all(Option::is_none))
                         + 2. * f32::from(c.gamma_shade)
-                        + 8. * f32::from(c.edge_filter)
+                        + 8. * c.edge_filter as u32 as f32
                         + 4. * f32::from(c.border),
                 ],
             });
@@ -402,7 +485,7 @@ impl Renderer {
             }
             let clip = command.map_or([0, 0, size[0], size[1]], |c| {
                 if restrict_pixels {
-                    scissor(c.bounds, camera, size)
+                    scissor_at_heights(c.bounds, camera, size, heights)
                 } else {
                     [0, 0, size[0], size[1]]
                 }
@@ -478,9 +561,13 @@ impl Renderer {
 }
 use bytemuck::Zeroable;
 /// 可視標高範囲の投影を囲み、各タイルで画面全体を塗らない。
+#[cfg(test)]
 fn scissor(bounds: [f64; 4], c: &Camera, size: [u32; 2]) -> [u32; 4] {
+    scissor_at_heights(bounds, c, size, [-500., 4500.])
+}
+fn scissor_at_heights(bounds: [f64; 4], c: &Camera, size: [u32; 2], heights: [f64; 2]) -> [u32; 4] {
     if c.globe {
-        return globe_scissor(bounds, c, size);
+        return globe_scissor_at_heights(bounds, c, size, heights);
     }
     let back = c.back();
     let right = glam::DVec3::new(c.yaw.cos(), 0., -c.yaw.sin());
@@ -489,7 +576,7 @@ fn scissor(bounds: [f64; 4], c: &Camera, size: [u32; 2]) -> [u32; 4] {
     let mut max = [f64::NEG_INFINITY; 2];
     for x in [bounds[0], bounds[2]] {
         for y in [bounds[1], bounds[3]] {
-            for height in [-500., 4500.] {
+            for height in heights {
                 let d = glam::DVec3::new(
                     (x * WORLD - c.center[0]) * c.scale(),
                     height - c.height,
@@ -519,7 +606,12 @@ fn scissor(bounds: [f64; 4], c: &Camera, size: [u32; 2]) -> [u32; 4] {
 }
 
 // 球面を包む箱を投影し、極側や日付変更線でも曲がった辺を切らない。
-fn globe_scissor(bounds: [f64; 4], c: &Camera, size: [u32; 2]) -> [u32; 4] {
+fn globe_scissor_at_heights(
+    bounds: [f64; 4],
+    c: &Camera,
+    size: [u32; 2],
+    heights: [f64; 2],
+) -> [u32; 4] {
     use glam::DVec3;
     let area = bounds.map(|v| v * WORLD);
     let span = (area[2] - area[0]).abs().max((area[3] - area[1]).abs());
@@ -535,7 +627,7 @@ fn globe_scissor(bounds: [f64; 4], c: &Camera, size: [u32; 2]) -> [u32; 4] {
                 area[0] + (area[2] - area[0]) * x as f64 / STEPS as f64,
                 area[1] + (area[3] - area[1]) * y as f64 / STEPS as f64,
             ];
-            for h in [-500., 4500.] {
+            for h in heights {
                 let p = crate::globe::local(c.center, world, h);
                 lower = lower.min(p);
                 upper = upper.max(p);
@@ -583,6 +675,85 @@ fn globe_scissor(bounds: [f64; 4], c: &Camera, size: [u32; 2]) -> [u32; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn interpolation_preserves_legacy_choices_and_roundtrips_all_modes() {
+        assert_eq!(
+            serde_json::from_str::<Interpolation>("true").unwrap(),
+            Interpolation::Edge
+        );
+        assert_eq!(
+            serde_json::from_str::<Interpolation>("false").unwrap(),
+            Interpolation::Bilinear
+        );
+        for mode in Interpolation::ALL {
+            let json = serde_json::to_string(&mode).unwrap();
+            assert_eq!(serde_json::from_str::<Interpolation>(&json).unwrap(), mode);
+        }
+    }
+
+    #[test]
+    fn flat_zoomed_map_scissors_use_zero_elevation_and_cover_each_tile() {
+        let size = [2686, 1564];
+        let mut camera = Camera::default();
+        camera.globe = true;
+        camera.height = 0.;
+        camera.set_map_view(
+            [0.8844271266197067, 0.3963378090889512],
+            19.,
+            0.,
+            0.,
+            size.map(f64::from),
+        );
+        let side = 1. / 262144.;
+        let cx = (camera.center[0] / WORLD / side).floor() as i32;
+        let cy = (camera.center[1] / WORLD / side).floor() as i32;
+        let back = camera.back();
+        let right = glam::DVec3::new(1., 0., 0.);
+        let up = back.cross(right);
+        let mut old_pixels = 0u64;
+        let mut new_pixels = 0u64;
+        for y in cy - 2..=cy + 2 {
+            for x in cx - 3..=cx + 3 {
+                let bounds = [
+                    x as f64 * side,
+                    y as f64 * side,
+                    (x + 1) as f64 * side,
+                    (y + 1) as f64 * side,
+                ];
+                let old = scissor(bounds, &camera, size);
+                let new = scissor_at_heights(bounds, &camera, size, [0., 0.]);
+                old_pixels += u64::from(old[2]) * u64::from(old[3]);
+                new_pixels += u64::from(new[2]) * u64::from(new[3]);
+                for sy in 0..=4 {
+                    for sx in 0..=4 {
+                        let world = [
+                            (x as f64 + sx as f64 / 4.) * side * WORLD,
+                            (y as f64 + sy as f64 / 4.) * side * WORLD,
+                        ];
+                        let q = crate::globe::local(camera.center, world, 0.)
+                            - glam::DVec3::Y * camera.height;
+                        let depth = camera.distance - q.dot(back);
+                        let scale = size[1] as f64 / (2. * camera.tan_half_fov() * depth);
+                        let p = [
+                            size[0] as f64 / 2. + q.dot(right) * scale,
+                            size[1] as f64 / 2. - q.dot(up) * scale,
+                        ];
+                        if p[0] >= 0.
+                            && p[0] < size[0] as f64
+                            && p[1] >= 0.
+                            && p[1] < size[1] as f64
+                        {
+                            assert!(p[0] >= new[0] as f64 && p[0] <= (new[0] + new[2]) as f64);
+                            assert!(p[1] >= new[1] as f64 && p[1] <= (new[1] + new[3]) as f64);
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("平面タイル描画面積: {old_pixels} → {new_pixels} px/フレーム");
+        assert!(new_pixels * 10 < old_pixels);
+        assert!(new_pixels < u64::from(size[0]) * u64::from(size[1]) * 2);
+    }
     #[test]
     fn globe_tile_scissors_cover_curved_edges_without_shading_the_whole_frame() {
         let mut c = Camera::default();
@@ -719,6 +890,14 @@ mod tests {
     #[test]
     #[ignore = "全面描画とタイル別描画範囲を同じGPUで計測する"]
     fn benchmark_globe_tile_scissors() -> anyhow::Result<()> {
+        benchmark_tile_scissors(false)
+    }
+    #[test]
+    #[ignore = "指定スナップショットの平面描画範囲を同じGPUで比較する"]
+    fn benchmark_flat_zoomed_tile_scissors() -> anyhow::Result<()> {
+        benchmark_tile_scissors(true)
+    }
+    fn benchmark_tile_scissors(flat: bool) -> anyhow::Result<()> {
         let backend = if cfg!(windows) {
             wgpu::Backends::DX12
         } else {
@@ -730,7 +909,7 @@ mod tests {
         let device = &app.renderer.state.device;
         let queue = &app.renderer.state.queue;
         let renderer = Renderer::new(device);
-        let size = [1280, 768];
+        let size = if flat { [2686, 1564] } else { [1280, 768] };
         let mut camera = Camera::default();
         camera.globe = true;
         camera.center = [35572623.49885807, 15783474.539974594];
@@ -739,6 +918,16 @@ mod tests {
         camera.yaw = 0.02880050428211689;
         camera.pitch = 1.1057327250626425;
         camera.viewport = size.map(f64::from);
+        if flat {
+            camera.height = 0.;
+            camera.set_map_view(
+                [0.8844271266197067, 0.3963378090889512],
+                19.,
+                0.,
+                0.,
+                size.map(f64::from),
+            );
+        }
         let extent = wgpu::Extent3d {
             width: size[0],
             height: size[1],
@@ -802,12 +991,14 @@ mod tests {
             wgpu::TextureFormat::Rgba8UnormSrgb,
             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         );
-        let side = 1. / 256.;
+        let side = if flat { 1. / 262144. } else { 1. / 256. };
         let cx = (camera.center[0] / WORLD / side) as i32;
         let cy = (camera.center[1] / WORLD / side) as i32;
         let mut commands = Vec::new();
-        for y in cy - 8..=cy + 8 {
-            for x in cx - 10..=cx + 10 {
+        let ry = if flat { 2 } else { 8 };
+        let rx = if flat { 3 } else { 10 };
+        for y in cy - ry..=cy + ry {
+            for x in cx - rx..=cx + rx {
                 commands.push(Quad {
                     bounds: [
                         x as f64 * side,
@@ -821,7 +1012,7 @@ mod tests {
                     tint: [0.3, 0.5, 0.8, 1.],
                     shade: false,
                     gamma_shade: false,
-                    edge_filter: false,
+                    edge_filter: Interpolation::Bilinear,
                     border: false,
                 });
             }
@@ -856,6 +1047,7 @@ mod tests {
                     size,
                     &commands,
                     restricted,
+                    if flat { [0., 0.] } else { [-500., 4500.] },
                 );
                 queue.submit([encoder.finish()]);
                 let _ = device.poll(wgpu::Maintain::Wait);
@@ -865,7 +1057,8 @@ mod tests {
                 begin.elapsed().as_secs_f64() * 1000. / 12.,
                 commands.len()
             );
-            let bytes = u64::from(size[0]) * u64::from(size[1]) * 4;
+            let row_bytes = (size[0] * 4).div_ceil(256) * 256;
+            let bytes = u64::from(row_bytes) * u64::from(size[1]);
             let read = device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,
                 size: bytes,
@@ -879,7 +1072,7 @@ mod tests {
                     buffer: &read,
                     layout: wgpu::TexelCopyBufferLayout {
                         offset: 0,
-                        bytes_per_row: Some(size[0] * 4),
+                        bytes_per_row: Some(row_bytes),
                         rows_per_image: None,
                     },
                 },
@@ -986,7 +1179,7 @@ mod tests {
                     tint: [1.; 4],
                     shade: false,
                     gamma_shade: false,
-                    edge_filter: false,
+                    edge_filter: Interpolation::Bilinear,
                     border: false,
                 }
             })
@@ -1142,7 +1335,7 @@ mod tests {
             tint: [1.; 4],
             shade: false,
             gamma_shade: false,
-            edge_filter: false,
+            edge_filter: Interpolation::Bilinear,
             border: false,
         };
         let shade = texture(
@@ -1162,16 +1355,20 @@ mod tests {
         let shade_view = shade.create_view(&Default::default());
         let gray = source((0..width).flat_map(|_| [64, 64, 64, 255]).collect());
         let mid = source((0..width).flat_map(|_| [188, 188, 188, 255]).collect());
-        for mode in 0..14 {
+        for mode in 0..15 {
             let mut q = match mode {
-                0 => quad(checker.clone(), checker.clone(), 1.),
+                0 | 14 => quad(checker.clone(), checker.clone(), 1.),
                 1 => quad(black.clone(), white.clone(), 0.5),
                 6 => quad(gray.clone(), gray.clone(), 1.),
                 7 => quad(mid.clone(), mid.clone(), 1.),
                 _ => quad(white.clone(), white.clone(), 1.),
             };
-            q.edge_filter = mode == 13;
-            if mode == 13 {
+            q.edge_filter = if mode == 14 {
+                Interpolation::Nearest
+            } else {
+                (mode >= 13).into()
+            };
+            if mode >= 13 {
                 // 拡大時の補間経路でも単色が変色しないことを確認する。
                 q.uv = [egui::Rect::from_min_max(egui::pos2(0.25, 0.25), egui::pos2(0.5, 0.5)); 2];
             }
@@ -1322,6 +1519,13 @@ mod tests {
                     }
                     9 => 0,
                     10 | 12 | 13 => 255,
+                    14 => {
+                        if (x / 4) % 2 == 0 {
+                            0
+                        } else {
+                            255
+                        }
+                    }
                     _ => {
                         if x < width as usize / 2 {
                             0

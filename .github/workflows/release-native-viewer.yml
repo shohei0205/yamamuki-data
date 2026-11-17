@@ -65,13 +65,14 @@ jobs:
           Get-Content -LiteralPath $log -Encoding utf8
           if ($result.ExitCode -ne 0) { exit $result.ExitCode }
           New-Item -ItemType Directory -Path dist -Force | Out-Null
-          Compress-Archive -LiteralPath $exe -DestinationPath "dist/$env:RELEASE_TAG-$env:PLATFORM.zip"
+          Compress-Archive -LiteralPath @($exe, 'viewer/THIRD_PARTY_NOTICES.txt') -DestinationPath "dist/$env:RELEASE_TAG-$env:PLATFORM.zip"
       - name: macOS版のアプリを作りZIPにまとめる
         if: runner.os == 'macOS'
         shell: bash
         run: |
           app="dist/YamamukiViewer.app"
-          mkdir -p "$app/Contents/MacOS"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp viewer/THIRD_PARTY_NOTICES.txt "$app/Contents/Resources/THIRD_PARTY_NOTICES.txt"
           install -m 755 "$CARGO_TARGET_DIR/release/yamamuki-viewer" "$app/Contents/MacOS/yamamuki-viewer"
           cp viewer/release/Info.plist "$app/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$app/Contents/Info.plist"
