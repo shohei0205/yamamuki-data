@@ -230,28 +230,47 @@ impl Renderer {
             dst_factor,
             operation: wgpu::BlendOperation::Add,
         };
-        Self {
-            cache: Default::default(),
-            color: pipeline(
-                "color",
-                blend(wgpu::BlendFactor::One, wgpu::BlendFactor::OneMinusSrcAlpha),
-                wgpu::ColorWrites::ALL,
-            ),
-            darken: pipeline(
-                "darken",
-                blend(wgpu::BlendFactor::Zero, wgpu::BlendFactor::OneMinusSrc),
-                wgpu::ColorWrites::COLOR,
-            ),
-            brighten: pipeline(
-                "brighten",
-                blend(wgpu::BlendFactor::Dst, wgpu::BlendFactor::One),
-                wgpu::ColorWrites::COLOR,
-            ),
-            lighting: pipeline(
+        // 独立した描画プログラムは同時に作成し、起動時の直列待ちをなくす。
+        let (color, darken, brighten, lighting) = std::thread::scope(|scope| {
+            let color = scope.spawn(|| {
+                pipeline(
+                    "color",
+                    blend(wgpu::BlendFactor::One, wgpu::BlendFactor::OneMinusSrcAlpha),
+                    wgpu::ColorWrites::ALL,
+                )
+            });
+            let darken = scope.spawn(|| {
+                pipeline(
+                    "darken",
+                    blend(wgpu::BlendFactor::Zero, wgpu::BlendFactor::OneMinusSrc),
+                    wgpu::ColorWrites::COLOR,
+                )
+            });
+            let brighten = scope.spawn(|| {
+                pipeline(
+                    "brighten",
+                    blend(wgpu::BlendFactor::Dst, wgpu::BlendFactor::One),
+                    wgpu::ColorWrites::COLOR,
+                )
+            });
+            let lighting = pipeline(
                 "lighting",
                 blend(wgpu::BlendFactor::One, wgpu::BlendFactor::Zero),
                 wgpu::ColorWrites::COLOR,
-            ),
+            );
+            (
+                color.join().unwrap(),
+                darken.join().unwrap(),
+                brighten.join().unwrap(),
+                lighting,
+            )
+        });
+        Self {
+            cache: Default::default(),
+            color,
+            darken,
+            brighten,
+            lighting,
             layout,
             sampler_group,
             empty: device

@@ -260,51 +260,72 @@ fn edge_footprint(image:texture_2d<f32>,uv:vec2<f32>)->f32 {
     let size=vec2<f32>(textureDimensions(image));
     return max(length(dpdx(uv)*size),length(dpdy(uv)*size));
 }
-fn edge_resample(image:texture_2d<f32>,image_sampler:sampler,uv:vec2<f32>,mode:u32,footprint:f32)->vec4<f32> {
-    let size=vec2<f32>(textureDimensions(image));
-    let maximum=vec2<i32>(textureDimensions(image))-vec2(1);
-    if mode==2u {return textureLoad(image,clamp(vec2<i32>(floor(uv*size)),vec2(0),maximum),0);}
-    if mode==0u || footprint>=1. {return textureSampleLevel(image,image_sampler,uv,0.);}
+// 新旧LODの重い補間本体を1回だけコンパイルする。参照する画像だけを切り替える。
+struct EdgePair {old_color:vec4<f32>,new_color:vec4<f32>}
+fn edge_pair_load(a:texture_2d<f32>,b:texture_2d<f32>,layer:u32,p:vec2<i32>)->vec4<f32> {
+    if layer==0u {return textureLoad(a,p,0);}
+    return textureLoad(b,p,0);
+}
+fn edge_pair_sample(a:texture_2d<f32>,b:texture_2d<f32>,s:sampler,layer:u32,uv:vec2<f32>)->vec4<f32> {
+    if layer==0u {return textureSampleLevel(a,s,uv,0.);}
+    return textureSampleLevel(b,s,uv,0.);
+}
+fn edge_resample_pair(old_image:texture_2d<f32>,new_image:texture_2d<f32>,image_sampler:sampler,old_uv:vec2<f32>,new_uv:vec2<f32>,mode:u32,old_footprint:f32,new_footprint:f32,amount:f32)->EdgePair {
+    var result=EdgePair(vec4(0.),vec4(0.));
+    var layer=select(0u,1u,amount>=1.);
+    let end=select(2u,1u,amount<=0.);
+    loop {
+        if layer>=end {break;}
+        let dims=select(textureDimensions(old_image),textureDimensions(new_image),layer==1u);
+        let size=vec2<f32>(dims);let maximum=vec2<i32>(dims)-vec2(1);
+        let uv=select(old_uv,new_uv,layer==1u);
+        let footprint=select(old_footprint,new_footprint,layer==1u);
+        var sampled=vec4(0.);
+        if mode==2u {
+            sampled=edge_pair_load(old_image,new_image,layer,clamp(vec2<i32>(floor(uv*size)),vec2(0),maximum));
+        } else if mode==0u || footprint>=1. {
+            sampled=edge_pair_sample(old_image,new_image,image_sampler,layer,uv);
+        } else {
     let p=uv*size-.5;
     let anchor=vec2<i32>(floor(p));
     let delta=p-vec2<f32>(anchor);
     var samples:array<vec4<f32>,36>;
-    samples[0]=textureLoad(image,clamp(anchor+vec2(-2,-2),vec2(0),maximum),0);
-    samples[1]=textureLoad(image,clamp(anchor+vec2(-1,-2),vec2(0),maximum),0);
-    samples[2]=textureLoad(image,clamp(anchor+vec2(0,-2),vec2(0),maximum),0);
-    samples[3]=textureLoad(image,clamp(anchor+vec2(1,-2),vec2(0),maximum),0);
-    samples[4]=textureLoad(image,clamp(anchor+vec2(2,-2),vec2(0),maximum),0);
-    samples[5]=textureLoad(image,clamp(anchor+vec2(3,-2),vec2(0),maximum),0);
-    samples[6]=textureLoad(image,clamp(anchor+vec2(-2,-1),vec2(0),maximum),0);
-    samples[7]=textureLoad(image,clamp(anchor+vec2(-1,-1),vec2(0),maximum),0);
-    samples[8]=textureLoad(image,clamp(anchor+vec2(0,-1),vec2(0),maximum),0);
-    samples[9]=textureLoad(image,clamp(anchor+vec2(1,-1),vec2(0),maximum),0);
-    samples[10]=textureLoad(image,clamp(anchor+vec2(2,-1),vec2(0),maximum),0);
-    samples[11]=textureLoad(image,clamp(anchor+vec2(3,-1),vec2(0),maximum),0);
-    samples[12]=textureLoad(image,clamp(anchor+vec2(-2,0),vec2(0),maximum),0);
-    samples[13]=textureLoad(image,clamp(anchor+vec2(-1,0),vec2(0),maximum),0);
-    samples[14]=textureLoad(image,clamp(anchor+vec2(0,0),vec2(0),maximum),0);
-    samples[15]=textureLoad(image,clamp(anchor+vec2(1,0),vec2(0),maximum),0);
-    samples[16]=textureLoad(image,clamp(anchor+vec2(2,0),vec2(0),maximum),0);
-    samples[17]=textureLoad(image,clamp(anchor+vec2(3,0),vec2(0),maximum),0);
-    samples[18]=textureLoad(image,clamp(anchor+vec2(-2,1),vec2(0),maximum),0);
-    samples[19]=textureLoad(image,clamp(anchor+vec2(-1,1),vec2(0),maximum),0);
-    samples[20]=textureLoad(image,clamp(anchor+vec2(0,1),vec2(0),maximum),0);
-    samples[21]=textureLoad(image,clamp(anchor+vec2(1,1),vec2(0),maximum),0);
-    samples[22]=textureLoad(image,clamp(anchor+vec2(2,1),vec2(0),maximum),0);
-    samples[23]=textureLoad(image,clamp(anchor+vec2(3,1),vec2(0),maximum),0);
-    samples[24]=textureLoad(image,clamp(anchor+vec2(-2,2),vec2(0),maximum),0);
-    samples[25]=textureLoad(image,clamp(anchor+vec2(-1,2),vec2(0),maximum),0);
-    samples[26]=textureLoad(image,clamp(anchor+vec2(0,2),vec2(0),maximum),0);
-    samples[27]=textureLoad(image,clamp(anchor+vec2(1,2),vec2(0),maximum),0);
-    samples[28]=textureLoad(image,clamp(anchor+vec2(2,2),vec2(0),maximum),0);
-    samples[29]=textureLoad(image,clamp(anchor+vec2(3,2),vec2(0),maximum),0);
-    samples[30]=textureLoad(image,clamp(anchor+vec2(-2,3),vec2(0),maximum),0);
-    samples[31]=textureLoad(image,clamp(anchor+vec2(-1,3),vec2(0),maximum),0);
-    samples[32]=textureLoad(image,clamp(anchor+vec2(0,3),vec2(0),maximum),0);
-    samples[33]=textureLoad(image,clamp(anchor+vec2(1,3),vec2(0),maximum),0);
-    samples[34]=textureLoad(image,clamp(anchor+vec2(2,3),vec2(0),maximum),0);
-    samples[35]=textureLoad(image,clamp(anchor+vec2(3,3),vec2(0),maximum),0);
+    samples[0]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(-2,-2),vec2(0),maximum));
+    samples[1]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(-1,-2),vec2(0),maximum));
+    samples[2]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(0,-2),vec2(0),maximum));
+    samples[3]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(1,-2),vec2(0),maximum));
+    samples[4]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(2,-2),vec2(0),maximum));
+    samples[5]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(3,-2),vec2(0),maximum));
+    samples[6]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(-2,-1),vec2(0),maximum));
+    samples[7]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(-1,-1),vec2(0),maximum));
+    samples[8]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(0,-1),vec2(0),maximum));
+    samples[9]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(1,-1),vec2(0),maximum));
+    samples[10]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(2,-1),vec2(0),maximum));
+    samples[11]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(3,-1),vec2(0),maximum));
+    samples[12]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(-2,0),vec2(0),maximum));
+    samples[13]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(-1,0),vec2(0),maximum));
+    samples[14]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(0,0),vec2(0),maximum));
+    samples[15]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(1,0),vec2(0),maximum));
+    samples[16]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(2,0),vec2(0),maximum));
+    samples[17]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(3,0),vec2(0),maximum));
+    samples[18]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(-2,1),vec2(0),maximum));
+    samples[19]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(-1,1),vec2(0),maximum));
+    samples[20]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(0,1),vec2(0),maximum));
+    samples[21]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(1,1),vec2(0),maximum));
+    samples[22]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(2,1),vec2(0),maximum));
+    samples[23]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(3,1),vec2(0),maximum));
+    samples[24]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(-2,2),vec2(0),maximum));
+    samples[25]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(-1,2),vec2(0),maximum));
+    samples[26]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(0,2),vec2(0),maximum));
+    samples[27]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(1,2),vec2(0),maximum));
+    samples[28]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(2,2),vec2(0),maximum));
+    samples[29]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(3,2),vec2(0),maximum));
+    samples[30]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(-2,3),vec2(0),maximum));
+    samples[31]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(-1,3),vec2(0),maximum));
+    samples[32]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(0,3),vec2(0),maximum));
+    samples[33]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(1,3),vec2(0),maximum));
+    samples[34]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(2,3),vec2(0),maximum));
+    samples[35]=edge_pair_load(old_image,new_image,layer,clamp(anchor+vec2(3,3),vec2(0),maximum));
     // 元画素ごとの5×5方向判定を共有する。4パッチの窓は外縁で値と傾きが0になる。
     var cells:array<vec3<f32>,25>;
     cells[0]=contour_tensor(samples[0],samples[1],samples[6],samples[7]);
@@ -597,6 +618,14 @@ fn edge_resample(image:texture_2d<f32>,image_sampler:sampler,uv:vec2<f32>,mode:u
     }
     let color=mix(reconstructed,total/max(weight,1e-8),clamp(weight,0.,1.));
     // 等倍付近の移行以外は、三次補間と固定した線形状の合成結果を使う。
-    if footprint<=.7 {return color;}
-    return mix(color,textureSampleLevel(image,image_sampler,uv,0.),smoothstep(.7,1.,footprint));
+    sampled=color;
+    if footprint>.7 {
+        sampled=mix(color,edge_pair_sample(old_image,new_image,image_sampler,layer,uv),smoothstep(.7,1.,footprint));
+    }
+
+        }
+        if layer==0u {result.old_color=sampled;} else {result.new_color=sampled;}
+        layer+=1u;
+    }
+    return result;
 }

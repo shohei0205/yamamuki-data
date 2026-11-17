@@ -50,7 +50,20 @@ impl<T: PartialEq> State<T> {
 
 // 大きく引いたときは、表示範囲を旧レベルの細かさで全面展開しない。
 pub fn can_blend(old: u32, new: u32, view_zoom: f64) -> bool {
-    old.max(new) <= view_zoom.floor() as u32 + 2
+    old.max(new) <= (view_zoom.floor() as u32).min(new).saturating_add(2)
+}
+
+#[cfg(test)]
+mod transition_budget_tests {
+    #[test]
+    fn lowering_online_limit_does_not_expand_old_detail_over_coarse_material_regions() {
+        // 上限を下げた広域範囲を旧レベルの細かさで全面列挙しない。
+        assert!(!super::can_blend(18, 6, 18.));
+        assert!(!super::can_blend(12, 6, 18.));
+        assert!(super::can_blend(7, 6, 18.));
+        assert!(super::can_blend(11, 12, 12.));
+        assert!(!super::can_blend(18, 12, 6.));
+    }
 }
 
 pub fn sample(tile: Tile, z: u32, uv: Rect) -> (Tile, Rect) {
@@ -114,11 +127,17 @@ pub struct Renderer {
     layout: wgpu::BindGroupLayout,
     sampler_group: wgpu::BindGroup,
     empty: wgpu::TextureView,
+    sampler_layout: wgpu::BindGroupLayout,
+    format: wgpu::TextureFormat,
+    programs: std::sync::OnceLock<Programs>,
+    gamma_shade: bool,
+    views: std::sync::Mutex<TextureViews>,
+}
+
+struct Programs {
     color: wgpu::RenderPipeline,
     darken: wgpu::RenderPipeline,
     brighten: wgpu::RenderPipeline,
-    gamma_shade: bool,
-    views: std::sync::Mutex<TextureViews>,
 }
 
 impl Renderer {
@@ -164,9 +183,45 @@ impl Renderer {
                 resource: wgpu::BindingResource::Sampler(&sampler),
             }],
         });
+        let empty = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("透明色・中立陰影"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+        Self {
+            device: device.clone(),
+            layout,
+            sampler_group,
+            empty,
+            gamma_shade: !format.is_srgb(),
+            views: Default::default(),
+            sampler_layout,
+            format,
+            programs: Default::default(),
+        }
+    }
+
+    // 元タイルを地形へ渡すだけなら、この2Dプログラムは不要。
+    fn programs(&self) -> &Programs {
+        self.programs.get_or_init(|| {
+            let device=&self.device;
+            let layout=&self.layout;
+            let sampler_layout=&self.sampler_layout;
+            let format=self.format;
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[&layout, &sampler_layout],
+            bind_group_layouts: &[layout, sampler_layout],
             push_constant_ranges: &[],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -214,55 +269,44 @@ impl Renderer {
                 cache: None,
             })
         };
-        let color = pipeline(
-            if format.is_srgb() {
-                "linear_color"
-            } else {
-                "gamma_color"
-            },
-            wgpu::BlendFactor::One,
-            wgpu::BlendFactor::OneMinusSrcAlpha,
-            false,
-        );
-        let darken = pipeline(
-            "darken",
-            wgpu::BlendFactor::Zero,
-            wgpu::BlendFactor::OneMinusSrc,
-            true,
-        );
-        let brighten = pipeline(
-            "brighten",
-            wgpu::BlendFactor::Dst,
-            wgpu::BlendFactor::One,
-            true,
-        );
-        let empty = device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("透明色・中立陰影"),
-                size: wgpu::Extent3d {
-                    width: 1,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&Default::default());
-        Self {
-            device: device.clone(),
-            layout,
-            sampler_group,
-            empty,
-            gamma_shade: !format.is_srgb(),
-            views: Default::default(),
-            color,
-            darken,
-            brighten,
-        }
+        let (color, darken, brighten) = std::thread::scope(|scope| {
+            let color = scope.spawn(|| {
+                pipeline(
+                    if format.is_srgb() {
+                        "linear_color"
+                    } else {
+                        "gamma_color"
+                    },
+                    wgpu::BlendFactor::One,
+                    wgpu::BlendFactor::OneMinusSrcAlpha,
+                    false,
+                )
+            });
+            let darken = scope.spawn(|| {
+                pipeline(
+                    "darken",
+                    wgpu::BlendFactor::Zero,
+                    wgpu::BlendFactor::OneMinusSrc,
+                    true,
+                )
+            });
+            let brighten = scope.spawn(|| {
+                pipeline(
+                    "brighten",
+                    wgpu::BlendFactor::Dst,
+                    wgpu::BlendFactor::One,
+                    true,
+                )
+            });
+            (
+                color.join().unwrap(),
+                darken.join().unwrap(),
+                brighten.join().unwrap(),
+            )
+        });
+
+            Programs {color,darken,brighten}
+        })
     }
 
     pub fn color_view(
@@ -396,9 +440,9 @@ impl Renderer {
             vertices,
             textures,
             shade_count,
-            color: self.color.clone(),
-            darken: self.darken.clone(),
-            brighten: self.brighten.clone(),
+            color: self.programs().color.clone(),
+            darken: self.programs().darken.clone(),
+            brighten: self.programs().brighten.clone(),
         })
     }
 }
@@ -450,6 +494,72 @@ impl Draw {
 mod tests {
     use super::*;
 
+    #[test]
+    fn recording_native_tiles_preserves_commands_without_compiling_2d_programs() {
+        let instance = wgpu::Instance::default();
+        let adapter =
+            pollster::block_on(instance.request_adapter(&Default::default())).expect("GPU");
+        let (device, _) =
+            pollster::block_on(adapter.request_device(&Default::default(), None)).unwrap();
+        let renderer = Renderer::for_target(&device, wgpu::TextureFormat::Rgba8Unorm);
+        assert!(renderer.programs.get().is_none());
+        let texture = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("受渡しだけを行う元タイル"),
+                size: wgpu::Extent3d {
+                    width: 2,
+                    height: 2,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+        let ctx = egui::Context::default();
+        let output = ctx.run(Default::default(), |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            renderer.paint(
+                &painter,
+                Rect::from_min_size(Pos2::ZERO, egui::vec2(256., 256.)),
+                &View {
+                    center: [0.5, 0.5],
+                    zoom: 0.,
+                    orientation: Default::default(),
+                },
+                vec![Quad {
+                    tile: Tile { z: 0, x: 0, y: 0 },
+                    uv: [FULL_UV; 2],
+                    textures: [Some(texture.clone()), Some(texture.clone())],
+                    edge_filter: Interpolation::Edge,
+                }],
+                Vec::new(),
+                1.,
+                true,
+            );
+        });
+        let commands = output
+            .shapes
+            .iter()
+            .filter_map(|s| {
+                let egui::Shape::Callback(c) = &s.shape else {
+                    return None;
+                };
+                c.callback
+                    .downcast_ref::<yamamuki_terrain_view::direct_material::Capture>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].edge_filter, Interpolation::Edge);
+        assert_eq!(commands[0].textures, [Some(texture.clone()), Some(texture)]);
+        assert!(
+            renderer.programs.get().is_none(),
+            "元タイルの受渡しで未使用の2Dプログラムを作成している"
+        );
+    }
     #[test]
     fn keeps_previous_until_target_is_ready_and_fades_once() {
         let mut state = State::default();

@@ -34,21 +34,15 @@ fn gamma(color: vec4<f32>) -> vec4<f32> {
 fn gamma_color(in: Vertex) -> @location(0) vec4<f32> {
     let old_footprint=edge_footprint(old_tile,in.old_uv);
     let new_footprint=edge_footprint(new_tile,in.new_uv);
-    if in.amount>=1. {return gamma(edge_resample(new_tile,linear_sampler,in.new_uv,u32(in.edge_filter),new_footprint));}
-    if in.amount<=0. {return gamma(edge_resample(old_tile,linear_sampler,in.old_uv,u32(in.edge_filter),old_footprint));}
-    let old = gamma(edge_resample(old_tile, linear_sampler, in.old_uv, u32(in.edge_filter),old_footprint));
-    let next = gamma(edge_resample(new_tile, linear_sampler, in.new_uv, u32(in.edge_filter),new_footprint));
-    return mix(old, next, in.amount);
+    let pair=edge_resample_pair(old_tile,new_tile,linear_sampler,in.old_uv,in.new_uv,u32(in.edge_filter),old_footprint,new_footprint,in.amount);
+    return mix(gamma(pair.old_color),gamma(pair.new_color),in.amount);
 }
 
 fn sample_linear(in: Vertex) -> vec4<f32> {
     let old_footprint=edge_footprint(old_tile,in.old_uv);
     let new_footprint=edge_footprint(new_tile,in.new_uv);
-    if in.amount>=1. {return edge_resample(new_tile,linear_sampler,in.new_uv,u32(in.edge_filter),new_footprint);}
-    if in.amount<=0. {return edge_resample(old_tile,linear_sampler,in.old_uv,u32(in.edge_filter),old_footprint);}
-    let old = edge_resample(old_tile, linear_sampler, in.old_uv, u32(in.edge_filter),old_footprint);
-    let next = edge_resample(new_tile, linear_sampler, in.new_uv, u32(in.edge_filter),new_footprint);
-    return mix(old, next, in.amount);
+    let pair=edge_resample_pair(old_tile,new_tile,linear_sampler,in.old_uv,in.new_uv,u32(in.edge_filter),old_footprint,new_footprint,in.amount);
+    return mix(pair.old_color,pair.new_color,in.amount);
 }
 
 @fragment

@@ -859,12 +859,18 @@ impl Viewer {
         let lod_zoom = zoom_override.unwrap_or_else(|| {
             terrain_material::lod_zoom(self.view.zoom, view.zoom, material_pass)
         });
-        let fade_backend = frame.wgpu_render_state().map(|state| {
-            let renderer = self
-                .lod_renderer
-                .get_or_insert_with(|| lod_fade::Renderer::new(state));
-            (state, &*renderer)
-        });
+        // 初期準備中の平面プレビューは既存の地図を先に出す。通常表示と、
+        // 元タイルの受け渡しでは選択した補間を使い、不要な2Dコンパイルを行わない。
+        let preparing_flat_preview = material_pass == 0 && self.flat_loading.is_some();
+        let fade_backend = frame
+            .wgpu_render_state()
+            .filter(|_| !preparing_flat_preview)
+            .map(|state| {
+                let renderer = self
+                    .lod_renderer
+                    .get_or_insert_with(|| lod_fade::Renderer::new(state));
+                (state, &*renderer)
+            });
         let failed = if self.show_online_map {
             if let Some(index) = self
                 .tiles

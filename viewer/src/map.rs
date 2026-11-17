@@ -920,8 +920,12 @@ impl Tiles {
             }
         }
         if self.borders {
-            for tile in view.tiles_at(rect, current) {
-                if matches!(self.cache.get(&tile), Some((Cached::Texture(_, _), _))) {
+            // 旧レベルで広域を全面列挙せず、保持しているタイルだけを見る。
+            for (&tile, (entry, _)) in &self.cache {
+                if tile.z == current
+                    && matches!(entry, Cached::Texture(_, _))
+                    && Rect::from_points(&view.tile_corners(rect, tile)).intersects(rect)
+                {
                     crate::terrain_material::tile_border(
                         painter,
                         rect,

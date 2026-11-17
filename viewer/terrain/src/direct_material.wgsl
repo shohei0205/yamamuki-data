@@ -35,18 +35,9 @@ fn material_filter()->u32 {
  let newUV=params.uv1.xy+uv*params.uv1.zw;
  let oldFootprint=edge_footprint(oldTile,oldUV);
  let newFootprint=edge_footprint(newTile,newUV);
- var c:vec4<f32>;
- if params.settings.x>=1. {
-  let b=edge_resample(newTile,linearSampler,newUV,material_filter(),newFootprint);
-  c=vec4(gamma(b.rgb),b.a)*params.settings.z;
- } else if params.settings.x<=0. {
-  let a=edge_resample(oldTile,linearSampler,oldUV,material_filter(),oldFootprint);
-  c=vec4(gamma(a.rgb),a.a)*params.settings.y;
- } else {
-  let a=edge_resample(oldTile,linearSampler,oldUV,material_filter(),oldFootprint);
-  let b=edge_resample(newTile,linearSampler,newUV,material_filter(),newFootprint);
-  c=mix(vec4(gamma(a.rgb),a.a)*params.settings.y,vec4(gamma(b.rgb),b.a)*params.settings.z,params.settings.x);
- }
+ let pair=edge_resample_pair(oldTile,newTile,linearSampler,oldUV,newUV,material_filter(),oldFootprint,newFootprint,params.settings.x);
+ let a=pair.old_color;let b=pair.new_color;
+ var c=mix(vec4(gamma(a.rgb),a.a)*params.settings.y,vec4(gamma(b.rgb),b.a)*params.settings.z,params.settings.x);
  c*=params.tint;
  return vec4(linear(c.rgb),c.a);
 }
@@ -56,18 +47,9 @@ fn difference(p:vec4<f32>)->f32{
  let newUV=params.uv1.xy+uv*params.uv1.zw;
  let oldFootprint=edge_footprint(oldTile,oldUV);
  let newFootprint=edge_footprint(newTile,newUV);
- var difference:f32;
- if params.settings.x>=1. {
-  let b=edge_resample(newTile,linearSampler,newUV,material_filter(),newFootprint).rg*params.settings.z;
-  difference=b.y-b.x;
- } else if params.settings.x<=0. {
-  let a=edge_resample(oldTile,linearSampler,oldUV,material_filter(),oldFootprint).rg*params.settings.y;
-  difference=a.y-a.x;
- } else {
-  let a=edge_resample(oldTile,linearSampler,oldUV,material_filter(),oldFootprint).rg*params.settings.y;
-  let b=edge_resample(newTile,linearSampler,newUV,material_filter(),newFootprint).rg*params.settings.z;
-  difference=mix(a.y-a.x,b.y-b.x,params.settings.x);
- }
+ let pair=edge_resample_pair(oldTile,newTile,linearSampler,oldUV,newUV,material_filter(),oldFootprint,newFootprint,params.settings.x);
+ let a=pair.old_color.rg*params.settings.y;let b=pair.new_color.rg*params.settings.z;
+ let difference=mix(a.y-a.x,b.y-b.x,params.settings.x);
  if (u32(params.settings.w)&2u)!=0u {return pow(max(1.+difference,0.),2.2)-1.;}
  return difference;
 }
