@@ -2033,6 +2033,11 @@ impl TerrainView {
             let zoom = (shared_data::WORLD * c.scale() * f64::from(rect.height())
                 / (512. * c.tan_half_fov() * c.distance))
                 .log2();
+            // 平面球面の俯瞰では背景と近景の取得範囲が同じになる。
+            // 透明マスクを二重に重ねると、粗い水域が詳細画像の透明部へ残る。
+            if self.app.path.is_empty() {
+                return vec![(regions[2], zoom)];
+            }
             // 視野全体は同じLODにするが、視野外の常駐背景まで詳細画像で埋めない。
             let overview = (f64::from(rect.width().max(rect.height()))
                 / (256.

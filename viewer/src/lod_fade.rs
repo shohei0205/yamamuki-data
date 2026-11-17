@@ -9,6 +9,7 @@ use yamamuki_terrain_view::direct_material::Interpolation;
 const SECONDS: f64 = 0.22;
 pub const FULL_UV: Rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.));
 
+#[derive(Clone)]
 pub struct State<T> {
     pub current: Option<T>,
     previous: Option<(T, f64)>,
@@ -25,6 +26,10 @@ impl<T> Default for State<T> {
 
 impl<T: PartialEq> State<T> {
     pub fn update(&mut self, target: T, ready: bool, fade: bool, now: f64) {
+        // OFFに切り替えたら、進行中のフェードもそのフレームで終える。
+        if !fade {
+            self.previous = None;
+        }
         if self
             .previous
             .as_ref()
@@ -40,29 +45,17 @@ impl<T: PartialEq> State<T> {
         }
     }
 
+    pub fn transitioning(&self, now: f64) -> bool {
+        self.previous
+            .as_ref()
+            .is_some_and(|(_, start)| now < start + SECONDS)
+    }
+
     pub fn blend(&self, ctx: &egui::Context, now: f64) -> Option<(&T, f32)> {
         let (previous, start) = self.previous.as_ref()?;
         ctx.request_repaint();
         let t = ((now - start) / SECONDS).clamp(0., 1.) as f32;
         Some((previous, t * t * (3. - 2. * t)))
-    }
-}
-
-// 大きく引いたときは、表示範囲を旧レベルの細かさで全面展開しない。
-pub fn can_blend(old: u32, new: u32, view_zoom: f64) -> bool {
-    old.max(new) <= (view_zoom.floor() as u32).min(new).saturating_add(2)
-}
-
-#[cfg(test)]
-mod transition_budget_tests {
-    #[test]
-    fn lowering_online_limit_does_not_expand_old_detail_over_coarse_material_regions() {
-        // 上限を下げた広域範囲を旧レベルの細かさで全面列挙しない。
-        assert!(!super::can_blend(18, 6, 18.));
-        assert!(!super::can_blend(12, 6, 18.));
-        assert!(super::can_blend(7, 6, 18.));
-        assert!(super::can_blend(11, 12, 12.));
-        assert!(!super::can_blend(18, 12, 6.));
     }
 }
 
@@ -85,6 +78,7 @@ pub fn sample(tile: Tile, z: u32, uv: Rect) -> (Tile, Rect) {
 pub type Backend<'a> = Option<(&'a RenderState, &'a Renderer)>;
 
 pub struct Quad {
+    pub amount: Option<f32>,
     pub tile: Tile,
     pub edge_filter: Interpolation,
     pub uv: [Rect; 2],
@@ -109,6 +103,7 @@ impl Quad {
             textures[1] = textures[0].clone();
         }
         Some(Self {
+            amount: None,
             tile,
             uv,
             textures,
@@ -352,7 +347,7 @@ impl Renderer {
                         rect: Rect::from_points(&view.tile_corners(rect, quad.tile)),
                         uv: quad.uv,
                         textures: quad.textures,
-                        amount,
+                        amount: quad.amount.unwrap_or(amount),
                         shade,
                         gamma_shade: shade && self.gamma_shade,
                         edge_filter: quad.edge_filter,
@@ -398,7 +393,7 @@ impl Renderer {
                         uv[0][i].y,
                         uv[1][i].x,
                         uv[1][i].y,
-                        amount,
+                        quad.amount.unwrap_or(amount),
                         quad.edge_filter as u32 as f32,
                     ]
                     .into_iter()
@@ -531,6 +526,7 @@ mod tests {
                     orientation: Default::default(),
                 },
                 vec![Quad {
+                    amount: None,
                     tile: Tile { z: 0, x: 0, y: 0 },
                     uv: [FULL_UV; 2],
                     textures: [Some(texture.clone()), Some(texture.clone())],
@@ -574,6 +570,23 @@ mod tests {
         state.update(11, true, true, 3.);
         assert_eq!(state.current, Some(11));
         assert_eq!(state.previous, Some((10, 3.)));
+    }
+
+    #[test]
+    fn disabling_animation_stops_active_fade_and_waits_for_ready_tiles() {
+        let ctx = egui::Context::default();
+        let mut state = State::default();
+        state.update(10, true, true, 0.);
+        state.update(11, true, true, 1.);
+        assert!(state.blend(&ctx, 1.1).is_some());
+        state.update(12, false, false, 1.1);
+        assert_eq!(state.current, Some(11));
+        assert!(state.blend(&ctx, 1.1).is_none());
+        state.update(12, true, false, 1.2);
+        assert_eq!(state.current, Some(12));
+        assert!(state.blend(&ctx, 1.2).is_none());
+        state.update(13, true, true, 1.3);
+        assert!(state.blend(&ctx, 1.3).is_some());
     }
 
     #[test]
@@ -621,6 +634,7 @@ mod tests {
                 .create_view(&Default::default())
         };
         let quad = |colors: [[u8; 4]; 2], format| Quad {
+            amount: None,
             edge_filter: Interpolation::Bilinear,
             tile: Tile { z: 0, x: 0, y: 0 },
             uv: [FULL_UV; 2],
@@ -881,6 +895,7 @@ mod tests {
                         full.size() / side,
                     );
                     Quad {
+                        amount: None,
                         tile,
                         uv: [uv; 2],
                         textures: [Some(source.clone()), Some(source.clone())],

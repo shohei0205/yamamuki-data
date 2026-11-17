@@ -49,7 +49,8 @@ impl<'de> serde::Deserialize<'de> for Interpolation {
             Saved::Legacy(v) => Ok(v.into()),
             Saved::Name(v) => match v.as_str() {
                 "bilinear" => Ok(Self::Bilinear),
-                "edge" => Ok(Self::Edge),
+                // 廃止した比較用モードも通常の輪郭優先へ引き継ぐ。
+                "edge" | "edge7" | "edge-multi" | "edge-curve" => Ok(Self::Edge),
                 "nearest" => Ok(Self::Nearest),
                 _ => Err(serde::de::Error::custom("未対応の補間方式")),
             },
@@ -704,6 +705,12 @@ mod tests {
             serde_json::from_str::<Interpolation>("false").unwrap(),
             Interpolation::Bilinear
         );
+        for retired in ["edge7", "edge-multi", "edge-curve"] {
+            let json = serde_json::to_string(retired).unwrap();
+            let mode = serde_json::from_str::<Interpolation>(&json).unwrap();
+            assert_eq!(mode, Interpolation::Edge);
+            assert_eq!(serde_json::to_string(&mode).unwrap(), "\"edge\"");
+        }
         for mode in Interpolation::ALL {
             let json = serde_json::to_string(&mode).unwrap();
             assert_eq!(serde_json::from_str::<Interpolation>(&json).unwrap(), mode);

@@ -654,6 +654,11 @@ mod tests {
         for zoom in [6., 12., 18., 22.] {
             for tilt in [0., 1.] {
                 flat.set_map_camera(center, zoom, 0.7, tilt, rect);
+                if tilt == 0. {
+                    let regions=flat.projected_material_regions(rect,0.001);
+                    anyhow::ensure!(regions.len()==1,"透明な地表レイヤーを同じ範囲へ二重に描いている: {regions:?}");
+                    anyhow::ensure!((regions[0].1-zoom).abs()<1e-8,"地表LODが視点倍率と一致しない");
+                }
                 let bytes = draw(&mut flat)?;
                 let positions = bytemuck::cast_slice::<u8, f32>(&bytes);
                 let holes = positions.chunks_exact(4).filter(|p| p[3] == 0.).count();

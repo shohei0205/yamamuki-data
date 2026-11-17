@@ -26,6 +26,10 @@ pub(crate) struct Snapshot {
     map_borders: bool,
     #[serde(default)]
     map_edge_filter: Interpolation,
+    #[serde(default = "animation_enabled")]
+    map_lod_animation: bool,
+    #[serde(default = "animation_enabled")]
+    surface_lod_animation: bool,
     #[serde(default)]
     surface_borders: bool,
     #[serde(default)]
@@ -41,6 +45,9 @@ pub(crate) struct Snapshot {
     pin_elevation: Option<([f64; 2], f64)>,
     surfaces: Vec<SurfaceState>,
     terrain: Option<yamamuki_terrain_view::snapshot::Snapshot>,
+}
+fn animation_enabled() -> bool {
+    true
 }
 pub(crate) struct Prepared {
     snapshot: Snapshot,
@@ -125,6 +132,8 @@ impl Viewer {
             surface_lod: self.surface_lod,
             map_borders: self.map_borders,
             map_edge_filter: self.map_edge_filter,
+            map_lod_animation: self.map_lod_animation,
+            surface_lod_animation: self.surface_lod_animation,
             surface_borders: self.surface_borders,
             surface_edge_filter: self.surface_edge_filter,
             palette: self.surface_palette,
@@ -343,6 +352,8 @@ impl Viewer {
         self.surface_lod = s.surface_lod;
         self.map_borders = s.map_borders;
         self.map_edge_filter = s.map_edge_filter;
+        self.map_lod_animation = s.map_lod_animation;
+        self.surface_lod_animation = s.surface_lod_animation;
         self.surface_borders = s.surface_borders;
         self.surface_edge_filter = s.surface_edge_filter;
         self.surface_palette = s.palette;
@@ -421,6 +432,8 @@ mod tests {
         v.view.orientation.orbit(egui::vec2(14., -80.));
         v.show_online_map = false;
         v.map_borders = true;
+        v.map_lod_animation = false;
+        v.surface_lod_animation = true;
         v.map_edge_filter = Interpolation::Edge;
         v.surface_borders = true;
         v.surface_edge_filter = Interpolation::Nearest;
@@ -439,6 +452,12 @@ mod tests {
         assert_eq!(replay.lod, v.lod);
         assert_eq!(replay.surface_lod, v.surface_lod);
         assert!(replay.map_borders && replay.surface_borders);
+        assert!(!replay.map_lod_animation && replay.surface_lod_animation);
+        let mut old = serde_json::to_value(v.capture_snapshot()?)?;
+        old.as_object_mut().unwrap().remove("map_lod_animation");
+        old.as_object_mut().unwrap().remove("surface_lod_animation");
+        let old: Snapshot = serde_json::from_value(old)?;
+        assert!(old.map_lod_animation && old.surface_lod_animation);
         assert_eq!(replay.map_edge_filter, Interpolation::Edge);
         assert_eq!(replay.surface_edge_filter, Interpolation::Nearest);
         assert_eq!(replay.map_pin_elevation, v.map_pin_elevation);

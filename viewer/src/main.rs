@@ -10,6 +10,7 @@ mod diagnostics;
 mod lod_fade;
 mod map;
 mod markers;
+mod performance;
 mod point_detail;
 mod point_list;
 mod points;
@@ -143,6 +144,7 @@ struct Viewer {
     snapshot_frozen: bool,
     snapshot_canvas: Option<[f32; 2]>,
     last_canvas_size: [f32; 2],
+    performance: performance::Overlay,
     snapshot_status: String,
     snapshot_jobs: Vec<mpsc::Receiver<Result<PathBuf>>>,
     snapshot_notice: Option<(String, std::time::Instant)>,
@@ -174,8 +176,10 @@ struct Viewer {
     lod: map::Lod,
     surface_lod: map::Lod,
     map_borders: bool,
+    map_lod_animation: bool,
     map_edge_filter: Interpolation,
     surface_borders: bool,
+    surface_lod_animation: bool,
     surface_edge_filter: Interpolation,
     surface_palette: surface_palette::Palette,
     lod_renderer: Option<lod_fade::Renderer>,
@@ -210,6 +214,7 @@ impl Viewer {
             .id(egui::Id::new("viewer-settings"))
             .open(&mut open)
             .default_width(540.)
+            .default_height(620.)
             .collapsible(false)
             .vscroll(true)
             .show(ctx, |ui| {
@@ -228,6 +233,7 @@ impl Viewer {
                 match self.settings_section {
                     SettingsSection::OnlineMap => {
                         ui.checkbox(&mut self.map_borders, "タイル境界を表示");
+                        ui.checkbox(&mut self.map_lod_animation, "レベル切り替えをアニメーション");
                         egui::ComboBox::from_label("拡大時の補間")
                             .selected_text(self.map_edge_filter.label())
                             .show_ui(ui, |ui| {
@@ -242,6 +248,7 @@ impl Viewer {
                     }
                     SettingsSection::Surface => {
                         ui.checkbox(&mut self.surface_borders, "タイル境界を表示");
+                        ui.checkbox(&mut self.surface_lod_animation, "レベル切り替えをアニメーション");
                         egui::ComboBox::from_label("拡大時の補間")
                             .selected_text(self.surface_edge_filter.label())
                             .show_ui(ui, |ui| {
@@ -319,6 +326,7 @@ impl Viewer {
             snapshot_frozen: false,
             snapshot_canvas: None,
             last_canvas_size: [800., 600.],
+            performance: performance::Overlay::default(),
             snapshot_status: String::new(),
             snapshot_jobs: Vec::new(),
             snapshot_notice: None,
@@ -350,8 +358,10 @@ impl Viewer {
             lod: map::Lod::default(),
             surface_lod: map::Lod::default(),
             map_borders: false,
+            map_lod_animation: true,
             map_edge_filter: Interpolation::Edge,
             surface_borders: false,
+            surface_lod_animation: true,
             surface_edge_filter: Interpolation::Edge,
             surface_palette: surface_palette::Palette::default(),
             lod_renderer: None,
@@ -382,6 +392,15 @@ impl Viewer {
             viewer.open(ctx, file);
         }
         viewer
+    }
+
+    fn restore_lod_animation_settings(&mut self, storage: Option<&dyn eframe::Storage>) {
+        self.map_lod_animation = storage
+            .and_then(|s| eframe::get_value(s, "map_lod_animation"))
+            .unwrap_or(true);
+        self.surface_lod_animation = storage
+            .and_then(|s| eframe::get_value(s, "surface_lod_animation"))
+            .unwrap_or(true);
     }
 
     fn lod_slider_max(&self) -> u32 {
@@ -886,6 +905,7 @@ impl Viewer {
                 );
             }
             self.tiles[0].borders = self.map_borders;
+            self.tiles[0].animate_lod = self.map_lod_animation;
             self.tiles[0].edge_filter = self.map_edge_filter;
             self.tiles[0].select_material_pass(material_pass);
             self.tiles[0].paint(
@@ -904,6 +924,7 @@ impl Viewer {
         let mut has_base = self.show_online_map;
         for surface in self.surfaces.iter_mut().filter(|surface| surface.enabled) {
             surface.borders = self.surface_borders;
+            surface.animate_lod = self.surface_lod_animation;
             surface.edge_filter = self.surface_edge_filter;
             surface.select_material_pass(material_pass);
             surface.paint(
@@ -1346,6 +1367,12 @@ impl eframe::App for Viewer {
         eframe::set_value(storage, MAP_SOURCE_KEY, &self.map_source);
         eframe::set_value(storage, LOD_KEY, &self.lod);
         eframe::set_value(storage, "map_borders", &self.map_borders);
+        eframe::set_value(storage, "map_lod_animation", &self.map_lod_animation);
+        eframe::set_value(
+            storage,
+            "surface_lod_animation",
+            &self.surface_lod_animation,
+        );
         eframe::set_value(storage, "map_edge_filter", &self.map_edge_filter);
         eframe::set_value(storage, "surface_borders", &self.surface_borders);
         eframe::set_value(storage, "surface_edge_filter", &self.surface_edge_filter);
@@ -2186,6 +2213,7 @@ impl eframe::App for Viewer {
                     egui::StrokeKind::Inside,
                 );
                 let zoom_height = zoom.size().y;
+                let mut badge_offset = zoom_height + 16.;
                 painter.galley(position, zoom, appearance::INK);
                 if let Some(observer) = &self.observer {
                     let height = observer_height(
@@ -2211,7 +2239,48 @@ impl eframe::App for Viewer {
                         egui::Stroke::new(1_f32, appearance::LINE),
                         egui::StrokeKind::Inside,
                     );
+                    badge_offset += label.size().y + 16.;
                     painter.galley(position, label, appearance::INK);
+                }
+                let mut stats = performance::CacheStats::default();
+                for tiles in &self.tiles {
+                    let (images, pending) = tiles.cache_stats();
+                    stats.maps += images;
+                    stats.map_pending += pending;
+                }
+                for surface in &self.surfaces {
+                    let (images, bytes, pending) = surface.cache_stats();
+                    stats.surfaces += images;
+                    stats.surface_bytes += bytes;
+                    stats.surface_pending += pending;
+                }
+                self.performance.paint(
+                    ui,
+                    rect,
+                    badge_offset,
+                    frame.wgpu_render_state(),
+                    frame.info().cpu_usage,
+                    stats,
+                );
+                if self.flat_loading.is_some() {
+                    egui::Area::new(ui.id().with("gpu-preparing"))
+                        .order(egui::Order::Foreground)
+                        .movable(false)
+                        .pivot(egui::Align2::CENTER_CENTER)
+                        .fixed_pos(rect.center())
+                        .show(ctx, |ui| {
+                            egui::Frame::new()
+                                .fill(appearance::PAPER)
+                                .corner_radius(8)
+                                .inner_margin(10)
+                                .stroke(egui::Stroke::new(1_f32, appearance::LINE))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.spinner();
+                                        ui.label("GPUの描画準備中…");
+                                    });
+                                });
+                        });
                 }
                 let (from_point, from_coordinate, return_to_overview) =
                     view_actions.map_or((false, false, false), |actions| actions.inner);
@@ -2439,6 +2508,7 @@ fn run() -> Result<()> {
                 .storage
                 .and_then(|s| eframe::get_value(s, "map_edge_filter"))
                 .unwrap_or(Interpolation::Edge);
+            viewer.restore_lod_animation_settings(cc.storage);
             viewer.surface_borders = cc
                 .storage
                 .and_then(|s| eframe::get_value(s, "surface_borders"))
@@ -3091,6 +3161,69 @@ mod surface_palette_checks {
         }
         fn flush(&mut self) {}
     }
+    #[test]
+    fn lod_animation_settings_are_independent_and_saved() {
+        let ctx = egui::Context::default();
+        let mut viewer = Viewer::new(&ctx, reqwest::blocking::Client::new(), None);
+        assert!(viewer.map_lod_animation && viewer.surface_lod_animation);
+        viewer.settings_open = true;
+        let mut tick = 0.;
+        let mut frame = |v: &mut Viewer, events| {
+            tick += 0.02;
+            ctx.run(
+                egui::RawInput {
+                    time: Some(tick),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1100., 800.))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| v.settings_window(ctx),
+            )
+        };
+        for section in [SettingsSection::OnlineMap, SettingsSection::Surface] {
+            viewer.settings_section = section;
+            frame(&mut viewer, vec![]);
+            let out = frame(&mut viewer, vec![]);
+            let at = out
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.text() == "レベル切り替えをアニメーション" => {
+                        Some(t.pos + t.galley.rect.center().to_vec2())
+                    }
+                    _ => None,
+                })
+                .expect("アニメーション設定が表示されていない");
+            for pressed in [true, false] {
+                frame(
+                    &mut viewer,
+                    vec![
+                        egui::Event::PointerMoved(at),
+                        egui::Event::PointerButton {
+                            pos: at,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert!(!viewer.map_lod_animation);
+            if matches!(section, SettingsSection::OnlineMap) {
+                assert!(viewer.surface_lod_animation);
+            } else {
+                assert!(!viewer.surface_lod_animation);
+            }
+        }
+        let mut storage = Storage::default();
+        viewer.save(&mut storage);
+        let mut restored = Viewer::new(&ctx, reqwest::blocking::Client::new(), None);
+        restored.restore_lod_animation_settings(Some(&storage));
+        assert!(!restored.map_lod_animation && !restored.surface_lod_animation);
+        restored.restore_lod_animation_settings(None);
+        assert!(restored.map_lod_animation && restored.surface_lod_animation);
+    }
+
     #[test]
     fn palette_menu_selects_and_saves_the_display_colors() {
         let ctx = egui::Context::default();
