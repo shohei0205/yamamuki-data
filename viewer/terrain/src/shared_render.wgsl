@@ -277,9 +277,9 @@ struct Fragment { @location(0) color:vec4<f32>, @location(1) world:vec4<f32> }
  let shade=clamp(flat+.70*(max(dot(normal,light),0.)-light.y)*view.settings.z,.08,1.3);
  var base=landcoverColor(v.position,mix(vec3(.41,.49,.33),vec3(.65,.62,.47),smoothstep(900.,3800.,v.height)));
  if (view.extra.w&2u)!=0u{
-  let errors=array<f32,8>(500.,400.,300.,250.,200.,125.,60.,25.);
-  let z=log2(errors[records[view.flags.w].data.z-6u]/12.5)/6.;
-  base=mix(vec3(.2,.5,.9),vec3(.95,.4,.15),z);
+  let hue=fract(f32(records[view.flags.w].data.z)*.618034);
+  let channels=abs(fract(vec3(hue)+vec3(0.,2./3.,1./3.))*6.-3.);
+  base=.95*mix(vec3(1.),clamp(channels-1.,vec3(0.),vec3(1.)),.7);
  }
  var color=clamp(base*select(shade,1.,landcover.settings.w>0.),vec3(0.),vec3(1.));
  var materialWeight=select(1.,-1.,(view.extra.w&2u)!=0u);

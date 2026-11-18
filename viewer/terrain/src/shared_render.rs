@@ -315,6 +315,10 @@ pub(crate) struct PrepareStats {
     pub allocations: usize,
     pub bind_groups: usize,
 }
+struct PreparedPlan {
+    plans: Vec<crate::shared_patches::Plan>,
+    pose: [f64; 10],
+}
 struct CachedScene {
     stats: PrepareStats,
     owner_texture: egui::TextureId,
@@ -334,6 +338,8 @@ struct CachedScene {
     point_patches: wgpu::Buffer,
     records: Vec<Record>,
     plans: Vec<crate::shared_patches::Plan>,
+    plan_inputs: Option<Arc<Vec<crate::shared_patches::Input>>>,
+    plan_job: Option<std::sync::Mutex<std::sync::mpsc::Receiver<PreparedPlan>>>,
     last_plan: std::time::Instant,
     camera: [f64; 10],
     triangles: u64,
@@ -890,6 +896,37 @@ impl Renderer {
             .map(|c| c.stats)
             .unwrap_or_default()
     }
+    #[cfg(test)]
+    pub(crate) fn current_plan_matches_reference(&self) -> Option<bool> {
+        let renderer = self.state.renderer.read();
+        let cache = renderer.callback_resources.get::<CachedScene>()?;
+        let c = &cache.render_camera;
+        let pose = [
+            c.center[0],
+            c.center[1],
+            c.distance,
+            c.yaw,
+            c.pitch,
+            c.viewport[0],
+            c.viewport[1],
+            c.mesh_pixels,
+            c.fov_y,
+            c.height,
+        ];
+        if cache.plan_job.is_some() || cache.camera != pose {
+            return None;
+        }
+        let inputs = cache.plan_inputs.as_ref()?;
+        let reference = crate::shared_patches::plan(inputs, c);
+        Some(
+            reference.len() == cache.plans.len()
+                && reference.iter().zip(&cache.plans).all(|(a, b)| {
+                    a.groups == b.groups
+                        && bytemuck::cast_slice::<_, u8>(&a.patches)
+                            == bytemuck::cast_slice::<_, u8>(&b.patches)
+                }),
+        )
+    }
     pub fn has_drawn_mesh(&self) -> bool {
         self.state
             .renderer
@@ -1178,19 +1215,43 @@ impl Renderer {
             .frozen_layout
             .as_ref()
             .map_or(ppp, |s| s.pixels_per_point);
+        // 視野外へ出るたびに共有シーンの並びを変えると、回転だけで接合情報・
+        // GPU設定を全再構築してしまう。容量内なら取得済みの面は保持し、
+        // 描画パッチ側でカリングする。大きすぎる場合は従来の可視面だけへ絞る。
+        let retain_offscreen = atlas_fits(
+            tiles
+                .iter()
+                .chain(&roots)
+                .map(|tile| u64::from(tile.n + 1).pow(2))
+                .sum(),
+            0,
+            self.state.device.limits().max_storage_buffer_binding_size,
+        );
         let tiles: Vec<_> = tiles
             .into_iter()
             .filter(|t| {
-                camera
-                    .visible_depth([
-                        t.origin[0],
-                        t.origin[1],
-                        t.origin[0] + t.side,
-                        t.origin[1] + t.side,
-                    ])
-                    .is_some()
+                retain_offscreen
+                    || camera
+                        .visible_depth([
+                            t.origin[0],
+                            t.origin[1],
+                            t.origin[0] + t.side,
+                            t.origin[1] + t.side,
+                        ])
+                        .is_some()
             })
             .collect();
+        let primary_keys = tiles
+            .iter()
+            .map(|t| {
+                (
+                    t.key,
+                    t.origin[0].to_bits(),
+                    t.origin[1].to_bits(),
+                    t.side.to_bits(),
+                )
+            })
+            .collect::<std::collections::HashSet<_>>();
         let mut unique = std::collections::HashSet::new();
         let mut roots: Vec<_> = roots
             .into_iter()
@@ -1203,19 +1264,23 @@ impl Renderer {
                 ))
             })
             .filter(|t| {
-                !tiles.iter().any(|current| {
-                    current.key == t.key && current.origin == t.origin && current.side == t.side
-                })
+                !primary_keys.contains(&(
+                    t.key,
+                    t.origin[0].to_bits(),
+                    t.origin[1].to_bits(),
+                    t.side.to_bits(),
+                ))
             })
             .filter(|t| {
-                camera
-                    .visible_depth([
-                        t.origin[0],
-                        t.origin[1],
-                        t.origin[0] + t.side,
-                        t.origin[1] + t.side,
-                    ])
-                    .is_some()
+                retain_offscreen
+                    || camera
+                        .visible_depth([
+                            t.origin[0],
+                            t.origin[1],
+                            t.origin[0] + t.side,
+                            t.origin[1] + t.side,
+                        ])
+                        .is_some()
             })
             .collect();
         roots.sort_by(|a, b| {
@@ -1229,14 +1294,15 @@ impl Renderer {
             previous.clear();
         }
         previous.retain(|t| {
-            camera
-                .visible_depth([
-                    t.origin[0],
-                    t.origin[1],
-                    t.origin[0] + t.side,
-                    t.origin[1] + t.side,
-                ])
-                .is_some()
+            retain_offscreen
+                || camera
+                    .visible_depth([
+                        t.origin[0],
+                        t.origin[1],
+                        t.origin[0] + t.side,
+                        t.origin[1] + t.side,
+                    ])
+                    .is_some()
         });
         let current_samples = tiles
             .iter()
@@ -1291,6 +1357,7 @@ impl Renderer {
         Callback::new_paint_callback(
             rect,
             Frame {
+                wake: self.wake.clone(),
                 owner_texture: self.texture,
                 frozen_layout: self.frozen_layout.clone(),
                 point_state: self.point_state.clone(),
@@ -1348,6 +1415,7 @@ impl Renderer {
     }
 }
 struct Frame {
+    wake: egui::Context,
     owner_texture: egui::TextureId,
     hit_state: Arc<std::sync::Mutex<crate::hit_test::State>>,
     hit_texture: wgpu::Texture,
@@ -1764,6 +1832,8 @@ impl CallbackTrait for Frame {
                 point_patches,
                 records,
                 plans: Vec::new(),
+                plan_inputs: None,
+                plan_job: None,
                 last_plan: std::time::Instant::now() - std::time::Duration::from_secs(1),
                 camera: [f64::NAN; 10],
                 triangles: 0,
@@ -1783,60 +1853,104 @@ impl CallbackTrait for Frame {
             camera.fov_y,
             camera.height,
         ];
+        // 完成した計画だけを取り込み、それまでは旧計画で描画を継続する。
+        let prepared = cache
+            .plan_job
+            .as_ref()
+            .map(|job| job.lock().unwrap().try_recv());
+        if let Some(result) = prepared {
+            match result {
+                Ok(prepared) => {
+                    cache.plans = prepared.plans;
+                    cache.camera = prepared.pose;
+                    cache.plans_uploaded = false;
+                    cache.clipped_background = true;
+                    cache.plan_job = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    cache.plan_job = None;
+                    self.wake.request_repaint();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
         if let Some(layout) = self.frozen_layout.as_ref().filter(|s| !s.force_replan) {
             install_snapshot_layout(cache, layout, queue);
             cache.clipped_background = layout.clipped_background;
-        } else if !cache.clipped_background
-            || cache.plans.is_empty()
-            || (pose != cache.camera
-                && cache.last_plan.elapsed() >= std::time::Duration::from_millis(100))
+        } else if cache.plan_job.is_none()
+            && (!cache.clipped_background
+                || cache.plans.is_empty()
+                || (pose != cache.camera
+                    && cache.last_plan.elapsed() >= std::time::Duration::from_millis(100)))
         {
-            let inputs = all[..current]
-                .iter()
-                .enumerate()
-                .map(|(i, t)| {
-                    let covered_by = if i < self.tiles.len() {
-                        Vec::new()
-                    } else {
-                        all[..current]
-                            .iter()
-                            .enumerate()
-                            .filter(|(j, b)| {
-                                *j != i
-                                    && (*j < self.tiles.len()
-                                        || b.key.0 > t.key.0
-                                        || (b.key.0 == t.key.0 && b.side < t.side))
-                                    && b.origin[0] < t.origin[0] + t.side
-                                    && b.origin[0] + b.side > t.origin[0]
-                                    && b.origin[1] < t.origin[1] + t.side
-                                    && b.origin[1] + b.side > t.origin[1]
-                            })
-                            .map(|(_, b)| {
-                                [
-                                    b.origin[0],
-                                    b.origin[1],
-                                    b.origin[0] + b.side,
-                                    b.origin[1] + b.side,
-                                ]
-                            })
-                            .collect()
-                    };
-                    crate::shared_patches::Input {
-                        origin: t.origin,
-                        side: t.side,
-                        n: t.n,
-                        covered_by,
-                    }
-                })
-                .collect::<Vec<_>>();
-            // 読み込み途中の背景も同じ計画に含め、境界の頂点を共通の格子へそろえる。
-            let plan_started = std::time::Instant::now();
-            cache.plans = crate::shared_patches::plan(&inputs, camera);
-            stats.plan_ms = plan_started.elapsed().as_secs_f64() * 1000.;
-            cache.plans_uploaded = false;
-            cache.clipped_background = true;
+            let inputs = cache.plan_inputs.get_or_insert_with(|| {
+                Arc::new(
+                    all[..current]
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| {
+                            let covered_by = if i < self.tiles.len() {
+                                Vec::new()
+                            } else {
+                                all[..current]
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(j, b)| {
+                                        *j != i
+                                            && (*j < self.tiles.len()
+                                                || b.key.0 > t.key.0
+                                                || (b.key.0 == t.key.0 && b.side < t.side))
+                                            && b.origin[0] < t.origin[0] + t.side
+                                            && b.origin[0] + b.side > t.origin[0]
+                                            && b.origin[1] < t.origin[1] + t.side
+                                            && b.origin[1] + b.side > t.origin[1]
+                                    })
+                                    .map(|(_, b)| {
+                                        [
+                                            b.origin[0],
+                                            b.origin[1],
+                                            b.origin[0] + b.side,
+                                            b.origin[1] + b.side,
+                                        ]
+                                    })
+                                    .collect()
+                            };
+                            crate::shared_patches::Input {
+                                origin: t.origin,
+                                side: t.side,
+                                n: t.n,
+                                covered_by,
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            });
+            if cache.plans.is_empty() {
+                // 初回だけは代替計画がないため作成する。視点変更は常に背景で準備する。
+                let started = std::time::Instant::now();
+                cache.plans = crate::shared_patches::plan(inputs, camera);
+                stats.plan_ms = started.elapsed().as_secs_f64() * 1000.;
+                cache.plans_uploaded = false;
+                cache.clipped_background = true;
+                cache.camera = pose;
+            } else {
+                let inputs = Arc::clone(inputs);
+                let camera = camera.clone();
+                let wake = self.wake.clone();
+                let (send, receive) = std::sync::mpsc::channel();
+                cache.plan_job = Some(std::sync::Mutex::new(receive));
+                std::thread::spawn(move || {
+                    let plans = crate::shared_patches::plan(&inputs, &camera);
+                    let _ = send.send(PreparedPlan { plans, pose });
+                    wake.request_repaint();
+                });
+            }
             cache.last_plan = std::time::Instant::now();
-            cache.camera = pose;
+        }
+        if pose != cache.camera && cache.plan_job.is_none() {
+            self.wake.request_repaint_after(
+                std::time::Duration::from_millis(100).saturating_sub(cache.last_plan.elapsed()),
+            );
         }
         if !cache.plans_uploaded {
             let all_patches = cache
@@ -1917,7 +2031,13 @@ impl CallbackTrait for Frame {
         cache.morph = self.morph;
         cache.pixels_per_point = self.size[0] as f32 / camera.viewport[0] as f32;
         queue.write_buffer(&cache.metadata, 0, bytemuck::cast_slice(&cache.records));
+        let uniform_started = std::time::Instant::now();
         for (i, tile) in all[..current].iter().enumerate() {
+            // 地球背景・地点照会は先頭の共通視点を参照する。それ以外は実際に
+            // 描画する面だけを更新し、視野外に保持した面へ毎フレーム転送しない。
+            if i != 0 && !self.tin && self.wire < 3 && cache.plans[i].patches.is_empty() {
+                continue;
+            }
             let u = View {
                 earth: [
                     latitude.sin() as f32,
@@ -1964,6 +2084,7 @@ impl CallbackTrait for Frame {
             };
             queue.write_buffer(&tile.view, 0, bytemuck::bytes_of(&u));
         }
+        let uniform_ms = uniform_started.elapsed().as_secs_f64() * 1000.;
         cache.triangles = 0;
         cache.visible_patches = 0;
         if !self.tin && self.wire != 4 {
@@ -2025,6 +2146,9 @@ impl CallbackTrait for Frame {
             pass.draw(0..3, 0..1);
         }
         for (i, plan) in cache.plans.iter().enumerate() {
+            if !self.tin && self.wire < 3 && plan.patches.is_empty() {
+                continue;
+            }
             let fallback = i >= self.tiles.len();
             pass.set_bind_group(0, &cache.bindings[i], &[]);
             if !self.tin && self.wire != 4 {
@@ -2048,6 +2172,7 @@ impl CallbackTrait for Frame {
             }
         }
         drop(pass);
+        let material_started = std::time::Instant::now();
         if self.direct.is_some() || camera.globe {
             let commands = self.direct.as_deref().unwrap_or(&[]);
             let render = if all.len() == 1 && all[0].key == (0, 0, 0) {
@@ -2088,13 +2213,15 @@ impl CallbackTrait for Frame {
             && (rebuild || stats.prepare_ms >= 16.)
         {
             eprintln!(
-                "地形準備: 全体={:.2}ms 再構築={:.2}ms 分割={:.2}ms 転送={}bytes 確保={} 描画設定={}",
+                "地形準備: 全体={:.2}ms 再構築={:.2}ms 分割={:.2}ms 転送={}bytes 確保={} 描画設定={} 視点={:.2}ms 地図={:.2}ms",
                 stats.prepare_ms,
                 stats.rebuild_ms,
                 stats.plan_ms,
                 stats.atlas_copy_bytes,
                 stats.allocations,
-                stats.bind_groups
+                stats.bind_groups,
+                uniform_ms,
+                material_started.elapsed().as_secs_f64() * 1000.
             );
         }
         cache.stats = stats;

@@ -27,6 +27,8 @@ pub(crate) struct Snapshot {
     #[serde(default)]
     map_borders: bool,
     #[serde(default)]
+    map_level_colors: bool,
+    #[serde(default)]
     map_edge_filter: Interpolation,
     #[serde(default = "animation_enabled")]
     map_lod_animation: bool,
@@ -34,6 +36,8 @@ pub(crate) struct Snapshot {
     surface_lod_animation: bool,
     #[serde(default)]
     surface_borders: bool,
+    #[serde(default)]
+    surface_level_colors: bool,
     #[serde(default)]
     surface_edge_filter: Interpolation,
     palette: surface_palette::Palette,
@@ -134,10 +138,12 @@ impl Viewer {
             lod: self.lod,
             surface_lod: self.surface_lod,
             map_borders: self.map_borders,
+            map_level_colors: self.map_level_colors,
             map_edge_filter: self.map_edge_filter,
             map_lod_animation: self.map_lod_animation,
             surface_lod_animation: self.surface_lod_animation,
             surface_borders: self.surface_borders,
+            surface_level_colors: self.surface_level_colors,
             surface_edge_filter: self.surface_edge_filter,
             palette: self.surface_palette,
             show_online_map: self.show_online_map,
@@ -355,10 +361,12 @@ impl Viewer {
         self.lod = s.lod;
         self.surface_lod = s.surface_lod;
         self.map_borders = s.map_borders;
+        self.map_level_colors = s.map_level_colors;
         self.map_edge_filter = s.map_edge_filter;
         self.map_lod_animation = s.map_lod_animation;
         self.surface_lod_animation = s.surface_lod_animation;
         self.surface_borders = s.surface_borders;
+        self.surface_level_colors = s.surface_level_colors;
         self.surface_edge_filter = s.surface_edge_filter;
         self.surface_palette = s.palette;
         self.show_online_map = s.show_online_map;
@@ -436,11 +444,13 @@ mod tests {
         v.view.orientation.orbit(egui::vec2(14., -80.));
         v.show_online_map = false;
         v.map_borders = true;
+        v.map_level_colors = true;
         v.map_lod_animation = false;
         v.map_levels = vec![(map::Source::Gsi, 12), (map::Source::Photo, 10)];
         v.surface_lod_animation = true;
         v.map_edge_filter = Interpolation::Edge;
         v.surface_borders = true;
+        v.surface_level_colors = true;
         v.surface_edge_filter = Interpolation::BSpline;
         v.lod.bias = 1.25;
         v.surface_lod.max_level = Some(9);
@@ -458,6 +468,7 @@ mod tests {
         assert_eq!(replay.lod, v.lod);
         assert_eq!(replay.surface_lod, v.surface_lod);
         assert!(replay.map_borders && replay.surface_borders);
+        assert!(replay.map_level_colors && replay.surface_level_colors);
         assert!(!replay.map_lod_animation && replay.surface_lod_animation);
         let mut old = serde_json::to_value(v.capture_snapshot()?)?;
         old.as_object_mut().unwrap().remove("map_lod_animation");

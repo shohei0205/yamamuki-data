@@ -179,6 +179,13 @@ impl Camera {
         (horizon * 1.15).max(self.distance * 8.).max(10000.)
     }
     pub fn visible_depth(&self, bounds: [f64; 4]) -> Option<f64> {
+        self.visible_depth_impl(bounds, true)
+    }
+    /// 画像の描画可否だけなら、面の切断と最近距離の計算を省く保守的な判定で十分。
+    pub fn may_be_visible(&self, bounds: [f64; 4]) -> bool {
+        self.visible_depth_impl(bounds, false).is_some()
+    }
+    fn visible_depth_impl(&self, bounds: [f64; 4], need_depth: bool) -> Option<f64> {
         if self.globe && bounds[2] - bounds[0] > crate::globe::RADIUS * 0.5 {
             return Some(0.2);
         }
@@ -251,6 +258,18 @@ impl Camera {
                     .max(near),
             );
         }
+        if !need_depth {
+            return Some(near);
+        }
+        if !crossing.iter().any(|v| *v) {
+            return Some(
+                vertices
+                    .iter()
+                    .map(|v| v[2])
+                    .fold(f64::INFINITY, f64::min)
+                    .max(near),
+            );
+        }
         for face in [
             [0, 1, 3, 2],
             [4, 6, 7, 5],
@@ -306,6 +325,16 @@ impl Camera {
             && self.auto == other.auto
             && self.lod_quality == other.lod_quality
             && self.mesh_pixels == other.mesh_pixels
+    }
+    pub(crate) fn preparation_scale(&self) -> f64 {
+        if self.observer {
+            (std::f64::consts::PI * (1. - 2. * self.eye()[1] / WORLD))
+                .sinh()
+                .atan()
+                .cos()
+        } else {
+            self.scale()
+        }
     }
     pub(crate) fn preparation_depth(&self, bounds: [f64; 4]) -> Option<f64> {
         if !self.observer {
@@ -462,6 +491,26 @@ pub fn stale_zoom_would_coarsen(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn material_visibility_never_rejects_a_visible_terrain_box() {
+        let mut camera = Camera::default();
+        camera.center = lonlat(138.7, 35.3);
+        camera.globe = true;
+        camera.distance = 10000.;
+        for yaw in [0., 1., 2., 3., 4.] {
+            camera.yaw = yaw;
+            for y in -8..=8 {
+                for x in -8..=8 {
+                    let left = camera.center[0] + x as f64 * 5000.;
+                    let top = camera.center[1] + y as f64 * 5000.;
+                    let bounds = [left, top, left + 5000., top + 5000.];
+                    if camera.visible_depth(bounds).is_some() {
+                        assert!(camera.may_be_visible(bounds));
+                    }
+                }
+            }
+        }
+    }
     use super::*;
     #[test]
     fn observer_prepares_all_directions_without_changing_draw_culling() {

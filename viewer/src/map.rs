@@ -490,6 +490,15 @@ impl View {
     }
 
     pub fn tiles_at(&self, rect: Rect, z: u32) -> Vec<Tile> {
+        self.tiles_at_visible(rect, z, None)
+    }
+    fn tiles_at_visible(
+        &self,
+        rect: Rect,
+        z: u32,
+        projection: Option<&yamamuki_terrain_view::Projection>,
+    ) -> Vec<Tile> {
+        let mut visible_groups = HashMap::<Tile, bool>::new();
         let side = 1u32 << z;
         let index = |x: f64| (x * side as f64).floor().clamp(0., (side - 1) as f64) as u32;
         let [min, max] = self.area(rect);
@@ -497,6 +506,33 @@ impl View {
         for y in index(min[1])..=index(max[1]) {
             for x in index(min[0])..=index(max[0]) {
                 let tile = Tile { z, x, y };
+                if let Some(projection) = projection {
+                    let mut visible = true;
+                    // 大きな区画が視野外なら子タイルの球面評価をまとめて省く。
+                    for level in [z.saturating_sub(6), z.saturating_sub(3), z] {
+                        let group = Tile {
+                            z: level,
+                            x: x >> (z - level),
+                            y: y >> (z - level),
+                        };
+                        let keep = *visible_groups.entry(group).or_insert_with(|| {
+                            let side = (1u32 << level) as f64;
+                            projection.tile_visible([
+                                group.x as f64 / side,
+                                group.y as f64 / side,
+                                (group.x + 1) as f64 / side,
+                                (group.y + 1) as f64 / side,
+                            ])
+                        });
+                        if !keep {
+                            visible = false;
+                            break;
+                        }
+                    }
+                    if !visible {
+                        continue;
+                    }
+                }
                 if self.orientation == Orientation::default()
                     || Rect::from_points(&self.tile_corners(rect, tile)).intersects(rect)
                 {
@@ -595,6 +631,8 @@ pub struct Tiles {
     pub animate_lod: bool,
     pub edge_filter: Interpolation,
     pub borders: bool,
+    pub level_colors: bool,
+    pub visibility: Option<yamamuki_terrain_view::Projection>,
     pub source: Source,
     cancelled: Arc<AtomicBool>,
     queue: mpsc::Sender<Tile>,
@@ -634,6 +672,8 @@ impl Tiles {
             animate_lod: true,
             edge_filter: Interpolation::Bilinear,
             borders: false,
+            level_colors: false,
+            visibility: None,
             source,
             cancelled,
             queue,
@@ -724,7 +764,7 @@ impl Tiles {
         if processed == limit && !self.pending.is_empty() {
             ui.ctx().request_repaint();
         }
-        let tiles = view.tiles_at(rect, tile_zoom);
+        let tiles = view.tiles_at_visible(rect, tile_zoom, self.visibility.as_ref());
         // 傾斜で可視範囲が広がっても、表示中のタイルはキャッシュに収める。
         let requested = tiles_with_halo(tiles.clone());
         let mut failed = false;
@@ -799,7 +839,7 @@ impl Tiles {
                     *touched = self.frame;
                     let texture = renderer.color_view(&textures, image.id(), self.frame)?;
                     let uv = lod_fade::sample(region, tile.z, lod_fade::FULL_UV).1;
-                    Some((texture, image.uv(uv)))
+                    Some((texture, image.uv(uv), image.is_opaque()))
                 };
                 let target_image = fetch(target);
                 let inherited = (0..=region.z).rev().find_map(|z| {
@@ -823,8 +863,10 @@ impl Tiles {
                 let uv = images
                     .each_ref()
                     .map(|image| image.as_ref().map_or(lod_fade::FULL_UV, |i| i.1));
+                let opaque = images.iter().all(|i| i.as_ref().is_some_and(|i| i.2));
                 let textures = images.map(|image| image.map(|i| i.0));
                 if let Some(mut quad) = lod_fade::Quad::new(region, uv, textures, ready) {
+                    quad.opaque = opaque;
                     quad.edge_filter = self.edge_filter;
                     quad.amount = Some(amount);
                     quads.push(quad);
@@ -859,6 +901,21 @@ impl Tiles {
                 1.,
                 self.material_pass != 0,
             );
+        }
+        if self.level_colors {
+            if let Some(history) = self.draw_history.get(&self.material_pass) {
+                for (&region, &(source, _)) in &history.previous {
+                    crate::terrain_material::clipped_tile_fill(
+                        painter,
+                        rect,
+                        view,
+                        source,
+                        region,
+                        self.material_pass != 0,
+                        1.,
+                    );
+                }
+            }
         }
         if self.borders {
             // 旧レベルで広域を全面列挙せず、保持しているタイルだけを見る。
@@ -973,6 +1030,156 @@ impl Drop for Tiles {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[ignore = "実視点で地図の選択・フェード・貼付コマンド準備をCPU計測する。通信なし"]
+    fn benchmark_external_map_preparation() -> anyhow::Result<()> {
+        let path = std::env::var("YAMAMUKI_SNAPSHOT_TEST_INPUT")?;
+        let value: serde_json::Value = serde_json::from_reader(std::fs::File::open(&path)?)?;
+        let scene: yamamuki_terrain_view::snapshot::Snapshot =
+            serde_json::from_value(value.clone())?;
+        let camera = &value["camera"];
+        let center = [
+            camera["center"][0].as_f64().unwrap() / 40075016.68557849,
+            camera["center"][1].as_f64().unwrap() / 40075016.68557849,
+        ];
+        let yaw = camera["yaw"].as_f64().unwrap();
+        let pitch = camera["pitch"].as_f64().unwrap();
+        let ctx = egui::Context::default();
+        let instance = eframe::wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let (device, gpu_queue) =
+            pollster::block_on(adapter.request_device(&Default::default(), None))?;
+        let format = eframe::wgpu::TextureFormat::Rgba8Unorm;
+        let state = eframe::egui_wgpu::RenderState {
+            adapter,
+            available_adapters: Vec::new(),
+            device: device.clone(),
+            queue: gpu_queue,
+            target_format: format,
+            renderer: Arc::new(eframe::epaint::mutex::RwLock::new(
+                eframe::egui_wgpu::Renderer::new(&device, format, None, 1, false),
+            )),
+        };
+        let renderer = lod_fade::Renderer::new(&state);
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1400., 1400.));
+        let view = crate::terrain_material::map_view(
+            [
+                center[0] - 0.0015,
+                center[1] - 0.0015,
+                center[0] + 0.0015,
+                center[1] + 0.0015,
+            ],
+            1400.,
+        );
+        let z = 15;
+        let requested = view.tiles_at(rect, z);
+        let image =
+            crate::tile_atlas::Image::load_map(&ctx, ColorImage::new([2, 2], egui::Color32::WHITE));
+        let output = ctx.run(Default::default(), |_| {});
+        for (id, delta) in &output.textures_delta.set {
+            state
+                .renderer
+                .write()
+                .update_texture(&state.device, &state.queue, *id, delta);
+        }
+        for cull in [false, true] {
+            let (queue, _jobs) = mpsc::channel();
+            let (_send, replies) = mpsc::channel();
+            let mut tiles = Tiles {
+                animate_lod: false,
+                edge_filter: Interpolation::Bilinear,
+                borders: false,
+                level_colors: false,
+                visibility: None,
+                source: Source::Gsi,
+                cancelled: Arc::default(),
+                queue,
+                replies,
+                pending: HashSet::new(),
+                cache: requested
+                    .iter()
+                    .map(|t| (*t, (Cached::Texture(image.clone(), None), 0)))
+                    .collect(),
+                frame: 0,
+                material_pass: 1,
+                draw_history: HashMap::new(),
+            };
+            let mut elapsed = Vec::new();
+            let mut commands = 0;
+            for step in 0..24 {
+                tiles.visibility = cull.then(|| {
+                    scene.observer_projection(yaw + (step as f64 * 0.2).sin() * 0.12, pitch)
+                });
+                if let Some(projection) = &tiles.visibility {
+                    let selected = view
+                        .tiles_at_visible(rect, z, Some(projection))
+                        .into_iter()
+                        .collect::<HashSet<_>>();
+                    let side = (1u32 << z) as f64;
+                    for tile in &requested {
+                        let visible = projection.tile_visible([
+                            tile.x as f64 / side,
+                            tile.y as f64 / side,
+                            (tile.x + 1) as f64 / side,
+                            (tile.y + 1) as f64 / side,
+                        ]);
+                        anyhow::ensure!(
+                            !visible || selected.contains(tile),
+                            "可視タイルが階層判定で消えた: {tile:?}"
+                        );
+                    }
+                }
+                let started = Instant::now();
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(rect),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            tiles.paint(
+                                ui,
+                                ui.painter(),
+                                rect,
+                                &view,
+                                true,
+                                z,
+                                z as f64,
+                                Some((&state, &renderer)),
+                            );
+                        });
+                    },
+                );
+                for (id, delta) in &output.textures_delta.set {
+                    state
+                        .renderer
+                        .write()
+                        .update_texture(&state.device, &state.queue, *id, delta);
+                }
+                let prepared = crate::terrain_material::collect(
+                    &ctx,
+                    &state,
+                    &renderer,
+                    output.shapes,
+                    &view,
+                    rect,
+                );
+                commands = prepared.len();
+                if step >= 4 {
+                    elapsed.push(started.elapsed().as_secs_f64() * 1000.);
+                }
+            }
+            elapsed.sort_by(f64::total_cmp);
+            eprintln!(
+                "地図CPU準備 前段カリング={cull}: 平均 {:.2}ms / p95 {:.2}ms / {}区画→{}描画",
+                elapsed.iter().sum::<f64>() / elapsed.len() as f64,
+                elapsed[elapsed.len() * 95 / 100],
+                requested.len(),
+                commands
+            );
+        }
+        Ok(())
+    }
     use super::*;
 
     #[test]
@@ -1041,6 +1248,8 @@ mod tests {
             animate_lod: true,
             edge_filter: Interpolation::Bilinear,
             borders: false,
+            level_colors: false,
+            visibility: None,
             source: Source::Gsi,
             cancelled: Arc::default(),
             queue,
@@ -1406,6 +1615,8 @@ mod tests {
             animate_lod: true,
             edge_filter: Interpolation::Bilinear,
             borders: false,
+            level_colors: false,
+            visibility: None,
             source: Source::Gsi,
             cancelled: Arc::default(),
             queue,
@@ -1581,6 +1792,8 @@ mod tests {
             animate_lod: true,
             edge_filter: Interpolation::Edge,
             borders: false,
+            level_colors: false,
+            visibility: None,
             source: Source::Gsi,
             cancelled: Arc::default(),
             queue,
@@ -1959,6 +2172,8 @@ mod tests {
             animate_lod: true,
             edge_filter: Interpolation::Bilinear,
             borders: false,
+            level_colors: false,
+            visibility: None,
             source: Source::Gsi,
             cancelled: Arc::default(),
             queue,

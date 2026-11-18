@@ -21,7 +21,7 @@ impl Field {
         let b = self.world_bounds(key);
         let depth = camera.preparation_depth(b)?;
         Some(
-            (b[2] - b[0]) * camera.scale() * camera.viewport[1]
+            (b[2] - b[0]) * camera.preparation_scale() * camera.viewport[1]
                 / (2. * camera.tan_half_fov() * depth),
         )
     }

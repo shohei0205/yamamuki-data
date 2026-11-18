@@ -189,6 +189,61 @@ fn worker(
 }
 type MeshKey = (Key, u32, shared_field::Field);
 type PlannedField = (Key, shared_field::Field, u32, f64, bool);
+// 同じ優先順位・同順位なら元の添字の小さい順を保ち、全区画の再走査を避ける。
+#[derive(Debug)]
+struct PreparationCandidate {
+    priority: f64,
+    index: usize,
+}
+impl PartialEq for PreparationCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.priority.to_bits() == other.priority.to_bits() && self.index == other.index
+    }
+}
+impl Eq for PreparationCandidate {}
+impl Ord for PreparationCandidate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other
+            .priority
+            .total_cmp(&self.priority)
+            .then_with(|| other.index.cmp(&self.index))
+    }
+}
+impl PartialOrd for PreparationCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+fn limit_preparation_samples(planned: &mut [PlannedField], budget: u64) {
+    let mut samples = planned
+        .iter()
+        .map(|p| u64::from(p.2 + 1).pow(2))
+        .sum::<u64>();
+    let mut heap = std::collections::BinaryHeap::new();
+    for (index, p) in planned.iter().enumerate() {
+        if p.2 > 16 {
+            heap.push(PreparationCandidate {
+                priority: p.3 / p.2 as f64,
+                index,
+            });
+        }
+    }
+    while samples > budget {
+        let Some(candidate) = heap.pop() else {
+            break;
+        };
+        let p = &mut planned[candidate.index];
+        samples -= u64::from(p.2 + 1).pow(2);
+        p.2 /= 2;
+        samples += u64::from(p.2 + 1).pow(2);
+        if p.2 > 16 {
+            heap.push(PreparationCandidate {
+                priority: p.3 / p.2 as f64,
+                index: candidate.index,
+            });
+        }
+    }
+}
 // 曲面の完成まで必要な局所メッシュと、穴を塞ぐ元タイルの背景を一緒に保護する。
 fn preparing_meshes(
     plan: impl IntoIterator<Item = (Key, shared_field::Field, u32)>,
@@ -245,6 +300,7 @@ struct App {
     pending_roots: VecDeque<Key>,
     scene_pending: bool,
     preparation: Option<(u64, Arc<Vec<PlannedField>>)>,
+    preparation_camera: Option<selection::Camera>,
     version: u64,
     queued: bool,
     last_request: Instant,
@@ -317,6 +373,7 @@ impl App {
             pending_roots: VecDeque::new(),
             scene_pending: false,
             preparation: None,
+            preparation_camera: None,
             version: 0,
             queued: true,
             last_request: Instant::now() - Duration::from_secs(1),
@@ -591,19 +648,36 @@ impl App {
         use std::hash::{Hash, Hasher};
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         let c = &self.camera;
-        for v in [
-            c.center[0],
-            c.center[1],
-            c.height,
-            c.distance,
-            c.yaw,
-            c.pitch,
-            c.fov_y,
-            c.viewport[0],
-            c.viewport[1],
-            c.mesh_pixels,
-        ] {
-            v.to_bits().hash(&mut hash);
+        if c.observer {
+            // 全方位の曲面準備は眼の位置と画角に依存し、注視点・方角には依存しない。
+            let reference = self
+                .preparation_camera
+                .as_ref()
+                .filter(|old| old.same_preparation(c))
+                .unwrap_or(c);
+            for value in reference.eye().into_iter().chain([
+                c.fov_y,
+                c.viewport[0],
+                c.viewport[1],
+                c.mesh_pixels,
+            ]) {
+                value.to_bits().hash(&mut hash);
+            }
+        } else {
+            for value in [
+                c.center[0],
+                c.center[1],
+                c.height,
+                c.distance,
+                c.yaw,
+                c.pitch,
+                c.fov_y,
+                c.viewport[0],
+                c.viewport[1],
+                c.mesh_pixels,
+            ] {
+                value.to_bits().hash(&mut hash);
+            }
         }
         (c.observer, c.globe, self.resolution, self.wire).hash(&mut hash);
         self.wanted.hash(&mut hash);
@@ -644,25 +718,10 @@ impl App {
                 planned.push((key, field, n, pixels, true));
             }
         }
-        while planned
-            .iter()
-            .map(|(_, _, n, _, _)| u64::from(*n + 1).pow(2))
-            .sum::<u64>()
-            > sample_budget
-        {
-            let least = planned
-                .iter()
-                .enumerate()
-                .filter(|(_, (_, _, n, _, _))| *n > 16)
-                .min_by(|(_, a), (_, b)| (a.3 / a.2 as f64).total_cmp(&(b.3 / b.2 as f64)))
-                .map(|(i, _)| i);
-            let Some(i) = least else {
-                break;
-            };
-            planned[i].2 /= 2;
-        }
+        limit_preparation_samples(&mut planned, sample_budget);
         let planned = Arc::new(planned);
         self.preparation = Some((stamp, planned.clone()));
+        self.preparation_camera = Some(self.camera.clone());
         planned
     }
     fn scene(&mut self) -> Result<bool> {
@@ -1386,10 +1445,16 @@ fn install_fonts(ctx: &egui::Context) {
 }
 
 /// 地形と同じ透視投影を地点マークとクリック座標にも使う。
+#[derive(Clone)]
 pub struct Projection {
     camera: selection::Camera,
 }
 impl Projection {
+    /// 貼付画像の準備前に、地形の標高範囲を含む保守的な視野判定を行う。
+    pub fn tile_visible(&self, bounds: [f64; 4]) -> bool {
+        self.camera
+            .may_be_visible(bounds.map(|v| v * shared_data::WORLD))
+    }
     pub fn screen(&self, rect: egui::Rect, world: [f64; 2], height: f64) -> Option<egui::Pos2> {
         let c = &self.camera;
         let back = c.back();
@@ -1509,6 +1574,18 @@ impl Projection {
         bounds.map(|v| v / shared_data::WORLD)
     }
     pub fn world_at(&self, rect: egui::Rect, p: egui::Pos2) -> Option<[f64; 2]> {
+        self.world_at_height(rect, p, self.camera.height)
+    }
+    /// 指定標高の平面・球面と視線の交点。掴んだ地形の高さをドラッグ中に維持する。
+    pub fn world_at_height(
+        &self,
+        rect: egui::Rect,
+        p: egui::Pos2,
+        height: f64,
+    ) -> Option<[f64; 2]> {
+        if !height.is_finite() {
+            return None;
+        }
         let c = &self.camera;
         let back = c.back();
         let right = glam::DVec3::new(c.yaw.cos(), 0., -c.yaw.sin());
@@ -1519,13 +1596,13 @@ impl Projection {
             - back;
         if c.globe {
             let origin = back * c.distance + glam::DVec3::Y * c.height;
-            let p = globe::intersect(origin, ray, c.height)?;
+            let p = globe::intersect(origin, ray, height)?;
             return Some(globe::world(c.center, p).map(|v| v / shared_data::WORLD));
         }
         if ray.y >= -1e-9 {
             return None;
         }
-        let local = back * c.distance + ray * (-back.y * c.distance / ray.y);
+        let local = back * c.distance + ray * ((height - c.height - back.y * c.distance) / ray.y);
         Some([
             c.center[0] / shared_data::WORLD + local.x / (c.scale() * shared_data::WORLD),
             c.center[1] / shared_data::WORLD + local.z / (c.scale() * shared_data::WORLD),
@@ -2017,9 +2094,15 @@ impl TerrainView {
         self.app.join = true;
         self.app.animate = true;
         self.app.borders = false;
+        self.app.colors = false;
         self.app.wire = 0;
         self.app.camera.lod_quality = selection::Camera::default().lod_quality;
-        let maximum = self.app.catalog.keys().map(|k| k.0).max()
+        let maximum = self
+            .app
+            .catalog
+            .keys()
+            .map(|k| k.0)
+            .max()
             .unwrap_or_else(|| selection::Camera::default().maximum);
         if self.app.camera.auto {
             self.app.camera.maximum = maximum;
@@ -2031,14 +2114,22 @@ impl TerrainView {
         self.app.last_interaction = Instant::now();
     }
 
-    pub fn interpolation_pending(&self)->bool { self.app.renderer.interpolation_pending() }
-    pub fn interpolation_error(&self)->Option<String> { self.app.renderer.interpolation_error() }
+    pub fn interpolation_pending(&self) -> bool {
+        self.app.renderer.interpolation_pending()
+    }
+    pub fn interpolation_error(&self) -> Option<String> {
+        self.app.renderer.interpolation_error()
+    }
+    pub fn level_colors(&self) -> bool {
+        self.app.colors
+    }
     pub fn display_controls(&mut self, ui: &mut egui::Ui) {
         ui.add(egui::Slider::new(&mut self.app.settings[0], 0.0..=1.).text("傾き調整"));
         ui.add(egui::Slider::new(&mut self.app.settings[1], 0.0..=3.).text("地形の陰影の強さ"));
         ui.checkbox(&mut self.app.join, "境界接合");
         ui.checkbox(&mut self.app.animate, "LODを滑らかに切替");
         ui.checkbox(&mut self.app.borders, "タイル境界");
+        ui.checkbox(&mut self.app.colors, "タイルをレベル別に色分け");
         wire_control(ui, &mut self.app.wire);
         ui.small(&self.app.status);
     }
@@ -2195,7 +2286,9 @@ fn launch_internal(
     }
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
+        vsync: false,
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            present_mode: wgpu::PresentMode::AutoNoVsync,
             desired_maximum_frame_latency: Some(1),
             wgpu_setup: setup.into(),
             ..Default::default()
@@ -2598,6 +2691,36 @@ mod projection_tests {
         }
     }
     #[test]
+    fn grabbed_terrain_height_round_trips_through_tilted_projection() {
+        let rect = egui::Rect::from_min_size(egui::pos2(100., 50.), egui::vec2(1200., 800.));
+        for globe in [false, true] {
+            for yaw in [0., 1.4, 3.] {
+                let camera = selection::Camera {
+                    center: selection::lonlat(138.7274, 35.3606),
+                    height: 500.,
+                    distance: 10000.,
+                    pitch: 0.8,
+                    yaw,
+                    globe,
+                    ..Default::default()
+                };
+                let world = camera.center.map(|v| v / shared_data::WORLD);
+                let projection = Projection { camera };
+                for height in [0., 1500., 3776.] {
+                    let screen = projection.screen(rect, world, height).unwrap();
+                    let restored = projection.world_at_height(rect, screen, height).unwrap();
+                    assert!(
+                        restored
+                            .iter()
+                            .zip(world)
+                            .all(|(a, b)| (a - b).abs() < 1e-8),
+                        "{restored:?} / {world:?}"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
     fn markers_and_clicks_share_the_terrain_camera() {
         let rect = egui::Rect::from_min_size(egui::pos2(100., 50.), egui::vec2(900., 600.));
         for yaw in [0., 1.4, 3.] {
@@ -2778,6 +2901,129 @@ mod remembered_scene_tests {
         }
         assert_eq!(app.remembered.len(), 2);
         let _ = app.renderer.state.device.poll(eframe::wgpu::Maintain::Wait);
+    }
+    #[test]
+    #[ignore = "実スナップショットの曲面準備計画をズームと左右回転で比較する"]
+    fn benchmark_external_preparation_rotation() -> Result<()> {
+        let value: serde_json::Value = serde_json::from_reader(std::fs::File::open(
+            std::env::var("YAMAMUKI_SNAPSHOT_TEST_INPUT")?,
+        )?)?;
+        let Some(mut app) = app_with_backend(eframe::wgpu::Backends::DX12) else {
+            return Ok(());
+        };
+        let original: selection::Camera = serde_json::from_value(value["camera"].clone())?;
+        let eye = original.eye();
+        app.resolution = value["resolution"].as_u64().unwrap() as u32;
+        let current = value["counts"][0].as_u64().unwrap() as usize;
+        for (i, mesh) in value["meshes"].as_array().unwrap().iter().enumerate() {
+            let key: Key = serde_json::from_value(mesh["key"].clone())?;
+            app.catalog.insert(key, 0);
+            if i < current {
+                app.wanted.push(key);
+            }
+            if key.0 == 6 {
+                app.packets
+                    .insert(key, Arc::new(Packet::constant_plane(key, 0.)?));
+            }
+        }
+        app.wanted.sort_unstable();
+        app.wanted.dedup();
+        for multiplier in [1., 1.2] {
+            app.preparation = None;
+            let mut previous: Option<Arc<Vec<PlannedField>>> = None;
+            let mut times = Vec::new();
+            let mut reused = 0;
+            let mut fields = 0;
+            for step in 0..8 {
+                app.camera = original.clone();
+                app.camera.set_observer(
+                    [eye[0], eye[1]],
+                    eye[2],
+                    original.yaw + step as f64 * 0.025,
+                    original.pitch,
+                    original.fov_y * multiplier,
+                    original.viewport,
+                );
+                let started = Instant::now();
+                let plan = app.preparation_plan();
+                times.push(started.elapsed().as_secs_f64() * 1000.);
+                if previous.as_ref().is_some_and(|old| Arc::ptr_eq(old, &plan)) {
+                    reused += 1;
+                }
+                fields = plan.len();
+                previous = Some(plan);
+            }
+            eprintln!(
+                "曲面準備 画角倍率={multiplier}: 初回 {:.2}ms / 回転平均 {:.2}ms / {fields}区画 / 再利用{reused}/7",
+                times[0],
+                times[1..].iter().sum::<f64>() / 7.
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    fn observer_preparation_is_retained_across_rotation_but_not_zoom() {
+        let Some(mut app) = app() else {
+            return;
+        };
+        app.resolution = 512;
+        let eye = selection::lonlat(138., 36.);
+        app.camera
+            .set_observer(eye, 3180., 0., 0.05, 15f64.to_radians(), [1150., 1340.]);
+        app.wanted = vec![(13, 7228, 3207)];
+        let first = app.preparation_plan();
+        for yaw in [0.2, 1., 2., 3., 5., 6.] {
+            app.camera
+                .set_observer(eye, 3180., yaw, 0.05, 15f64.to_radians(), [1150., 1340.]);
+            assert!(
+                Arc::ptr_eq(&first, &app.preparation_plan()),
+                "向きだけで曲面準備計画を再計算した"
+            );
+        }
+        app.camera.fov_y *= 1.2;
+        assert!(
+            !Arc::ptr_eq(&first, &app.preparation_plan()),
+            "画角変更が計画へ反映されない"
+        );
+    }
+    #[test]
+    fn preparation_heap_keeps_the_exact_original_reduction_order() {
+        for count in [1, 16, 80, 257] {
+            let planned = (0..count)
+                .map(|i| {
+                    (
+                        (13, i, 0),
+                        shared_field::Field::default(),
+                        16u32 << (i % 6),
+                        ((i * 47) % 101) as f64,
+                        false,
+                    )
+                })
+                .collect::<Vec<_>>();
+            for budget in [0, 10000, 100000, 1000000] {
+                let mut reference = planned.clone();
+                while reference
+                    .iter()
+                    .map(|p| u64::from(p.2 + 1).pow(2))
+                    .sum::<u64>()
+                    > budget
+                {
+                    let Some(index) = reference
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, p)| p.2 > 16)
+                        .min_by(|(_, a), (_, b)| (a.3 / a.2 as f64).total_cmp(&(b.3 / b.2 as f64)))
+                        .map(|(i, _)| i)
+                    else {
+                        break;
+                    };
+                    reference[index].2 /= 2;
+                }
+                let mut actual = planned.clone();
+                limit_preparation_samples(&mut actual, budget);
+                assert_eq!(actual, reference, "count={count} budget={budget}");
+            }
+        }
     }
     #[test]
     fn preparation_plan_is_reused_until_the_camera_or_targets_change() {

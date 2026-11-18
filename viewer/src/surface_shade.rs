@@ -202,6 +202,8 @@ impl Renderer {
                         amount: 1.,
                         shade: true,
                         gamma_shade: !self.srgb_target,
+                        opaque: false,
+                        surface: None,
                         edge_filter: Interpolation::Bilinear,
                     },
                 );

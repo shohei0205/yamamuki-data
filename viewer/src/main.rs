@@ -7,6 +7,7 @@ use yamamuki_terrain_view::direct_material::Interpolation;
 mod appearance;
 mod boundaries;
 mod diagnostics;
+mod graphics_settings;
 mod lod_fade;
 mod map;
 mod markers;
@@ -132,6 +133,7 @@ struct Observer {
 enum SettingsSection {
     #[default]
     OnlineMap,
+    Graphics,
     Surface,
     Terrain,
     Points,
@@ -140,6 +142,10 @@ enum SettingsSection {
 
 struct Viewer {
     settings_open: bool,
+    vsync: bool,
+    running_vsync: bool,
+    drag_anchor: Option<yamamuki_terrain_view::Hit>,
+    drag_hit_job: Option<mpsc::Receiver<Result<Option<yamamuki_terrain_view::Hit>>>>,
     settings_section: SettingsSection,
     snapshot_frozen: bool,
     snapshot_canvas: Option<[f32; 2]>,
@@ -177,9 +183,11 @@ struct Viewer {
     lod: map::Lod,
     surface_lod: map::Lod,
     map_borders: bool,
+    map_level_colors: bool,
     map_lod_animation: bool,
     map_edge_filter: Interpolation,
     surface_borders: bool,
+    surface_level_colors: bool,
     surface_lod_animation: bool,
     surface_edge_filter: Interpolation,
     surface_palette: surface_palette::Palette,
@@ -211,14 +219,22 @@ struct Viewer {
 impl Viewer {
     fn reset_settings_section(&mut self) {
         match self.settings_section {
+            SettingsSection::Graphics => {
+                self.vsync = false;
+                if let Err(e) = graphics_settings::save(self.vsync) {
+                    self.error = Some(format!("描画設定を保存できません: {e:#}"));
+                }
+            }
             SettingsSection::OnlineMap => {
                 self.map_borders = false;
+                self.map_level_colors = false;
                 self.map_lod_animation = true;
                 self.map_edge_filter = Interpolation::Edge;
                 self.lod = map::Lod::default();
             }
             SettingsSection::Surface => {
                 self.surface_borders = false;
+                self.surface_level_colors = false;
                 self.surface_lod_animation = true;
                 self.surface_edge_filter = Interpolation::Edge;
                 self.surface_lod = map::Lod::default();
@@ -257,6 +273,7 @@ impl Viewer {
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     for (section, label) in [
+                        (SettingsSection::Graphics, "描画"),
                         (SettingsSection::OnlineMap, "オンライン地図"),
                         (SettingsSection::Surface, "地表"),
                         (SettingsSection::Terrain, "地形"),
@@ -272,8 +289,16 @@ impl Viewer {
                 }
                 ui.add_space(6.);
                 match self.settings_section {
+                    SettingsSection::Graphics => {
+                        if ui.checkbox(&mut self.vsync, "垂直同期（VSync）を待つ").changed() {
+                            if let Err(e) = graphics_settings::save(self.vsync) {self.error=Some(format!("描画設定を保存できません: {e:#}"));}
+                        }
+                        ui.label("変更はアプリの再起動後に反映されます。");
+                        if self.vsync != self.running_vsync {ui.label("変更を反映するには再起動してください。");}
+                    }
                     SettingsSection::OnlineMap => {
                         ui.checkbox(&mut self.map_borders, "タイル境界を表示");
+                        ui.checkbox(&mut self.map_level_colors, "タイルをレベル別に色分け");
                         ui.checkbox(&mut self.map_lod_animation, "レベル切り替えをアニメーション");
                         egui::ComboBox::from_label("拡大時の補間")
                             .selected_text(self.map_edge_filter.label())
@@ -289,6 +314,7 @@ impl Viewer {
                     }
                     SettingsSection::Surface => {
                         ui.checkbox(&mut self.surface_borders, "タイル境界を表示");
+                        ui.checkbox(&mut self.surface_level_colors, "タイルをレベル別に色分け");
                         ui.checkbox(&mut self.surface_lod_animation, "レベル切り替えをアニメーション");
                         egui::ComboBox::from_label("拡大時の補間")
                             .selected_text(self.surface_edge_filter.label())
@@ -363,6 +389,10 @@ impl Viewer {
         install_japanese_font(ctx);
         let mut viewer = Self {
             settings_open: false,
+            vsync: graphics_settings::load(),
+            running_vsync: graphics_settings::load(),
+            drag_anchor: None,
+            drag_hit_job: None,
             settings_section: SettingsSection::default(),
             snapshot_frozen: false,
             snapshot_canvas: None,
@@ -400,9 +430,11 @@ impl Viewer {
             lod: map::Lod::default(),
             surface_lod: map::Lod::default(),
             map_borders: false,
+            map_level_colors: false,
             map_lod_animation: true,
             map_edge_filter: Interpolation::Edge,
             surface_borders: false,
+            surface_level_colors: false,
             surface_lod_animation: true,
             surface_edge_filter: Interpolation::Edge,
             surface_palette: surface_palette::Palette::default(),
@@ -923,6 +955,11 @@ impl Viewer {
         // 初期準備中の平面プレビューは既存の地図を先に出す。通常表示と、
         // 元タイルの受け渡しでは選択した補間を使い、不要な2Dコンパイルを行わない。
         let preparing_flat_preview = material_pass == 0 && self.flat_loading.is_some();
+        let visibility = if material_pass != 0 {
+            self.active_terrain().map(|t| t.projection())
+        } else {
+            None
+        };
         let fade_backend = frame
             .wgpu_render_state()
             .filter(|_| !preparing_flat_preview)
@@ -947,6 +984,8 @@ impl Viewer {
                 );
             }
             self.tiles[0].borders = self.map_borders;
+            self.tiles[0].level_colors = self.map_level_colors;
+            self.tiles[0].visibility = visibility;
             self.tiles[0].animate_lod = self.map_lod_animation;
             self.tiles[0].edge_filter = self.map_edge_filter;
             self.tiles[0].select_material_pass(material_pass);
@@ -967,6 +1006,7 @@ impl Viewer {
         let mut has_base = self.show_online_map;
         for surface in self.surfaces.iter_mut().filter(|surface| surface.enabled) {
             surface.borders = self.surface_borders;
+            surface.level_colors = self.surface_level_colors;
             surface.animate_lod = self.surface_lod_animation;
             surface.edge_filter = self.surface_edge_filter;
             surface.select_material_pass(material_pass);
@@ -995,6 +1035,12 @@ impl Viewer {
         let Some(state) = frame.wgpu_render_state() else {
             return false;
         };
+        if self.active_terrain().unwrap().level_colors() {
+            self.active_terrain_mut()
+                .unwrap()
+                .set_materials([None, None, None]);
+            return false;
+        }
         let enabled = self.show_online_map
             || self
                 .surfaces
@@ -1069,6 +1115,8 @@ impl Viewer {
                         tint: appearance::CANVAS.to_array().map(|v| f32::from(v) / 255.),
                         shade: false,
                         gamma_shade: false,
+                        opaque: false,
+                        surface: None,
                         edge_filter: Interpolation::Bilinear,
                         border: false,
                     });
@@ -1410,6 +1458,7 @@ impl eframe::App for Viewer {
         eframe::set_value(storage, "map_fixed_levels", &self.map_levels);
         eframe::set_value(storage, LOD_KEY, &self.lod);
         eframe::set_value(storage, "map_borders", &self.map_borders);
+        eframe::set_value(storage, "map_level_colors", &self.map_level_colors);
         eframe::set_value(storage, "map_lod_animation", &self.map_lod_animation);
         eframe::set_value(
             storage,
@@ -1418,6 +1467,7 @@ impl eframe::App for Viewer {
         );
         eframe::set_value(storage, "map_edge_filter", &self.map_edge_filter);
         eframe::set_value(storage, "surface_borders", &self.surface_borders);
+        eframe::set_value(storage, "surface_level_colors", &self.surface_level_colors);
         eframe::set_value(storage, "surface_edge_filter", &self.surface_edge_filter);
         eframe::set_value(storage, SURFACE_LOD_KEY, &self.surface_lod);
         eframe::set_value(storage, SURFACE_PALETTE_KEY, &self.surface_palette);
@@ -2020,6 +2070,25 @@ impl eframe::App for Viewer {
                         self.view.orientation = map::Orientation::default();
                     }
                 }
+                // ボタンを押した時点の描画済み地形を選び、ドラッグ開始閾値を超える前に取得する。
+                let primary_down = ctx.input(|i| i.pointer.primary_down());
+                if !primary_down || self.observer.is_some() || self.snapshot_frozen {
+                    self.drag_anchor = None;
+                    self.drag_hit_job = None;
+                } else if response.hovered() && ctx.input(|i| i.pointer.primary_pressed()) {
+                    self.drag_anchor = None;
+                    self.drag_hit_job = response.interact_pointer_pos().and_then(|position| {
+                        self.active_terrain()
+                            .map(|t| t.hit_test(ctx, rect, position))
+                    });
+                }
+                if let Some(reply) = self.drag_hit_job.as_ref().and_then(|r| r.try_recv().ok()) {
+                    self.drag_hit_job = None;
+                    match reply {
+                        Ok(hit) => self.drag_anchor = hit,
+                        Err(e) => self.error = Some(format!("ドラッグ位置を取得できません: {e:#}")),
+                    }
+                }
                 let dragging = response.dragged();
                 let rotating = response.dragged_by(egui::PointerButton::Secondary);
                 if !self.snapshot_frozen && dragging {
@@ -2049,17 +2118,37 @@ impl eframe::App for Viewer {
                     } else if rotating {
                         self.view.orientation.orbit(d);
                     } else if response.dragged_by(egui::PointerButton::Primary) {
-                        if let Some(terrain) = self.active_terrain() {
-                            let projection = terrain.projection();
-                            let pointer = response.interact_pointer_pos().unwrap_or(rect.center());
-                            if let (Some(before), Some(after)) = (
-                                projection.world_at(rect, pointer - d),
-                                projection.world_at(rect, pointer),
-                            ) {
-                                for axis in 0..2 {
-                                    self.view.center[axis] =
-                                        (self.view.center[axis] + before[axis] - after[axis])
-                                            .clamp(0., 1.);
+                        if self.active_terrain().is_some() {
+                            if let Some(anchor) = self.drag_anchor {
+                                let pointer =
+                                    response.interact_pointer_pos().unwrap_or(rect.center());
+                                // 球面では中心移動によって投影も変わるため、小さく反復して追従させる。
+                                for _ in 0..3 {
+                                    let center = self.view.center;
+                                    let zoom = self.view.zoom;
+                                    let (yaw, tilt) = self.view.orientation.angles();
+                                    let terrain = self.active_terrain_mut().unwrap();
+                                    terrain.set_map_camera(center, zoom, yaw, tilt, rect);
+                                    let Some(after) = terrain.projection().world_at_height(
+                                        rect,
+                                        pointer,
+                                        anchor.height,
+                                    ) else {
+                                        break;
+                                    };
+                                    for axis in 0..2 {
+                                        let delta = if axis == 0 {
+                                            (anchor.world[axis] - after[axis] + 0.5).rem_euclid(1.)
+                                                - 0.5
+                                        } else {
+                                            anchor.world[axis] - after[axis]
+                                        };
+                                        self.view.center[axis] = if axis == 0 {
+                                            (self.view.center[axis] + delta).rem_euclid(1.)
+                                        } else {
+                                            (self.view.center[axis] + delta).clamp(0., 1.)
+                                        };
+                                    }
                                 }
                             }
                         } else {
@@ -2442,15 +2531,16 @@ fn install_japanese_font(ctx: &egui::Context) {
 }
 
 #[cfg(windows)]
-fn windows_graphics() -> eframe::egui_wgpu::WgpuConfiguration {
+fn windows_graphics(vsync: bool) -> eframe::egui_wgpu::WgpuConfiguration {
     use eframe::{
         egui_wgpu::{WgpuConfiguration, WgpuSetup, WgpuSetupCreateNew},
         wgpu,
     };
 
     WgpuConfiguration {
+        present_mode: graphics_settings::present_mode(vsync),
         wgpu_setup: WgpuSetup::CreateNew(WgpuSetupCreateNew {
-            // 垂直同期を保ったまま、描画間隔が安定していた Direct3D 12 を優先する。
+            // Direct3D 12 を優先する。
             native_adapter_selector: Some(Arc::new(|adapters, surface| {
                 adapters
                     .iter()
@@ -2543,10 +2633,17 @@ fn run() -> Result<()> {
     };
     ensure!(args.next().is_none(), "ファイルは1つ指定してください");
     let client = map::client()?;
+    let vsync = graphics_settings::load();
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         #[cfg(windows)]
-        wgpu_options: windows_graphics(),
+        wgpu_options: windows_graphics(vsync),
+        #[cfg(not(windows))]
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            present_mode: graphics_settings::present_mode(vsync),
+            ..Default::default()
+        },
+        vsync,
         viewport: egui::ViewportBuilder::default()
             .with_app_id(APP_ID)
             .with_inner_size(DEFAULT_WINDOW_SIZE),
@@ -2584,6 +2681,10 @@ fn run() -> Result<()> {
                 .storage
                 .and_then(|s| eframe::get_value(s, "map_borders"))
                 .unwrap_or(false);
+            viewer.map_level_colors = cc
+                .storage
+                .and_then(|s| eframe::get_value(s, "map_level_colors"))
+                .unwrap_or(false);
             viewer.map_edge_filter = cc
                 .storage
                 .and_then(|s| eframe::get_value(s, "map_edge_filter"))
@@ -2592,6 +2693,10 @@ fn run() -> Result<()> {
             viewer.surface_borders = cc
                 .storage
                 .and_then(|s| eframe::get_value(s, "surface_borders"))
+                .unwrap_or(false);
+            viewer.surface_level_colors = cc
+                .storage
+                .and_then(|s| eframe::get_value(s, "surface_level_colors"))
                 .unwrap_or(false);
             viewer.surface_edge_filter = cc
                 .storage

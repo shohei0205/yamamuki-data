@@ -31,6 +31,24 @@ pub struct Prepared {
     packets: HashMap<Key, Arc<Packet>>,
 }
 impl Snapshot {
+    pub fn projection(&self) -> Projection {
+        Projection {
+            camera: self.camera.clone(),
+        }
+    }
+    pub fn observer_projection(&self, yaw: f64, pitch: f64) -> Projection {
+        let mut camera = self.camera.clone();
+        let eye = camera.eye();
+        camera.set_observer(
+            [eye[0], eye[1]],
+            eye[2],
+            yaw,
+            pitch,
+            camera.fov_y,
+            camera.viewport,
+        );
+        Projection { camera }
+    }
     pub fn prepare(self) -> Result<Prepared> {
         anyhow::ensure!(self.version == 1, "未対応の地形スナップショットです");
         anyhow::ensure!(
@@ -726,41 +744,53 @@ mod tests {
         let x1 = (bounds[2] * side).floor() as u32;
         let y0 = (bounds[1] * side).floor() as u32;
         let y1 = (bounds[3] * side).floor() as u32;
+        let full_regions = std::env::var_os("YAMAMUKI_FULL_MATERIAL_REGIONS").is_some();
         anyhow::ensure!(
-            (x1 - x0 + 1) * (y1 - y0 + 1) <= 4096,
+            full_regions || (x1 - x0 + 1) * (y1 - y0 + 1) <= 4096,
             "計測範囲が広すぎる: {bounds:?}"
         );
         let mut quads = Vec::new();
-        for y in y0..=y1 {
-            for x in x0..=x1 {
-                quads.push(Quad {
-                    bounds: [
-                        x as f64 / side,
-                        y as f64 / side,
-                        (x + 1) as f64 / side,
-                        (y + 1) as f64 / side,
-                    ],
-                    uv: [egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)); 2],
-                    textures: [Some(view.clone()), Some(view.clone())],
-                    amount: 1.,
-                    tint: [1.; 4],
-                    shade: false,
-                    gamma_shade: false,
-                    edge_filter: Interpolation::Bilinear,
-                    border: false,
-                });
+        if !full_regions {
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    quads.push(Quad {
+                        bounds: [
+                            x as f64 / side,
+                            y as f64 / side,
+                            (x + 1) as f64 / side,
+                            (y + 1) as f64 / side,
+                        ],
+                        uv: [egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)); 2],
+                        textures: [Some(view.clone()), Some(view.clone())],
+                        amount: 1.,
+                        tint: [1.; 4],
+                        shade: false,
+                        gamma_shade: false,
+                        opaque: rgba.chunks_exact(4).all(|p| p[3] == 255),
+                        surface: None,
+                        edge_filter: Interpolation::Bilinear,
+                        border: false,
+                    });
+                }
             }
         }
-        if std::env::var_os("YAMAMUKI_FULL_MATERIAL_REGIONS").is_some() {
+        if full_regions {
             quads.clear();
             let rect = egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 egui::vec2(camera.viewport[0] as f32, camera.viewport[1] as f32),
             );
             let width = camera.viewport[0].max(camera.viewport[1]);
-            for (area, zoom) in replay
-                .projected_material_regions(rect, width / (256. * (1u32 << max_zoom) as f64) / 1.02)
-            {
+            let areas = replay.projected_material_regions(
+                rect,
+                width / (256. * (1u32 << max_zoom) as f64) / 1.02,
+            );
+            let screen_zoom = std::env::var("YAMAMUKI_MAP_SCREEN_ZOOM")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok());
+            for i in std::iter::once(0).chain((1..areas.len()).rev()) {
+                let (area, zoom) = areas[i];
+                let zoom = screen_zoom.map_or(zoom, |screen| screen.min(zoom));
                 let z = (zoom.floor() as u32).clamp(2, max_zoom);
                 let side = (1u32 << z) as f64;
                 let half = (area[2] - area[0]).max(area[3] - area[1]) * 1.02 / 2.;
@@ -783,6 +813,8 @@ mod tests {
                             tint: [1.; 4],
                             shade: false,
                             gamma_shade: false,
+                            opaque: rgba.chunks_exact(4).all(|p| p[3] == 255),
+                            surface: None,
                             edge_filter: Interpolation::Bilinear,
                             border: false,
                         });
@@ -855,6 +887,83 @@ mod tests {
             quads.len(),
             camera.viewport
         );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        while replay.app.renderer.interpolation_pending() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        anyhow::ensure!(
+            !replay.app.renderer.interpolation_pending(),
+            "補間準備が終わらない"
+        );
+        anyhow::ensure!(
+            replay.app.renderer.interpolation_error().is_none(),
+            "補間準備に失敗"
+        );
+        replay.app.renderer.direct = Some(Vec::new());
+        draw_inner(&mut replay, false)?;
+        let baseline = std::time::Instant::now();
+        for _ in 0..8 {
+            draw_inner(&mut replay, false)?;
+        }
+        eprintln!(
+            "地形のみ: 平均 {:.2}ms",
+            baseline.elapsed().as_secs_f64() * 1000. / 8.
+        );
+        if std::env::var_os("YAMAMUKI_BENCH_CAMERA_MOTION").is_some() {
+            replay.replan_frozen();
+            for quad in &mut quads {
+                quad.edge_filter = Interpolation::Bilinear;
+            }
+            replay.app.renderer.direct = Some(quads.clone());
+            let mut times = Vec::new();
+            for i in 0..36 {
+                let eye = camera.eye();
+                replay.app.camera.set_observer(
+                    [eye[0], eye[1]],
+                    eye[2],
+                    camera.yaw + (i as f64 * 0.2).sin() * 0.12,
+                    camera.pitch,
+                    camera.fov_y,
+                    camera.viewport,
+                );
+                let started = std::time::Instant::now();
+                draw_inner(&mut replay, false)?;
+                times.push(started.elapsed().as_secs_f64() * 1000.);
+                if i > 0 {
+                    let stats = replay.app.renderer.prepare_stats();
+                    anyhow::ensure!(
+                        stats.rebuild_ms == 0.
+                            && stats.plan_ms == 0.
+                            && stats.atlas_copy_bytes == 0
+                            && stats.allocations == 0
+                            && stats.bind_groups == 0,
+                        "回転だけで共有シーンを再構築した"
+                    );
+                }
+            }
+            times.sort_by(f64::total_cmp);
+            eprintln!(
+                "連続左右回転: 平均 {:.2}ms / p95 {:.2}ms / 最大 {:.2}ms",
+                times.iter().sum::<f64>() / times.len() as f64,
+                times[times.len() * 95 / 100],
+                times[times.len() - 1]
+            );
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            loop {
+                draw_inner(&mut replay, false)?;
+                if let Some(matches) = replay.app.renderer.current_plan_matches_reference() {
+                    anyhow::ensure!(matches, "非同期計画が同じ視点の同期計画と一致しない");
+                    eprintln!("停止後の最終計画: 同期方式と全パッチ・分割数が完全一致");
+                    break;
+                }
+                anyhow::ensure!(
+                    std::time::Instant::now() < deadline,
+                    "停止後に最新の分割計画へ到達しない"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            return Ok(());
+        }
         for mode in [
             Interpolation::Bilinear,
             Interpolation::Bicubic,

@@ -28,6 +28,7 @@ pub struct Image {
     lease: Arc<Lease>,
     area: Rect,
     edges: Arc<Edges>,
+    opaque: bool,
 }
 // 隣接更新には外周だけを残し、全タイルの展開画像は保持しない。
 struct Edges {
@@ -102,6 +103,9 @@ fn bordered(image: &ColorImage, gutter: usize) -> ColorImage {
 }
 
 impl Image {
+    pub fn is_opaque(&self) -> bool {
+        self.opaque
+    }
     pub fn load(
         ctx: &egui::Context,
         _name: impl Into<String>,
@@ -161,6 +165,7 @@ impl Image {
             pool.pages.push(Arc::downgrade(&page));
             (page, 0)
         });
+        let opaque = image.pixels.iter().all(|p| p.a() == 255);
         let edges = Arc::new(Edges::new(&image, gutter));
         let [w, h] = image.size;
         let x = slot % GRID * (w + gutter * 2);
@@ -184,6 +189,7 @@ impl Image {
             lease: Arc::new(Lease { page, slot }),
             area,
             edges,
+            opaque,
         }
     }
     /// 同じズームの隣接タイルの端を余白へ転送する。UVと画像IDは維持する。

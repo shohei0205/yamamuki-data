@@ -555,18 +555,11 @@ fn edge_resample_pair(old_image:texture_2d<f32>,new_image:texture_2d<f32>,image_
     let patch3=contour_patch(samples[14],samples[15],samples[16],samples[20],samples[21],samples[22],samples[26],samples[27],samples[28],delta-vec2(1.0,1.0),flow3,array<vec4<f32>,25>(samples[7],samples[8],samples[9],samples[10],samples[11],samples[13],samples[14],samples[15],samples[16],samples[17],samples[19],samples[20],samples[21],samples[22],samples[23],samples[25],samples[26],samples[27],samples[28],samples[29],samples[31],samples[32],samples[33],samples[34],samples[35]),patchMode);
     total+=patch3.color*patch3.weight;weight+=patch3.weight;
     boundaryWeight+=patch3.boundary;boundaryTensor+=patch3.direction*patch3.boundary;
-    // 比較版は基底色だけを4画素のバイリニアへ変更する。
-    // 輪郭形状・方向付き再構成・4パッチの重ね合わせは通常版と共通。
-    var base=vec4(0.);
-    if mode==6u {
-        base=mix(mix(samples[14],samples[15],delta.x),mix(samples[20],samples[21],delta.x),delta.y);
-    } else {
     let row0=profile_curve(samples[7],samples[8],samples[9],samples[10],delta.x);
     let row1=profile_curve(samples[13],samples[14],samples[15],samples[16],delta.x);
     let row2=profile_curve(samples[19],samples[20],samples[21],samples[22],delta.x);
     let row3=profile_curve(samples[25],samples[26],samples[27],samples[28],delta.x);
-    base=profile_curve(row0,row1,row2,row3,delta.y);
-    }
+    let base=profile_curve(row0,row1,row2,row3,delta.y);
     // 実画像の外端でクランプされた画素を、一定色の面と誤認しない。
     // タイル本体には隣接3画素の余白があるため、通常のタイル境界では有効になる。
     if any(anchor<vec2(2)) || any(anchor+vec2(3)>maximum) {boundaryWeight=0.;}

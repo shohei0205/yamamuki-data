@@ -13,16 +13,14 @@ pub enum Interpolation {
     Nearest = 2,
     Bicubic = 4,
     BSpline = 5,
-    EdgeBilinear = 6,
 }
 impl Interpolation {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 5] = [
         Self::Nearest,
         Self::Bilinear,
         Self::Bicubic,
         Self::BSpline,
         Self::Edge,
-        Self::EdgeBilinear,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -30,7 +28,6 @@ impl Interpolation {
             Self::Bicubic => "Bicubic",
             Self::BSpline => "Bスプライン",
             Self::Edge => "輪郭優先",
-            Self::EdgeBilinear => "輪郭優先（基底バイリニア）",
             Self::Nearest => "最近傍",
         }
     }
@@ -42,7 +39,6 @@ impl serde::Serialize for Interpolation {
             Self::Bicubic => "bicubic",
             Self::BSpline => "bspline",
             Self::Edge => "edge",
-            Self::EdgeBilinear => "edge-bilinear",
             Self::Nearest => "nearest",
         })
     }
@@ -65,7 +61,7 @@ impl<'de> serde::Deserialize<'de> for Interpolation {
             Saved::Legacy(v) => Ok(v.into()),
             Saved::Name(v) => match v.as_str() {
                 "bilinear" => Ok(Self::Bilinear),
-                "edge-bilinear" => Ok(Self::EdgeBilinear),
+                "edge-bilinear" => Ok(Self::Edge),
                 "edge-single" => Ok(Self::Edge),
                 "bicubic" => Ok(Self::Bicubic),
                 "bspline" => Ok(Self::BSpline),
@@ -80,6 +76,26 @@ impl<'de> serde::Deserialize<'de> for Interpolation {
     }
 }
 
+/// 合成済みの地表色に対応する、オンライン背景への乗算係数。
+#[derive(Clone)]
+pub struct SurfaceBlend {
+    pub textures: [Option<wgpu::TextureView>; 2],
+    pub uv: [egui::Rect; 2],
+    pub group: usize,
+}
+fn texture_key(c: &Quad) -> [Option<wgpu::TextureView>; 4] {
+    let gains = c
+        .surface
+        .as_ref()
+        .map_or([None, None], |s| s.textures.clone());
+    [
+        c.textures[0].clone(),
+        c.textures[1].clone(),
+        gains[0].clone(),
+        gains[1].clone(),
+    ]
+}
+
 /// 2Dの描画命令から引き継ぐ元テクスチャ。座標は正規化Web Mercator。
 #[derive(Clone)]
 pub struct Quad {
@@ -90,6 +106,8 @@ pub struct Quad {
     pub tint: [f32; 4],
     pub shade: bool,
     pub gamma_shade: bool,
+    pub opaque: bool,
+    pub surface: Option<SurfaceBlend>,
     pub edge_filter: Interpolation,
     pub border: bool,
 }
@@ -101,6 +119,8 @@ pub struct Capture {
     pub amount: f32,
     pub shade: bool,
     pub gamma_shade: bool,
+    pub opaque: bool,
+    pub surface: Option<SurfaceBlend>,
     pub edge_filter: Interpolation,
 }
 pub fn capture(painter: &egui::Painter, command: Capture) {
@@ -119,6 +139,9 @@ struct Params {
     settings: [f32; 4],
     earth: [f32; 4],
     eye: [f32; 4],
+    gain_uv0: [f32; 4],
+    gain_uv1: [f32; 4],
+    visibility: [f32; 4],
 }
 #[derive(Default)]
 struct Cache {
@@ -126,10 +149,13 @@ struct Cache {
     capacity: usize,
     positions: Option<wgpu::TextureView>,
     lighting: Option<(wgpu::Texture, wgpu::TextureView)>,
-    groups: std::collections::HashMap<[Option<wgpu::TextureView>; 2], wgpu::BindGroup>,
+    groups: std::collections::HashMap<[Option<wgpu::TextureView>; 4], wgpu::BindGroup>,
     groups_created: u64,
     buffers_created: u64,
     screen_bounds: Option<ScreenBounds>,
+    coverage: Option<(wgpu::Texture, wgpu::TextureView)>,
+    globe_bounds_pose: [u64; 4],
+    globe_bounds: std::collections::HashMap<[u64; 4], Option<(glam::DVec3, glam::DVec3)>>,
 }
 struct ScreenBounds {
     positions: wgpu::TextureView,
@@ -145,6 +171,7 @@ pub(crate) struct Renderer {
     shade: wgpu::RenderPipeline,
     filtered: Option<Arc<std::sync::OnceLock<Result<FilteredPrograms, String>>>>,
     lighting: wgpu::RenderPipeline,
+    occlusion: wgpu::RenderPipeline,
     sampler_group: wgpu::BindGroup,
     empty: wgpu::TextureView,
     bounds_compute_layout: wgpu::BindGroupLayout,
@@ -168,6 +195,14 @@ impl Renderer {
         mask: wgpu::ColorWrites,
     ) -> wgpu::RenderPipeline {
         crate::gpu_profile::timed(entry, || {
+            let targets = [Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                blend: Some(wgpu::BlendState {
+                    color,
+                    alpha: wgpu::BlendComponent::OVER,
+                }),
+                write_mask: mask,
+            })];
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(entry),
                 layout: Some(&pipeline_layout),
@@ -178,20 +213,23 @@ impl Renderer {
                     compilation_options: Default::default(),
                 },
                 primitive: Default::default(),
-                depth_stencil: None,
+                depth_stencil: if entry == "lighting" {
+                    None
+                } else {
+                    Some(wgpu::DepthStencilState {
+                        format: wgpu::TextureFormat::Depth32Float,
+                        depth_write_enabled: entry == "occlusion",
+                        depth_compare: wgpu::CompareFunction::GreaterEqual,
+                        stencil: Default::default(),
+                        bias: Default::default(),
+                    })
+                },
                 multisample: Default::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some(entry),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                        blend: Some(wgpu::BlendState {
-                            color,
-                            alpha: wgpu::BlendComponent::OVER,
-                        }),
-                        write_mask: mask,
-                    })],
+                    targets: if entry == "occlusion" { &[] } else { &targets },
                 }),
                 multiview: None,
                 cache: None,
@@ -233,6 +271,8 @@ impl Renderer {
                 texture(1, true),
                 texture(2, true),
                 texture(5, true),
+                texture(6, false),
+                texture(7, false),
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -390,6 +430,11 @@ impl Renderer {
             );
             (color.join().unwrap(), shade.join().unwrap(), lighting)
         });
+        let occlusion = pipeline(
+            "occlusion",
+            blend(wgpu::BlendFactor::One, wgpu::BlendFactor::Zero),
+            wgpu::ColorWrites::empty(),
+        );
         let filtered = background.map(|ctx| {
             let result = Arc::new(std::sync::OnceLock::new());
             let ready = Arc::clone(&result);
@@ -460,6 +505,7 @@ impl Renderer {
             shade,
             filtered,
             lighting,
+            occlusion,
             layout,
             sampler_group,
             empty: device
@@ -548,19 +594,64 @@ impl Renderer {
         heights: [f64; 2],
     ) {
         let _ = device.poll(wgpu::Maintain::Poll);
+        let mut cache = self.cache.lock().unwrap();
+        let bounds_pose = [
+            camera.center[0].to_bits(),
+            camera.center[1].to_bits(),
+            heights[0].to_bits(),
+            heights[1].to_bits(),
+        ];
+        let legacy_bounds = std::env::var_os("YAMAMUKI_DISABLE_MATERIAL_BOUND_REUSE").is_some();
+        let anchor = [
+            f64::from_bits(cache.globe_bounds_pose[0]),
+            f64::from_bits(cache.globe_bounds_pose[1]),
+        ];
+        if (legacy_bounds && cache.globe_bounds_pose != bounds_pose)
+            || cache.globe_bounds_pose[2..] != bounds_pose[2..]
+            || (anchor[0] - camera.center[0]).hypot(anchor[1] - camera.center[1]) > 100000.
+            || cache.globe_bounds.len() > 32768
+        {
+            cache.globe_bounds.clear();
+            cache.globe_bounds_pose = bounds_pose;
+        }
+
+        let mut anchor_camera = camera.clone();
+        anchor_camera.center = [
+            f64::from_bits(cache.globe_bounds_pose[0]),
+            f64::from_bits(cache.globe_bounds_pose[1]),
+        ];
+        let frame = GlobeFrame::new(anchor_camera.center, camera.center);
+        let planes = visibility_planes(camera);
         // 地形へ貼れない画面外・遠方の画像は、GPU設定を作る前に除く。
         let commands = commands
             .iter()
-            .filter(|c| camera.visible_depth(c.bounds.map(|v| v * WORLD)).is_some())
+            .filter(|c| {
+                if camera.globe && !legacy_bounds {
+                    let physical = *cache
+                        .globe_bounds
+                        .entry(c.bounds.map(f64::to_bits))
+                        .or_insert_with(|| {
+                            globe_physical_bounds(c.bounds, &anchor_camera, heights)
+                        });
+                    physical.is_none_or(|(lower, upper)| {
+                        let (lower, upper) = frame.bounds(lower, upper);
+                        box_visible(lower, upper, &planes)
+                    })
+                } else {
+                    camera.may_be_visible(c.bounds.map(|v| v * WORLD))
+                }
+            })
             .collect::<Vec<_>>();
         let target = target_texture.create_view(&Default::default());
         let stride = (std::mem::size_of::<Params>() as u64).div_ceil(u64::from(
             device.limits().min_uniform_buffer_offset_alignment,
         )) * u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let count = commands.len() + 1;
+        let use_occlusion = heights != [0., 0.]
+            && std::env::var_os("YAMAMUKI_DISABLE_MATERIAL_OCCLUSION").is_none()
+            && opaque_overlap(&commands);
         let use_bounds = self.cull && restrict_pixels && heights != [0., 0.] && commands.len() >= 8;
 
-        let mut cache = self.cache.lock().unwrap();
         if cache.positions.as_ref() != Some(positions)
             || cache
                 .lighting
@@ -593,8 +684,8 @@ impl Renderer {
         let mut draws = Vec::with_capacity(count);
         let active: std::collections::HashSet<_> = commands
             .iter()
-            .map(|c| c.textures.clone())
-            .chain(std::iter::once([None, None]))
+            .map(|c| texture_key(c))
+            .chain(std::iter::once([None, None, None, None]))
             .collect();
         cache.groups.retain(|key, _| active.contains(key));
         let mut needed = std::collections::HashSet::new();
@@ -625,17 +716,43 @@ impl Renderer {
                     c.uv[1].width(),
                     c.uv[1].height(),
                 ],
+                gain_uv0: c.surface.as_ref().map_or([0.; 4], |s| {
+                    [
+                        s.uv[0].min.x,
+                        s.uv[0].min.y,
+                        s.uv[0].width(),
+                        s.uv[0].height(),
+                    ]
+                }),
+                gain_uv1: c.surface.as_ref().map_or([0.; 4], |s| {
+                    [
+                        s.uv[1].min.x,
+                        s.uv[1].min.y,
+                        s.uv[1].width(),
+                        s.uv[1].height(),
+                    ]
+                }),
+                visibility: [(i + 1) as f32 / count as f32, 0., 0., 0.],
                 tint: c.tint,
                 settings: [
                     c.amount,
                     f32::from(c.textures[0].is_some()),
                     f32::from(c.textures[1].is_some()),
-                    f32::from(c.textures.iter().all(Option::is_none))
+                    f32::from(c.surface.is_none() && c.textures.iter().all(Option::is_none))
                         + 2. * f32::from(c.gamma_shade)
                         + 8. * (c.edge_filter as u32 & 3) as f32
                         + 64. * (c.edge_filter as u32 >> 2) as f32
                         + 4. * f32::from(c.border)
-                        + 32. * f32::from(use_bounds),
+                        + 32. * f32::from(use_bounds)
+                        + 256. * f32::from(c.surface.is_some())
+                        + 512.
+                            * f32::from(
+                                c.surface.as_ref().is_some_and(|s| s.textures[0].is_some()),
+                            )
+                        + 1024.
+                            * f32::from(
+                                c.surface.as_ref().is_some_and(|s| s.textures[1].is_some()),
+                            ),
                 ],
             });
             if command.is_none() && camera.globe {
@@ -657,7 +774,7 @@ impl Renderer {
             let at = i * stride as usize;
             bytes[at..at + std::mem::size_of::<Params>()]
                 .copy_from_slice(bytemuck::bytes_of(&params));
-            let key = command.map_or([None, None], |c| c.textures.clone());
+            let key = command.map_or([None, None, None, None], |c| texture_key(c));
             needed.insert(key.clone());
             if !cache.groups.contains_key(&key) {
                 let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -681,6 +798,18 @@ impl Renderer {
                             ),
                         },
                         wgpu::BindGroupEntry {
+                            binding: 6,
+                            resource: wgpu::BindingResource::TextureView(
+                                key[2].as_ref().unwrap_or(&self.empty),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 7,
+                            resource: wgpu::BindingResource::TextureView(
+                                key[3].as_ref().unwrap_or(&self.empty),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
                             binding: 5,
                             resource: wgpu::BindingResource::TextureView(&lighting_view),
                         },
@@ -699,7 +828,20 @@ impl Renderer {
             }
             let clip = command.map_or([0, 0, size[0], size[1]], |c| {
                 if restrict_pixels {
-                    scissor_at_heights(c.bounds, camera, size, heights)
+                    if camera.globe {
+                        let physical = *cache
+                            .globe_bounds
+                            .entry(c.bounds.map(f64::to_bits))
+                            .or_insert_with(|| {
+                                globe_physical_bounds(c.bounds, &anchor_camera, heights)
+                            });
+                        physical.map_or([0, 0, size[0], size[1]], |(lower, upper)| {
+                            let (lower, upper) = frame.bounds(lower, upper);
+                            globe_project_bounds(lower, upper, camera, size)
+                        })
+                    } else {
+                        scissor_at_heights(c.bounds, camera, size, heights)
+                    }
                 } else {
                     [0, 0, size[0], size[1]]
                 }
@@ -807,9 +949,76 @@ impl Renderer {
             pass.dispatch_workgroups(commands.len() as u32, 1, 1);
         }
         let bounds_vertex = bounds.vertex.clone();
+        if cache
+            .coverage
+            .as_ref()
+            .is_none_or(|(t, _)| t.width() != size[0] || t.height() != size[1])
+        {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("不透明地図の最終描画順"),
+                size: wgpu::Extent3d {
+                    width: size[0],
+                    height: size[1],
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Depth32Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            cache.coverage = Some((texture, view));
+        }
+        let coverage = cache.coverage.as_ref().unwrap().1.clone();
         drop(cache);
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("不透明地図に隠れる補間を除外"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &coverage,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0.),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            if use_occlusion {
+                pass.set_pipeline(&self.occlusion);
+                pass.set_bind_group(1, &self.sampler_group, &[]);
+                pass.set_bind_group(2, &bounds_vertex, &[]);
+                for (i, c) in commands.iter().enumerate() {
+                    if !opaque_command(c) {
+                        continue;
+                    }
+                    let (group, _, clip, offset) = &draws[i];
+                    if clip[2] == 0 || clip[3] == 0 {
+                        continue;
+                    }
+                    pass.set_scissor_rect(clip[0], clip[1], clip[2], clip[3]);
+                    pass.set_bind_group(0, group, &[*offset]);
+                    if use_bounds {
+                        pass.draw(0..6, i as u32..i as u32 + 1);
+                    } else {
+                        pass.draw(0..3, 0..1);
+                    }
+                }
+            }
+        }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("元タイルを地形ピクセルへ合成"),
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &coverage,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &target,
                 resolve_target: None,
@@ -829,7 +1038,47 @@ impl Renderer {
             .and_then(|p| p.as_ref().ok());
         let color_pipeline = filtered.map_or(&self.color, |p| &p.color);
         let shade_pipeline = filtered.map_or(&self.shade, |p| &p.shade);
-        for (group, shade, clip, offset) in &draws {
+        let mut last_surface = None;
+        for (draw_index, (group, shade, clip, offset)) in draws.iter().enumerate() {
+            let surface = commands
+                .get(draw_index)
+                .and_then(|c| c.surface.as_ref())
+                .map(|s| s.group);
+            if surface.is_some() && surface != last_surface {
+                drop(pass);
+                encoder.copy_texture_to_texture(
+                    target_texture.as_image_copy(),
+                    lighting_source.as_image_copy(),
+                    wgpu::Extent3d {
+                        width: size[0],
+                        height: size[1],
+                        depth_or_array_layers: 1,
+                    },
+                );
+                pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("元タイルを地形ピクセルへ合成"),
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &coverage,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &target,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                pass.set_bind_group(1, &self.sampler_group, &[]);
+                pass.set_bind_group(2, &bounds_vertex, &[]);
+            }
+            last_surface = surface;
             if shade.is_none() || clip[2] == 0 || clip[3] == 0 {
                 continue;
             }
@@ -886,6 +1135,97 @@ impl Renderer {
         pass.draw(0..3, 0..1);
     }
 }
+// 保存した接平面から現在の接平面へ箱を変換する。景色モードで注視点が
+// 移動しても、高価なタイル単位の球面評価を繰り返さない。
+struct GlobeFrame {
+    rotation: glam::DMat3,
+    origin: glam::DVec3,
+}
+impl GlobeFrame {
+    fn new(anchor: [f64; 2], center: [f64; 2]) -> Self {
+        fn basis(center: [f64; 2]) -> glam::DMat3 {
+            let (sin_lat, cos_lat) = crate::globe::latitude(center[1]).sin_cos();
+            let (sin_lon, cos_lon) = (center[0] / crate::globe::RADIUS).sin_cos();
+            glam::DMat3::from_cols(
+                glam::DVec3::new(cos_lon, 0., -sin_lon),
+                glam::DVec3::new(cos_lat * sin_lon, sin_lat, cos_lat * cos_lon),
+                glam::DVec3::new(sin_lat * sin_lon, -cos_lat, sin_lat * cos_lon),
+            )
+        }
+        Self {
+            rotation: basis(center).transpose() * basis(anchor),
+            origin: crate::globe::local(center, anchor, 0.),
+        }
+    }
+    fn bounds(&self, lower: glam::DVec3, upper: glam::DVec3) -> (glam::DVec3, glam::DVec3) {
+        let center = self.rotation * ((lower + upper) * 0.5) + self.origin;
+        let absolute = glam::DMat3::from_cols(
+            self.rotation.x_axis.abs(),
+            self.rotation.y_axis.abs(),
+            self.rotation.z_axis.abs(),
+        );
+        let extent = absolute * ((upper - lower) * 0.5) + glam::DVec3::splat(1e-6);
+        (center - extent, center + extent)
+    }
+}
+// 方角だけが変わるフレームは保持済みの球面箱を使い、元タイルの緯度経度を再評価しない。
+fn visibility_planes(c: &Camera) -> [(glam::DVec3, f64); 6] {
+    use glam::DVec3;
+    let back = c.back();
+    let forward = -back;
+    let right = DVec3::new(c.yaw.cos(), 0., -c.yaw.sin());
+    let up = back.cross(right);
+    let eye = back * c.distance + DVec3::Y * c.height;
+    let vertical = c.tan_half_fov() * 1.15;
+    let horizontal = vertical * c.viewport[0] / c.viewport[1];
+    [
+        (forward, -(c.distance / 10000.).max(0.2)),
+        (-forward, c.far_depth()),
+        (right + forward * horizontal, 0.),
+        (-right + forward * horizontal, 0.),
+        (up + forward * vertical, 0.),
+        (-up + forward * vertical, 0.),
+    ]
+    .map(|(normal, distance)| (normal, distance - normal.dot(eye)))
+}
+fn box_visible(lower: glam::DVec3, upper: glam::DVec3, planes: &[(glam::DVec3, f64); 6]) -> bool {
+    planes.iter().all(|(normal, distance)| {
+        let support = glam::DVec3::new(
+            if normal.x >= 0. { upper.x } else { lower.x },
+            if normal.y >= 0. { upper.y } else { lower.y },
+            if normal.z >= 0. { upper.z } else { lower.z },
+        );
+        normal.dot(support) + distance >= 0.
+    })
+}
+// 画素から不透明と分かる画像だけを遮蔽元にし、背景参照する地表は除く。
+fn opaque_command(c: &Quad) -> bool {
+    c.opaque
+        && !c.shade
+        && !c.border
+        && c.surface.is_none()
+        && c.tint[3] >= 1.
+        && c.textures.iter().all(Option::is_some)
+}
+fn opaque_overlap(commands: &[&Quad]) -> bool {
+    let mut bounds = commands
+        .iter()
+        .filter(|c| opaque_command(c))
+        .map(|c| c.bounds)
+        .collect::<Vec<_>>();
+    bounds.sort_unstable_by(|a, b| a[0].total_cmp(&b[0]));
+    for (i, a) in bounds.iter().enumerate() {
+        for b in &bounds[i + 1..] {
+            if b[0] >= a[2] {
+                break;
+            }
+            if a[1] < b[3] && b[1] < a[3] {
+                return true;
+            }
+        }
+    }
+    false
+}
 use bytemuck::Zeroable;
 /// 可視標高範囲の投影を囲み、各タイルで画面全体を塗らない。
 #[cfg(test)]
@@ -939,23 +1279,48 @@ fn globe_scissor_at_heights(
     size: [u32; 2],
     heights: [f64; 2],
 ) -> [u32; 4] {
+    globe_physical_bounds(bounds, c, heights).map_or([0, 0, size[0], size[1]], |(lower, upper)| {
+        globe_project_bounds(lower, upper, c, size)
+    })
+}
+// 球面の箱は方角・画角に依存しない。左右回転では三角関数による再計算を避ける。
+fn globe_physical_bounds(
+    bounds: [f64; 4],
+    c: &Camera,
+    heights: [f64; 2],
+) -> Option<(glam::DVec3, glam::DVec3)> {
     use glam::DVec3;
     let area = bounds.map(|v| v * WORLD);
     let span = (area[2] - area[0]).abs().max((area[3] - area[1]).abs());
     if span > crate::globe::RADIUS * 0.5 {
-        return [0, 0, size[0], size[1]];
+        return None;
     }
     let mut lower = DVec3::splat(f64::INFINITY);
     let mut upper = DVec3::splat(f64::NEG_INFINITY);
     const STEPS: u32 = 4;
-    for y in 0..=STEPS {
-        for x in 0..=STEPS {
-            let world = [
-                area[0] + (area[2] - area[0]) * x as f64 / STEPS as f64,
-                area[1] + (area[3] - area[1]) * y as f64 / STEPS as f64,
-            ];
+    let latitude = crate::globe::latitude(c.center[1]);
+    let (sin_lat, cos_lat) = latitude.sin_cos();
+    // 5×5点の緯度・経度を行と列で共用し、高さごとに三角関数を計算し直さない。
+    let rows: [(f64, f64, f64); 5] = std::array::from_fn(|y| {
+        let world_y = area[1] + (area[3] - area[1]) * y as f64 / STEPS as f64;
+        let b = crate::globe::latitude(world_y);
+        let db = b - latitude;
+        (b.cos(), db.sin(), (db / 2.).sin().powi(2))
+    });
+    let columns: [(f64, f64); 5] = std::array::from_fn(|x| {
+        let world_x = area[0] + (area[2] - area[0]) * x as f64 / STEPS as f64;
+        let dl = (world_x - c.center[0]) / crate::globe::RADIUS;
+        (dl.sin(), (dl / 2.).sin().powi(2))
+    });
+    for (cos_b, sin_db, half_db) in rows {
+        for (sin_dl, half_dl) in columns {
             for h in heights {
-                let p = crate::globe::local(c.center, world, h);
+                let r = crate::globe::RADIUS + h;
+                let p = DVec3::new(
+                    r * cos_b * sin_dl,
+                    h - r * (2. * half_db + 2. * cos_lat * cos_b * half_dl),
+                    -r * (sin_db + 2. * sin_lat * cos_b * half_dl),
+                );
                 lower = lower.min(p);
                 upper = upper.max(p);
             }
@@ -967,6 +1332,15 @@ fn globe_scissor_at_heights(
     let padding = (dx * dx + dy * dy) / crate::globe::RADIUS + 0.1;
     lower -= DVec3::splat(padding);
     upper += DVec3::splat(padding);
+    Some((lower, upper))
+}
+fn globe_project_bounds(
+    lower: glam::DVec3,
+    upper: glam::DVec3,
+    c: &Camera,
+    size: [u32; 2],
+) -> [u32; 4] {
+    use glam::DVec3;
     let back = c.back();
     let right = DVec3::new(c.yaw.cos(), 0., -c.yaw.sin());
     let up = back.cross(right);
@@ -1001,6 +1375,37 @@ fn globe_scissor_at_heights(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn retained_globe_boxes_cover_terrain_when_observer_target_moves() {
+        for latitude in [0.2, 0.4, 0.85] {
+            let mut camera = Camera::default();
+            camera.globe = true;
+            camera.center = [WORLD * 0.88, WORLD * latitude];
+            let bounds = [0.8799, latitude - 0.0001, 0.8801, latitude + 0.0001];
+            let (lower, upper) = globe_physical_bounds(bounds, &camera, [-500., 4500.]).unwrap();
+            for delta in [[100., -100.], [-500., 300.], [10000., 5000.]] {
+                let mut moved = camera.clone();
+                moved.center = [camera.center[0] + delta[0], camera.center[1] + delta[1]];
+                let frame = GlobeFrame::new(camera.center, moved.center);
+                let (lo, hi) = frame.bounds(lower, upper);
+                for y in 0..=8 {
+                    for x in 0..=8 {
+                        for h in [-500., 0., 4500.] {
+                            let world = [
+                                (bounds[0] + (bounds[2] - bounds[0]) * x as f64 / 8.) * WORLD,
+                                (bounds[1] + (bounds[3] - bounds[1]) * y as f64 / 8.) * WORLD,
+                            ];
+                            let p = crate::globe::local(moved.center, world, h);
+                            assert!(
+                                p.cmpge(lo).all() && p.cmple(hi).all(),
+                                "{p:?} / {lo:?} / {hi:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
     use super::*;
     #[test]
     fn removed_edge_spline_settings_restore_to_edge_mode() {
@@ -1021,7 +1426,7 @@ mod tests {
             serde_json::from_str::<Interpolation>("false").unwrap(),
             Interpolation::Bilinear
         );
-        for retired in ["edge7", "edge-multi", "edge-curve"] {
+        for retired in ["edge7", "edge-multi", "edge-curve", "edge-bilinear"] {
             let json = serde_json::to_string(retired).unwrap();
             let mode = serde_json::from_str::<Interpolation>(&json).unwrap();
             assert_eq!(mode, Interpolation::Edge);
@@ -1354,6 +1759,8 @@ mod tests {
                     tint: [0.3, 0.5, 0.8, 1.],
                     shade: false,
                     gamma_shade: false,
+                    opaque: false,
+                    surface: None,
                     edge_filter: Interpolation::Bilinear,
                     border: false,
                 });
@@ -1521,6 +1928,8 @@ mod tests {
                     tint: [1.; 4],
                     shade: false,
                     gamma_shade: false,
+                    opaque: false,
+                    surface: None,
                     edge_filter: Interpolation::Bilinear,
                     border: false,
                 }
@@ -1688,6 +2097,8 @@ mod tests {
             tint: [1.; 4],
             shade: false,
             gamma_shade: false,
+            opaque: false,
+            surface: None,
             edge_filter: Interpolation::Bilinear,
             border: false,
         };
@@ -1708,7 +2119,7 @@ mod tests {
         let shade_view = shade.create_view(&Default::default());
         let gray = source((0..width).flat_map(|_| [64, 64, 64, 255]).collect());
         let mid = source((0..width).flat_map(|_| [188, 188, 188, 255]).collect());
-        for mode in (0..18).filter(|mode| *mode != 15) {
+        for mode in (0..29).filter(|mode| *mode != 15) {
             if background && mode == 16 {
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
                 while renderer.interpolation_pending() && std::time::Instant::now() < deadline {
@@ -1745,9 +2156,13 @@ mod tests {
                 // 拡大時の補間経路でも単色が変色しないことを確認する。
                 q.uv = [egui::Rect::from_min_max(egui::pos2(0.25, 0.25), egui::pos2(0.5, 0.5)); 2];
             }
-            if (8..10).contains(&mode) {
+            if (8..10).contains(&mode) || mode == 26 {
                 q.border = true;
                 q.textures = [None, None];
+                if mode == 26 {
+                    q.uv =
+                        [egui::Rect::from_min_max(egui::pos2(0.5, 0.25), egui::pos2(1., 0.75)); 2];
+                }
                 if mode == 9 {
                     q.uv =
                         [egui::Rect::from_min_max(egui::pos2(0.25, 0.25), egui::pos2(0.75, 0.75));
@@ -1822,6 +2237,119 @@ mod tests {
                 });
             }
             let mut commands = vec![q];
+            if (18..26).contains(&mode) {
+                let coefficient = |gain: f32| {
+                    let tex = texture(
+                        wgpu::TextureFormat::R32Float,
+                        wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    );
+                    let values = (0..width)
+                        .map(|x| {
+                            if mode == 24 {
+                                0.5 + x as f32 / (width - 1) as f32
+                            } else if mode == 25 {
+                                if x % 2 == 0 { 0.5 } else { 1.5 }
+                            } else {
+                                gain
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    queue.write_texture(
+                        tex.as_image_copy(),
+                        bytemuck::cast_slice(&values),
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(width * 4),
+                            rows_per_image: None,
+                        },
+                        extent,
+                    );
+                    tex.create_view(&Default::default())
+                };
+                let gains = if mode == 19 {
+                    [1.5, 1.5]
+                } else if mode == 22 {
+                    [0.5, 1.5]
+                } else {
+                    [0.5, 0.5]
+                };
+                let mut merged = quad(
+                    black.clone(),
+                    black.clone(),
+                    if mode == 22 { 0.5 } else { 1. },
+                );
+                merged.textures = if mode == 20 {
+                    let color = source((0..width).flat_map(|_| [64, 0, 0, 128]).collect());
+                    [Some(color.clone()), Some(color)]
+                } else if mode == 21 {
+                    let color = source((0..width).flat_map(|_| [64, 0, 0, 255]).collect());
+                    [Some(color.clone()), Some(color)]
+                } else {
+                    [None, None]
+                };
+                merged.surface = Some(SurfaceBlend {
+                    textures: gains.map(|g| Some(coefficient(g))),
+                    uv: merged.uv,
+                    group: 1,
+                });
+                if mode == 25 {
+                    merged.edge_filter = Interpolation::Nearest;
+                    merged.surface.as_mut().unwrap().uv =
+                        [egui::Rect::from_min_max(egui::pos2(0.25, 0.), egui::pos2(0.5, 1.)); 2];
+                }
+                let background = source((0..width).flat_map(|_| [128, 128, 128, 255]).collect());
+                commands = vec![quad(background.clone(), background, 1.), merged];
+                if mode == 23 {
+                    let mut other = commands[1].clone();
+                    other.surface.as_mut().unwrap().group = 2;
+                    commands.push(other);
+                }
+            }
+
+            // 高さのある元画像で、隠面省略を実際に有効にした状態を検査する。
+            if mode >= 27 {
+                let tall = |rgba: [u8; 4]| {
+                    let size = wgpu::Extent3d {
+                        height: 8,
+                        ..extent
+                    };
+                    let tex = device.create_texture(&wgpu::TextureDescriptor {
+                        label: None,
+                        size,
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
+                    let values = (0..width * 8).flat_map(|_| rgba).collect::<Vec<_>>();
+                    queue.write_texture(
+                        tex.as_image_copy(),
+                        &values,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(width * 4),
+                            rows_per_image: Some(8),
+                        },
+                        size,
+                    );
+                    tex.create_view(&Default::default())
+                };
+                let white = tall([255; 4]);
+                let black = tall([0, 0, 0, 255]);
+                let mut base = quad(white.clone(), white.clone(), 1.);
+                base.opaque = true;
+                let mut front = quad(white, black, 0.5);
+                front.opaque = true;
+                commands = vec![base, front];
+                if mode == 28 {
+                    // 半透明の後続画像は下地を遮蔽してはならない。
+                    let transparent = tall([0, 0, 0, 128]);
+                    commands.push(quad(transparent.clone(), transparent, 1.));
+                }
+            }
+
             if (4..=5).contains(&mode) {
                 let mut overlay = quad(shade_view.clone(), shade_view.clone(), 1.);
                 overlay.shade = true;
@@ -1912,6 +2440,29 @@ mod tests {
                         };
                         (gamma * 255.).round() as u8
                     }
+                    18 => 64,
+                    19 => 192,
+                    20 => 96,
+                    21 => 64,
+                    22 => 128,
+                    23 => 32,
+                    24 => (64. + 128. * x as f32 / (width - 1) as f32).round() as u8,
+                    27 => 128,
+                    28 => 92,
+                    26 => {
+                        if x >= width as usize - 2 {
+                            255
+                        } else {
+                            0
+                        }
+                    }
+                    25 => {
+                        if (x / 4) % 2 == 0 {
+                            64
+                        } else {
+                            192
+                        }
+                    }
                     14 => {
                         if (x / 4) % 2 == 0 {
                             0
@@ -1931,6 +2482,15 @@ mod tests {
                     pixel[0].abs_diff(expected) <= 2,
                     "mode={mode} x={x}: {pixel:?}, expected={expected}"
                 );
+                if mode == 20 {
+                    assert!(
+                        pixel[1].abs_diff(32) <= 2 && pixel[2].abs_diff(32) <= 2,
+                        "半透明地表の背景係数が不正: {pixel:?}"
+                    );
+                }
+                if mode == 21 {
+                    assert_eq!(&pixel[1..3], &[0, 0], "不透明な地表へ背景陰影が漏れた");
+                }
                 assert_eq!(pixel[3], 255);
             }
         }

@@ -78,6 +78,7 @@ pub fn sample(tile: Tile, z: u32, uv: Rect) -> (Tile, Rect) {
 pub type Backend<'a> = Option<(&'a RenderState, &'a Renderer)>;
 
 pub struct Quad {
+    pub opaque: bool,
     pub amount: Option<f32>,
     pub tile: Tile,
     pub edge_filter: Interpolation,
@@ -108,6 +109,7 @@ impl Quad {
             uv,
             textures,
             edge_filter: Interpolation::Bilinear,
+            opaque: false,
         })
     }
 }
@@ -330,6 +332,8 @@ impl Renderer {
                         amount: quad.amount.unwrap_or(amount),
                         shade,
                         gamma_shade: shade && self.gamma_shade,
+                        opaque: quad.opaque,
+                        surface: None,
                         edge_filter: quad.edge_filter,
                     },
                 );
@@ -508,6 +512,7 @@ mod tests {
                     uv: [FULL_UV; 2],
                     textures: [Some(texture.clone()), Some(texture.clone())],
                     edge_filter: Interpolation::Edge,
+                    opaque: false,
                 }],
                 Vec::new(),
                 1.,
@@ -613,6 +618,7 @@ mod tests {
         let quad = |colors: [[u8; 4]; 2], format| Quad {
             amount: None,
             edge_filter: Interpolation::Bilinear,
+            opaque: false,
             tile: Tile { z: 0, x: 0, y: 0 },
             uv: [FULL_UV; 2],
             textures: colors.map(|bytes| Some(texture(bytes, format))),
@@ -877,6 +883,7 @@ mod tests {
                         uv: [uv; 2],
                         textures: [Some(source.clone()), Some(source.clone())],
                         edge_filter,
+                        opaque: false,
                     }
                 })
                 .collect();
@@ -991,7 +998,7 @@ mod tests {
                 let ms = times[skip..].iter().sum::<f64>() / (times.len() - skip) as f64;
                 eprintln!("拡大GPU: mode={edge_filter:?} {pixels}x{height} {ms:.3}ms");
                 if let Some(input) = &preview {
-                    std::fs::write(input.with_file_name(if edge_filter == Interpolation::Edge {"timing-edge.json"}else if edge_filter == Interpolation::EdgeBilinear {"timing-edge-bilinear.json"}else{"timing-bilinear.json"}),
+                    std::fs::write(input.with_file_name(if edge_filter == Interpolation::Edge {"timing-edge.json"}else{"timing-bilinear.json"}),
                         serde_json::to_vec_pretty(&serde_json::json!({"adapter":adapter.get_info().name,"width":pixels,"height":height,"edge":edge_filter,"gpu_ms":ms,"frames":times})).unwrap()).unwrap();
                 }
             }
@@ -1011,7 +1018,6 @@ mod tests {
             for (name, mode) in [
                 ("bilinear", Interpolation::Bilinear),
                 ("edge", Interpolation::Edge),
-                ("edge-bilinear", Interpolation::EdgeBilinear),
             ] {
                 let bytes = render(mode, false, pixels);
                 let height = std::env::var("YAMAMUKI_FILTER_PREVIEW_HEIGHT")
@@ -1024,13 +1030,6 @@ mod tests {
                     .unwrap();
             }
             return;
-        }
-        // 基底補間の比較版も、分割タイルと単一画像で同じ画素を生成する。
-        let edge_bilinear = render(Interpolation::EdgeBilinear, false, 128);
-        assert_eq!(edge_bilinear, render(Interpolation::EdgeBilinear, true, 128));
-        if !gradient && !curved && boundary == 0 {
-            assert_ne!(edge_bilinear, render(Interpolation::Bilinear, false, 128));
-            assert_ne!(edge_bilinear, render(Interpolation::Edge, false, 128));
         }
         if boundary != 0 {
             let geometric = render(Interpolation::Edge, false, 128);

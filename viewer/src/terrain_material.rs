@@ -5,6 +5,8 @@ use yamamuki_terrain_view::direct_material::{Capture, Quad};
 pub struct BorderCapture {
     pub rect: egui::Rect,
     pub color: egui::Color32,
+    pub uv: egui::Rect,
+    pub fill: bool,
 }
 pub fn tile_border(
     painter: &egui::Painter,
@@ -14,18 +16,98 @@ pub fn tile_border(
     material: bool,
     color: egui::Color32,
 ) {
+    clipped_tile_border(painter, rect, view, tile, tile, material, color);
+}
+/// 表示区画で切り取られた元タイルの、本来の外周だけを描く。
+pub fn clipped_tile_border(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    view: &crate::map::View,
+    source: crate::map::Tile,
+    region: crate::map::Tile,
+    material: bool,
+    color: egui::Color32,
+) {
+    let Some((tile, uv)) = clipped_border_area(source, region) else {
+        return;
+    };
+    if uv.left() > 0. && uv.right() < 1. && uv.top() > 0. && uv.bottom() < 1. {
+        return;
+    }
     let corners = view.tile_corners(rect, tile);
     if material {
         let rect = egui::Rect::from_points(&corners);
         painter.add(egui::Shape::Callback(egui::PaintCallback {
             rect,
-            callback: std::sync::Arc::new(BorderCapture { rect, color }),
+            callback: std::sync::Arc::new(BorderCapture {
+                rect,
+                color,
+                uv,
+                fill: false,
+            }),
         }));
     } else {
-        painter.add(egui::Shape::closed_line(
+        // UVが元タイルの0または1に一致する辺だけが本物の外周。
+        for (visible, a, b) in [
+            (uv.top() == 0., 0, 1),
+            (uv.right() == 1., 1, 2),
+            (uv.bottom() == 1., 2, 3),
+            (uv.left() == 0., 3, 0),
+        ] {
+            if visible {
+                painter.line_segment([corners[a], corners[b]], egui::Stroke::new(1.5_f32, color));
+            }
+        }
+    }
+}
+/// 元タイルと表示区画の交差だけを塗り、粗タイル内の細タイルを偽のレベルにしない。
+pub fn tile_level_color(z: u32) -> egui::Color32 {
+    let hue = (z as f32 * 0.618034).fract();
+    egui::ecolor::Hsva::new(hue, 0.7, 0.95, 0.48).into()
+}
+pub fn clipped_tile_fill(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    view: &crate::map::View,
+    source: crate::map::Tile,
+    region: crate::map::Tile,
+    material: bool,
+    weight: f32,
+) {
+    let Some((tile, _)) = clipped_border_area(source, region) else {
+        return;
+    };
+    let color = tile_level_color(source.z).gamma_multiply(weight.clamp(0., 1.));
+    let corners = view.tile_corners(rect, tile);
+    if material {
+        let area = egui::Rect::from_points(&corners);
+        painter.add(egui::Shape::Callback(egui::PaintCallback {
+            rect: area,
+            callback: std::sync::Arc::new(BorderCapture {
+                rect: area,
+                color,
+                uv: crate::lod_fade::FULL_UV,
+                fill: true,
+            }),
+        }));
+    } else {
+        painter.add(egui::Shape::convex_polygon(
             corners.to_vec(),
-            egui::Stroke::new(1.5_f32, color),
+            color,
+            egui::Stroke::NONE,
         ));
+    }
+}
+fn clipped_border_area(
+    source: crate::map::Tile,
+    region: crate::map::Tile,
+) -> Option<(crate::map::Tile, egui::Rect)> {
+    if source.z <= region.z {
+        let (parent, uv) = crate::lod_fade::sample(region, source.z, crate::lod_fade::FULL_UV);
+        (parent == source).then_some((region, uv))
+    } else {
+        let (parent, _) = crate::lod_fade::sample(source, region.z, crate::lod_fade::FULL_UV);
+        (parent == region).then_some((source, crate::lod_fade::FULL_UV))
     }
 }
 const COVERAGE_MARGIN: f64 = 1.02;
@@ -102,6 +184,8 @@ pub fn collect(
                         tint: color,
                         shade: false,
                         gamma_shade: false,
+                        opaque: false,
+                        surface: None,
                         edge_filter: Interpolation::Bilinear,
                         border: false,
                     });
@@ -111,14 +195,16 @@ pub fn collect(
                 if let Some(c) = callback.callback.downcast_ref::<BorderCapture>() {
                     result.push(Quad {
                         bounds: world_rect(view, rect, c.rect),
-                        uv: [crate::lod_fade::FULL_UV; 2],
+                        uv: [c.uv; 2],
                         textures: [None, None],
                         amount: 1.,
                         tint: c.color.to_array().map(|v| v as f32 / 255.),
                         shade: false,
                         gamma_shade: false,
+                        opaque: false,
+                        surface: None,
                         edge_filter: Interpolation::Bilinear,
-                        border: true,
+                        border: !c.fill,
                     });
                 } else if let Some(c) = callback.callback.downcast_ref::<Capture>() {
                     result.push(Quad {
@@ -129,6 +215,8 @@ pub fn collect(
                         tint: [1.; 4],
                         shade: c.shade,
                         gamma_shade: c.gamma_shade,
+                        opaque: c.opaque,
+                        surface: c.surface.clone(),
                         edge_filter: c.edge_filter,
                         border: false,
                     });
@@ -149,7 +237,158 @@ fn intersects_view(tile: [f64; 4], view: [f64; 4]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn level_fill_uses_source_level_and_only_the_displayed_quadrant() {
+        let ctx = egui::Context::default();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(256., 256.));
+        let view = crate::map::View {
+            center: [0.5; 2],
+            zoom: 0.,
+            orientation: Default::default(),
+        };
+        let source = crate::map::Tile { z: 0, x: 0, y: 0 };
+        let region = crate::map::Tile { z: 1, x: 1, y: 0 };
+        let output = ctx.run(Default::default(), |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            clipped_tile_fill(&painter, rect, &view, source, region, true, 1.);
+        });
+        let fills = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Callback(c) => c.callback.downcast_ref::<BorderCapture>(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(fills.len(), 1);
+        let fill = fills[0];
+        assert!(fill.fill);
+        assert_eq!(fill.color, tile_level_color(0));
+        assert_ne!(fill.color, tile_level_color(1));
+        assert_eq!(
+            fill.rect,
+            egui::Rect::from_min_max(egui::pos2(128., 0.), egui::pos2(256., 128.))
+        );
+    }
     use super::*;
+    #[test]
+    fn partial_coarse_tile_keeps_source_uv_instead_of_region_edges() {
+        use crate::map::Tile;
+        let coarse = Tile { z: 0, x: 0, y: 0 };
+        let detail = Tile { z: 1, x: 1, y: 0 };
+        let (tile, uv) = clipped_border_area(coarse, detail).unwrap();
+        assert_eq!(tile, detail);
+        assert_eq!(
+            uv,
+            egui::Rect::from_min_max(egui::pos2(0.5, 0.), egui::pos2(1., 0.5))
+        );
+        assert_eq!(
+            [
+                uv.top() == 0.,
+                uv.right() == 1.,
+                uv.bottom() == 1.,
+                uv.left() == 0.
+            ],
+            [true, true, false, false]
+        );
+        assert_eq!(
+            clipped_border_area(detail, coarse),
+            Some((detail, crate::lod_fade::FULL_UV))
+        );
+        assert!(clipped_border_area(detail, Tile { z: 1, x: 0, y: 1 }).is_none());
+    }
+    #[test]
+    fn clipped_border_drawing_omits_the_artificial_subdivision_edges() {
+        let ctx = egui::Context::default();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(256., 256.));
+        let view = crate::map::View {
+            center: [0.5, 0.5],
+            zoom: 0.,
+            orientation: Default::default(),
+        };
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            clipped_tile_border(
+                &painter,
+                rect,
+                &view,
+                crate::map::Tile { z: 0, x: 0, y: 0 },
+                crate::map::Tile { z: 1, x: 1, y: 0 },
+                false,
+                egui::Color32::WHITE,
+            );
+        });
+        let lines = output
+            .shapes
+            .iter()
+            .filter(|s| matches!(s.shape, egui::Shape::LineSegment { .. }))
+            .count();
+        assert_eq!(lines, 2, "粗タイルの部分区画へ偽の4辺を描いた");
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            clipped_tile_border(
+                &painter,
+                rect,
+                &view,
+                crate::map::Tile { z: 0, x: 0, y: 0 },
+                crate::map::Tile { z: 2, x: 1, y: 1 },
+                true,
+                egui::Color32::WHITE,
+            );
+        });
+        assert!(output.shapes.is_empty(), "粗タイルの内部に境界を描いた");
+    }
+    #[test]
+    fn one_detailed_quadrant_does_not_put_a_fine_grid_over_the_coarse_remainder() {
+        let ctx = egui::Context::default();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(256., 256.));
+        let view = crate::map::View {
+            center: [0.5, 0.5],
+            zoom: 0.,
+            orientation: Default::default(),
+        };
+        let coarse = crate::map::Tile { z: 0, x: 0, y: 0 };
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            for y in 0..2 {
+                for x in 0..2 {
+                    let region = crate::map::Tile { z: 1, x, y };
+                    let source = if x == 0 && y == 0 { region } else { coarse };
+                    clipped_tile_border(
+                        &painter,
+                        rect,
+                        &view,
+                        source,
+                        region,
+                        false,
+                        egui::Color32::WHITE,
+                    );
+                }
+            }
+        });
+        let lines: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|s| {
+                if let egui::Shape::LineSegment { points, .. } = &s.shape {
+                    Some(*points)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(lines.len(), 10);
+        for [a, b] in lines {
+            assert!(
+                !(a.x == 128. && b.x == 128. && a.y.min(b.y) >= 128.),
+                "粗タイルの右下側に偽の縦線がある"
+            );
+            assert!(
+                !(a.y == 128. && b.y == 128. && a.x.min(b.x) >= 128.),
+                "粗タイルの右下側に偽の横線がある"
+            );
+        }
+    }
     #[test]
     fn lod_regions_select_whole_tiles_including_partial_intersections() {
         let tile = [0.25, 0.25, 0.5, 0.5];

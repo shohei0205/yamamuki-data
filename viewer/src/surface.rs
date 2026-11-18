@@ -309,8 +309,10 @@ struct ShadeImage {
 
 #[derive(Default)]
 struct ComposedTile {
+    source_tiles: Vec<Tile>,
     image: Option<ColorImage>,
     shades: Vec<ShadeImage>,
+    background_gain: Option<Vec<f32>>,
 }
 
 fn composite(
@@ -407,6 +409,19 @@ fn composite_cached(
                     }
                 }
                 if let Some(image) = image {
+                    // 合成用の余白だけに使った隣接タイルは、表示中の境界に含めない。
+                    if row < gutter + pixels
+                        && row + ys.len() > gutter
+                        && col < gutter + pixels
+                        && col + xs.len() > gutter
+                    {
+                        let shift = z - source_z;
+                        tile_images.source_tiles.push(Tile {
+                            z: source_z,
+                            x: x >> shift,
+                            y: y >> shift,
+                        });
+                    }
                     let mut shade_pixels = shade_online.then(|| {
                         &mut shade_image
                             .get_or_insert_with(|| ShadeImage {
@@ -594,6 +609,24 @@ fn composite_cached(
                     .any(|pixel| pixel.a() != 0)
             })
     });
+    tile_images
+        .source_tiles
+        .sort_unstable_by_key(|t| (t.z, t.x, t.y));
+    tile_images.source_tiles.dedup();
+    if !tile_images.shades.is_empty() {
+        let mut gains = vec![1.; side * side];
+        for shade in &tile_images.shades {
+            for (gain, pixel) in gains.iter_mut().zip(&shade.image.pixels) {
+                *gain *= (1.
+                    + shade.strength
+                        * (f32::from(pixel.r())
+                            - f32::from(shade.neutral) * f32::from(pixel.a()) / 255.)
+                        / f32::from(shade.neutral))
+                .clamp(0., 2.);
+            }
+        }
+        tile_images.background_gain = Some(gains);
+    }
     if colors
         .chunks_exact(side)
         .skip(gutter)
@@ -642,25 +675,9 @@ impl Key {
                 .eq(other.levels.iter().map(Option::is_some))
     }
 
-    fn layer_keys(&self) -> Vec<(usize, Self)> {
-        let mut base = self.overlay;
-        self.levels
-            .iter()
-            .enumerate()
-            .filter_map(|(layer, level)| {
-                level.as_ref()?;
-                let mut key = self.clone();
-                for index in 0..key.levels.len() {
-                    if index != layer {
-                        key.levels[index] = None;
-                        key.auto_levels[index] = false;
-                    }
-                }
-                key.overlay = base;
-                base = true;
-                Some((layer, key))
-            })
-            .collect()
+    // 選択中の全レイヤーを一つのキャッシュキーで合成する。
+    fn draw_keys(&self) -> Vec<(usize, Self)> {
+        vec![(0, self.clone())]
     }
 
     fn covers(&self, tile: Tile) -> bool {
@@ -669,10 +686,46 @@ impl Key {
     }
 }
 
+fn upload_background_gain(
+    state: &eframe::egui_wgpu::RenderState,
+    size: [u32; 2],
+    gain: &[f32],
+) -> wgpu::TextureView {
+    let texture = state.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("合成済み地表の背景乗算係数"),
+        size: wgpu::Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::R32Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let bytes: Vec<_> = gain.iter().flat_map(|v| v.to_le_bytes()).collect();
+    state.queue.write_texture(
+        texture.as_image_copy(),
+        &bytes,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(size[0] * 4),
+            rows_per_image: None,
+        },
+        texture.size(),
+    );
+    texture.create_view(&Default::default())
+}
+
 type Reply = (Key, Result<ComposedTile>);
 
 struct Cached {
+    source_tiles: Vec<Tile>,
     image: Option<crate::tile_atlas::Image>,
+    background_gain: Option<wgpu::TextureView>,
+    pending_gain: Option<Vec<f32>>,
     shades: Vec<(usize, surface_shade::ShadeTexture)>,
     bytes: usize,
     touched: u64,
@@ -892,6 +945,7 @@ pub struct Surface {
     pub edge_filter: Interpolation,
     tile_lods: HashMap<usize, HashMap<Tile, lod_fade::State<Key>>>,
     pub borders: bool,
+    pub level_colors: bool,
     source: Source,
     layer_stats: HashMap<(i64, i64), LayerStats>,
     dataset: usize,
@@ -981,6 +1035,7 @@ impl Surface {
             animate_lod: true,
             tile_lods: HashMap::new(),
             borders: false,
+            level_colors: false,
             source,
             layer_stats: HashMap::new(),
             dataset: 0,
@@ -1166,7 +1221,7 @@ impl Surface {
                     && key.same_layer(grid)
                     && key.covers(region)
                     && key
-                        .layer_keys()
+                        .draw_keys()
                         .iter()
                         .all(|(_, key)| self.cache.get(key).is_some_and(|entry| !entry.failed))
             })
@@ -1178,7 +1233,12 @@ impl Surface {
         (
             self.cache
                 .values()
-                .filter(|entry| entry.image.is_some() || !entry.shades.is_empty())
+                .filter(|entry| {
+                    entry.image.is_some()
+                        || entry.background_gain.is_some()
+                        || entry.pending_gain.is_some()
+                        || !entry.shades.is_empty()
+                })
                 .count(),
             self.cache_bytes,
             self.pending.len(),
@@ -1194,7 +1254,7 @@ impl Surface {
             self.frame,
         );
         self.cached_tiles.retain(|key, _| {
-            key.layer_keys()
+            key.draw_keys()
                 .iter()
                 .all(|(_, key)| self.cache.get(key).is_some_and(|entry| !entry.failed))
         });
@@ -1214,7 +1274,8 @@ impl Surface {
         lod: Lod,
         lod_zoom: f64,
     ) {
-        // 各レイヤーの画像・補間は分離し、切り替え時刻だけをタイル単位で共有する。
+        // 各レイヤーのLODを選び、合成済みの画像をタイル単位で切り替える。
+        let surface_group = self as *const Self as usize;
         let set = &self.source.datasets[self.dataset];
         self.frame = ui.ctx().cumulative_pass_nr();
         let limit = if dragging { 1 } else { PENDING };
@@ -1223,14 +1284,23 @@ impl Surface {
             received += 1;
             self.pending.remove(&key);
             let mut entry = Cached {
+                source_tiles: Vec::new(),
                 image: None,
+                background_gain: None,
+                pending_gain: None,
                 shades: Vec::new(),
                 bytes: 0,
                 touched: self.frame,
                 failed: false,
             };
             match result {
-                Ok(ComposedTile { image, shades }) => {
+                Ok(ComposedTile {
+                    image,
+                    shades,
+                    background_gain,
+                    source_tiles,
+                }) => {
+                    entry.source_tiles = source_tiles;
                     if let Some(image) = image {
                         entry.bytes += image.pixels.len() * 4;
                         entry.image = Some(crate::tile_atlas::Image::load(
@@ -1239,6 +1309,16 @@ impl Surface {
                             image,
                             egui::TextureOptions::LINEAR,
                         ));
+                    }
+                    if let Some(gain) = background_gain {
+                        entry.bytes += gain.len() * 4;
+                        if let Some((state, _)) = fade_backend {
+                            let side = (key.pixels + key.gutter * 2) as u32;
+                            entry.background_gain =
+                                Some(upload_background_gain(state, [side, side], &gain));
+                        } else {
+                            entry.pending_gain = Some(gain);
+                        }
                     }
                     if let Some((state, _)) = fade_backend.filter(|_| !shades.is_empty()) {
                         let renderer = self
@@ -1263,6 +1343,16 @@ impl Surface {
         }
         if received == limit && !self.pending.is_empty() {
             ui.ctx().request_repaint();
+        }
+        // 準備中のプレビューで受け取った係数も、GPUが使える最初のフレームで転送する。
+        if let Some((state, _)) = fade_backend {
+            for (key, entry) in &mut self.cache {
+                if let Some(gain) = entry.pending_gain.take() {
+                    let side = (key.pixels + key.gutter * 2) as u32;
+                    entry.background_gain =
+                        Some(upload_background_gain(state, [side, side], &gain));
+                }
+            }
         }
         // 3Dの収集用座標系には画素数の意味がない。通常の画面と同じ密度で元タイルを保持する。
         let scale = if self.material_pass == 0 {
@@ -1321,7 +1411,7 @@ impl Surface {
                     tile,
                     ..grid.clone()
                 };
-                for (_, key) in bundle.layer_keys() {
+                for (_, key) in bundle.draw_keys() {
                     if let Some(entry) = self.cache.get_mut(&key) {
                         entry.touched = self.frame;
                         if entry.failed && self.error.is_none() {
@@ -1335,7 +1425,7 @@ impl Surface {
                     }
                 }
                 if bundle
-                    .layer_keys()
+                    .draw_keys()
                     .iter()
                     .all(|(_, key)| self.cache.get(key).is_some_and(|entry| !entry.failed))
                 {
@@ -1373,7 +1463,7 @@ impl Surface {
             let mut cpu_shades = (0..set.layers.len())
                 .map(|_| Vec::new())
                 .collect::<Vec<_>>();
-            let mut borders = Vec::new();
+            let mut borders = HashMap::<(Tile, Tile), f32>::new();
             for region in regions {
                 let target = Key {
                     tile: lod_fade::sample(region, z, lod_fade::FULL_UV).0,
@@ -1388,7 +1478,7 @@ impl Surface {
                     })
                     .unwrap_or_default();
                 let available = |key: &Key| {
-                    key.layer_keys()
+                    key.draw_keys()
                         .iter()
                         .all(|(_, key)| self.cache.get(key).is_some_and(|entry| !entry.failed))
                 };
@@ -1430,7 +1520,8 @@ impl Surface {
                         let color = entry.image.as_ref().and_then(|image| {
                             renderer.color_view(&textures, image.id(), self.frame)
                         });
-                        let ready = entry.image.is_none() || color.is_some();
+                        let ready = entry.pending_gain.is_none()
+                            && (entry.image.is_none() || color.is_some());
                         Some((
                             color,
                             ready,
@@ -1441,11 +1532,12 @@ impl Surface {
                                 .collect::<Vec<_>>(),
                             entry.image.as_ref().map_or(uv, |image| image.uv(uv)),
                             uv,
+                            entry.background_gain.clone(),
                         ))
                     };
                     // 空・透明タイルも含め、有効な全レイヤーのGPU転送を待つ。
                     let ready = desired
-                        .layer_keys()
+                        .draw_keys()
                         .iter()
                         .all(|(_, key)| fetch(key).is_some_and(|entry| entry.1));
                     // 描画区画をまとめ直しただけなら、表示していない粗画像から再フェードしない。
@@ -1453,7 +1545,7 @@ impl Surface {
                     if !ready
                         && let Some(fallback) = initial_fallback
                         && fallback
-                            .layer_keys()
+                            .draw_keys()
                             .iter()
                             .all(|(_, key)| fetch(key).is_some_and(|entry| entry.1))
                     {
@@ -1472,9 +1564,45 @@ impl Surface {
                         .blend(ui.ctx(), now)
                         .map_or((current, 1.), |(old, t)| (old, t));
                     for ((layer, old), (_, current)) in
-                        old.layer_keys().into_iter().zip(current.layer_keys())
+                        old.draw_keys().into_iter().zip(current.draw_keys())
                     {
                         let mut entries = [fetch(&old), fetch(&current)];
+                        if self.material_pass != 0
+                            && entries.iter().flatten().any(|e| e.5.is_some())
+                        {
+                            let uv = entries
+                                .each_ref()
+                                .map(|e| e.as_ref().map_or(lod_fade::FULL_UV, |e| e.3));
+                            let gain_uv = entries
+                                .each_ref()
+                                .map(|e| e.as_ref().map_or(lod_fade::FULL_UV, |e| e.4));
+                            yamamuki_terrain_view::direct_material::capture(
+                                painter,
+                                yamamuki_terrain_view::direct_material::Capture {
+                                    rect: Rect::from_points(&view.tile_corners(rect, region)),
+                                    uv,
+                                    textures: entries
+                                        .each_ref()
+                                        .map(|e| e.as_ref().and_then(|e| e.0.clone())),
+                                    amount,
+                                    shade: false,
+                                    gamma_shade: false,
+                                    opaque: false,
+                                    edge_filter: self.edge_filter,
+                                    surface: Some(
+                                        yamamuki_terrain_view::direct_material::SurfaceBlend {
+                                            textures: entries
+                                                .each_ref()
+                                                .map(|e| e.as_ref().and_then(|e| e.5.clone())),
+                                            uv: gain_uv,
+                                            group: surface_group,
+                                        },
+                                    ),
+                                },
+                            );
+                            continue;
+                        }
+
                         let color_ready = entries
                             .each_ref()
                             .map(|entry| entry.as_ref().is_some_and(|entry| entry.1));
@@ -1494,23 +1622,26 @@ impl Surface {
                         let uv = entries
                             .each_ref()
                             .map(|entry| entry.as_ref().map_or(lod_fade::FULL_UV, |entry| entry.4));
-                        let shade = entries.each_ref().map(|entry| {
-                            entry
-                                .as_ref()?
-                                .2
-                                .iter()
-                                .find(|(index, _)| *index == layer)
-                                .map(|(_, texture)| texture.clone())
-                        });
-                        if let Some(mut quad) = lod_fade::Quad::new(region, uv, shade, ready) {
-                            quad.edge_filter = self.edge_filter;
-                            quad.amount = Some(amount);
-                            shades[layer].push(quad);
+                        // 準備中の旧2D経路でも、全陰影を背景へ掛けてから統合色を重ねる。
+                        for shade_index in 0..set.layers.len() {
+                            let shade = entries.each_ref().map(|entry| {
+                                entry
+                                    .as_ref()?
+                                    .2
+                                    .iter()
+                                    .find(|(index, _)| *index == shade_index)
+                                    .map(|(_, texture)| texture.clone())
+                            });
+                            if let Some(mut quad) = lod_fade::Quad::new(region, uv, shade, ready) {
+                                quad.edge_filter = self.edge_filter;
+                                quad.amount = Some(amount);
+                                shades[layer].push(quad);
+                            }
                         }
                     }
                 } else {
                     transition.update(desired.clone(), true, false, now);
-                    for (layer, key) in desired.layer_keys() {
+                    for (layer, key) in desired.draw_keys() {
                         if let Some(entry) = self.cache.get_mut(&key) {
                             entry.touched = self.frame;
                             entry.collect(
@@ -1524,8 +1655,22 @@ impl Surface {
                         }
                     }
                 }
-                if self.borders {
-                    borders.push(region);
+                if self.borders || self.level_colors {
+                    if let Some(current) = transition.current.as_ref() {
+                        let (old, amount) = transition
+                            .blend(ui.ctx(), now)
+                            .map_or((current, 1.), |(old, t)| (old, t));
+                        for (key, weight) in [(old, 1. - amount), (current, amount)] {
+                            if weight <= 0. {
+                                continue;
+                            }
+                            if let Some(entry) = self.cache.get(key) {
+                                for source in &entry.source_tiles {
+                                    *borders.entry((region, *source)).or_default() += weight;
+                                }
+                            }
+                        }
+                    }
                 }
                 next.insert(region, transition);
             }
@@ -1555,15 +1700,29 @@ impl Surface {
                     }
                 }
             }
-            for tile in borders {
-                crate::terrain_material::tile_border(
-                    painter,
-                    rect,
-                    view,
-                    tile,
-                    self.material_pass != 0,
-                    egui::Color32::from_rgb(0, 210, 235),
-                );
+            for ((region, source), weight) in borders {
+                if self.level_colors {
+                    crate::terrain_material::clipped_tile_fill(
+                        painter,
+                        rect,
+                        view,
+                        source,
+                        region,
+                        self.material_pass != 0,
+                        weight,
+                    );
+                }
+                if self.borders {
+                    crate::terrain_material::clipped_tile_border(
+                        painter,
+                        rect,
+                        view,
+                        source,
+                        region,
+                        self.material_pass != 0,
+                        egui::Color32::from_rgb(0, 210, 235).gamma_multiply(weight.clamp(0., 1.)),
+                    );
+                }
             }
         }
         if self.material_pass == 0 {
@@ -2330,15 +2489,20 @@ mod tests {
     }
 
     #[test]
-    fn drawing_keeps_layers_separate_with_independent_lods_and_original_order() -> Result<()> {
-        check_separate_layer_drawing(false)
+    fn drawing_merges_layers_with_independent_lods_and_original_order() -> Result<()> {
+        check_merged_layer_drawing(false, false)
     }
     #[test]
     #[ignore = "実GPUで地形へ渡す補間・陰影・色のレイヤー順を確認する"]
-    fn gpu_layer_interpolation_precedes_forest_shade_water_composition() -> Result<()> {
-        check_separate_layer_drawing(true)
+    fn gpu_merged_surface_is_one_material_per_tile() -> Result<()> {
+        check_merged_layer_drawing(true, false)
     }
-    fn check_separate_layer_drawing(gpu: bool) -> Result<()> {
+    #[test]
+    #[ignore = "実GPUで地表重ね表示が一回の合成描画になることを確認する"]
+    fn gpu_merged_surface_overlay_keeps_background_shade_in_one_material() -> Result<()> {
+        check_merged_layer_drawing(true, true)
+    }
+    fn check_merged_layer_drawing(gpu: bool, overlay: bool) -> Result<()> {
         let temp = tempfile::tempdir()?;
         let path = temp.path().join("separate.sqlite3");
         let conn = Connection::open(&path)?;
@@ -2351,7 +2515,7 @@ mod tests {
                 (1,3,'water','mask',20,'[]','{"color":[30,90,150,255]}');
             INSERT INTO surface_levels VALUES(1,1,0,'z0',2),(1,1,1,'z1',2),(1,2,0,'z0',2),(1,2,1,'z1',2),(1,3,0,'z0',2),(1,3,1,'z1',2);
         "#)?;
-        for (layer, gray) in [(1, 255), (2, 68), (3, 128)] {
+        for (layer, gray) in [(1, if overlay { 128 } else { 255 }), (2, 68), (3, 128)] {
             let mut png = Vec::new();
             {
                 let mut encoder = png::Encoder::new(&mut png, 2, 2);
@@ -2395,7 +2559,7 @@ mod tests {
             zoom: 0.,
             orientation: Default::default(),
         };
-        let mut frame = || {
+        let mut frame = |upload: bool| {
             let output = ctx.run(egui::RawInput::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(256., 256.));
@@ -2405,8 +2569,8 @@ mod tests {
                         rect,
                         &view,
                         false,
-                        false,
-                        state.as_ref().zip(renderer.as_ref()),
+                        overlay,
+                        state.as_ref().zip(renderer.as_ref()).filter(|_| upload),
                         Lod::default(),
                         0.,
                     );
@@ -2419,13 +2583,25 @@ mod tests {
                 }
             }
             let captured = output.shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Callback(c) if c.callback.downcast_ref::<yamamuki_terrain_view::direct_material::Capture>().is_some())).count();
-            let ready =
-                surface.pending.is_empty() && surface.cache.len() >= 3 && (!gpu || captured >= 3);
+            let ready = surface.pending.is_empty()
+                && !surface.cache.is_empty()
+                && (!gpu || !upload || captured >= 1);
             (output, ready)
         };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // GPU準備前のプレビューで受け取った係数も、後の本描画で失われない。
+        if gpu && overlay {
+            loop {
+                let (_, ready) = frame(false);
+                if ready {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "CPU合成が完了しない");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
         let output = loop {
-            let (output, ready) = frame();
+            let (output, ready) = frame(true);
             if ready {
                 break output;
             }
@@ -2437,12 +2613,12 @@ mod tests {
         };
         drop(frame);
         assert_eq!(surface.options, original_options);
-        assert!(surface.cache.len() >= 3);
+        assert_eq!(surface.cache.len(), 1);
         for key in surface.cache.keys() {
             assert_eq!(
                 key.levels.iter().flatten().count(),
-                1,
-                "合成済みの画像を作っている"
+                3,
+                "レイヤーが一つのキャッシュへ統合されていない"
             );
             assert_eq!(key.gutter, 3);
         }
@@ -2458,40 +2634,39 @@ mod tests {
                         .downcast_ref::<yamamuki_terrain_view::direct_material::Capture>()
                 })
                 .collect();
-            assert_eq!(captures.len(), 3);
+            assert_eq!(captures.len(), 1);
             assert_eq!(
                 captures.iter().map(|c| c.shade).collect::<Vec<_>>(),
-                vec![false, true, false]
+                vec![false]
             );
             assert!(
                 captures
                     .iter()
                     .all(|c| c.edge_filter == Interpolation::Edge),
-                "合成前のレイヤーに補間が適用されていない"
+                "合成済みタイルに選択中の補間が適用されていない"
             );
             assert!(
                 captures
                     .iter()
                     .all(|c| c.textures.iter().all(Option::is_some))
             );
+            assert_eq!(
+                captures[0].surface.is_some(),
+                overlay,
+                "オンライン背景の陰影が統合されていない"
+            );
+            if overlay {
+                return Ok(());
+            }
             check_synchronized_surface_tile_fades(
                 &ctx,
                 &mut surface,
                 state.as_ref().unwrap(),
                 renderer.as_ref().unwrap(),
             )?;
-            for layer in 0..3 {
-                check_independent_surface_tile_fades(
-                    &ctx,
-                    &mut surface,
-                    state.as_ref().unwrap(),
-                    renderer.as_ref().unwrap(),
-                    layer,
-                )?;
-            }
             return Ok(());
         }
-        let images: Vec<_> = [0, 2]
+        let images: Vec<_> = [0]
             .into_iter()
             .map(|layer| {
                 let (key, entry) = surface
@@ -2520,7 +2695,7 @@ mod tests {
             })
             .collect();
         // 同じアトラスページに格納されても、UVで識別して実際の描画順を確認する。
-        assert_eq!(drawn, vec![0, 1]);
+        assert_eq!(drawn, vec![0]);
         assert!(surface.tile_lods.contains_key(&0));
         Ok(())
     }
@@ -2597,95 +2772,46 @@ mod tests {
             }
         }
         let initial = frame(surface, 20.);
-        assert_eq!(initial.len(), 6, "GPUにある粗い地表を選べず白抜けした");
+        assert_eq!(initial.len(), 2, "GPUにある粗い地表を選べず白抜けした");
         let keys: Vec<_> = requests.try_iter().collect();
-        let image = |layer| match layer {
-            1 => ComposedTile {
-                image: None,
-                shades: vec![ShadeImage {
-                    layer: 1,
-                    image: ColorImage::new([262, 262], egui::Color32::WHITE),
-                    neutral: 136,
-                    strength: 0.65,
-                }],
-            },
-            2 => ComposedTile::default(),
-            _ => ComposedTile {
-                image: Some(ColorImage::new([262, 262], egui::Color32::WHITE)),
-                shades: Vec::new(),
-            },
+        let image = || ComposedTile {
+            image: Some(ColorImage::new([262, 262], egui::Color32::WHITE)),
+            ..Default::default()
         };
-        for (layer, time) in [(0, 20.01), (1, 20.03)] {
-            let key = keys
-                .iter()
-                .find(|key| key.tile.x == 0 && key.levels[layer].is_some())
-                .unwrap()
-                .clone();
-            send.send((key, Ok(image(layer))))?;
-            frame(surface, time);
-            let captured = frame(surface, time + 0.01);
-            assert_eq!(captured.len(), 6);
-            assert!(
-                captured.iter().all(|(_, amount)| *amount == 1.),
-                "未到着のレイヤーを待たずに切り替わった: {captured:?}"
-            );
-        }
-        let key = keys
-            .iter()
-            .find(|key| key.tile.x == 0 && key.levels[2].is_some())
-            .unwrap()
-            .clone();
-        send.send((key, Ok(image(2))))?;
+        let left_key = keys.iter().find(|key| key.tile.x == 0).unwrap().clone();
+        assert_eq!(left_key.levels, vec![Some(1); 3]);
+        send.send((left_key, Ok(image())))?;
         frame(surface, 20.05);
         let captured = frame(surface, 20.06);
         let left: Vec<_> = captured
             .iter()
             .filter(|(x, _)| *x < 128.)
-            .map(|(_, amount)| *amount)
+            .map(|(_, t)| *t)
             .collect();
-        assert_eq!(left.len(), 3);
-        assert!(
-            left[0] < 1. && left.iter().all(|amount| *amount == left[0]),
-            "左タイルのレイヤーが同期していない: {captured:?}"
-        );
+        assert_eq!(left.len(), 1);
+        assert!(left[0] < 1., "統合タイルがフェードしていない");
         assert!(
             captured
                 .iter()
                 .filter(|(x, _)| *x > 128.)
-                .all(|(_, amount)| *amount == 1.)
+                .all(|(_, t)| *t == 1.)
         );
-        for layer in 0..3 {
-            let key = keys
-                .iter()
-                .find(|key| key.tile.x == 1 && key.levels[layer].is_some())
-                .unwrap()
-                .clone();
-            send.send((key, Ok(image(layer))))?;
-        }
+        let right_key = keys.iter().find(|key| key.tile.x == 1).unwrap().clone();
+        send.send((right_key, Ok(image())))?;
         frame(surface, 20.1);
         let captured = frame(surface, 20.11);
-        let right: Vec<_> = captured
-            .iter()
-            .filter(|(x, _)| *x > 128.)
-            .map(|(_, amount)| *amount)
-            .collect();
-        let left: Vec<_> = captured
-            .iter()
-            .filter(|(x, _)| *x < 128.)
-            .map(|(_, amount)| *amount)
-            .collect();
-        assert_eq!(right.len(), 3);
+        let right = captured.iter().find(|(x, _)| *x > 128.).unwrap();
+        let left = captured.iter().find(|(x, _)| *x < 128.).unwrap();
         assert!(
-            right[0] < left[0] && right.iter().all(|amount| *amount == right[0]),
-            "タイル間の独立性とレイヤー間の同期が両立していない: {captured:?}"
+            right.1 < left.1 && right.1 < 1.,
+            "タイル別の切り替え時刻が共有された"
         );
         frame(surface, 20.5);
-        // 完了済みタイルの描画区画を再構成しても、未表示の粗画像からフェードし直さない。
         surface.tile_lods.clear();
         let repeated = frame(surface, 20.6);
         assert!(
-            repeated.iter().all(|(_, amount)| *amount == 1.),
-            "完了済み画像へ不要なフェードが再発した: {repeated:?}"
+            repeated.iter().all(|(_, t)| *t == 1.),
+            "完了済みの統合タイルが再フェードした"
         );
         requests.try_iter().for_each(drop);
         for option in &mut surface.options {
@@ -2696,140 +2822,6 @@ mod tests {
             requests.try_iter().next().is_none(),
             "ズームアウトで保持済みの地表タイルを再要求した"
         );
-        Ok(())
-    }
-
-    fn check_independent_surface_tile_fades(
-        ctx: &egui::Context,
-        surface: &mut Surface,
-        state: &eframe::egui_wgpu::RenderState,
-        renderer: &lod_fade::Renderer,
-        layer: usize,
-    ) -> Result<()> {
-        let (jobs, requests) = mpsc::channel();
-        let (send, replies) = mpsc::channel();
-        surface.jobs = jobs;
-        surface.replies = replies;
-        surface.pending.clear();
-        surface.tile_lods.clear();
-        let remove: Vec<_> = surface
-            .cache
-            .keys()
-            .filter(|key| key.tile.z > 0)
-            .cloned()
-            .collect();
-        for key in remove {
-            surface.cache_bytes -= surface.cache.remove(&key).unwrap().bytes;
-        }
-        for (index, option) in surface.options.iter_mut().enumerate() {
-            *option = (index == layer, Some(0));
-        }
-        let view = View {
-            center: [0.5, 0.25],
-            zoom: 1.,
-            orientation: Default::default(),
-        };
-        let frame = |surface: &mut Surface, time: f64| {
-            let time = time + layer as f64;
-            let output = ctx.run(
-                egui::RawInput {
-                    time: Some(time),
-                    ..Default::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        surface.paint(
-                            ui,
-                            ui.painter(),
-                            Rect::from_min_size(Pos2::ZERO, egui::vec2(256., 128.)),
-                            &view,
-                            false,
-                            layer != 0,
-                            Some((state, renderer)),
-                            Lod::default(),
-                            1.,
-                        );
-                    });
-                },
-            );
-            for (id, delta) in &output.textures_delta.set {
-                state
-                    .renderer
-                    .write()
-                    .update_texture(&state.device, &state.queue, *id, delta);
-            }
-            output
-                .shapes
-                .iter()
-                .filter_map(|s| {
-                    let egui::Shape::Callback(c) = &s.shape else {
-                        return None;
-                    };
-                    let c = c
-                        .callback
-                        .downcast_ref::<yamamuki_terrain_view::direct_material::Capture>()?;
-                    Some((
-                        c.rect.center().x,
-                        c.amount,
-                        c.textures[0] != c.textures[1] || c.uv[0] != c.uv[1],
-                    ))
-                })
-                .collect::<Vec<_>>()
-        };
-        frame(surface, 49.8);
-        for option in &mut surface.options {
-            option.1 = Some(1);
-        }
-        frame(surface, 50.);
-        let keys: Vec<_> = requests.try_iter().collect();
-        let left = keys
-            .iter()
-            .find(|key| key.tile.x == 0)
-            .expect("左の要求")
-            .clone();
-        let right = keys
-            .iter()
-            .find(|key| key.tile.x == 1)
-            .expect("右の要求")
-            .clone();
-        let image = || match layer {
-            0 => ComposedTile {
-                image: Some(ColorImage::new([262, 262], egui::Color32::WHITE)),
-                shades: Vec::new(),
-            },
-            1 => ComposedTile {
-                image: None,
-                shades: vec![ShadeImage {
-                    layer: 1,
-                    image: ColorImage::new([262, 262], egui::Color32::WHITE),
-                    neutral: 136,
-                    strength: 0.65,
-                }],
-            },
-            // 完全に透明な水域タイルも準備済みとしてフェードする。
-            _ => ComposedTile::default(),
-        };
-        send.send((left, Ok(image())))?;
-        frame(surface, 50.01);
-        let first = frame(surface, 50.02);
-        assert!(
-            first.iter().any(|(x, t, d)| *x < 128. && *t < 1. && *d),
-            "隣が未到着のため左の地表タイルがフェードしない: layer={layer} {first:?}"
-        );
-        assert!(
-            first.iter().any(|(x, t, d)| *x > 128. && *t == 1. && !d),
-            "未到着の右側が旧地表を維持していない: {first:?}"
-        );
-        send.send((right, Ok(image())))?;
-        frame(surface, 50.1);
-        let second = frame(surface, 50.11);
-        let left = second.iter().find(|(x, _, _)| *x < 128.).unwrap();
-        let right = second.iter().find(|(x, _, _)| *x > 128.).unwrap();
-        assert!(
-            left.1 > right.1 && right.1 < 1. && right.2,
-            "地表タイルが個別の時刻で開始していない: {second:?}"
-        );
-        assert!(frame(surface, 50.5).iter().all(|(_, t, _)| *t == 1.));
         Ok(())
     }
 
@@ -2854,7 +2846,10 @@ mod tests {
                     cache.insert(
                         key,
                         Cached {
+                            source_tiles: Vec::new(),
                             image: None,
+                            background_gain: None,
+                            pending_gain: None,
                             shades: Vec::new(),
                             bytes: 1,
                             touched,
@@ -2908,7 +2903,10 @@ mod tests {
                     cache.insert(
                         key,
                         Cached {
+                            source_tiles: Vec::new(),
                             image: None,
+                            background_gain: None,
+                            pending_gain: None,
                             shades: Vec::new(),
                             bytes,
                             touched,
@@ -2991,8 +2989,8 @@ mod tests {
         db::initialize(&conn)?;
         conn.execute_batch(r#"
             INSERT INTO datasets VALUES (1,'edges','surface','地表','1',1,'{}');
-            INSERT INTO surface_layers VALUES (1,1,'hillshade','hillshade',0,'[]','{"neutral":136,"strength":1}');
-            INSERT INTO surface_levels VALUES (1,1,1,'z1',2);
+            INSERT INTO surface_layers VALUES (1,1,'hillshade','hillshade',0,'[]','{"neutral":136,"strength":1,"completeTileExtent":true}');
+            INSERT INTO surface_levels VALUES (1,1,1,'z1',2),(1,1,2,'z2',2);
         "#)?;
         for (x, gray) in [(0, 40), (1, 200)] {
             let mut png = Vec::new();
@@ -3008,6 +3006,22 @@ mod tests {
         }
         let source = Source::open(path)?;
         let dataset = &source.datasets[0];
+        for requested in [1, 2] {
+            let tile = composite(
+                &conn,
+                dataset,
+                Tile { z: 2, x: 1, y: 0 },
+                2,
+                &[Some(requested)],
+                false,
+                &[true],
+            )?;
+            assert_eq!(
+                tile.source_tiles,
+                vec![Tile { z: 1, x: 0, y: 0 }],
+                "余白の隣接タイルや要求先z2を境界へ混ぜた"
+            );
+        }
         for overlay in [false, true] {
             let render = |z, x| -> Result<ColorImage> {
                 let mut result = composite(
@@ -3217,6 +3231,18 @@ mod tests {
             &[],
         )?;
         assert_eq!(overlay.shades.len(), 1);
+        assert_eq!(
+            overlay.source_tiles,
+            vec![Tile { z: 0, x: 0, y: 0 }, Tile { z: 1, x: 0, y: 0 }]
+        );
+        let gains = overlay
+            .background_gain
+            .as_ref()
+            .context("オンライン背景の係数がありません")?;
+        assert_eq!(
+            [gains[5], gains[6], gains[9], gains[10]],
+            [0.5, 0.5, 1., 1.]
+        );
         assert_eq!(
             interior(&overlay.shades[0].image),
             [68, 68, 136, 136].map(egui::Color32::from_gray)
