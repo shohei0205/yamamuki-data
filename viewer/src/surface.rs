@@ -1586,6 +1586,7 @@ pub fn layer_list(
     mut point_layer: Option<PointLayer<'_>>,
     map_source: &mut MapSource,
     online_enabled: &mut bool,
+    map_levels: &mut Vec<(MapSource, u32)>,
     zoom: f64,
     max_height: f32,
     lod: Lod,
@@ -1764,7 +1765,8 @@ pub fn layer_list(
                     row.col(|ui| {
                         info_clicked = ui
                             .menu_button("i", |ui| {
-                                source.show_info(ui, source.tile_zoom(zoom, lod))
+                                source
+                                    .show_info(ui, source.selected_tile_zoom(zoom, lod, map_levels))
                             })
                             .response
                             .on_hover_text("オンライン地図の情報")
@@ -1772,10 +1774,29 @@ pub fn layer_list(
                         if !*online_enabled {
                             ui.disable();
                         }
-                        ui.add(
-                            egui::Label::new(format!("自動 (z{})", source.tile_zoom(zoom, lod)))
-                                .selectable(false),
-                        );
+                        let old = map_levels
+                            .iter()
+                            .find(|(s, _)| *s == source)
+                            .map(|(_, z)| *z);
+                        let mut selected = old;
+                        egui::ComboBox::from_id_salt(("online-map-level", source.label()))
+                            .width(100.)
+                            .selected_text(selected.map_or_else(
+                                || format!("自動 (z{})", source.tile_zoom(zoom, lod)),
+                                |z| format!("z{z}"),
+                            ))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut selected, None, "自動");
+                                for z in source.min_tile_zoom()..=source.max_tile_zoom() {
+                                    ui.selectable_value(&mut selected, Some(z), format!("z{z}"));
+                                }
+                            });
+                        if selected != old {
+                            map_levels.retain(|(s, _)| *s != source);
+                            if let Some(z) = selected {
+                                map_levels.push((source, z));
+                            }
+                        }
                     });
                     if *online_enabled && !info_clicked && (clicked || row.response().clicked()) {
                         *map_source = source;
@@ -2117,6 +2138,84 @@ mod tests {
         }
         Ok(())
     }
+    #[test]
+    #[ignore = "実スナップショット付近の地表画像をGPU計測用に書き出す"]
+    fn export_snapshot_material_sample() -> Result<()> {
+        let snapshot: serde_json::Value = serde_json::from_reader(flate2::read::GzDecoder::new(
+            std::fs::File::open(std::env::var("YAMAMUKI_ZOOM_SNAPSHOT")?)?,
+        ))?;
+        let file = &snapshot["surfaces"][0];
+        let source = Source::open(PathBuf::from(file["path"].as_str().unwrap()))?;
+        let conn = db::open(&source.path)?;
+        let set = &source.datasets[0];
+        let center: [f64; 2] = serde_json::from_value(snapshot["view"]["center"].clone())?;
+        let z = 12;
+        let tile = Tile {
+            z,
+            x: (center[0] * (1u32 << z) as f64) as u32,
+            y: (center[1] * (1u32 << z) as f64) as u32,
+        };
+        let dir = PathBuf::from(std::env::var("YAMAMUKI_MATERIAL_EXPORT_DIR")?);
+        std::fs::create_dir_all(&dir)?;
+        let mut base = false;
+        let mut decoded = DecodedTiles {
+            gutter: 3,
+            ..Default::default()
+        };
+        for (index, layer) in set.layers.iter().enumerate() {
+            let mut levels = vec![None; set.layers.len()];
+            levels[index] = Some(z);
+            let result = composite_cached(
+                &conn,
+                set,
+                tile,
+                384,
+                &levels,
+                base,
+                &vec![true; set.layers.len()],
+                &mut decoded,
+            )?;
+            base = true;
+            let image = if let Some(image) = result.image {
+                image
+            } else {
+                let shade = &result.shades[0];
+                let mut image = shade.image.clone();
+                for pixel in &mut image.pixels {
+                    let gain = if pixel.a() == 0 {
+                        1.
+                    } else {
+                        (1. + shade.strength
+                            * (f32::from(pixel.r()) / f32::from(shade.neutral) - 1.))
+                            .max(0.)
+                    };
+                    *pixel = egui::Color32::from_rgba_premultiplied(
+                        ((1. - gain).max(0.) * 255.).round() as u8,
+                        ((gain - 1.).max(0.) * 255.).round() as u8,
+                        0,
+                        255,
+                    );
+                }
+                image
+            };
+            let mut encoder = png::Encoder::new(
+                std::fs::File::create(dir.join(format!("{}.png", layer.id)))?,
+                image.size[0] as u32,
+                image.size[1] as u32,
+            );
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.write_header()?.write_image_data(
+                &image
+                    .pixels
+                    .iter()
+                    .flat_map(|p| p.to_array())
+                    .collect::<Vec<_>>(),
+            )?;
+            eprintln!("{} {:?}", layer.id, image.size);
+        }
+        Ok(())
+    }
+
     #[test]
     fn material_density_uses_image_pixels_and_fixed_lod() -> Result<()> {
         let temp = tempfile::tempdir()?;
@@ -3212,6 +3311,7 @@ mod tests {
                                 None,
                                 &mut map,
                                 &mut online_enabled,
+                                &mut Vec::new(),
                                 8.,
                                 f32::INFINITY,
                                 Lod::default(),

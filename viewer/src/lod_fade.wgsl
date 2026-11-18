@@ -54,11 +54,6 @@ fn shade(in: Vertex) -> f32 {
 }
 
 @fragment
-fn darken(in: Vertex) -> @location(0) vec4<f32> {
-    return vec4<f32>(vec3<f32>(max(-shade(in), 0.0)), 0.0);
-}
-
-@fragment
-fn brighten(in: Vertex) -> @location(0) vec4<f32> {
-    return vec4<f32>(vec3<f32>(max(shade(in), 0.0)), 0.0);
+fn shade_color(in: Vertex) -> @location(0) vec4<f32> {
+ return vec4<f32>(vec3<f32>(clamp(1.0+shade(in),0.0,2.0)*0.5),0.0);
 }

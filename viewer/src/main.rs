@@ -173,6 +173,7 @@ struct Viewer {
     view: map::View,
     tiles: Vec<map::Tiles>,
     map_source: map::Source,
+    map_levels: Vec<(map::Source, u32)>,
     lod: map::Lod,
     surface_lod: map::Lod,
     map_borders: bool,
@@ -208,6 +209,42 @@ struct Viewer {
 }
 
 impl Viewer {
+    fn reset_settings_section(&mut self) {
+        match self.settings_section {
+            SettingsSection::OnlineMap => {
+                self.map_borders = false;
+                self.map_lod_animation = true;
+                self.map_edge_filter = Interpolation::Edge;
+                self.lod = map::Lod::default();
+            }
+            SettingsSection::Surface => {
+                self.surface_borders = false;
+                self.surface_lod_animation = true;
+                self.surface_edge_filter = Interpolation::Edge;
+                self.surface_lod = map::Lod::default();
+                self.surface_palette = surface_palette::Palette::default();
+                for surface in &mut self.surfaces {
+                    surface.palette = self.surface_palette;
+                }
+            }
+            SettingsSection::Terrain => {
+                if let Some(terrain) = &mut self.terrain {
+                    terrain.reset_display_settings();
+                }
+            }
+            SettingsSection::Points => {
+                self.show_point_names = false;
+                self.mark_view = None;
+            }
+            SettingsSection::Observer => {
+                if let Some(observer) = &mut self.observer {
+                    observer.eye_offset = 2.;
+                    observer.fov = 45f64.to_radians();
+                }
+            }
+        }
+    }
+
     fn settings_window(&mut self, ctx: &egui::Context) {
         let mut open = self.settings_open;
         egui::Window::new("設定")
@@ -230,6 +267,10 @@ impl Viewer {
                     }
                 });
                 ui.separator();
+                if ui.button("このタブを初期値に戻す").clicked() {
+                    self.reset_settings_section();
+                }
+                ui.add_space(6.);
                 match self.settings_section {
                     SettingsSection::OnlineMap => {
                         ui.checkbox(&mut self.map_borders, "タイル境界を表示");
@@ -355,6 +396,7 @@ impl Viewer {
             },
             tiles: Vec::new(),
             map_source: map::Source::Gsi,
+            map_levels: Vec::new(),
             lod: map::Lod::default(),
             surface_lod: map::Lod::default(),
             map_borders: false,
@@ -914,7 +956,8 @@ impl Viewer {
                 rect,
                 &view,
                 dragging,
-                self.map_source.tile_zoom(lod_zoom, self.lod),
+                self.map_source
+                    .selected_tile_zoom(lod_zoom, self.lod, &self.map_levels),
                 lod_zoom,
                 fade_backend,
             )
@@ -973,8 +1016,7 @@ impl Viewer {
             .filter_map(|s| s.material_max_zoom(self.surface_lod))
             .chain(self.show_online_map.then(|| {
                 self.map_source
-                    .max_tile_zoom()
-                    .min(self.lod.max_level.unwrap_or(u32::MAX)) as f64
+                    .selected_tile_zoom(f64::MAX, self.lod, &self.map_levels) as f64
             }))
             .max_by(f64::total_cmp)
             .unwrap_or(18.);
@@ -1365,6 +1407,7 @@ impl Viewer {
 impl eframe::App for Viewer {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, MAP_SOURCE_KEY, &self.map_source);
+        eframe::set_value(storage, "map_fixed_levels", &self.map_levels);
         eframe::set_value(storage, LOD_KEY, &self.lod);
         eframe::set_value(storage, "map_borders", &self.map_borders);
         eframe::set_value(storage, "map_lod_animation", &self.map_lod_animation);
@@ -1421,10 +1464,16 @@ impl eframe::App for Viewer {
                 && self.flat_loading.is_none()
                 && self.loading.is_none()
                 && (file.is_none() || mesh_ready)
+                && (std::env::var_os("YAMAMUKI_STARTUP_CHECK_WAIT_INTERPOLATION").is_none()
+                    || self
+                        .active_terrain()
+                        .is_none_or(|t| !t.interpolation_pending()))
             {
                 let result = serde_json::json!({"first_frame_ms": FIRST_FRAME_MS.get(),
                     "gpu_ready_ms": STARTUP_STARTED.get().map(|s| s.elapsed().as_secs_f64()*1000.),
-                    "first_terrain_ms": FILE_STARTED.get().map(|s| s.elapsed().as_secs_f64()*1000.)});
+                    "first_terrain_ms": FILE_STARTED.get().map(|s| s.elapsed().as_secs_f64()*1000.),
+                    "interpolation_ready": self.active_terrain().is_none_or(|t| !t.interpolation_pending()),
+                    "interpolation_error": self.active_terrain().and_then(|t|t.interpolation_error())});
                 let _ = std::fs::write(output, serde_json::to_vec_pretty(&result).unwrap());
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -1617,7 +1666,7 @@ impl eframe::App for Viewer {
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     if self.show_online_map {
-                        self.map_source.attribution(ui, self.map_source.tile_zoom(self.view.zoom, self.lod));
+                        self.map_source.attribution(ui, self.map_source.selected_tile_zoom(self.view.zoom, self.lod, &self.map_levels));
                     }
                     let mut shown = std::collections::HashSet::new();
                     for surface in self.surfaces.iter().filter(|surface| surface.enabled) {
@@ -1680,6 +1729,7 @@ impl eframe::App for Viewer {
                             point_layer,
                             &mut self.map_source,
                             &mut self.show_online_map,
+                            &mut self.map_levels,
                             self.view.zoom,
                             if has_points {
                                 layer_height
@@ -2193,7 +2243,9 @@ impl eframe::App for Viewer {
                 let zoom = painter.layout_no_wrap(
                     {
                         let zoom = self.view.zoom;
-                        let tile_zoom = self.map_source.tile_zoom(zoom, self.lod);
+                        let tile_zoom =
+                            self.map_source
+                                .selected_tile_zoom(zoom, self.lod, &self.map_levels);
                         if self.show_online_map && tile_zoom != zoom as u32 {
                             format!("Z {zoom:.1} / z{tile_zoom}")
                         } else {
@@ -2281,6 +2333,30 @@ impl eframe::App for Viewer {
                                     });
                                 });
                         });
+                }
+                if let Some(terrain) = self.active_terrain() {
+                    let pending = terrain.interpolation_pending();
+                    let error = terrain.interpolation_error();
+                    if self.flat_loading.is_none() && (pending || error.is_some()) {
+                        egui::Area::new(ui.id().with("interpolation-preparing"))
+                            .order(egui::Order::Foreground)
+                            .interactable(false)
+                            .fixed_pos(rect.left_bottom() + egui::vec2(10., -34.))
+                            .show(ctx, |ui| {
+                                egui::Frame::new()
+                                    .fill(appearance::PAPER)
+                                    .corner_radius(5)
+                                    .inner_margin(6)
+                                    .show(ui, |ui| {
+                                        if let Some(error) = error {
+                                            ui.label("高品質補間の準備に失敗しました")
+                                                .on_hover_text(error);
+                                        } else {
+                                            ui.label("高品質補間を準備中…（地図は操作できます）");
+                                        }
+                                    });
+                            });
+                    }
                 }
                 let (from_point, from_coordinate, return_to_overview) =
                     view_actions.map_or((false, false, false), |actions| actions.inner);
@@ -2495,6 +2571,10 @@ fn run() -> Result<()> {
             viewer.map_source = cc
                 .storage
                 .and_then(|storage| eframe::get_value(storage, MAP_SOURCE_KEY))
+                .unwrap_or_default();
+            viewer.map_levels = cc
+                .storage
+                .and_then(|s| eframe::get_value(s, "map_fixed_levels"))
                 .unwrap_or_default();
             viewer.lod = cc
                 .storage
@@ -3161,6 +3241,46 @@ mod surface_palette_checks {
         }
         fn flush(&mut self) {}
     }
+    #[test]
+    fn settings_reset_is_limited_to_selected_tab() {
+        let ctx = egui::Context::default();
+        let client = reqwest::blocking::Client::builder()
+            .proxy(reqwest::Proxy::all("http://127.0.0.1:9").unwrap())
+            .build()
+            .unwrap();
+        let mut viewer = Viewer::new(&ctx, client, None);
+        viewer.map_borders = true;
+        viewer.map_lod_animation = false;
+        viewer.map_edge_filter = Interpolation::Nearest;
+        viewer.surface_borders = true;
+        viewer.surface_lod_animation = false;
+        viewer.surface_edge_filter = Interpolation::Nearest;
+        viewer.surface_palette = surface_palette::Palette::Contrast;
+        viewer.show_point_names = true;
+        viewer.settings_section = SettingsSection::OnlineMap;
+        viewer.reset_settings_section();
+        assert!(!viewer.map_borders);
+        assert!(viewer.map_lod_animation);
+        assert_eq!(viewer.map_edge_filter, Interpolation::Edge);
+        assert!(viewer.surface_borders && viewer.show_point_names);
+        assert!(!viewer.surface_lod_animation);
+        viewer.settings_section = SettingsSection::Surface;
+        viewer.reset_settings_section();
+        assert!(!viewer.surface_borders);
+        assert!(viewer.surface_lod_animation);
+        assert_eq!(viewer.surface_edge_filter, Interpolation::Edge);
+        assert_eq!(viewer.surface_palette, surface_palette::Palette::default());
+        assert!(viewer.show_point_names);
+        viewer.settings_section = SettingsSection::Points;
+        viewer.reset_settings_section();
+        assert!(!viewer.show_point_names);
+        // 未読込のタブでも安全に操作できる。
+        viewer.settings_section = SettingsSection::Terrain;
+        viewer.reset_settings_section();
+        viewer.settings_section = SettingsSection::Observer;
+        viewer.reset_settings_section();
+    }
+
     #[test]
     fn lod_animation_settings_are_independent_and_saved() {
         let ctx = egui::Context::default();

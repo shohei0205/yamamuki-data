@@ -8,6 +8,18 @@ struct Params { area:vec4<f32>, uv0:vec4<f32>, uv1:vec4<f32>, tint:vec4<f32>, se
 @vertex fn vs(@builtin(vertex_index)i:u32)->@builtin(position)vec4<f32>{
  let p=array<vec2<f32>,3>(vec2(-1.,-1.),vec2(3.,-1.),vec2(-1.,3.)); return vec4(p[i],0.,1.);
 }
+@group(2) @binding(0) var<storage,read> materialRectangles:array<vec4<u32>>;
+@vertex fn tile_vs(@builtin(vertex_index)i:u32,@builtin(instance_index)command:u32)->@builtin(position)vec4<f32>{
+ if (u32(params.settings.w)&32u)==0u {
+  let p=array<vec2<f32>,3>(vec2(-1.,-1.),vec2(3.,-1.),vec2(-1.,3.));return vec4(p[i],0.,1.);
+ }
+ let rect=materialRectangles[command];
+ if any(rect.zw<=rect.xy) {return vec4(-2.,-2.,0.,1.);}
+ let corner=array<vec2<f32>,6>(vec2(0.,0.),vec2(1.,0.),vec2(0.,1.),vec2(0.,1.),vec2(1.,0.),vec2(1.,1.));
+ let pixel=mix(vec2<f32>(rect.xy),vec2<f32>(rect.zw),corner[i]);
+ let clip=pixel/vec2<f32>(textureDimensions(positions))*2.-1.;
+ return vec4(clip.x,-clip.y,0.,1.);
+}
 fn linear(c:vec3<f32>)->vec3<f32>{return select(pow((c+vec3(.055))/1.055,vec3(2.4)),c/12.92,c<=vec3(.04045));}
 fn gamma(c:vec3<f32>)->vec3<f32>{return select(1.055*pow(max(c,vec3(0.)),vec3(1./2.4))-.055,c*12.92,c<vec3(.0031308));}
 fn coordinate(p:vec4<f32>)->vec2<f32>{
@@ -20,7 +32,7 @@ fn coordinate(p:vec4<f32>)->vec2<f32>{
 }
 fn material_filter()->u32 {
  let flags=u32(params.settings.w);
- return (flags>>3u)&3u;
+ return ((flags>>3u)&3u)|((flags>>6u)<<2u);
 }
 @fragment fn color(@builtin(position)p:vec4<f32>)->@location(0)vec4<f32>{
  let uv=coordinate(p);
@@ -53,8 +65,7 @@ fn difference(p:vec4<f32>)->f32{
  if (u32(params.settings.w)&2u)!=0u {return pow(max(1.+difference,0.),2.2)-1.;}
  return difference;
 }
-@fragment fn darken(@builtin(position)p:vec4<f32>)->@location(0)vec4<f32>{return vec4(vec3(max(-difference(p),0.)),0.);}
-@fragment fn brighten(@builtin(position)p:vec4<f32>)->@location(0)vec4<f32>{return vec4(vec3(max(difference(p),0.)),0.);}
+@fragment fn shade(@builtin(position)p:vec4<f32>)->@location(0)vec4<f32>{return vec4(vec3(clamp(1.+difference(p),0.,2.)*.5),0.);}
 @fragment fn lighting(@builtin(position)p:vec4<f32>)->@location(0)vec4<f32>{
  let pixel=vec2<i32>(p.xy);
  let q=textureLoad(positions,pixel,0); if q.w==0.{discard;}

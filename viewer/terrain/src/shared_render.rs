@@ -258,7 +258,7 @@ pub struct Renderer {
     positions_view: wgpu::TextureView,
     lighting_source: wgpu::Texture,
     pub texture: egui::TextureId,
-    color: wgpu::Texture,
+    pub(crate) color: wgpu::Texture,
     depth: wgpu::Texture,
     size: [u32; 2],
     compute: wgpu::ComputePipeline,
@@ -534,6 +534,12 @@ fn render_shader_source() -> String {
     )
 }
 impl Renderer {
+    pub fn interpolation_pending(&self) -> bool {
+        self.direct_renderer.interpolation_pending()
+    }
+    pub fn interpolation_error(&self) -> Option<String> {
+        self.direct_renderer.interpolation_error()
+    }
     pub fn new(state: RenderState, ctx: &egui::Context) -> Self {
         let started = std::time::Instant::now();
         let d = &state.device;
@@ -575,8 +581,9 @@ impl Renderer {
                             });
                         compute
                     });
-                    let direct_job =
-                        scope.spawn(|| Arc::new(crate::direct_material::Renderer::new(d)));
+                    let direct_job = scope.spawn(|| {
+                        Arc::new(crate::direct_material::Renderer::new_background(d, ctx))
+                    });
                     let render_shader = crate::gpu_profile::timed("共有曲面描画", || {
                         d.create_shader_module(wgpu::ShaderModuleDescriptor {
                             label: Some("共有曲面描画"),

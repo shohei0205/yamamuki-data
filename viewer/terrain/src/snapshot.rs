@@ -638,6 +638,294 @@ mod tests {
         Ok(())
     }
     #[test]
+    #[ignore = "実スナップショットに地図を重ねてGPU描画時間を測る"]
+    fn benchmark_external_online_material() -> Result<()> {
+        use crate::direct_material::{Interpolation, Quad};
+        let snapshot: Snapshot = serde_json::from_reader(std::fs::File::open(std::env::var(
+            "YAMAMUKI_SNAPSHOT_TEST_INPUT",
+        )?)?)?;
+        let app =
+            crate::remembered_scene_tests::app_with_backend(eframe::wgpu::Backends::DX12).unwrap();
+        let mut replay = TerrainView::from_snapshot(
+            &egui::Context::default(),
+            &app.renderer.state,
+            snapshot.prepare()?,
+        )?;
+        let positions = draw(&mut replay)?;
+        let camera = replay.app.camera.clone();
+        let mut bounds = [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        for pixel in positions.chunks_exact(16) {
+            let q: [f32; 4] = std::array::from_fn(|i| {
+                f32::from_le_bytes(pixel[i * 4..i * 4 + 4].try_into().unwrap())
+            });
+            if q[3] <= 0. {
+                continue;
+            }
+            for axis in 0..2 {
+                let v = (camera.center[axis] + f64::from(q[axis])) / crate::shared_data::WORLD;
+                bounds[axis] = bounds[axis].min(v);
+                bounds[axis + 2] = bounds[axis + 2].max(v);
+            }
+        }
+        let mut decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(
+            std::env::var("YAMAMUKI_MAP_TEST_PNG")?,
+        )?));
+        decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+        let mut reader = decoder.read_info()?;
+        let mut bytes = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut bytes)?;
+        let channels = info.color_type.samples();
+        let rgba = bytes[..info.buffer_size()]
+            .chunks_exact(channels)
+            .flat_map(|p| match channels {
+                4 => [p[0], p[1], p[2], p[3]],
+                3 => [p[0], p[1], p[2], 255],
+                _ => [p[0], p[0], p[0], 255],
+            })
+            .collect::<Vec<_>>();
+        let state = replay.app.renderer.state.clone();
+        let texture = state
+            .device
+            .create_texture(&eframe::wgpu::TextureDescriptor {
+                label: Some("計測用の保存済み地図"),
+                size: eframe::wgpu::Extent3d {
+                    width: info.width,
+                    height: info.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: eframe::wgpu::TextureDimension::D2,
+                format: eframe::wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: eframe::wgpu::TextureUsages::TEXTURE_BINDING
+                    | eframe::wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+        state.queue.write_texture(
+            texture.as_image_copy(),
+            &rgba,
+            eframe::wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(info.width * 4),
+                rows_per_image: Some(info.height),
+            },
+            texture.size(),
+        );
+        let view = texture.create_view(&Default::default());
+        let max_zoom = std::env::var("YAMAMUKI_MAP_TEST_ZOOM")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(18);
+        let side = (1u32 << max_zoom) as f64;
+        let x0 = (bounds[0] * side).floor() as u32;
+        let x1 = (bounds[2] * side).floor() as u32;
+        let y0 = (bounds[1] * side).floor() as u32;
+        let y1 = (bounds[3] * side).floor() as u32;
+        anyhow::ensure!(
+            (x1 - x0 + 1) * (y1 - y0 + 1) <= 4096,
+            "計測範囲が広すぎる: {bounds:?}"
+        );
+        let mut quads = Vec::new();
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                quads.push(Quad {
+                    bounds: [
+                        x as f64 / side,
+                        y as f64 / side,
+                        (x + 1) as f64 / side,
+                        (y + 1) as f64 / side,
+                    ],
+                    uv: [egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)); 2],
+                    textures: [Some(view.clone()), Some(view.clone())],
+                    amount: 1.,
+                    tint: [1.; 4],
+                    shade: false,
+                    gamma_shade: false,
+                    edge_filter: Interpolation::Bilinear,
+                    border: false,
+                });
+            }
+        }
+        if std::env::var_os("YAMAMUKI_FULL_MATERIAL_REGIONS").is_some() {
+            quads.clear();
+            let rect = egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(camera.viewport[0] as f32, camera.viewport[1] as f32),
+            );
+            let width = camera.viewport[0].max(camera.viewport[1]);
+            for (area, zoom) in replay
+                .projected_material_regions(rect, width / (256. * (1u32 << max_zoom) as f64) / 1.02)
+            {
+                let z = (zoom.floor() as u32).clamp(2, max_zoom);
+                let side = (1u32 << z) as f64;
+                let half = (area[2] - area[0]).max(area[3] - area[1]) * 1.02 / 2.;
+                let cx = (area[0] + area[2]) / 2.;
+                let cy = (area[1] + area[3]) / 2.;
+                for y in ((cy - half) * side).floor() as u32..=((cy + half) * side).floor() as u32 {
+                    for x in
+                        ((cx - half) * side).floor() as u32..=((cx + half) * side).floor() as u32
+                    {
+                        quads.push(Quad {
+                            bounds: [
+                                x as f64 / side,
+                                y as f64 / side,
+                                (x + 1) as f64 / side,
+                                (y + 1) as f64 / side,
+                            ],
+                            uv: [egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)); 2],
+                            textures: [Some(view.clone()), Some(view.clone())],
+                            amount: 1.,
+                            tint: [1.; 4],
+                            shade: false,
+                            gamma_shade: false,
+                            edge_filter: Interpolation::Bilinear,
+                            border: false,
+                        });
+                    }
+                }
+            }
+        }
+        if let Some(dir) = std::env::var_os("YAMAMUKI_SURFACE_TEST_DIR") {
+            let dir = PathBuf::from(dir);
+            let uv = egui::Rect::from_min_max(
+                egui::pos2(3. / info.width as f32, 3. / info.height as f32),
+                egui::pos2(1. - 3. / info.width as f32, 1. - 3. / info.height as f32),
+            );
+            for quad in &mut quads {
+                quad.uv = [uv; 2];
+            }
+            let template = quads.clone();
+            for (name, is_shade) in [("hillshade", true), ("water", false)] {
+                let mut decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(
+                    dir.join(format!("{name}.png")),
+                )?));
+                decoder.set_transformations(
+                    png::Transformations::EXPAND | png::Transformations::STRIP_16,
+                );
+                let mut reader = decoder.read_info()?;
+                let mut bytes = vec![0; reader.output_buffer_size().unwrap()];
+                let info = reader.next_frame(&mut bytes)?;
+                let texture = state
+                    .device
+                    .create_texture(&eframe::wgpu::TextureDescriptor {
+                        label: Some(name),
+                        size: eframe::wgpu::Extent3d {
+                            width: info.width,
+                            height: info.height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: eframe::wgpu::TextureDimension::D2,
+                        format: if is_shade {
+                            eframe::wgpu::TextureFormat::Rgba8Unorm
+                        } else {
+                            eframe::wgpu::TextureFormat::Rgba8UnormSrgb
+                        },
+                        usage: eframe::wgpu::TextureUsages::TEXTURE_BINDING
+                            | eframe::wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
+                state.queue.write_texture(
+                    texture.as_image_copy(),
+                    &bytes[..info.buffer_size()],
+                    eframe::wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(info.width * 4),
+                        rows_per_image: Some(info.height),
+                    },
+                    texture.size(),
+                );
+                let view = texture.create_view(&Default::default());
+                quads.extend(template.iter().cloned().map(|mut quad| {
+                    quad.textures = [Some(view.clone()), Some(view.clone())];
+                    quad.shade = is_shade;
+                    quad.gamma_shade = is_shade;
+                    quad
+                }));
+            }
+        }
+        eprintln!(
+            "地図範囲 {bounds:?} / {}タイル / 画面 {:?}",
+            quads.len(),
+            camera.viewport
+        );
+        for mode in [
+            Interpolation::Bilinear,
+            Interpolation::Bicubic,
+            Interpolation::BSpline,
+            Interpolation::Edge,
+            Interpolation::Nearest,
+        ] {
+            for quad in &mut quads {
+                quad.edge_filter = mode;
+            }
+            replay.app.renderer.direct = Some(quads.clone());
+            draw_inner(&mut replay, false)?;
+            let started = std::time::Instant::now();
+            for _ in 0..8 {
+                draw_inner(&mut replay, false)?;
+            }
+            eprintln!(
+                "地図補間 {mode:?}: 平均 {:.2}ms",
+                started.elapsed().as_secs_f64() * 1000. / 8.
+            );
+            if let Some(dir) = std::env::var_os("YAMAMUKI_MATERIAL_OUTPUT_DIR") {
+                let dir = PathBuf::from(dir);
+                std::fs::create_dir_all(&dir)?;
+                let texture = &replay.app.renderer.color;
+                let size = texture.size();
+                let row = (size.width * 4).div_ceil(256) * 256;
+                let buffer = state.device.create_buffer(&eframe::wgpu::BufferDescriptor {
+                    label: Some("画素比較用"),
+                    size: u64::from(row) * u64::from(size.height),
+                    usage: eframe::wgpu::BufferUsages::COPY_DST
+                        | eframe::wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
+                let mut encoder = state.device.create_command_encoder(&Default::default());
+                encoder.copy_texture_to_buffer(
+                    texture.as_image_copy(),
+                    eframe::wgpu::TexelCopyBufferInfo {
+                        buffer: &buffer,
+                        layout: eframe::wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(row),
+                            rows_per_image: Some(size.height),
+                        },
+                    },
+                    size,
+                );
+                state.queue.submit([encoder.finish()]);
+                let (tx, rx) = std::sync::mpsc::channel();
+                buffer
+                    .slice(..)
+                    .map_async(eframe::wgpu::MapMode::Read, move |r| {
+                        let _ = tx.send(r);
+                    });
+                let _ = state.device.poll(eframe::wgpu::Maintain::Wait);
+                rx.recv()??;
+                let mapped = buffer.slice(..).get_mapped_range();
+                let rgba = mapped
+                    .chunks_exact(row as usize)
+                    .flat_map(|r| r[..(size.width * 4) as usize].iter().copied())
+                    .collect::<Vec<_>>();
+                std::fs::write(dir.join(format!("{mode:?}.rgba")), rgba)?;
+                std::fs::write(
+                    dir.join("size.json"),
+                    serde_json::to_vec(&[size.width, size.height])?,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn sea_level_plane_covers_the_screen_at_every_camera_zoom() -> Result<()> {
         let backend = if cfg!(windows) {
             eframe::wgpu::Backends::DX12
@@ -655,9 +943,15 @@ mod tests {
             for tilt in [0., 1.] {
                 flat.set_map_camera(center, zoom, 0.7, tilt, rect);
                 if tilt == 0. {
-                    let regions=flat.projected_material_regions(rect,0.001);
-                    anyhow::ensure!(regions.len()==1,"透明な地表レイヤーを同じ範囲へ二重に描いている: {regions:?}");
-                    anyhow::ensure!((regions[0].1-zoom).abs()<1e-8,"地表LODが視点倍率と一致しない");
+                    let regions = flat.projected_material_regions(rect, 0.001);
+                    anyhow::ensure!(
+                        regions.len() == 1,
+                        "透明な地表レイヤーを同じ範囲へ二重に描いている: {regions:?}"
+                    );
+                    anyhow::ensure!(
+                        (regions[0].1 - zoom).abs() < 1e-8,
+                        "地表LODが視点倍率と一致しない"
+                    );
                 }
                 let bytes = draw(&mut flat)?;
                 let positions = bytemuck::cast_slice::<u8, f32>(&bytes);

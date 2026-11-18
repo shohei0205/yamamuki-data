@@ -20,6 +20,8 @@ pub(crate) struct Snapshot {
     view: map::View,
     observer: Option<Observer>,
     map_source: map::Source,
+    #[serde(default)]
+    map_levels: Vec<(map::Source, u32)>,
     lod: map::Lod,
     surface_lod: map::Lod,
     #[serde(default)]
@@ -128,6 +130,7 @@ impl Viewer {
             view: self.view,
             observer: self.observer.clone(),
             map_source: self.map_source,
+            map_levels: self.map_levels.clone(),
             lod: self.lod,
             surface_lod: self.surface_lod,
             map_borders: self.map_borders,
@@ -348,6 +351,7 @@ impl Viewer {
         self.view = s.view;
         self.observer = s.observer;
         self.map_source = s.map_source;
+        self.map_levels = s.map_levels;
         self.lod = s.lod;
         self.surface_lod = s.surface_lod;
         self.map_borders = s.map_borders;
@@ -433,10 +437,11 @@ mod tests {
         v.show_online_map = false;
         v.map_borders = true;
         v.map_lod_animation = false;
+        v.map_levels = vec![(map::Source::Gsi, 12), (map::Source::Photo, 10)];
         v.surface_lod_animation = true;
         v.map_edge_filter = Interpolation::Edge;
         v.surface_borders = true;
-        v.surface_edge_filter = Interpolation::Nearest;
+        v.surface_edge_filter = Interpolation::BSpline;
         v.lod.bias = 1.25;
         v.surface_lod.max_level = Some(9);
         v.map_pin = Some([0.875, 0.35]);
@@ -449,6 +454,7 @@ mod tests {
         replay.restore_snapshot(&ctx, None, prepared)?;
         assert!(replay.view == v.view);
         assert_eq!(replay.map_source, v.map_source);
+        assert_eq!(replay.map_levels, v.map_levels);
         assert_eq!(replay.lod, v.lod);
         assert_eq!(replay.surface_lod, v.surface_lod);
         assert!(replay.map_borders && replay.surface_borders);
@@ -459,7 +465,7 @@ mod tests {
         let old: Snapshot = serde_json::from_value(old)?;
         assert!(old.map_lod_animation && old.surface_lod_animation);
         assert_eq!(replay.map_edge_filter, Interpolation::Edge);
-        assert_eq!(replay.surface_edge_filter, Interpolation::Nearest);
+        assert_eq!(replay.surface_edge_filter, Interpolation::BSpline);
         assert_eq!(replay.map_pin_elevation, v.map_pin_elevation);
         assert!(!replay.show_online_map);
         assert!(replay.snapshot_frozen);

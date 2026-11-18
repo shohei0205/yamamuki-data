@@ -144,6 +144,15 @@ impl Source {
             .max(self.min_tile_zoom())
     }
 
+    /// 固定レベルは自動LODの補正・上限から独立させ、提供元の範囲だけで制限する。
+    pub fn selected_tile_zoom(self, zoom: f64, lod: Lod, levels: &[(Source, u32)]) -> u32 {
+        levels
+            .iter()
+            .find(|(source, _)| *source == self)
+            .map(|(_, z)| (*z).clamp(self.min_tile_zoom(), self.max_tile_zoom()))
+            .unwrap_or_else(|| self.tile_zoom(zoom, lod))
+    }
+
     fn tile_endpoint(self) -> (&'static str, &'static str) {
         let endpoint = match self {
             Self::Gsi => "https://cyberjapandata.gsi.go.jp/xyz/std",
@@ -965,6 +974,27 @@ impl Drop for Tiles {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_map_lod_is_per_source_and_independent_of_auto_limits() {
+        let lod = Lod {
+            max_level: Some(6),
+            bias: -4.,
+        };
+        let levels = vec![(Source::Gsi, 12), (Source::Photo, 10)];
+        assert_eq!(Source::Gsi.selected_tile_zoom(3., lod, &levels), 12);
+        assert_eq!(Source::Gsi.selected_tile_zoom(18., lod, &levels), 12);
+        assert_eq!(Source::Photo.selected_tile_zoom(18., lod, &levels), 10);
+        assert_eq!(Source::Pale.selected_tile_zoom(18., lod, &levels), 6);
+        assert_eq!(
+            Source::Blank.selected_tile_zoom(18., lod, &[(Source::Blank, 30)]),
+            14
+        );
+        assert_eq!(
+            Source::Relief.selected_tile_zoom(0., lod, &[(Source::Relief, 0)]),
+            5
+        );
+    }
 
     #[test]
     fn distant_materials_and_low_lod_limits_use_the_first_available_source_zoom() {

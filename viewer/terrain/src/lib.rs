@@ -2011,6 +2011,28 @@ impl TerrainView {
             self.app.last_interaction = Instant::now();
         }
     }
+    /// 表示設定タブだけを戻し、視点・読込データ・固定レベルの選択は維持する。
+    pub fn reset_display_settings(&mut self) {
+        self.app.settings = [0.25, 1., 0.];
+        self.app.join = true;
+        self.app.animate = true;
+        self.app.borders = false;
+        self.app.wire = 0;
+        self.app.camera.lod_quality = selection::Camera::default().lod_quality;
+        let maximum = self.app.catalog.keys().map(|k| k.0).max()
+            .unwrap_or_else(|| selection::Camera::default().maximum);
+        if self.app.camera.auto {
+            self.app.camera.maximum = maximum;
+        } else {
+            self.automatic_maximum = Some(maximum);
+        }
+        self.app.queued = true;
+        self.app.settled = false;
+        self.app.last_interaction = Instant::now();
+    }
+
+    pub fn interpolation_pending(&self)->bool { self.app.renderer.interpolation_pending() }
+    pub fn interpolation_error(&self)->Option<String> { self.app.renderer.interpolation_error() }
     pub fn display_controls(&mut self, ui: &mut egui::Ui) {
         ui.add(egui::Slider::new(&mut self.app.settings[0], 0.0..=1.).text("傾き調整"));
         ui.add(egui::Slider::new(&mut self.app.settings[1], 0.0..=3.).text("地形の陰影の強さ"));

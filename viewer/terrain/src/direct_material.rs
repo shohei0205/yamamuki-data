@@ -11,12 +11,22 @@ pub enum Interpolation {
     Bilinear = 0,
     Edge = 1,
     Nearest = 2,
+    Bicubic = 4,
+    BSpline = 5,
 }
 impl Interpolation {
-    pub const ALL: [Self; 3] = [Self::Bilinear, Self::Edge, Self::Nearest];
+    pub const ALL: [Self; 5] = [
+        Self::Nearest,
+        Self::Bilinear,
+        Self::Bicubic,
+        Self::BSpline,
+        Self::Edge,
+    ];
     pub fn label(self) -> &'static str {
         match self {
             Self::Bilinear => "バイリニア",
+            Self::Bicubic => "Bicubic",
+            Self::BSpline => "Bスプライン",
             Self::Edge => "輪郭優先",
             Self::Nearest => "最近傍",
         }
@@ -26,6 +36,8 @@ impl serde::Serialize for Interpolation {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(match self {
             Self::Bilinear => "bilinear",
+            Self::Bicubic => "bicubic",
+            Self::BSpline => "bspline",
             Self::Edge => "edge",
             Self::Nearest => "nearest",
         })
@@ -36,7 +48,7 @@ impl From<bool> for Interpolation {
         if value { Self::Edge } else { Self::Bilinear }
     }
 }
-// 保存済みのboolと旧スナップショットも、当時の見た目のまま復元する。
+// 保存済みのboolと廃止した補間名は、現在の輪郭優先へ引き継ぐ。
 impl<'de> serde::Deserialize<'de> for Interpolation {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         #[derive(serde::Deserialize)]
@@ -49,9 +61,14 @@ impl<'de> serde::Deserialize<'de> for Interpolation {
             Saved::Legacy(v) => Ok(v.into()),
             Saved::Name(v) => match v.as_str() {
                 "bilinear" => Ok(Self::Bilinear),
+                "edge-single" => Ok(Self::Edge),
+                "bicubic" => Ok(Self::Bicubic),
+                "bspline" => Ok(Self::BSpline),
+                "edge-geometric" => Ok(Self::Edge),
                 // 廃止した比較用モードも通常の輪郭優先へ引き継ぐ。
                 "edge" | "edge7" | "edge-multi" | "edge-curve" => Ok(Self::Edge),
                 "nearest" => Ok(Self::Nearest),
+                "edge-spline" => Ok(Self::Edge),
                 _ => Err(serde::de::Error::custom("未対応の補間方式")),
             },
         }
@@ -107,22 +124,96 @@ struct Cache {
     groups: std::collections::HashMap<[Option<wgpu::TextureView>; 2], wgpu::BindGroup>,
     groups_created: u64,
     buffers_created: u64,
+    screen_bounds: Option<ScreenBounds>,
+}
+struct ScreenBounds {
+    positions: wgpu::TextureView,
+    size: [u32; 2],
+    capacity: usize,
+    meta: wgpu::Buffer,
+    compute: wgpu::BindGroup,
+    vertex: wgpu::BindGroup,
 }
 pub(crate) struct Renderer {
     layout: wgpu::BindGroupLayout,
     color: wgpu::RenderPipeline,
-    darken: wgpu::RenderPipeline,
-    brighten: wgpu::RenderPipeline,
+    shade: wgpu::RenderPipeline,
+    filtered: Option<Arc<std::sync::OnceLock<Result<FilteredPrograms, String>>>>,
     lighting: wgpu::RenderPipeline,
     sampler_group: wgpu::BindGroup,
     empty: wgpu::TextureView,
+    bounds_compute_layout: wgpu::BindGroupLayout,
+    bounds_vertex_layout: wgpu::BindGroupLayout,
+    bounds_collect: wgpu::ComputePipeline,
+    bounds_reduce: wgpu::ComputePipeline,
+    cull: bool,
     cache: std::sync::Mutex<Cache>,
 }
+struct FilteredPrograms {
+    color: wgpu::RenderPipeline,
+    shade: wgpu::RenderPipeline,
+}
 impl Renderer {
+    fn pipeline(
+        device: &wgpu::Device,
+        shader: &wgpu::ShaderModule,
+        pipeline_layout: &wgpu::PipelineLayout,
+        entry: &str,
+        color: wgpu::BlendComponent,
+        mask: wgpu::ColorWrites,
+    ) -> wgpu::RenderPipeline {
+        crate::gpu_profile::timed(entry, || {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(entry),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some(if entry == "lighting" { "vs" } else { "tile_vs" }),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                        blend: Some(wgpu::BlendState {
+                            color,
+                            alpha: wgpu::BlendComponent::OVER,
+                        }),
+                        write_mask: mask,
+                    })],
+                }),
+                multiview: None,
+                cache: None,
+            })
+        })
+    }
+    #[cfg(test)]
     pub fn new(device: &wgpu::Device) -> Self {
+        Self::new_impl(device, None)
+    }
+    pub fn new_background(device: &wgpu::Device, ctx: &egui::Context) -> Self {
+        Self::new_impl(device, Some(ctx.clone()))
+    }
+    pub fn interpolation_pending(&self) -> bool {
+        self.filtered.as_ref().is_some_and(|p| p.get().is_none())
+    }
+    pub fn interpolation_error(&self) -> Option<String> {
+        self.filtered.as_ref()?.get()?.as_ref().err().cloned()
+    }
+    fn new_impl(device: &wgpu::Device, background: Option<egui::Context>) -> Self {
         let texture = |binding, filterable| wgpu::BindGroupLayoutEntry {
             binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
+            visibility: if binding == 0 {
+                wgpu::ShaderStages::VERTEX_FRAGMENT
+            } else {
+                wgpu::ShaderStages::FRAGMENT
+            },
             ty: wgpu::BindingType::Texture {
                 sample_type: wgpu::TextureSampleType::Float { filterable },
                 view_dimension: wgpu::TextureViewDimension::D2,
@@ -139,7 +230,7 @@ impl Renderer {
                 texture(5, true),
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
@@ -183,48 +274,88 @@ impl Renderer {
                         include_str!("direct_material.wgsl"),
                         include_str!("globe.wgsl"),
                         include_str!("atmosphere.wgsl"),
-                        include_str!("edge_interpolation.wgsl")
+                        if background.is_some() {
+                            include_str!("basic_interpolation.wgsl")
+                        } else {
+                            include_str!("edge_interpolation.wgsl")
+                        }
                     )
                     .into(),
                 ),
             })
         });
+        let storage = |binding, read_only, visibility| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let bounds_compute_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("地図表示範囲の計算"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    storage(1, false, wgpu::ShaderStages::COMPUTE),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: wgpu::BufferSize::new(32),
+                        },
+                        count: None,
+                    },
+                    storage(3, true, wgpu::ShaderStages::COMPUTE),
+                    storage(4, false, wgpu::ShaderStages::COMPUTE),
+                ],
+            });
+        let bounds_vertex_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("地図表示範囲の参照"),
+                entries: &[storage(0, true, wgpu::ShaderStages::VERTEX)],
+            });
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("地形画素から地図の範囲を決める"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("material_bounds.wgsl").into()),
+        });
+        let compute_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&bounds_compute_layout],
+            push_constant_ranges: &[],
+        });
+        let compute = |entry| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(entry),
+                layout: Some(&compute_layout),
+                module: &module,
+                entry_point: Some(entry),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        };
+        let bounds_collect = crate::gpu_profile::timed("地図範囲集約", || compute("collect"));
+        let bounds_reduce = crate::gpu_profile::timed("地図矩形計算", || compute("bound"));
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[&layout, &sampler_layout],
+            bind_group_layouts: &[&layout, &sampler_layout, &bounds_vertex_layout],
             push_constant_ranges: &[],
         });
         let pipeline = |entry, color, mask| {
-            crate::gpu_profile::timed(entry, || {
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some(entry),
-                    layout: Some(&pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: &shader,
-                        entry_point: Some("vs"),
-                        buffers: &[],
-                        compilation_options: Default::default(),
-                    },
-                    primitive: Default::default(),
-                    depth_stencil: None,
-                    multisample: Default::default(),
-                    fragment: Some(wgpu::FragmentState {
-                        module: &shader,
-                        entry_point: Some(entry),
-                        compilation_options: Default::default(),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                            blend: Some(wgpu::BlendState {
-                                color,
-                                alpha: wgpu::BlendComponent::OVER,
-                            }),
-                            write_mask: mask,
-                        })],
-                    }),
-                    multiview: None,
-                    cache: None,
-                })
-            })
+            Self::pipeline(device, &shader, &pipeline_layout, entry, color, mask)
         };
         let blend = |src_factor, dst_factor| wgpu::BlendComponent {
             src_factor,
@@ -232,7 +363,7 @@ impl Renderer {
             operation: wgpu::BlendOperation::Add,
         };
         // 独立した描画プログラムは同時に作成し、起動時の直列待ちをなくす。
-        let (color, darken, brighten, lighting) = std::thread::scope(|scope| {
+        let (color, shade, lighting) = std::thread::scope(|scope| {
             let color = scope.spawn(|| {
                 pipeline(
                     "color",
@@ -240,17 +371,10 @@ impl Renderer {
                     wgpu::ColorWrites::ALL,
                 )
             });
-            let darken = scope.spawn(|| {
+            let shade = scope.spawn(|| {
                 pipeline(
-                    "darken",
-                    blend(wgpu::BlendFactor::Zero, wgpu::BlendFactor::OneMinusSrc),
-                    wgpu::ColorWrites::COLOR,
-                )
-            });
-            let brighten = scope.spawn(|| {
-                pipeline(
-                    "brighten",
-                    blend(wgpu::BlendFactor::Dst, wgpu::BlendFactor::One),
+                    "shade",
+                    blend(wgpu::BlendFactor::Dst, wgpu::BlendFactor::Src),
                     wgpu::ColorWrites::COLOR,
                 )
             });
@@ -259,18 +383,77 @@ impl Renderer {
                 blend(wgpu::BlendFactor::One, wgpu::BlendFactor::Zero),
                 wgpu::ColorWrites::COLOR,
             );
-            (
-                color.join().unwrap(),
-                darken.join().unwrap(),
-                brighten.join().unwrap(),
-                lighting,
-            )
+            (color.join().unwrap(), shade.join().unwrap(), lighting)
+        });
+        let filtered = background.map(|ctx| {
+            let result = Arc::new(std::sync::OnceLock::new());
+            let ready = Arc::clone(&result);
+            let device = device.clone();
+            let layout = pipeline_layout.clone();
+            std::thread::spawn(move || {
+                let programs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some("高品質画像補間"),
+                        source: wgpu::ShaderSource::Wgsl(
+                            format!(
+                                "{}\n{}\n{}\n{}",
+                                include_str!("direct_material.wgsl"),
+                                include_str!("globe.wgsl"),
+                                include_str!("atmosphere.wgsl"),
+                                include_str!("edge_interpolation.wgsl")
+                            )
+                            .into(),
+                        ),
+                    });
+                    std::thread::scope(|scope| {
+                        let color = scope.spawn(|| {
+                            Self::pipeline(
+                                &device,
+                                &shader,
+                                &layout,
+                                "color",
+                                blend(wgpu::BlendFactor::One, wgpu::BlendFactor::OneMinusSrcAlpha),
+                                wgpu::ColorWrites::ALL,
+                            )
+                        });
+                        let shade = Self::pipeline(
+                            &device,
+                            &shader,
+                            &layout,
+                            "shade",
+                            blend(wgpu::BlendFactor::Dst, wgpu::BlendFactor::Src),
+                            wgpu::ColorWrites::COLOR,
+                        );
+                        FilteredPrograms {
+                            color: color.join().expect("画像補間の準備に失敗"),
+                            shade,
+                        }
+                    })
+                }))
+                .map_err(|panic| {
+                    let text = panic
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| panic.downcast_ref::<&str>().map(|v| v.to_string()))
+                        .unwrap_or_else(|| "高品質補間の準備に失敗しました".into());
+                    eprintln!("高品質補間の準備に失敗: {text}");
+                    text
+                });
+                let _ = ready.set(programs);
+                ctx.request_repaint();
+            });
+            result
         });
         Self {
+            bounds_compute_layout,
+            bounds_vertex_layout,
+            bounds_collect,
+            bounds_reduce,
+            cull: std::env::var_os("YAMAMUKI_DISABLE_MATERIAL_CULLING").is_none(),
             cache: Default::default(),
             color,
-            darken,
-            brighten,
+            shade,
+            filtered,
             lighting,
             layout,
             sampler_group,
@@ -370,6 +553,8 @@ impl Renderer {
             device.limits().min_uniform_buffer_offset_alignment,
         )) * u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let count = commands.len() + 1;
+        let use_bounds = self.cull && restrict_pixels && heights != [0., 0.] && commands.len() >= 8;
+
         let mut cache = self.cache.lock().unwrap();
         if cache.positions.as_ref() != Some(positions)
             || cache
@@ -389,7 +574,9 @@ impl Renderer {
             cache.uniform = Some(device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("再利用する直接貼付パラメーター"),
                 size: cache.capacity as u64 * stride,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::UNIFORM
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::STORAGE,
                 mapped_at_creation: false,
             }));
             cache.buffers_created += 1;
@@ -440,8 +627,10 @@ impl Renderer {
                     f32::from(c.textures[1].is_some()),
                     f32::from(c.textures.iter().all(Option::is_none))
                         + 2. * f32::from(c.gamma_shade)
-                        + 8. * c.edge_filter as u32 as f32
-                        + 4. * f32::from(c.border),
+                        + 8. * (c.edge_filter as u32 & 3) as f32
+                        + 64. * (c.edge_filter as u32 >> 2) as f32
+                        + 4. * f32::from(c.border)
+                        + 32. * f32::from(use_bounds),
                 ],
             });
             if command.is_none() && camera.globe {
@@ -519,6 +708,100 @@ impl Renderer {
         }
         cache.groups.retain(|key, _| needed.contains(key));
         queue.write_buffer(&uniform, 0, &bytes);
+        if cache
+            .screen_bounds
+            .as_ref()
+            .is_none_or(|b| b.size != size || b.capacity < count || b.positions != *positions)
+        {
+            let capacity = count.next_power_of_two();
+            let blocks = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("画面区画の地理範囲"),
+                size: u64::from(size[0].div_ceil(32) * size[1].div_ceil(32)) * 16,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            let rectangles = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("地図ごとの表示矩形"),
+                size: capacity as u64 * 16,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            let meta = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("地図範囲計算の設定"),
+                size: 32,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let compute = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("地図表示範囲の計算"),
+                layout: &self.bounds_compute_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(positions),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: blocks.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: meta.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: uniform.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: rectangles.as_entire_binding(),
+                    },
+                ],
+            });
+            let vertex = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("地図の画面範囲"),
+                layout: &self.bounds_vertex_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: rectangles.as_entire_binding(),
+                }],
+            });
+            cache.screen_bounds = Some(ScreenBounds {
+                positions: positions.clone(),
+                size,
+                capacity,
+                meta,
+                compute,
+                vertex,
+            });
+        }
+        let bounds = cache.screen_bounds.as_ref().unwrap();
+        if use_bounds {
+            queue.write_buffer(
+                &bounds.meta,
+                0,
+                bytemuck::cast_slice(&[
+                    size[0],
+                    size[1],
+                    size[0].div_ceil(32),
+                    size[1].div_ceil(32),
+                    commands.len() as u32,
+                    (stride / 16) as u32,
+                    0,
+                    0,
+                ]),
+            );
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("実地形から地図の描画範囲を計算"),
+                timestamp_writes: None,
+            });
+            pass.set_bind_group(0, &bounds.compute, &[]);
+            pass.set_pipeline(&self.bounds_collect);
+            pass.dispatch_workgroups(size[0].div_ceil(32), size[1].div_ceil(32), 1);
+            pass.set_pipeline(&self.bounds_reduce);
+            pass.dispatch_workgroups(commands.len() as u32, 1, 1);
+        }
+        let bounds_vertex = bounds.vertex.clone();
         drop(cache);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("元タイルを地形ピクセルへ合成"),
@@ -533,6 +816,14 @@ impl Renderer {
             ..Default::default()
         });
         pass.set_bind_group(1, &self.sampler_group, &[]);
+        pass.set_bind_group(2, &bounds_vertex, &[]);
+        let filtered = self
+            .filtered
+            .as_ref()
+            .and_then(|p| p.get())
+            .and_then(|p| p.as_ref().ok());
+        let color_pipeline = filtered.map_or(&self.color, |p| &p.color);
+        let shade_pipeline = filtered.map_or(&self.shade, |p| &p.shade);
         for (group, shade, clip, offset) in &draws {
             if shade.is_none() || clip[2] == 0 || clip[3] == 0 {
                 continue;
@@ -540,13 +831,23 @@ impl Renderer {
             pass.set_scissor_rect(clip[0], clip[1], clip[2], clip[3]);
             pass.set_bind_group(0, group, &[*offset]);
             if *shade == Some(true) {
-                for pipeline in [&self.darken, &self.brighten] {
+                for pipeline in [shade_pipeline] {
                     pass.set_pipeline(pipeline);
-                    pass.draw(0..3, 0..1);
+                    if use_bounds {
+                        let i = *offset / (stride as u32);
+                        pass.draw(0..6, i..i + 1);
+                    } else {
+                        pass.draw(0..3, 0..1);
+                    }
                 }
             } else {
-                pass.set_pipeline(&self.color);
-                pass.draw(0..3, 0..1);
+                pass.set_pipeline(color_pipeline);
+                if use_bounds {
+                    let i = *offset / (stride as u32);
+                    pass.draw(0..6, i..i + 1);
+                } else {
+                    pass.draw(0..3, 0..1);
+                }
             }
         }
         drop(pass);
@@ -574,6 +875,7 @@ impl Renderer {
         });
         pass.set_pipeline(&self.lighting);
         pass.set_bind_group(1, &self.sampler_group, &[]);
+        pass.set_bind_group(2, &bounds_vertex, &[]);
         let (group, _, _, offset) = draws.last().unwrap();
         pass.set_bind_group(0, group, &[*offset]);
         pass.draw(0..3, 0..1);
@@ -695,6 +997,15 @@ fn globe_scissor_at_heights(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn removed_edge_spline_settings_restore_to_edge_mode() {
+        assert_eq!(
+            serde_json::from_str::<Interpolation>("\"edge-spline\"").unwrap(),
+            Interpolation::Edge
+        );
+        assert!(!Interpolation::ALL.iter().any(|mode| *mode as u32 == 3));
+    }
+
     #[test]
     fn interpolation_preserves_legacy_choices_and_roundtrips_all_modes() {
         assert_eq!(
@@ -1281,6 +1592,13 @@ mod tests {
     }
     #[test]
     fn native_pixels_crossfade_and_hillshade_on_real_gpu() {
+        check_material_pixels(false);
+    }
+    #[test]
+    fn background_compilation_preserves_basic_draws_and_switches_to_filtered_draws() {
+        check_material_pixels(true);
+    }
+    fn check_material_pixels(background: bool) {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: if cfg!(windows) {
                 wgpu::Backends::DX12
@@ -1296,7 +1614,11 @@ mod tests {
         };
         let (device, queue) =
             pollster::block_on(adapter.request_device(&Default::default(), None)).unwrap();
-        let renderer = Renderer::new(&device);
+        let renderer = if background {
+            Renderer::new_background(&device, &egui::Context::default())
+        } else {
+            Renderer::new(&device)
+        };
         let width = 384u32;
         let extent = wgpu::Extent3d {
             width,
@@ -1381,15 +1703,35 @@ mod tests {
         let shade_view = shade.create_view(&Default::default());
         let gray = source((0..width).flat_map(|_| [64, 64, 64, 255]).collect());
         let mid = source((0..width).flat_map(|_| [188, 188, 188, 255]).collect());
-        for mode in 0..15 {
+        for mode in (0..18).filter(|mode| *mode != 15) {
+            if background && mode == 16 {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+                while renderer.interpolation_pending() && std::time::Instant::now() < deadline {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                assert!(
+                    !renderer.interpolation_pending(),
+                    "高品質補間が準備完了しない"
+                );
+                assert!(
+                    renderer.interpolation_error().is_none(),
+                    "{:?}",
+                    renderer.interpolation_error()
+                );
+            }
+
             let mut q = match mode {
-                0 | 14 => quad(checker.clone(), checker.clone(), 1.),
+                0 | 14 | 16 | 17 => quad(checker.clone(), checker.clone(), 1.),
                 1 => quad(black.clone(), white.clone(), 0.5),
                 6 => quad(gray.clone(), gray.clone(), 1.),
                 7 => quad(mid.clone(), mid.clone(), 1.),
                 _ => quad(white.clone(), white.clone(), 1.),
             };
-            q.edge_filter = if mode == 14 {
+            q.edge_filter = if mode == 17 {
+                Interpolation::BSpline
+            } else if mode == 16 {
+                Interpolation::Bicubic
+            } else if mode == 14 {
                 Interpolation::Nearest
             } else {
                 (mode >= 13).into()
@@ -1481,6 +1823,12 @@ mod tests {
                 overlay.gamma_shade = mode == 5;
                 commands.push(overlay);
             }
+            // 多数の画像がある経路でも、空・半透明・陰影・フェードの値を維持する。
+            for _ in 0..8 {
+                let mut invisible = commands[0].clone();
+                invisible.tint = [0.; 4];
+                commands.push(invisible);
+            }
             renderer.render(
                 &device,
                 &queue,
@@ -1544,7 +1892,21 @@ mod tests {
                         }
                     }
                     9 => 0,
-                    10 | 12 | 13 => 255,
+                    10 | 12 | 13 | 15 => 255,
+                    16 | 17 => {
+                        // 周期2の白黒画素にCatmull–Romを適用したCPU参照値。
+                        let p = width as f32 * 0.25 + (x as f32 + 0.5) * 0.25 - 0.5;
+                        let u = p - p.floor();
+                        let v = u * u * (3. - 2. * u);
+                        let v = if mode == 17 { (1. + v) / 3. } else { v };
+                        let linear = if p.floor() as u32 % 2 == 0 { v } else { 1. - v };
+                        let gamma = if linear <= 0.0031308 {
+                            linear * 12.92
+                        } else {
+                            1.055 * linear.powf(1. / 2.4) - 0.055
+                        };
+                        (gamma * 255.).round() as u8
+                    }
                     14 => {
                         if (x / 4) % 2 == 0 {
                             0

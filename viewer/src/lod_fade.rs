@@ -131,8 +131,7 @@ pub struct Renderer {
 
 struct Programs {
     color: wgpu::RenderPipeline,
-    darken: wgpu::RenderPipeline,
-    brighten: wgpu::RenderPipeline,
+    shade: wgpu::RenderPipeline,
 }
 
 impl Renderer {
@@ -264,7 +263,7 @@ impl Renderer {
                 cache: None,
             })
         };
-        let (color, darken, brighten) = std::thread::scope(|scope| {
+        let (color, shade) = std::thread::scope(|scope| {
             let color = scope.spawn(|| {
                 pipeline(
                     if format.is_srgb() {
@@ -277,30 +276,11 @@ impl Renderer {
                     false,
                 )
             });
-            let darken = scope.spawn(|| {
-                pipeline(
-                    "darken",
-                    wgpu::BlendFactor::Zero,
-                    wgpu::BlendFactor::OneMinusSrc,
-                    true,
-                )
-            });
-            let brighten = scope.spawn(|| {
-                pipeline(
-                    "brighten",
-                    wgpu::BlendFactor::Dst,
-                    wgpu::BlendFactor::One,
-                    true,
-                )
-            });
-            (
-                color.join().unwrap(),
-                darken.join().unwrap(),
-                brighten.join().unwrap(),
-            )
+            let shade = scope.spawn(|| pipeline("shade_color", wgpu::BlendFactor::Dst, wgpu::BlendFactor::Src, true));
+            (color.join().unwrap(), shade.join().unwrap())
         });
 
-            Programs {color,darken,brighten}
+            Programs {color,shade}
         })
     }
 
@@ -436,8 +416,7 @@ impl Renderer {
             textures,
             shade_count,
             color: self.programs().color.clone(),
-            darken: self.programs().darken.clone(),
-            brighten: self.programs().brighten.clone(),
+            shade: self.programs().shade.clone(),
         })
     }
 }
@@ -448,8 +427,7 @@ struct Draw {
     textures: Vec<wgpu::BindGroup>,
     shade_count: usize,
     color: wgpu::RenderPipeline,
-    darken: wgpu::RenderPipeline,
-    brighten: wgpu::RenderPipeline,
+    shade: wgpu::RenderPipeline,
 }
 
 impl egui_wgpu::CallbackTrait for Draw {
@@ -468,8 +446,7 @@ impl Draw {
         pass.set_vertex_buffer(0, self.vertices.slice(..));
         pass.set_bind_group(1, &self.sampler_group, &[]);
         for (pipeline, range) in [
-            (&self.darken, 0..self.shade_count),
-            (&self.brighten, 0..self.shade_count),
+            (&self.shade, 0..self.shade_count),
             (&self.color, self.shade_count..self.textures.len()),
         ] {
             if range.is_empty() {
@@ -1031,8 +1008,11 @@ mod tests {
                 .and_then(|v| v.parse::<u32>().ok())
                 .unwrap_or(1024)
                 .clamp(128, 4096);
-            for (name, enabled) in [("bilinear", false), ("edge", true)] {
-                let bytes = render(enabled.into(), false, pixels);
+            for (name, mode) in [
+                ("bilinear", Interpolation::Bilinear),
+                ("edge", Interpolation::Edge),
+            ] {
+                let bytes = render(mode, false, pixels);
                 let height = std::env::var("YAMAMUKI_FILTER_PREVIEW_HEIGHT")
                     .ok()
                     .and_then(|v| v.parse::<u32>().ok())
@@ -1045,6 +1025,16 @@ mod tests {
             return;
         }
         if boundary != 0 {
+            let geometric = render(Interpolation::Edge, false, 128);
+            let geometric_split = render(Interpolation::Edge, true, 128);
+            assert!(
+                geometric
+                    .iter()
+                    .zip(&geometric_split)
+                    .all(|(a, b)| a.abs_diff(*b) <= 1),
+                "色の境界の曲線復元がタイル境界で変わる"
+            );
+            assert!(geometric.chunks_exact(4).all(|p| p[3] == 255));
             let ordinary = render(Interpolation::Bilinear, false, 128);
             let edge = render(Interpolation::Edge, false, 128);
             let split = render(Interpolation::Edge, true, 128);
@@ -1158,7 +1148,35 @@ mod tests {
                 .all(|p| (p[0] == 0 || p[0] == 255) && p[0] == p[1] && p[1] == p[2] && p[3] == 255),
             "最近傍で元画素以外の中間色が作られた"
         );
+        let bicubic = render(Interpolation::Bicubic, false, 128);
+        let bicubic_split = render(Interpolation::Bicubic, true, 128);
+        assert!(
+            bicubic
+                .iter()
+                .zip(&bicubic_split)
+                .all(|(a, b)| a.abs_diff(*b) <= 1),
+            "Bicubicがタイル境界で変わる"
+        );
+        assert!(bicubic.chunks_exact(4).all(|p| p[3] == 255));
+        let spline = render(Interpolation::BSpline, false, 128);
+        let spline_split = render(Interpolation::BSpline, true, 128);
+        assert!(
+            spline
+                .iter()
+                .zip(&spline_split)
+                .all(|(a, b)| a.abs_diff(*b) <= 1),
+            "Bスプラインがタイル境界で変わる"
+        );
+        assert!(spline.chunks_exact(4).all(|p| p[3] == 255));
+        assert_ne!(
+            spline, bicubic,
+            "BスプラインがBicubicと同じ出力になっている"
+        );
         let ordinary = render(Interpolation::Bilinear, false, 128);
+        assert_ne!(
+            bicubic, ordinary,
+            "Bicubicがバイリニアと同じ出力になっている"
+        );
         let edge = render(Interpolation::Edge, false, 128);
         let split = render(Interpolation::Edge, true, 128);
         assert!(
