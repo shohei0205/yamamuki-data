@@ -13,14 +13,16 @@ pub enum Interpolation {
     Nearest = 2,
     Bicubic = 4,
     BSpline = 5,
+    EdgeBilinear = 6,
 }
 impl Interpolation {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Nearest,
         Self::Bilinear,
         Self::Bicubic,
         Self::BSpline,
         Self::Edge,
+        Self::EdgeBilinear,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -28,6 +30,7 @@ impl Interpolation {
             Self::Bicubic => "Bicubic",
             Self::BSpline => "Bスプライン",
             Self::Edge => "輪郭優先",
+            Self::EdgeBilinear => "輪郭優先（基底バイリニア）",
             Self::Nearest => "最近傍",
         }
     }
@@ -39,6 +42,7 @@ impl serde::Serialize for Interpolation {
             Self::Bicubic => "bicubic",
             Self::BSpline => "bspline",
             Self::Edge => "edge",
+            Self::EdgeBilinear => "edge-bilinear",
             Self::Nearest => "nearest",
         })
     }
@@ -61,6 +65,7 @@ impl<'de> serde::Deserialize<'de> for Interpolation {
             Saved::Legacy(v) => Ok(v.into()),
             Saved::Name(v) => match v.as_str() {
                 "bilinear" => Ok(Self::Bilinear),
+                "edge-bilinear" => Ok(Self::EdgeBilinear),
                 "edge-single" => Ok(Self::Edge),
                 "bicubic" => Ok(Self::Bicubic),
                 "bspline" => Ok(Self::BSpline),

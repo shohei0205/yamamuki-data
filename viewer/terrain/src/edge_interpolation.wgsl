@@ -93,32 +93,24 @@ fn contour_boundary_fit(neighbors:array<vec4<f32>,25>,low:vec3<f32>,axis:vec3<f3
     projection[23]=dot(neighbors[23].rgb-low,axis)*inverseAxis;
     projection[24]=dot(neighbors[24].rgb-low,axis)*inverseAxis;
     var m0=0.;var m1=0.;var m2=0.;var m3=0.;var m4=0.;var rhs=vec3(0.);
-    var minimumX=1e9;var maximumX=-1e9;var minimumY=1e9;var maximumY=-1e9;
-    for(var j=0u;j<25u;j+=1u) {
-        let t0=projection[j];
-        for(var edge=0u;edge<2u;edge+=1u) {
-            let step=select(1u,5u,edge==1u);
-            if (edge==0u && j%5u==4u) || (edge==1u && j>=20u) {continue;}
-            let t1=projection[j+step];
-            if edge==0u {
-                minimumX=min(minimumX,t1-t0);maximumX=max(maximumX,t1-t0);
-            } else {
-                minimumY=min(minimumY,t1-t0);maximumY=max(maximumY,t1-t0);
-            }
-            if (t0-.5)*(t1-.5)>=0. || abs(t1-t0)<.02 {continue;}
-            let fraction=clamp((.5-t0)/(t1-t0),0.,1.);
-            let q=vec2(f32(j%5u)-2.,f32(j/5u)-2.)+select(vec2(fraction,0.),vec2(0.,fraction),edge==1u);
-            let along=dot(tangent,q);let across=dot(normal,q);
-            // 別の線の反対側の境界や遠い交差線を混ぜない。
-            let w=(1.-smoothstep(.5,1.25,abs(across-seed)))*overlap_window(along/3.);
-            let u=along*.5;let u2=u*u;
-            m0+=w;m1+=w*u;m2+=w*u2;m3+=w*u2*u;m4+=w*u2*u2;
-            rhs+=w*across*vec3(1.,u,u2);
-        }
+    // 法線の主軸と交差する20辺だけを使う。5×5の支持範囲は維持する。
+    let vertical=abs(normal.y)>abs(normal.x);
+    var minimum=1e9;var maximum=-1e9;
+    for(var k=0u;k<20u;k+=1u) {
+        let j=select((k/4u)*5u+k%4u,k,vertical);
+        let step=select(1u,5u,vertical);
+        let t0=projection[j];let t1=projection[j+step];
+        minimum=min(minimum,t1-t0);maximum=max(maximum,t1-t0);
+        if (t0-.5)*(t1-.5)>=0. || abs(t1-t0)<.02 {continue;}
+        let fraction=clamp((.5-t0)/(t1-t0),0.,1.);
+        let q=vec2(f32(j%5u)-2.,f32(j/5u)-2.)+select(vec2(fraction,0.),vec2(0.,fraction),vertical);
+        let along=dot(tangent,q);let across=dot(normal,q);
+        let w=(1.-smoothstep(.5,1.25,abs(across-seed)))*overlap_window(along/3.);
+        let u=along*.5;let u2=u*u;
+        m0+=w;m1+=w*u;m2+=w*u2;m3+=w*u2*u;m4+=w*u2*u2;
+        rhs+=w*across*vec3(1.,u,u2);
     }
-    // 支持領域全体で同じ向きへ連続的に変わる濃淡は段差に置き換えない。
-    let minimum=select(minimumX,minimumY,abs(normal.y)>abs(normal.x));
-    let maximum=select(maximumX,maximumY,abs(normal.y)>abs(normal.x));
+    // 主軸全体で同じ向きに変化する連続階調を段差へ置き換えない。
     if minimum>1e-4 || maximum< -1e-4 {return vec4(0.);}
     if m0<1. {return vec4(0.);}
     let ridge=m0*.001;
@@ -144,6 +136,8 @@ fn contour_patch(a:vec4<f32>,b:vec4<f32>,c:vec4<f32>,d:vec4<f32>,e:vec4<f32>,f:v
     var normal=vec2(0.,1.);
     if dot(v,v)>1e-12 {normal=v*inverseSqrt(dot(v,v));}
     let coherence=eigen/max(xx+yy,1e-8);
+    // この範囲では細線・面境界・曲線復元の重みがすべて0になる。
+    if coherence<=.2 {return ContourPatch(e,0.,0.,tensor);}
     let distance=dot(normal,offset);
     // 近傍の少数色の重心と共分散から、線の位置・方向・幅を推定する。
     // 2画素先にも続く面は細線ではないため、断面曲線だけを使う。
@@ -533,7 +527,7 @@ fn edge_resample_pair(old_image:texture_2d<f32>,new_image:texture_2d<f32>,image_
     // 実画像の端をクランプしてできた平坦部を、本物の段差と判定しない。
     // 通常のタイル本体は隣接3画素の余白に覆われるため曲線復元が有効。
     let completeSupport=all(anchor>=vec2(2)) && all(anchor+vec2(3)<=maximum);
-    let patchMode=select(0u,mode,completeSupport);
+    let patchMode=select(0u,1u,completeSupport);
     var total=vec4(0.);
     var weight=0.;
     var boundaryWeight=0.;var boundaryTensor=vec3(0.);
@@ -561,11 +555,18 @@ fn edge_resample_pair(old_image:texture_2d<f32>,new_image:texture_2d<f32>,image_
     let patch3=contour_patch(samples[14],samples[15],samples[16],samples[20],samples[21],samples[22],samples[26],samples[27],samples[28],delta-vec2(1.0,1.0),flow3,array<vec4<f32>,25>(samples[7],samples[8],samples[9],samples[10],samples[11],samples[13],samples[14],samples[15],samples[16],samples[17],samples[19],samples[20],samples[21],samples[22],samples[23],samples[25],samples[26],samples[27],samples[28],samples[29],samples[31],samples[32],samples[33],samples[34],samples[35]),patchMode);
     total+=patch3.color*patch3.weight;weight+=patch3.weight;
     boundaryWeight+=patch3.boundary;boundaryTensor+=patch3.direction*patch3.boundary;
+    // 比較版は基底色だけを4画素のバイリニアへ変更する。
+    // 輪郭形状・方向付き再構成・4パッチの重ね合わせは通常版と共通。
+    var base=vec4(0.);
+    if mode==6u {
+        base=mix(mix(samples[14],samples[15],delta.x),mix(samples[20],samples[21],delta.x),delta.y);
+    } else {
     let row0=profile_curve(samples[7],samples[8],samples[9],samples[10],delta.x);
     let row1=profile_curve(samples[13],samples[14],samples[15],samples[16],delta.x);
     let row2=profile_curve(samples[19],samples[20],samples[21],samples[22],delta.x);
     let row3=profile_curve(samples[25],samples[26],samples[27],samples[28],delta.x);
-    let base=profile_curve(row0,row1,row2,row3,delta.y);
+    base=profile_curve(row0,row1,row2,row3,delta.y);
+    }
     // 実画像の外端でクランプされた画素を、一定色の面と誤認しない。
     // タイル本体には隣接3画素の余白があるため、通常のタイル境界では有効になる。
     if any(anchor<vec2(2)) || any(anchor+vec2(3)>maximum) {boundaryWeight=0.;}
@@ -579,48 +580,13 @@ fn edge_resample_pair(old_image:texture_2d<f32>,new_image:texture_2d<f32>,image_
         if dot(v,v)>1e-12 {normal=v*inverseSqrt(dot(v,v));}
         let tangent=vec2(-normal.y,normal.x);
         var sum=vec4(0.);var smoothWeights=0.;
-        {
-            let q=vec2(-2.0,-2.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[0]*w;smoothWeights+=w;
-        }
-        {
-            let q=vec2(-1.0,-2.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[1]*w;smoothWeights+=w;
-        }
-        {
-            let q=vec2(0.0,-2.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[2]*w;smoothWeights+=w;
-        }
-        {
-            let q=vec2(1.0,-2.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[3]*w;smoothWeights+=w;
-        }
-        {
-            let q=vec2(2.0,-2.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[4]*w;smoothWeights+=w;
-        }
-        {
-            let q=vec2(3.0,-2.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[5]*w;smoothWeights+=w;
-        }
-        {
-            let q=vec2(-2.0,-1.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[6]*w;smoothWeights+=w;
-        }
+
+
+
+
+
+
+
         {
             let q=vec2(-1.0,-1.0)-delta;
             let across=dot(normal,q);let along=dot(tangent,q);
@@ -645,18 +611,8 @@ fn edge_resample_pair(old_image:texture_2d<f32>,new_image:texture_2d<f32>,image_
             let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
             sum+=samples[10]*w;smoothWeights+=w;
         }
-        {
-            let q=vec2(3.0,-1.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[11]*w;smoothWeights+=w;
-        }
-        {
-            let q=vec2(-2.0,0.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[12]*w;smoothWeights+=w;
-        }
+
+
         {
             let q=vec2(-1.0,0.0)-delta;
             let across=dot(normal,q);let along=dot(tangent,q);
@@ -681,18 +637,8 @@ fn edge_resample_pair(old_image:texture_2d<f32>,new_image:texture_2d<f32>,image_
             let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
             sum+=samples[16]*w;smoothWeights+=w;
         }
-        {
-            let q=vec2(3.0,0.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[17]*w;smoothWeights+=w;
-        }
-        {
-            let q=vec2(-2.0,1.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[18]*w;smoothWeights+=w;
-        }
+
+
         {
             let q=vec2(-1.0,1.0)-delta;
             let across=dot(normal,q);let along=dot(tangent,q);
@@ -717,18 +663,8 @@ fn edge_resample_pair(old_image:texture_2d<f32>,new_image:texture_2d<f32>,image_
             let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
             sum+=samples[22]*w;smoothWeights+=w;
         }
-        {
-            let q=vec2(3.0,1.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[23]*w;smoothWeights+=w;
-        }
-        {
-            let q=vec2(-2.0,2.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[24]*w;smoothWeights+=w;
-        }
+
+
         {
             let q=vec2(-1.0,2.0)-delta;
             let across=dot(normal,q);let along=dot(tangent,q);
@@ -753,48 +689,13 @@ fn edge_resample_pair(old_image:texture_2d<f32>,new_image:texture_2d<f32>,image_
             let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
             sum+=samples[28]*w;smoothWeights+=w;
         }
-        {
-            let q=vec2(3.0,2.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[29]*w;smoothWeights+=w;
-        }
-        {
-            let q=vec2(-2.0,3.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[30]*w;smoothWeights+=w;
-        }
-        {
-            let q=vec2(-1.0,3.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[31]*w;smoothWeights+=w;
-        }
-        {
-            let q=vec2(0.0,3.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[32]*w;smoothWeights+=w;
-        }
-        {
-            let q=vec2(1.0,3.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[33]*w;smoothWeights+=w;
-        }
-        {
-            let q=vec2(2.0,3.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[34]*w;smoothWeights+=w;
-        }
-        {
-            let q=vec2(3.0,3.0)-delta;
-            let across=dot(normal,q);let along=dot(tangent,q);
-            let w=exp2(-3.*across*across-.35*along*along)*overlap_window(q.x/3.)*overlap_window(q.y/3.);
-            sum+=samples[35]*w;smoothWeights+=w;
-        }
+
+
+
+
+
+
+
         reconstructed=mix(base,sum/max(smoothWeights,1e-8),clamp(boundaryWeight,0.,1.));
     }
     let color=mix(reconstructed,total/max(weight,1e-8),clamp(weight,0.,1.));
