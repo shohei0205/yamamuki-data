@@ -32,6 +32,16 @@ struct Item {
     edges: [f32; 4],
     origins: [f32; 4],
 }
+const MAX_DRAW_TRIANGLES: u64 = 4_000_000;
+// 保持済みの曲面密度に応じた枠を確保し、小さな視点変更で遠方の格子を
+// 全域で半減・再精細化することを避ける。低密度時は従来の200万枠を使う。
+fn triangle_budget(inputs: &[Input]) -> u64 {
+    inputs
+        .iter()
+        .map(|t| 2 * u64::from(t.n).pow(2))
+        .sum::<u64>()
+        .clamp(2_000_000, MAX_DRAW_TRIANGLES)
+}
 pub fn plan(inputs: &[Input], camera: &Camera) -> Vec<Plan> {
     let mut items = Vec::new();
     let latitude = (std::f64::consts::PI * (1. - 2. * camera.center[1] / WORLD))
@@ -191,7 +201,8 @@ pub fn plan(inputs: &[Input], camera: &Camera) -> Vec<Plan> {
             ));
         }
     }
-    while triangles > 2_000_000 {
+    let triangle_budget = triangle_budget(inputs);
+    while triangles > triangle_budget {
         let Some((_, i, n)) = heap.pop() else { break };
         let p = &mut items[i];
         if n != p.n || p.n <= p.min {
@@ -501,7 +512,10 @@ mod tests {
             .flat_map(|p| &p.groups)
             .map(|(n, r)| 2 * u64::from(*n).pow(2) * u64::from(r.end - r.start))
             .sum::<u64>();
-        assert!(triangles <= 2_000_000, "接合後に予算を超えた: {triangles}");
+        assert!(
+            triangles <= MAX_DRAW_TRIANGLES,
+            "接合後に予算を超えた: {triangles}"
+        );
     }
 
     #[test]
@@ -572,7 +586,7 @@ mod tests {
             start.elapsed(),
             plans.iter().map(|p| p.patches.len()).sum::<usize>()
         );
-        assert!(triangles <= 2_000_000);
+        assert!(triangles <= MAX_DRAW_TRIANGLES);
     }
 
     #[test]
@@ -775,6 +789,6 @@ mod tests {
             },
         );
         assert!(triangles(&distant) * 16 < triangles(&p));
-        assert!(triangles(&p) <= 2_000_000);
+        assert!(triangles(&p) <= MAX_DRAW_TRIANGLES);
     }
 }

@@ -33,7 +33,6 @@ use std::{
 struct Request {
     version: u64,
     camera: selection::Camera,
-    prefer_finer: bool,
     resident: HashSet<Key>,
 }
 enum Message {
@@ -109,15 +108,7 @@ fn worker(
             }
             request.camera.level_errors_m = db.level_errors;
             let started = Instant::now();
-            let mut keys = selection::select(&db.catalog, &request.camera);
-            if request.camera.auto && request.prefer_finer {
-                keys = selection::prefer_cached(
-                    keys,
-                    &db.cached_keys(),
-                    &db.catalog,
-                    request.camera.maximum,
-                );
-            }
+            let keys = selection::select(&db.catalog, &request.camera);
             if !request.camera.auto
                 && (keys.len() > 256 || keys.iter().map(|k| db.catalog[k]).sum::<usize>() > 500_000)
             {
@@ -295,6 +286,7 @@ struct App {
     roots: Vec<Arc<shared_render::Tile>>,
     shown: Vec<Arc<shared_render::Tile>>,
     previous: Vec<Arc<shared_render::Tile>>,
+    previous_primary: usize,
     transition: Instant,
     wanted: Vec<Key>,
     pending_roots: VecDeque<Key>,
@@ -368,6 +360,7 @@ impl App {
             roots: Vec::new(),
             shown: Vec::new(),
             previous: Vec::new(),
+            previous_primary: 0,
             transition: Instant::now() - Duration::from_secs(1),
             wanted: Vec::new(),
             pending_roots: VecDeque::new(),
@@ -507,6 +500,13 @@ impl App {
         field: shared_field::Field,
         sample_budget: u64,
     ) -> Option<Arc<shared_render::Tile>> {
+        // 計画と完全一致する面は予算の予約量によらず再利用する。
+        // 予約が不足しているだけで同じGPU曲面を毎フレーム作り直してはならない。
+        if let Some(tile) = self.local_gpu.get(&(key, n, field)) {
+            let tile = tile.clone();
+            self.mesh_used.insert((key, n, field), Instant::now());
+            return Some(tile);
+        }
         // 同じ領域の候補は2の累乗の密度だけ。全キャッシュを毎区画走査しない。
         let mut size = n.max(1).next_power_of_two();
         let mut result = None;
@@ -745,7 +745,7 @@ impl App {
             return Ok(false);
         }
         // 復号や既存の遷移を待つ間にも、届いた曲面からGPU準備を進める。
-        let prepare_started = Instant::now();
+        let mut upload_time = Duration::ZERO;
         let mut uploaded = 0;
         let mut incomplete = missing;
         if self.transition.elapsed() >= Duration::from_millis(450) {
@@ -771,20 +771,22 @@ impl App {
                 incomplete = true;
                 continue;
             }
-            if field.depth > 0 && background_keys.insert(key) {
+            if (field.depth > 0 || n != 32) && background_keys.insert(key) {
                 if !self.gpu.contains_key(&(key, 32)) {
-                    if uploaded >= 16
-                        || (uploaded > 0 && prepare_started.elapsed() >= Duration::from_millis(8))
+                    if uploaded >= shared_render::MAX_UPLOAD_JOBS
+                        || (uploaded > 0 && upload_time >= Duration::from_millis(2))
                     {
                         incomplete = true;
                         continue;
                     }
                     uploaded += 1;
                 }
+                let upload_started = Instant::now();
                 let Some(base) = self.tile(key, 32)? else {
                     incomplete = true;
                     continue;
                 };
+                upload_time += upload_started.elapsed();
                 background.push(base);
             }
             let cached = if field.depth > 0 {
@@ -802,14 +804,15 @@ impl App {
                 }
                 continue;
             }
-            if uploaded >= 16
-                || (uploaded > 0 && prepare_started.elapsed() >= Duration::from_millis(8))
+            if uploaded >= shared_render::MAX_UPLOAD_JOBS
+                || (uploaded > 0 && upload_time >= Duration::from_millis(2))
                 || !self.renderer.can_upload(n)
             {
                 incomplete = true;
                 continue;
             }
             uploaded += 1;
+            let upload_started = Instant::now();
             let tile = if field.depth > 0 {
                 let packet = self.packets.get(&key).unwrap();
                 let tile = self.renderer.upload_field(packet, n, field)?;
@@ -823,6 +826,7 @@ impl App {
                 };
                 tile
             };
+            upload_time += upload_started.elapsed();
             remaining_samples = remaining_samples.saturating_sub(samples);
             if is_background {
                 background.push(tile);
@@ -842,11 +846,15 @@ impl App {
             return Ok(false);
         }
         // 全領域が揃ってから背景と本体を同時に切り替え、準備途中の穴を作らない。
-        self.local_background = background;
         if changed {
-            self.previous = std::mem::replace(&mut self.shown, next);
-            self.transition = Instant::now();
+            // 分割が異なる旧面を新しい接合格子へ変形すると、境界だけが一時的に
+            // 凹む。全区画が揃った新メッシュへ一括で切り替え、旧面を再評価しない。
+            self.shown = next;
+            self.previous.clear();
+            self.previous_primary = 0;
+            self.transition = Instant::now() - Duration::from_secs(1);
         }
+        self.local_background = background;
         if self.transition.elapsed() >= Duration::from_millis(450) {
             self.previous.clear();
         }
@@ -1002,11 +1010,9 @@ impl eframe::App for App {
             }
             let idle = now.duration_since(self.last_interaction);
             let spacing = refinement_spacing(idle, ctx.pixels_per_point());
-            // 先の段階を完成させてから細かくする。操作の再開時はすぐ軽い設定へ戻す。
-            if !self.path.is_empty()
-                && spacing != self.camera.mesh_pixels
-                && (spacing > self.camera.mesh_pixels || !self.scene_pending)
-            {
+            // 準備が済んだら段階的に細かくする。操作を再開しただけで完成済みの
+            // 密度を粗く戻すと同じ座標の標高が上下するため、密度を下げない。
+            if !self.path.is_empty() && spacing < self.camera.mesh_pixels && !self.scene_pending {
                 self.camera.mesh_pixels = spacing;
                 self.scene_pending = true;
             }
@@ -1345,7 +1351,6 @@ impl eframe::App for App {
                 .send(Request {
                     version: self.version,
                     camera: self.camera.clone(),
-                    prefer_finer: !self.settled,
                     resident: self.packets.keys().copied().collect(),
                 })
                 .is_err()
@@ -1967,6 +1972,7 @@ impl TerrainView {
             .app
             .previous
             .iter()
+            .take(self.app.previous_primary)
             .filter(|_| self.app.transition.elapsed() < Duration::from_millis(450));
         let levels = self
             .app
@@ -2377,6 +2383,133 @@ mod notification_tests {
         Ok(())
     }
     #[test]
+    fn decoded_children_do_not_change_the_requested_automatic_lod() -> Result<()> {
+        use yamamuki_terrain::sqlite::{ENCODING, Tile, WORLD, point_hash};
+        let path = std::env::temp_dir().join(format!(
+            "terrain-cache-policy-{}-{}.sqlite3",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let mut conn = yamamuki_data_sqlite::rusqlite::Connection::open(&path)?;
+        yamamuki_data_sqlite::initialize(&conn)?;
+        yamamuki_terrain::fixture::create(&mut conn)?;
+        let dataset: i64 = conn.query_row(
+            "SELECT rowid FROM datasets WHERE id='terrain-fixture'",
+            [],
+            |r| r.get(0),
+        )?;
+        let parent: Key = conn.query_row(
+            "SELECT l.z,t.x,t.y FROM terrain_tiles t JOIN terrain_levels l USING(dataset_key,level_key) WHERE l.z=12 LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        let children = (0..2)
+            .flat_map(|y| (0..2).map(move |x| (13, parent.1 * 2 + x, parent.2 * 2 + y)))
+            .collect::<Vec<Key>>();
+        for key in &children {
+            let side = WORLD / 2f64.powi(key.0 as i32);
+            let origin = [
+                (key.1 as f64 * side * 16.).round() as i32,
+                (key.2 as f64 * side * 16.).round() as i32,
+            ];
+            let n = (side * 16.).ceil() as i32;
+            let local = vec![[0, 0, 0], [n, 0, 0], [n, n, 0], [0, n, 0]];
+            let points = local
+                .iter()
+                .map(|p| [p[0] + origin[0], p[1] + origin[1], p[2]])
+                .collect::<Vec<_>>();
+            let tile = Tile {
+                origin,
+                count: local.len(),
+                parents: vec![],
+                hash: point_hash(&points),
+                controls: yamamuki_terrain::natural_codec::independent(&local)?,
+            };
+            conn.execute(
+                "INSERT OR REPLACE INTO terrain_tiles VALUES(?1,?2,?3,?4,?5,?6)",
+                yamamuki_data_sqlite::rusqlite::params![
+                    dataset,
+                    key.0,
+                    key.1,
+                    key.2,
+                    ENCODING,
+                    tile.encode()?
+                ],
+            )?;
+        }
+        drop(conn);
+        let db = Database::open(&path)?;
+        let b = shared_data::bounds(parent);
+        let mut camera = selection::Camera {
+            center: [(b[0] + b[2]) * 0.5, (b[1] + b[3]) * 0.5],
+            distance: 9000.,
+            pitch: 1.56,
+            maximum: 13,
+            auto: false,
+            viewport: [1200., 800.],
+            level_errors_m: db.level_errors,
+            ..Default::default()
+        };
+        let (tx, requests) = mpsc::channel();
+        let (messages, rx) = mpsc::channel();
+        tx.send(Request {
+            version: 1,
+            camera: camera.clone(),
+            resident: HashSet::new(),
+        })?;
+        let source = path.clone();
+        let handle = std::thread::spawn(move || {
+            worker(source, requests, messages, egui::Context::default())
+        });
+        let mut resident = HashSet::new();
+        loop {
+            match rx.recv_timeout(Duration::from_secs(5))? {
+                Message::Packet(_, p, _) => {
+                    resident.insert(p.key);
+                }
+                Message::Ready(1, ..) => break,
+                Message::Error(e) => anyhow::bail!("{e}"),
+                _ => {}
+            }
+        }
+        assert!(
+            children.iter().all(|c| resident.contains(c)),
+            "4子タイルがすべて復号済みになっていない"
+        );
+        camera.auto = true;
+        camera.distance = 40000.;
+        let expected = selection::select(&db.catalog, &camera);
+        assert!(
+            expected.contains(&parent),
+            "検査対象の親タイルが通常の自動LODに選ばれていない: {expected:?}"
+        );
+        tx.send(Request {
+            version: 2,
+            camera,
+            resident,
+        })?;
+        loop {
+            match rx.recv_timeout(Duration::from_secs(5))? {
+                Message::Selected(2, keys) => {
+                    assert_eq!(
+                        keys, expected,
+                        "復号済みの細かいデータがあるだけで目標LODを変更した"
+                    );
+                    break;
+                }
+                Message::Error(e) => anyhow::bail!("{e}"),
+                _ => {}
+            }
+        }
+        drop(tx);
+        handle.join().unwrap();
+        drop(db);
+        std::fs::remove_file(path)?;
+        Ok(())
+    }
+    #[test]
     fn latest_visible_tiles_arrive_before_background_roots() -> Result<()> {
         let path = std::env::temp_dir().join(format!(
             "terrain-worker-{}-{}.sqlite3",
@@ -2402,7 +2535,6 @@ mod notification_tests {
             tx.send(Request {
                 version,
                 camera: camera.clone(),
-                prefer_finer: false,
                 resident: HashSet::new(),
             })?;
         }
@@ -2858,6 +2990,45 @@ mod remembered_scene_tests {
         ))
     }
     #[test]
+    fn completed_camera_mesh_updates_do_not_start_a_deformation() -> Result<()> {
+        let Some(mut app) = app() else {
+            return Ok(());
+        };
+        let key = (13, 7234, 3199);
+        let first = Arc::new(Packet::constant_plane(key, 1500.)?);
+        app.camera.center = [
+            first.origin[0] + first.side / 2.,
+            first.origin[1] + first.side / 2.,
+        ];
+        app.camera.viewport = [256., 256.];
+        app.camera.distance = 10000.;
+        app.camera.pitch = 1.56;
+        app.resolution = 32;
+        app.shown = vec![app.renderer.upload(&first, 8)?];
+        app.packets.insert(key, first);
+        app.wanted = vec![key];
+        for target in [key, (12, key.1 >> 1, key.2 >> 1)] {
+            app.packets
+                .entry(target)
+                .or_insert(Arc::new(Packet::constant_plane(target, 1700.)?));
+            app.wanted = vec![target];
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !app.scene()? {
+                anyhow::ensure!(Instant::now() < deadline, "完成メッシュに切り替わらない");
+                let _ = app.renderer.state.device.poll(eframe::wgpu::Maintain::Wait);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(!app.shown.is_empty());
+            assert!(app.shown.iter().all(|t| t.key == target));
+            assert!(app.previous.is_empty(), "操作の更新で旧面を保持している");
+            assert!(
+                app.transition.elapsed() >= Duration::from_millis(450),
+                "操作の更新で形状遷移が始まった"
+            );
+        }
+        Ok(())
+    }
+    #[test]
     fn turning_back_restores_the_same_gpu_mesh_without_uploading() {
         let Some(mut app) = app() else {
             eprintln!("GPUがないためGPU試験を省略します");
@@ -3023,6 +3194,61 @@ mod remembered_scene_tests {
                 limit_preparation_samples(&mut actual, budget);
                 assert_eq!(actual, reference, "count={count} budget={budget}");
             }
+        }
+    }
+    #[test]
+    fn exact_local_mesh_is_reused_when_reserved_samples_are_exhausted() -> Result<()> {
+        let Some(mut app) = app() else {
+            return Ok(());
+        };
+        let key = (13, 7228, 3207);
+        let packet = Packet::constant_plane(key, 1500.)?;
+        let field = shared_field::Field {
+            depth: 1,
+            x: 0,
+            y: 0,
+        };
+        let tile = app.renderer.upload_field(&packet, 16, field)?;
+        app.local_gpu.insert((key, 16, field), tile.clone());
+        let reused = app
+            .cached_local(key, 16, field, 0)
+            .expect("予約不足だけで完成済みメッシュを捨てた");
+        assert!(Arc::ptr_eq(&tile, &reused));
+        assert!(
+            app.cached_local(key, 8, field, 0).is_none(),
+            "予算不足なのに要求以上の面へ拡大した"
+        );
+        Ok(())
+    }
+    #[test]
+    fn restarting_map_motion_does_not_coarsen_completed_mesh_density() {
+        let Some(mut app) = app() else {
+            return;
+        };
+        let ctx = egui::Context::default();
+        app.path = "精細度を検査するfixture".into();
+        app.camera.mesh_pixels = 0.6;
+        app.embedded_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1200., 800.),
+        ));
+        app.queued = false;
+        app.loading = true;
+        app.settled = true;
+        let mut frame = eframe::Frame::_new_kittest();
+        for idle in [0, 500, 1500, 0, 1500, 0] {
+            app.last_interaction = Instant::now() - Duration::from_millis(idle);
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: app.embedded_rect,
+                    ..Default::default()
+                },
+                |ctx| eframe::App::update(&mut app, ctx, &mut frame),
+            );
+            assert_eq!(
+                app.camera.mesh_pixels, 0.6,
+                "操作の再開・停止だけで密度を粗く戻した idle={idle}"
+            );
         }
     }
     #[test]

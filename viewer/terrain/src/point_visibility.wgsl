@@ -1,6 +1,6 @@
 // 描画と同じ曲面から地点を持ち上げ、実際の描画位置で遮蔽を判定する。
 struct Sample {original:vec4<f32>,adjusted:vec4<f32>}
-struct Record {bounds:vec4<f32>,data:vec4<u32>,neighbors:vec4<u32>,tile:vec4<f32>,draw:vec4<u32>}
+struct Record {bounds:vec4<f32>,data:vec4<u32>,neighbors:vec4<u32>,tile:vec4<f32>,tile_end:vec4<f32>,draw:vec4<u32>,transition:vec4<u32>,blend_data:vec4<u32>}
 struct Patch {bounds:vec4<f32>,edges:vec4<f32>,origins:vec4<f32>,lines:vec4<f32>}
 struct View {matrix:mat4x4<f32>,offset:vec4<f32>,settings:vec4<f32>,flags:vec4<u32>,extra:vec4<u32>,earth:vec4<f32>,eye:vec4<f32>,frame:vec4<f32>}
 @group(0) @binding(0) var positions:texture_2d<f32>;

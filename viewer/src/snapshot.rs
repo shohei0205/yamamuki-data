@@ -3,7 +3,7 @@ use super::*;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use yamamuki_terrain_view::direct_material::Interpolation;
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct SurfaceState {
     pub path: PathBuf,
     pub dataset: usize,
@@ -11,8 +11,10 @@ pub(crate) struct SurfaceState {
     pub options: Vec<(bool, Option<u32>)>,
     pub palette: surface_palette::Palette,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Snapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) recording: Option<Box<operation_recording::Recording>>,
     format: String,
     version: u32,
     viewer_version: String,
@@ -56,6 +58,7 @@ fn animation_enabled() -> bool {
     true
 }
 pub(crate) struct Prepared {
+    pub(crate) replay: Option<Arc<operation_recording::Recording>>,
     snapshot: Snapshot,
     terrain: Option<yamamuki_terrain_view::snapshot::Prepared>,
     points: Option<Points>,
@@ -68,9 +71,15 @@ pub(crate) fn prepare(path: &Path) -> Result<Prepared> {
     } else {
         Box::new(input)
     };
-    let mut snapshot: Snapshot = serde_json::from_reader(std::io::BufReader::new(
-        std::io::Read::take(reader, 64 * 1024 * 1024),
+    let snapshot: Snapshot = serde_json::from_reader(std::io::BufReader::new(
+        std::io::Read::take(reader, 256 * 1024 * 1024),
     ))?;
+    prepare_value(snapshot)
+}
+pub(crate) fn prepare_value(mut snapshot: Snapshot) -> Result<Prepared> {
+    if let Some(recording) = &snapshot.recording {
+        recording.validate()?;
+    }
     ensure!(
         snapshot.format == "yamamuki-viewer-snapshot" && snapshot.version == 1,
         "未対応の表示スナップショットです"
@@ -101,6 +110,7 @@ pub(crate) fn prepare(path: &Path) -> Result<Prepared> {
         .map(|s| surface::Source::open(s.path.clone()))
         .collect::<Result<Vec<_>>>()?;
     Ok(Prepared {
+        replay: None,
         snapshot,
         terrain,
         points,
@@ -119,7 +129,7 @@ impl Viewer {
             t.unfreeze();
         }
     }
-    fn capture_snapshot(&self) -> Result<Snapshot> {
+    pub(crate) fn capture_snapshot(&self) -> Result<Snapshot> {
         let terrain = self
             .terrain
             .as_ref()
@@ -127,6 +137,7 @@ impl Viewer {
             .map(|t| t.snapshot())
             .transpose()?;
         let snapshot = Snapshot {
+            recording: None,
             format: "yamamuki-viewer-snapshot".into(),
             version: 1,
             viewer_version: env!("CARGO_PKG_VERSION").into(),
@@ -193,22 +204,7 @@ impl Viewer {
         }
     }
     pub(crate) fn snapshot_shortcut(&mut self, ctx: &egui::Context) {
-        let pressed = ctx.input(|i| {
-            i.events.iter().any(|e| {
-                matches!(
-                    e,
-                    egui::Event::Key {
-                        key: egui::Key::F8,
-                        pressed: true,
-                        repeat: false,
-                        ..
-                    }
-                )
-            })
-        });
-        if pressed {
-            self.quick_snapshot(ctx);
-        }
+        self.operation_notice(ctx);
         self.snapshot_jobs
             .retain(|receive| match receive.try_recv() {
                 Ok(result) => {
@@ -240,7 +236,7 @@ impl Viewer {
         }
     }
 }
-fn save_in_background(
+pub(crate) fn save_in_background(
     snapshot: Snapshot,
     dir: PathBuf,
     ctx: egui::Context,
@@ -258,12 +254,12 @@ fn save_in_background(
     });
     receive
 }
-fn quick_directory() -> PathBuf {
+pub(crate) fn quick_directory() -> PathBuf {
     eframe::storage_dir(APP_ID)
         .unwrap_or_else(std::env::temp_dir)
         .join("snapshots")
 }
-fn quick_path(dir: &Path) -> PathBuf {
+pub(crate) fn quick_path(dir: &Path) -> PathBuf {
     static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -276,7 +272,7 @@ fn quick_path(dir: &Path) -> PathBuf {
     ))
 }
 impl Snapshot {
-    fn write(&self, path: &Path) -> Result<()> {
+    pub(crate) fn write(&self, path: &Path) -> Result<()> {
         let snapshot = self;
         let pending = tempfile::NamedTempFile::new_in(
             path.parent()
@@ -323,11 +319,14 @@ impl Viewer {
         prepared: Prepared,
     ) -> Result<()> {
         let Prepared {
-            snapshot: s,
+            snapshot: mut s,
+            replay,
             terrain,
             points,
             surfaces,
         } = prepared;
+        self.operation_trace = s.recording.take().map(|v| Arc::new(*v));
+        self.operation_playback = None;
         let terrain = terrain
             .map(|p| {
                 yamamuki_terrain_view::TerrainView::from_snapshot(
@@ -411,6 +410,9 @@ impl Viewer {
         }
         self.snapshot_frozen = true;
         self.snapshot_status = "スナップショットを固定表示中（解除で通常操作へ戻ります）".into();
+        if let Some(recording) = replay {
+            self.begin_operation_playback(ctx, recording);
+        }
         Ok(())
     }
 }

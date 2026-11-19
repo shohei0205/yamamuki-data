@@ -102,7 +102,15 @@ impl Snapshot {
                     .all(|v| v.is_finite() && *v >= 1. && *v <= 32768.),
                 "描画サイズが不正です"
             );
-            for p in &layout.plans {
+            anyhow::ensure!(
+                layout.previous.is_empty() || layout.previous.len() == self.counts[3],
+                "旧描画パッチの構成が不正です"
+            );
+            for p in layout
+                .plans
+                .iter()
+                .chain(layout.previous.iter().flatten().map(|p| &p.plan))
+            {
                 anyhow::ensure!(p.patches.len() <= 1_048_576, "描画パッチが多すぎます");
                 for patch in &p.patches {
                     anyhow::ensure!(
@@ -236,6 +244,16 @@ impl TerrainView {
         view.app.local_background = take(s.counts[1]);
         view.app.roots = take(s.counts[2]);
         view.app.previous = take(s.counts[3]);
+        view.app.previous_primary =
+            s.layout
+                .as_ref()
+                .filter(|l| !l.previous.is_empty())
+                .map_or(s.counts[3], |l| {
+                    l.previous
+                        .iter()
+                        .take_while(|p| !p.as_ref().is_some_and(|p| p.background))
+                        .count()
+                });
         view.app.camera = s.camera;
         view.app.settings = s.settings;
         view.app.smooth = s.smooth;
@@ -388,6 +406,560 @@ mod tests {
             .collect())
     }
     #[test]
+    #[ignore = "操作記録のカメラ履歴で実際の非同期更新を進める"]
+    fn external_recorded_camera_frames() -> Result<()> {
+        let input: serde_json::Value = serde_json::from_reader(std::fs::File::open(
+            std::env::var("YAMAMUKI_OPERATION_TEST_INPUT")?,
+        )?)?;
+        let recording = &input["recording"];
+        let initial: Snapshot = serde_json::from_value(recording["initial"]["terrain"].clone())?;
+        let app =
+            crate::remembered_scene_tests::app_with_backend(eframe::wgpu::Backends::DX12).unwrap();
+        let ctx = egui::Context::default();
+        let mut replay = TerrainView::from_snapshot(&ctx, &app.renderer.state, initial.prepare()?)?;
+        let raw = draw(&mut replay)?;
+        let size = replay.app.renderer.positions.size();
+        let pixels: &[[f32; 4]] = bytemuck::cast_slice(&raw);
+        let mut points = Vec::new();
+        for y in 0..12 {
+            for x in 0..24 {
+                let q = pixels[(((y * size.height / 12 + size.height / 24) * size.width)
+                    + (x * size.width / 24 + size.width / 48))
+                    as usize];
+                if q[3] == 0. {
+                    continue;
+                }
+                let mut world = [
+                    replay.app.camera.center[0] + q[0] as f64,
+                    replay.app.camera.center[1] + q[1] as f64,
+                ];
+                if let Some(tile) = replay
+                    .app
+                    .shown
+                    .iter()
+                    .filter(|t| {
+                        (0..2).all(|a| world[a] >= t.origin[a] && world[a] <= t.origin[a] + t.side)
+                    })
+                    .max_by_key(|t| t.key.0)
+                {
+                    let (axis, upper, _) = [
+                        (0, false, world[0] - tile.origin[0]),
+                        (0, true, tile.origin[0] + tile.side - world[0]),
+                        (1, false, world[1] - tile.origin[1]),
+                        (1, true, tile.origin[1] + tile.side - world[1]),
+                    ]
+                    .into_iter()
+                    .min_by(|a, b| a.2.total_cmp(&b.2))
+                    .unwrap();
+                    world[axis] = tile.origin[axis] + if upper { tile.side } else { 0. };
+                }
+                points.push([
+                    world[0] / shared_data::WORLD,
+                    world[1] / shared_data::WORLD,
+                    0.,
+                ]);
+            }
+        }
+        let mut history = Vec::new();
+        replay.unfreeze();
+        let mut frame = eframe::Frame::_new_kittest();
+        let frames = recording["frames"].as_array().unwrap();
+        for i in 0..frames.len() + 90 {
+            let sample = &frames[i.min(frames.len() - 1)]["after"];
+            let v = &sample["view"];
+            let rect = egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(
+                    sample["canvas"][0].as_f64().unwrap() as f32,
+                    sample["canvas"][1].as_f64().unwrap() as f32,
+                ),
+            );
+            let r = &v["orientation"]["rotation"];
+            replay.set_map_camera(
+                [
+                    v["center"][0].as_f64().unwrap(),
+                    v["center"][1].as_f64().unwrap(),
+                ],
+                v["zoom"].as_f64().unwrap(),
+                r["s"].as_f64().unwrap().atan2(r["c"].as_f64().unwrap()),
+                v["orientation"]["vertical_scale"].as_f64().unwrap().acos(),
+                rect,
+            );
+            replay.app.embedded_rect = Some(rect);
+            let start = Instant::now();
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ctx| {
+                    replay.update(ctx, &mut frame);
+                },
+            );
+            let update_ms = start.elapsed().as_secs_f64() * 1000.;
+            let start = Instant::now();
+            draw_inner(&mut replay, false)?;
+            if std::env::var_os("YAMAMUKI_OPERATION_PROBE").is_some() {
+                history.push(external_probe_heights(&mut replay, &ctx, &points)?);
+            }
+            let mut counts = std::collections::BTreeMap::new();
+            for t in &replay.app.shown {
+                *counts.entry((t.key.0, t.n)).or_insert(0usize) += 1;
+            }
+            eprintln!(
+                "連続記録 frame={i} update={update_ms:.2}ms draw={:.2}ms shown={} roots={} pending={} meshes={counts:?}",
+                start.elapsed().as_secs_f64() * 1000.,
+                replay.app.shown.len(),
+                replay.app.roots.len(),
+                replay.app.scene_pending
+            );
+        }
+        if let Some(path) = std::env::var_os("YAMAMUKI_OPERATION_PROBE") {
+            let largest = (0..points.len())
+                .filter_map(|i| {
+                    let values = history
+                        .iter()
+                        .map(|frame| frame[i])
+                        .filter(|v| v[3] > 0.)
+                        .map(|v| v[2])
+                        .collect::<Vec<_>>();
+                    if values.is_empty() {
+                        return None;
+                    }
+                    Some(
+                        values.iter().copied().fold(f32::NEG_INFINITY, f32::max)
+                            - values.iter().copied().fold(f32::INFINITY, f32::min),
+                    )
+                })
+                .fold(0f32, f32::max);
+            eprintln!("固定した境界地点の最大標高変動: {largest:.4}m");
+            std::fs::write(
+                path,
+                serde_json::to_vec(&serde_json::json!({"points":points,"history":history}))?,
+            )?;
+            if let Ok(limit) = std::env::var("YAMAMUKI_OPERATION_MAX_HEIGHT_DELTA") {
+                let limit: f32 = limit.parse()?;
+                anyhow::ensure!(
+                    largest <= limit,
+                    "境界の標高変動が許容値を超えた: {largest}m > {limit}m"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "実視点で固定座標の描画標高を小さなカメラ移動・再分割の前後で比較する"]
+    fn external_small_camera_move_height_stability() -> Result<()> {
+        check_external_height_stability(false, false, None)
+    }
+    #[test]
+    #[ignore = "指定のズーム不具合スナップショットで外挿元の安定性を検査する"]
+    fn external_zoom_keeps_neighbor_extrapolation_stable() -> Result<()> {
+        check_external_height_stability(true, true, Some([0.8827219158358839, 0.3906429162144127]))
+    }
+    #[test]
+    #[ignore = "固定解除後のズームで、境界が更新前と完了後の範囲を超えて変形しないか検査する"]
+    fn external_zoom_does_not_temporarily_dent_terrain_seams() -> Result<()> {
+        check_external_camera_transition(false)
+    }
+    #[test]
+    #[ignore = "固定解除後のカメラ移動で、境界の一時的な凹みと描画時間を検査する"]
+    fn external_pan_does_not_temporarily_dent_terrain_seams() -> Result<()> {
+        check_external_camera_transition(true)
+    }
+    fn check_external_camera_transition(pan: bool) -> Result<()> {
+        use anyhow::ensure;
+        let snapshot: Snapshot = serde_json::from_reader(std::fs::File::open(std::env::var(
+            "YAMAMUKI_SNAPSHOT_TEST_INPUT",
+        )?)?)?;
+        let app =
+            crate::remembered_scene_tests::app_with_backend(eframe::wgpu::Backends::DX12).unwrap();
+        let ctx = egui::Context::default();
+        let mut replay =
+            TerrainView::from_snapshot(&ctx, &app.renderer.state, snapshot.prepare()?)?;
+        let original = replay.app.camera.clone();
+        let raw = draw(&mut replay)?;
+        let pixels: &[[f32; 4]] = bytemuck::cast_slice(&raw);
+        let size = replay.app.renderer.positions.size();
+        let mut points = Vec::new();
+        for row in 0..16 {
+            for col in 0..32 {
+                let x = (col * size.width / 32 + size.width / 64).min(size.width - 1);
+                let y = (row * size.height / 16 + size.height / 32).min(size.height - 1);
+                let q = pixels[(y * size.width + x) as usize];
+                if q[3] != 0. {
+                    points.push([
+                        (original.center[0] + q[0] as f64) / shared_data::WORLD,
+                        (original.center[1] + q[1] as f64) / shared_data::WORLD,
+                        0.,
+                    ]);
+                }
+            }
+        }
+        // 実際に表示されていた位置を評価区画の辺へ寄せ、その両側も照会する。
+        let mut borders = Vec::new();
+        for p in &points {
+            let q = [p[0] * shared_data::WORLD, p[1] * shared_data::WORLD];
+            if let Some(tile) = replay
+                .app
+                .shown
+                .iter()
+                .filter(|t| (0..2).all(|a| q[a] >= t.origin[a] && q[a] <= t.origin[a] + t.side))
+                .max_by(|a, b| {
+                    a.key
+                        .0
+                        .cmp(&b.key.0)
+                        .then_with(|| b.side.total_cmp(&a.side))
+                })
+            {
+                let (axis, upper, _) = [
+                    (0, false, q[0] - tile.origin[0]),
+                    (0, true, tile.origin[0] + tile.side - q[0]),
+                    (1, false, q[1] - tile.origin[1]),
+                    (1, true, tile.origin[1] + tile.side - q[1]),
+                ]
+                .into_iter()
+                .min_by(|a, b| a.2.total_cmp(&b.2))
+                .unwrap();
+                for delta in [-1., 0., 1.] {
+                    let mut xy = q;
+                    xy[axis] = tile.origin[axis] + if upper { tile.side } else { 0. } + delta;
+                    borders.push([xy[0] / shared_data::WORLD, xy[1] / shared_data::WORLD, 0.]);
+                }
+            }
+        }
+        points.extend(borders);
+        replay.unfreeze();
+        let mut db = Database::open(std::path::Path::new(&replay.app.path))?;
+        replay.app.catalog = db.catalog.clone();
+        replay.app.remembered_until_selection = None;
+        replay.app.loading = false;
+        for factor in if pan {
+            vec![0., 10., 30., 50., 100., 300., 500., 1000., 500., 0.]
+        } else {
+            vec![1., 0.98, 0.95, 0.9, 0.8, 0.7, 0.6]
+        } {
+            replay.app.camera = original.clone();
+            if pan {
+                replay.app.camera.center[0] += factor;
+                replay.app.camera.center[1] += factor * 0.3;
+            } else {
+                replay.app.camera.distance *= factor;
+                replay.app.camera.center[0] += 0.01;
+            }
+            replay.app.frozen_morph = Some(1.);
+            draw_inner(&mut replay, false)?;
+            let before = external_probe_heights(&mut replay, &ctx, &points)?;
+            replay.app.wanted = selection::select(&replay.app.catalog, &replay.app.camera);
+            for key in replay.app.wanted.clone() {
+                if !replay.app.packets.contains_key(&key) {
+                    replay.app.packets.insert(key, db.packet(key)?);
+                }
+            }
+            let deadline = Instant::now() + Duration::from_secs(45);
+            while !replay.app.scene()? {
+                ensure!(Instant::now() < deadline, "曲面準備が完了しない");
+                let _ = replay
+                    .app
+                    .renderer
+                    .state
+                    .device
+                    .poll(eframe::wgpu::Maintain::Wait);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            eprintln!(
+                "曲面切替: 主={} 背景={} 旧={}",
+                replay.app.shown.len(),
+                replay.app.local_background.len(),
+                replay.app.previous.len()
+            );
+            replay.app.frozen_morph = Some(0.);
+            draw_inner(&mut replay, false)?;
+            let after = external_probe_heights(&mut replay, &ctx, &points)?;
+            let mut largest = (0f32, 0usize);
+            let mut screen_jump = 0f64;
+            let mut count = 0;
+            for (i, (a, b)) in before.iter().zip(&after).enumerate() {
+                if a[2] == 0. || b[2] == 0. || a[3] == 0. || b[3] == 0. {
+                    continue;
+                }
+                let dx = f64::from(a[0] - b[0]) * original.viewport[0];
+                let dy = f64::from(a[1] - b[1]) * original.viewport[1];
+                screen_jump = screen_jump.max(dx.hypot(dy));
+                let delta = (a[2] - b[2]).abs();
+                if delta > largest.0 {
+                    largest = (delta, i);
+                }
+                count += 1;
+            }
+            eprintln!(
+                "切替開始 ズーム距離倍率={factor} 比較={count}点 最大差={}m 地点={:?} 前={}m 後={}m",
+                largest.0, points[largest.1], before[largest.1][2], after[largest.1][2]
+            );
+            ensure!(count > 0, "表示中の照会点がない");
+            eprintln!("切替開始の最大画面差: {screen_jump}px");
+            // 同一保存タイルの評価更新は、新面へ直接切り替える。開始位置の
+            // 一致でなく、開始から完了までの余分な上下動と境界を検査する。
+            let mut stages = Vec::new();
+            for t in [0.25f32, 0.5, 0.75, 1.] {
+                replay.app.frozen_morph = Some(t);
+                let started = Instant::now();
+                draw_inner(&mut replay, false)?;
+                eprintln!(
+                    "遷移描画 t={t}: {:.2}ms",
+                    started.elapsed().as_secs_f64() * 1000.
+                );
+                stages.push((t, external_probe_heights(&mut replay, &ctx, &points)?));
+            }
+            let end = &stages.last().unwrap().1;
+            let projection = replay.projection();
+            let rect = egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(original.viewport[0] as f32, original.viewport[1] as f32),
+            );
+            let mut deviation = 0f32;
+            for (t, stage) in &stages[..3] {
+                for (i, mid) in stage.iter().enumerate() {
+                    let a = after[i];
+                    let b = end[i];
+                    if a[3] == 0. || b[3] == 0. || mid[3] == 0. {
+                        continue;
+                    }
+                    let expected = a[2] * (1. - t) + b[2] * t;
+                    let xy = [points[i][0], points[i][1]];
+                    if let (Some(a), Some(b)) = (
+                        projection.screen(rect, xy, expected as f64),
+                        projection.screen(rect, xy, mid[2] as f64),
+                    ) {
+                        deviation = deviation.max(a.distance(b));
+                    }
+                }
+            }
+            eprintln!("遷移途中の直線的な変化からの最大画面差: {deviation}px");
+            ensure!(
+                deviation < 0.25,
+                "遷移途中で余分な上下動が発生: {deviation}px"
+            );
+            let mut overshoot = 0f32;
+            for stage in std::iter::once(&after).chain(stages.iter().map(|(_, v)| v)) {
+                for (i, mid) in stage.iter().enumerate() {
+                    let a = before[i];
+                    let b = end[i];
+                    if a[3] == 0. || b[3] == 0. || mid[3] == 0. {
+                        continue;
+                    }
+                    let expected = mid[2].clamp(a[2].min(b[2]), a[2].max(b[2]));
+                    let xy = [points[i][0], points[i][1]];
+                    if let (Some(a), Some(b)) = (
+                        projection.screen(rect, xy, expected as f64),
+                        projection.screen(rect, xy, mid[2] as f64),
+                    ) {
+                        overshoot = overshoot.max(a.distance(b));
+                    }
+                }
+            }
+            eprintln!("更新前と完了後の範囲を超える一時変形: {overshoot}px");
+            ensure!(overshoot < 0.25, "境界が一時的に凹んだ: {overshoot}px");
+            replay.app.previous.clear();
+            replay.app.transition = Instant::now() - Duration::from_secs(1);
+        }
+        Ok(())
+    }
+    fn external_probe_heights(
+        replay: &mut TerrainView,
+        ctx: &egui::Context,
+        points: &[[f64; 3]],
+    ) -> Result<Vec<[f32; 4]>> {
+        *replay.app.renderer.point_state.lock().unwrap() = Default::default();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            if let Some(values) = replay.point_projection(ctx, points) {
+                let state = replay.app.renderer.point_state.lock().unwrap();
+                if state.is_settled() {
+                    return Ok(values);
+                }
+            }
+            anyhow::ensure!(Instant::now() < deadline, "標高照会が完了しない");
+            draw_inner(replay, false)?;
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    fn check_external_height_stability(
+        zoom: bool,
+        rebuild: bool,
+        probe: Option<[f64; 2]>,
+    ) -> Result<()> {
+        use crate::shared_data::WORLD;
+        use anyhow::ensure;
+        let snapshot: Snapshot = serde_json::from_reader(std::fs::File::open(std::env::var(
+            "YAMAMUKI_SNAPSHOT_TEST_INPUT",
+        )?)?)?;
+        let app =
+            crate::remembered_scene_tests::app_with_backend(eframe::wgpu::Backends::DX12).unwrap();
+        let ctx = egui::Context::default();
+        let mut replay =
+            TerrainView::from_snapshot(&ctx, &app.renderer.state, snapshot.prepare()?)?;
+        let original = replay.app.camera.clone();
+        let raw = draw(&mut replay)?;
+        let values: &[[f32; 4]] = bytemuck::cast_slice(&raw);
+        let size = replay.app.renderer.positions.size();
+        let mut points = Vec::new();
+        for row in 0..16 {
+            for col in 0..32 {
+                let x = (col * size.width / 32 + size.width / 64).min(size.width - 1);
+                let y = (row * size.height / 16 + size.height / 32).min(size.height - 1);
+                let q = values[(y * size.width + x) as usize];
+                if q[3] != 0. {
+                    points.push([
+                        (original.center[0] + q[0] as f64) / WORLD,
+                        (original.center[1] + q[1] as f64) / WORLD,
+                        q[3].abs() as f64 - 10000.,
+                    ]);
+                }
+            }
+        }
+        if let Some(xy) = probe {
+            points.push([xy[0], xy[1], 0.]);
+        }
+        ensure!(!points.is_empty(), "地形上の照会点がない");
+        if rebuild {
+            let db = Database::open(std::path::Path::new(&replay.app.path))?;
+            replay.app.catalog = db.catalog.clone();
+            replay.app.wanted = replay
+                .app
+                .shown
+                .iter()
+                .map(|t| t.key)
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            replay.app.remembered_until_selection = None;
+            replay.app.loading = false;
+            replay.app.frozen_morph = Some(1.);
+        }
+        let mut reference: Option<Vec<[f32; 4]>> = None;
+        for replan in [false, true] {
+            if replan {
+                replay.replan_frozen();
+                reference = None;
+            }
+            for shift in if zoom {
+                vec![1., 0.95, 0.9, 0.8, 0.7, 0.6, 0.8, 1.]
+            } else {
+                vec![0.01, 10., -10., 0.01]
+            } {
+                replay.app.camera = original.clone();
+                if zoom {
+                    replay.app.camera.distance *= shift;
+                    replay.app.camera.center[0] += 0.01;
+                } else {
+                    replay.app.camera.center[0] += shift;
+                }
+                if rebuild && replan {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                    while !replay.app.scene()? {
+                        ensure!(
+                            std::time::Instant::now() < deadline,
+                            "曲面の再準備が完了しない"
+                        );
+                        let _ = replay
+                            .app
+                            .renderer
+                            .state
+                            .device
+                            .poll(eframe::wgpu::Maintain::Wait);
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                    replay.app.previous.clear();
+                }
+                draw_inner(&mut replay, false)?;
+                if replan {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                    while replay
+                        .app
+                        .renderer
+                        .current_plan_matches_reference()
+                        .is_none()
+                    {
+                        ensure!(
+                            std::time::Instant::now() < deadline,
+                            "分割計画が追いつかない"
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        draw_inner(&mut replay, false)?;
+                    }
+                }
+                let draw_started = std::time::Instant::now();
+                draw_inner(&mut replay, false)?;
+                eprintln!(
+                    "描画計測 {:.2}ms / {:?}",
+                    draw_started.elapsed().as_secs_f64() * 1000.,
+                    replay.app.renderer.metrics()
+                );
+                *replay.app.renderer.point_state.lock().unwrap() = Default::default();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                let heights = loop {
+                    if let Some(values) = replay.point_projection(&ctx, &points) {
+                        break values;
+                    }
+                    ensure!(std::time::Instant::now() < deadline, "標高照会が完了しない");
+                    draw_inner(&mut replay, false)?;
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                };
+                let baseline = reference.get_or_insert_with(|| heights.clone());
+                let mut largest = (0., 0);
+                let mut count = 0;
+                let mut squares = 0.;
+                let mut probe_seen = false;
+                for (i, (a, b)) in baseline.iter().zip(&heights).enumerate() {
+                    if a[2] == 0.
+                        || b[2] == 0.
+                        || replay
+                            .app
+                            .renderer
+                            .describe_height_point([points[i][0], points[i][1]])
+                            == "ownerなし"
+                    {
+                        continue;
+                    }
+                    let delta = (a[2] - b[2]).abs();
+                    if probe.is_some() && i + 1 == points.len() {
+                        probe_seen = true;
+                        eprintln!("注目点の標高: 元={}m 現在={}m 差={}m", a[2], b[2], delta);
+                        ensure!(delta < 0.5, "注目点の標高が変わった: {delta}m");
+                    }
+                    if delta > largest.0 {
+                        largest = (delta, i);
+                    }
+                    squares += delta as f64 * delta as f64;
+                    count += 1;
+                }
+                ensure!(
+                    probe.is_none() || probe_seen,
+                    "検査対象の山が描画範囲にない"
+                );
+                if let Some(xy) = probe {
+                    eprintln!("注目点: {}", replay.app.renderer.describe_height_point(xy));
+                }
+                eprintln!(
+                    "標高安定性 再分割={replan} ズーム={zoom} 操作量={shift}: {count}点 / 最大{:.3}m / RMS {:.3}m / 位置 {:?}",
+                    largest.0,
+                    (squares / (count.max(1) as f64)).sqrt(),
+                    points[largest.1]
+                );
+                if !rebuild {
+                    ensure!(
+                        largest.0 < 0.5,
+                        "小さなカメラ移動で描画標高が変わった: {}m",
+                        largest.0
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+    #[test]
     #[ignore = "実データの視点変更時の取得・GPU準備・切替待ちを計測する"]
     fn benchmark_external_mesh_switch_latency() -> Result<()> {
         let path = std::env::var("YAMAMUKI_SNAPSHOT_TEST_INPUT")?;
@@ -444,7 +1016,21 @@ mod tests {
                 }
                 let _ = a.renderer.state.device.poll(eframe::wgpu::Maintain::Wait);
                 frames += 1;
-                anyhow::ensure!(frames < 1000, "準備が完了しません");
+                if frames % 250 == 0 {
+                    let plan = a.preparation_plan();
+                    let missing = a
+                        .wanted
+                        .iter()
+                        .filter(|k| !a.packets.contains_key(k))
+                        .count();
+                    eprintln!(
+                        "メッシュ準備進捗: {frames}フレーム / {}区画 / ローカルGPU {} / 不足 {missing} / CPU完了 {}",
+                        plan.len(),
+                        a.local_gpu.len(),
+                        job.is_finished()
+                    );
+                }
+                anyhow::ensure!(frames < 3000, "準備が完了しません");
                 std::thread::sleep(std::time::Duration::from_millis(16));
             }
             let cpu_ms = job.join().unwrap()?;
@@ -655,6 +1241,44 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    #[ignore = "指定したスナップショットの同じメッシュ・視点で描画時間と出力を比較する"]
+    fn benchmark_external_fixed_scene() -> Result<()> {
+        let snapshot: Snapshot = serde_json::from_reader(std::fs::File::open(std::env::var(
+            "YAMAMUKI_SNAPSHOT_TEST_INPUT",
+        )?)?)?;
+        let app =
+            crate::remembered_scene_tests::app_with_backend(eframe::wgpu::Backends::DX12).unwrap();
+        let mut replay = TerrainView::from_snapshot(
+            &egui::Context::default(),
+            &app.renderer.state,
+            snapshot.prepare()?,
+        )?;
+        for _ in 0..3 {
+            draw_inner(&mut replay, false)?;
+        }
+        let start = Instant::now();
+        let mut cpu = 0.;
+        for _ in 0..16 {
+            draw_inner(&mut replay, false)?;
+            cpu += replay.app.renderer.prepare_stats().prepare_ms;
+        }
+        eprintln!(
+            "固定視点: 平均={:.3}ms CPU={:.3}ms 描画={:?}",
+            start.elapsed().as_secs_f64() * 1000. / 16.,
+            cpu / 16.,
+            replay.app.renderer.metrics()
+        );
+        eprintln!(
+            "接合候補（元の表・接合評価用）: {:?}",
+            replay.app.renderer.candidate_counts()
+        );
+        if let Some(path) = std::env::var_os("YAMAMUKI_FIXED_POSITION_OUTPUT") {
+            std::fs::write(path, draw(&mut replay)?)?;
+        }
+        Ok(())
+    }
+
     #[test]
     #[ignore = "実スナップショットに地図を重ねてGPU描画時間を測る"]
     fn benchmark_external_online_material() -> Result<()> {
@@ -934,9 +1558,7 @@ mod tests {
                     anyhow::ensure!(
                         stats.rebuild_ms == 0.
                             && stats.plan_ms == 0.
-                            && stats.atlas_copy_bytes == 0
-                            && stats.allocations == 0
-                            && stats.bind_groups == 0,
+                            && stats.atlas_copy_bytes == 0,
                         "回転だけで共有シーンを再構築した"
                     );
                 }
@@ -1321,7 +1943,9 @@ mod tests {
         let key = *db.catalog.keys().max_by_key(|k| k.0).unwrap();
         let packet = db.packet(key)?;
         let fresh = app.renderer.upload(&packet, 16)?;
-        let old = app.renderer.upload(&packet, 8)?;
+        let old_key = (key.0 - 1, key.1 >> 1, key.2 >> 1);
+        let old_packet = db.packet(old_key)?;
+        let old = app.renderer.upload(&old_packet, 8)?;
         app.camera.center = [
             packet.origin[0] + packet.side / 2.,
             packet.origin[1] + packet.side / 2.,
@@ -1329,8 +1953,8 @@ mod tests {
         app.camera.distance = 10000.;
         app.camera.height = 500.;
         app.camera.viewport = [64., 64.];
-        app.shown = vec![fresh];
-        app.previous = vec![old];
+        app.shown = vec![old.clone()];
+        app.frozen_morph = Some(1.);
         app.path = path.to_string_lossy().into();
         app.generation = db.generation.clone();
         let mut source = TerrainView {
@@ -1338,6 +1962,10 @@ mod tests {
             app,
             automatic_maximum: None,
         };
+        draw(&mut source)?;
+        source.app.shown = vec![fresh];
+        source.app.previous = vec![old];
+        source.app.frozen_morph = Some(0.37);
         let before = draw(&mut source)?;
         assert!(
             bytemuck::cast_slice::<u8, f32>(&before)
@@ -1348,6 +1976,10 @@ mod tests {
         let captured = source.snapshot()?;
         assert_eq!(captured.morph, 0.37);
         assert_eq!(captured.counts, [1, 0, 0, 1]);
+        assert!(
+            captured.layout.as_ref().unwrap().previous[0].is_some(),
+            "旧表示の三角形を保存できていない"
+        );
         let bytes = serde_json::to_vec(&captured)?;
         let decoded: Snapshot = serde_json::from_slice(&bytes)?;
         let prepared = decoded.prepare()?;

@@ -708,57 +708,6 @@ mod tests {
     }
 }
 
-/// 4子タイルがすべて復号済みなら、一段細かいレベルを一時的に維持する。
-pub fn prefer_cached(
-    keys: Vec<Key>,
-    cached: &std::collections::HashSet<Key>,
-    catalog: &HashMap<Key, usize>,
-    maximum: u32,
-) -> Vec<Key> {
-    let mut result = keys.iter().copied().collect::<BTreeSet<_>>();
-    let mut controls = result.iter().map(|k| catalog[k]).sum::<usize>();
-    for k in keys {
-        if k.0 >= maximum {
-            continue;
-        }
-        let children = (0..2)
-            .flat_map(|y| (0..2).map(move |x| (k.0 + 1, k.1 * 2 + x, k.2 * 2 + y)))
-            .collect::<Vec<_>>();
-        if children
-            .iter()
-            .all(|c| cached.contains(c) && catalog.contains_key(c))
-        {
-            let cost = children.iter().map(|c| catalog[c]).sum::<usize>();
-            if result.len() + 3 <= 96 && controls - catalog[&k] + cost <= 250000 {
-                controls = controls - catalog[&k] + cost;
-                result.remove(&k);
-                result.extend(children);
-            }
-        }
-    }
-    result.into_iter().collect()
-}
-#[cfg(test)]
-mod cache_tests {
-    use super::*;
-    #[test]
-    fn complete_cached_children_only_and_one_level() {
-        let k = (8, 2, 3);
-        let children = [(9, 4, 6), (9, 5, 6), (9, 4, 7), (9, 5, 7)];
-        let mut catalog = HashMap::from([(k, 10)]);
-        for c in children {
-            catalog.insert(c, 10);
-        }
-        let mut cache = children
-            .into_iter()
-            .collect::<std::collections::HashSet<_>>();
-        assert_eq!(prefer_cached(vec![k], &cache, &catalog, 13).len(), 4);
-        cache.remove(&children[0]);
-        assert_eq!(prefer_cached(vec![k], &cache, &catalog, 13), vec![k]);
-        assert_eq!(prefer_cached(vec![k], &cache, &catalog, 8), vec![k]);
-    }
-}
-
 #[cfg(test)]
 mod map_camera_tests {
     use super::*;

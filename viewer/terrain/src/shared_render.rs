@@ -31,6 +31,8 @@ struct SourceBuffers {
     triangles: wgpu::Buffer,
     bytes: usize,
 }
+// 小区画を16件で止めず、点数上限とCPU時間予算で投入量を制御する。
+pub(crate) const MAX_UPLOAD_JOBS: usize = 128;
 #[derive(Default)]
 struct UploadBudget {
     jobs: AtomicUsize,
@@ -38,7 +40,7 @@ struct UploadBudget {
 }
 impl UploadBudget {
     fn available(&self, n: u32) -> bool {
-        self.jobs.load(Ordering::Acquire) < 16
+        self.jobs.load(Ordering::Acquire) < MAX_UPLOAD_JOBS
             && self.samples.load(Ordering::Acquire) + (n as usize + 1).pow(2)
                 <= 4 * (513usize).pow(2)
     }
@@ -230,6 +232,7 @@ impl LandcoverGpu {
 struct SharedPipelines {
     compute: wgpu::ComputePipeline,
     pipeline: wgpu::RenderPipeline,
+    fast_pipeline: wgpu::RenderPipeline,
     fallback: wgpu::RenderPipeline,
     control: wgpu::RenderPipeline,
     control_fallback: wgpu::RenderPipeline,
@@ -265,6 +268,7 @@ pub struct Renderer {
     indices: Arc<std::collections::HashMap<u32, wgpu::Buffer>>,
 
     pipeline: wgpu::RenderPipeline,
+    fast_pipeline: wgpu::RenderPipeline,
     fallback: wgpu::RenderPipeline,
     control: wgpu::RenderPipeline,
     control_fallback: wgpu::RenderPipeline,
@@ -290,10 +294,23 @@ struct Record {
     data: [u32; 4],
     neighbors: [u32; 4],
     tile: [f32; 4],
+    // 元タイルの遠い端点はf64から直接変換し、大きな辺長のf32加算で復元しない。
+    tile_end: [f32; 4],
     draw: [u32; 4],
+    // 同じ評価曲面が旧表示にもある場合の索引+1。0は探索が必要。
+    transition: [u32; 4],
+    // 接合用に絞った候補の開始・件数・元タイル終端表。境界探索は従来表を使う。
+    blend_data: [u32; 4],
+}
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct PreviousPlan {
+    pub background: bool,
+    pub plan: crate::shared_patches::Plan,
 }
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct LayoutSnapshot {
+    #[serde(default)]
+    pub previous: Vec<Option<PreviousPlan>>,
     pub plans: Vec<crate::shared_patches::Plan>,
     pub camera: [f64; 10],
     pub render_camera: Camera,
@@ -319,6 +336,83 @@ struct PreparedPlan {
     plans: Vec<crate::shared_patches::Plan>,
     pose: [f64; 10],
 }
+// 接合候補を元タイルごとの外接矩形で絞り、全評価区画の総当たりを避ける。
+struct SeamGroups {
+    groups: Vec<([f32; 4], Vec<usize>)>,
+}
+impl SeamGroups {
+    fn new(records: &[Record], keys: &[Key], densities: &[u32]) -> Self {
+        let mut groups = std::collections::HashMap::<Key, ([f32; 4], Vec<usize>)>::new();
+        for (i, record) in records.iter().enumerate() {
+            let a = record.tile;
+            let local = record.bounds;
+            let pad = record.tile[3]
+                .max((local[2] / 8.).min(2. * local[2] / densities[i] as f32))
+                .max(1.);
+            let bounds = [a[0] - pad, a[1] - pad, a[0] + a[2] + pad, a[1] + a[2] + pad];
+            let entry = groups.entry(keys[i]).or_insert((
+                [
+                    f32::INFINITY,
+                    f32::INFINITY,
+                    f32::NEG_INFINITY,
+                    f32::NEG_INFINITY,
+                ],
+                Vec::new(),
+            ));
+            for axis in 0..2 {
+                entry.0[axis] = entry.0[axis].min(bounds[axis]);
+                entry.0[axis + 2] = entry.0[axis + 2].max(bounds[axis + 2]);
+            }
+            entry.1.push(i);
+        }
+        Self {
+            groups: groups.into_values().collect(),
+        }
+    }
+    fn candidates(&self, area: [f32; 4]) -> Vec<usize> {
+        let mut result = Vec::new();
+        for (bounds, ids) in &self.groups {
+            if area[0] <= bounds[2]
+                && area[2] >= bounds[0]
+                && area[1] <= bounds[3]
+                && area[3] >= bounds[1]
+            {
+                result.extend(ids);
+            }
+        }
+        result.sort_unstable();
+        result
+    }
+}
+// 並び替えただけで描画設定を作り直さず、同じ曲面の視点設定の場所を保つ。
+fn uniform_slots(ids: &[usize], previous: &[(usize, u64)], capacity: u64) -> Vec<u64> {
+    let prior = previous
+        .iter()
+        .copied()
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut slots = ids
+        .iter()
+        .map(|id| prior.get(id).copied().filter(|&s| s < capacity))
+        .collect::<Vec<_>>();
+    let mut used = slots
+        .iter()
+        .flatten()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let mut free = 0;
+    for slot in &mut slots {
+        if slot.is_some() {
+            continue;
+        }
+        while used.contains(&free) {
+            free += 1;
+        }
+        assert!(free < capacity, "視点設定の容量が不足");
+        *slot = Some(free);
+        used.insert(free);
+    }
+    slots.into_iter().map(Option::unwrap).collect()
+}
 struct CachedScene {
     stats: PrepareStats,
     owner_texture: egui::TextureId,
@@ -333,11 +427,18 @@ struct CachedScene {
     _atlas: wgpu::Buffer,
     _links: wgpu::Buffer,
     metadata: wgpu::Buffer,
+    views: wgpu::Buffer,
+    view_bytes: Vec<u8>,
+    view_stride: u64,
+    view_slots: Vec<u64>,
     bindings: Vec<wgpu::BindGroup>,
     patches: Vec<wgpu::Buffer>,
+    bindings_ready: Vec<bool>,
+    placeholder_patch: wgpu::Buffer,
     point_patches: wgpu::Buffer,
     records: Vec<Record>,
     plans: Vec<crate::shared_patches::Plan>,
+    previous_plans: Vec<Option<PreviousPlan>>,
     plan_inputs: Option<Arc<Vec<crate::shared_patches::Input>>>,
     plan_job: Option<std::sync::Mutex<std::sync::mpsc::Receiver<PreparedPlan>>>,
     last_plan: std::time::Instant,
@@ -539,6 +640,16 @@ fn render_shader_source() -> String {
         include_str!("atmosphere.wgsl")
     )
 }
+// 通常表示では旧スナップショットの変形を使わない。分岐をGPUへ残すだけでも
+// レジスター使用量が増えるため、同じ接合式だけを使う専用プログラムにする。
+fn regular_render_shader_source() -> String {
+    let mut source = render_shader_source();
+    let start = source.find("fn surfaceFor(").unwrap();
+    let end = source[start..].find("fn surface(q:").unwrap() + start;
+    source.replace_range(start..end,"fn surfaceFor(q:vec2<f32>,owner:u32,allowMorph:bool)->vec3<f32>{return blend(q,owner,false); }\n");
+    source
+}
+
 impl Renderer {
     pub fn interpolation_pending(&self) -> bool {
         self.direct_renderer.interpolation_pending()
@@ -665,10 +776,30 @@ impl Renderer {
                         multiview: None,
                         cache: None,
                     };
-                    let pipeline =
-                        crate::gpu_profile::timed("地形曲面・頂点/画素", || {
-                            d.create_render_pipeline(&descriptor)
+                    let (pipeline, fast_pipeline) = std::thread::scope(|scope| {
+                        let fast = scope.spawn(|| {
+                            let shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
+                                label: Some("通常表示の共有曲面"),
+                                source: wgpu::ShaderSource::Wgsl(
+                                    regular_render_shader_source().into(),
+                                ),
+                            });
+                            let mut regular = descriptor.clone();
+                            regular.vertex.module = &shader;
+                            regular.fragment.as_mut().unwrap().module = &shader;
+                            crate::gpu_profile::timed("地形曲面・通常表示", || {
+                                d.create_render_pipeline(&regular)
+                            })
                         });
+                        let pipeline =
+                            crate::gpu_profile::timed("地形曲面・頂点/画素", || {
+                                d.create_render_pipeline(&descriptor)
+                            });
+                        (
+                            pipeline,
+                            fast.join().expect("通常表示プログラムの準備が停止しました"),
+                        )
+                    });
                     let fallback = pipeline.clone();
                     descriptor.vertex.entry_point = Some("control_vs");
                     descriptor.fragment.as_mut().unwrap().entry_point = Some("control_fs");
@@ -725,6 +856,7 @@ impl Renderer {
                             .join()
                             .expect("曲面評価プログラムの準備が停止しました"),
                         pipeline,
+                        fast_pipeline,
                         fallback,
                         control,
                         control_fallback,
@@ -742,6 +874,7 @@ impl Renderer {
         let SharedPipelines {
             compute,
             pipeline,
+            fast_pipeline,
             fallback,
             control,
             control_fallback,
@@ -792,6 +925,7 @@ impl Renderer {
             compute,
 
             pipeline,
+            fast_pipeline,
             fallback,
             control,
             control_fallback,
@@ -927,6 +1061,73 @@ impl Renderer {
                 }),
         )
     }
+    #[cfg(test)]
+    pub(crate) fn describe_height_point(&self, world: [f64; 2]) -> String {
+        let renderer = self.state.renderer.read();
+        let Some(cache) = renderer.callback_resources.get::<CachedScene>() else {
+            return String::new();
+        };
+        let q = [
+            (world[0] * WORLD - cache.render_camera.center[0]) as f32,
+            (world[1] * WORLD - cache.render_camera.center[1]) as f32,
+        ];
+        let owner = (0..cache.current)
+            .filter(|&i| {
+                let r = cache.records[i];
+                r.draw[1] > 0
+                    && (0..2).all(|axis| {
+                        q[axis] >= r.bounds[axis] - 0.01
+                            && q[axis] <= r.bounds[axis] + r.bounds[2] + 0.01
+                    })
+            })
+            .max_by(|&i, &j| {
+                cache.records[i].data[2]
+                    .cmp(&cache.records[j].data[2])
+                    .then_with(|| cache.records[j].bounds[2].total_cmp(&cache.records[i].bounds[2]))
+            });
+        let Some(i) = owner else {
+            return "ownerなし".into();
+        };
+        let r = cache.records[i];
+        let parts = cache.plans[i]
+            .patches
+            .iter()
+            .filter(|p| {
+                (0..2).all(|axis| {
+                    q[axis] >= r.bounds[axis] + p.bounds[axis] - 0.01
+                        && q[axis] <= r.bounds[axis] + p.bounds[axis] + p.bounds[2] + 0.01
+                })
+            })
+            .map(|p| {
+                format!(
+                    "bounds={:?} edges={:?} origins={:?}",
+                    p.bounds, p.edges, p.origins
+                )
+            })
+            .collect::<Vec<_>>();
+        let prior = (cache.current..cache.records.len())
+            .filter(|&j| {
+                let r = cache.records[j];
+                (0..2)
+                    .all(|a| q[a] >= r.bounds[a] - 0.01 && q[a] <= r.bounds[a] + r.bounds[2] + 0.01)
+            })
+            .map(|j| {
+                format!(
+                    "{j}: {:?} {:?} n={} offset={} pad={} maxpad={}",
+                    cache.tiles[j].key,
+                    cache.tiles[j].field,
+                    cache.records[j].data[1],
+                    cache.records[j].data[0],
+                    cache.records[j].tile[3],
+                    f32::from_bits(cache.records[j].draw[3])
+                )
+            })
+            .collect::<Vec<_>>();
+        format!(
+            "owner={i} key={:?} field={:?} n={} side={} q={q:?} parts={parts:?} prior={prior:?}",
+            cache.tiles[i].key, cache.tiles[i].field, r.data[1], r.bounds[2]
+        )
+    }
     pub fn has_drawn_mesh(&self) -> bool {
         self.state
             .renderer
@@ -934,6 +1135,23 @@ impl Renderer {
             .callback_resources
             .get::<CachedScene>()
             .is_some_and(|c| c.owner_texture == self.texture && c.triangles > 0)
+    }
+    #[cfg(test)]
+    pub(crate) fn candidate_counts(&self) -> (u64, u64) {
+        self.state
+            .renderer
+            .read()
+            .callback_resources
+            .get::<CachedScene>()
+            .map(|c| {
+                c.records.iter().fold((0, 0), |(full, compact), r| {
+                    (
+                        full + u64::from(r.data[3]),
+                        compact + u64::from(r.blend_data[1]),
+                    )
+                })
+            })
+            .unwrap_or_default()
     }
     pub fn metrics(&self) -> (u64, usize, usize) {
         let renderer = self.state.renderer.read();
@@ -946,6 +1164,8 @@ impl Renderer {
                     cache.visible_patches,
                     cache._atlas.size() as usize
                         + cache.metadata.size() as usize
+                        + cache.views.size() as usize
+                        + cache._links.size() as usize
                         + cache
                             .patches
                             .iter()
@@ -969,6 +1189,7 @@ impl Renderer {
                     c.primary,
                     c.current,
                     LayoutSnapshot {
+                        previous: c.previous_plans.clone(),
                         plans: c.plans.clone(),
                         camera: c.camera,
                         render_camera: c.render_camera.clone(),
@@ -1354,6 +1575,16 @@ impl Renderer {
             );
             self.size = size;
         }
+        let pipeline = if previous.is_empty() || morph >= 1. {
+            self.fast_pipeline.clone()
+        } else {
+            self.pipeline.clone()
+        };
+        let fallback = if previous.is_empty() || morph >= 1. {
+            self.fast_pipeline.clone()
+        } else {
+            self.fallback.clone()
+        };
         Callback::new_paint_callback(
             rect,
             Frame {
@@ -1404,9 +1635,9 @@ impl Renderer {
                 tin,
                 color: self.color.create_view(&Default::default()),
                 depth: self.depth.create_view(&Default::default()),
-                pipeline: self.pipeline.clone(),
+                pipeline: pipeline.clone(),
                 indices: self.indices.clone(),
-                fallback: self.fallback.clone(),
+                fallback,
                 control: self.control.clone(),
                 control_fallback: self.control_fallback.clone(),
                 globe_pipeline: self.globe_pipeline.clone(),
@@ -1566,15 +1797,45 @@ impl CallbackTrait for Frame {
                 old.map_or(0, |c| c._atlas.size()),
                 u64::from(device.limits().max_storage_buffer_binding_size),
             );
+            let old_background = old
+                .map(|cache| {
+                    cache.tiles[..cache.current]
+                        .iter()
+                        .zip(&cache.records)
+                        .filter(|(_, r)| r.bounds[3] > 0.)
+                        .map(|(t, _)| Arc::as_ptr(t) as usize)
+                        .collect::<std::collections::HashSet<_>>()
+                })
+                .unwrap_or_default();
             let mut records = Vec::<Record>::new();
             for (i, t) in all.iter().enumerate() {
                 records.push(Record {
+                    blend_data: [0; 4],
+                    tile_end: {
+                        let b = crate::shared_data::bounds(t.key);
+                        [
+                            (b[2] - camera.center[0]) as f32,
+                            (b[3] - camera.center[1]) as f32,
+                            0.,
+                            0.,
+                        ]
+                    },
+                    transition: [0; 4],
                     draw: [0; 4],
                     bounds: [
                         (t.origin[0] - camera.center[0]) as f32,
                         (t.origin[1] - camera.center[1]) as f32,
                         t.side as f32,
-                        if i >= self.tiles.len() && i < current {
+                        if (i >= self.tiles.len() && i < current)
+                            || (i >= current
+                                && (old_background.contains(&(Arc::as_ptr(t) as usize))
+                                    || self
+                                        .frozen_layout
+                                        .as_ref()
+                                        .and_then(|l| l.previous.get(i - current))
+                                        .and_then(Option::as_ref)
+                                        .is_some_and(|p| p.background)))
+                        {
                             1.
                         } else {
                             0.
@@ -1593,42 +1854,89 @@ impl CallbackTrait for Frame {
                     },
                 });
             }
+            // 同じ元タイルの詳細区画が重なっていなければ、内部の参照先は
+            // 必ず自分自身になる。GPUで同じ区画群を再探索する必要はない。
+            let mut primary_groups = std::collections::HashMap::<Key, Vec<usize>>::new();
+            for (i, t) in all[..self.tiles.len()].iter().enumerate() {
+                primary_groups.entry(t.key).or_default().push(i);
+            }
+            for ids in primary_groups.values() {
+                for &i in ids {
+                    let a = records[i].bounds;
+                    records[i].transition[3] = u32::from(!ids.iter().any(|&j| {
+                        let b = records[j].bounds;
+                        j != i
+                            && (0..2).all(|axis| {
+                                (a[axis] + a[2]).min(b[axis] + b[2]) - a[axis].max(b[axis]) > 0.01
+                            })
+                    }));
+                }
+            }
+            let previous_indices = all[current..]
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| records[current + *j].bounds[3] == 0.)
+                .map(|(j, t)| (Arc::as_ptr(t) as usize, (current + j + 1) as u32))
+                .collect::<std::collections::HashMap<_, _>>();
+            for i in 0..self.tiles.len() {
+                records[i].transition[0] = previous_indices
+                    .get(&(Arc::as_ptr(&all[i]) as usize))
+                    .copied()
+                    .unwrap_or(0);
+            }
+            let groups = SeamGroups::new(
+                &records,
+                &all.iter().map(|t| t.key).collect::<Vec<_>>(),
+                &all.iter().map(|t| t.n).collect::<Vec<_>>(),
+            );
             let mut links = Vec::<u32>::new();
             for i in 0..records.len() {
                 let a = records[i].bounds;
                 records[i].neighbors[0] = links.len() as u32;
-                for (j, b) in records.iter().enumerate() {
+                let own_pad = (a[2] / 8.).min(2. * a[2] / all[i].n as f32).max(1.);
+                for j in groups.candidates([
+                    a[0] - own_pad,
+                    a[1] - own_pad,
+                    a[0] + a[2] + own_pad,
+                    a[1] + a[2] + own_pad,
+                ]) {
+                    let b = &records[j];
                     // GPUで必ず除外される重なった代替面を候補へ入れない。
                     // 大きな代替面の接合幅が詳細面の高速経路まで無効にするのも防ぐ。
                     let own = records[i];
                     let overlap = (0..2).all(|axis| {
-                        (own.tile[axis] + own.tile[2]).min(b.tile[axis] + b.tile[2])
-                            - own.tile[axis].max(b.tile[axis])
+                        own.tile_end[axis].min(b.tile_end[axis]) - own.tile[axis].max(b.tile[axis])
                             > 0.01
                     });
-                    if i < current
-                        && j < current
+                    if (i < current) == (j < current)
                         && b.bounds[3] > 0.
                         && overlap
                         && (own.bounds[3] == 0. || b.bounds[2] > own.bounds[2] * 1.001)
                     {
                         continue;
                     }
-                    let pad = (a[2] / 8.)
-                        .min(2. * a[2] / all[i].n as f32)
-                        .max((b.bounds[2] / 8.).min(2. * b.bounds[2] / all[j].n as f32))
-                        .max(1.);
-                    if a[0] - pad <= b.bounds[0] + b.bounds[2]
-                        && a[0] + a[2] + pad >= b.bounds[0]
-                        && a[1] - pad <= b.bounds[1] + b.bounds[2]
-                        && a[1] + a[2] + pad >= b.bounds[1]
+                    // 接合幅は元データに対して固定されている。評価区画の幅や
+                    // nで候補を切ると、分割だけで必要な隣接曲面が出入りする。
+                    let pad = b.tile[3].max(1.);
+                    if a[0] - pad <= b.tile_end[0]
+                        && a[0] + a[2] + pad >= b.tile[0]
+                        && a[1] - pad <= b.tile_end[1]
+                        && a[1] + a[2] + pad >= b.tile[1]
                     {
                         links.push(j as u32);
                     }
                 }
                 let begin = records[i].neighbors[0] as usize;
                 // 元タイルごとに並べ、カメラに合わせて分割した領域を重複加算しない。
-                links[begin..].sort_by_key(|&j| (j as usize >= current, all[j as usize].key));
+                links[begin..].sort_by_key(|&j| {
+                    let t = &all[j as usize];
+                    // 外挿で必ず使う固定格子を先頭に置き、局所区画の探索を省けるようにする。
+                    (
+                        j as usize >= current,
+                        t.key,
+                        !(t.field.depth == 0 && t.n == 32),
+                    )
+                });
                 records[i].data[3] = links.len() as u32 - records[i].neighbors[0];
                 // 境界から十分離れた頂点は、隣接タイルの探索を省ける。
                 let pad = links[begin..]
@@ -1643,7 +1951,15 @@ impl CallbackTrait for Frame {
                     continue;
                 }
                 let a = records[i];
-                let mut candidates = (0..current)
+                let mut candidates = groups
+                    .candidates([
+                        a.bounds[0],
+                        a.bounds[1],
+                        a.bounds[0] + a.bounds[2],
+                        a.bounds[1] + a.bounds[2],
+                    ])
+                    .into_iter()
+                    .filter(|&j| j < current)
                     .filter(|&j| {
                         let b = records[j];
                         let preferred = b.bounds[3] < a.bounds[3]
@@ -1696,6 +2012,117 @@ impl CallbackTrait for Frame {
                     begin = end;
                 }
             }
+            // blendの照会点は参照元区画の内部にある。元タイル全体の固定格子、
+            // または参照元自身があれば距離0の候補が必ず存在するので、区画と
+            // 交差しない局所面は最寄り候補にならない。境界探索用の表は残す。
+            for i in 0..records.len() {
+                let base = records[i].neighbors[0] as usize;
+                let ids = links[base..base + records[i].data[3] as usize].to_vec();
+                let mut kept = Vec::new();
+                let a = &all[i];
+                let mut begin = 0;
+                while begin < ids.len() {
+                    let first = ids[begin] as usize;
+                    let mut end = begin + 1;
+                    while end < ids.len()
+                        && all[ids[end] as usize].key == all[first].key
+                        && (ids[end] as usize >= current) == (first >= current)
+                    {
+                        end += 1;
+                    }
+                    let group = &ids[begin..end];
+                    let bounded = group.contains(&(i as u32))
+                        || group
+                            .iter()
+                            .any(|&j| all[j as usize].field.depth == 0 && all[j as usize].n == 32);
+                    for &j in group {
+                        let b = &all[j as usize];
+                        // GPUの単精度座標の丸めを含めても交差しない候補だけを省く。
+                        let pad = (a.side.max(b.side) * 1e-6).max(WORLD * f32::EPSILON as f64 * 8.);
+                        if !bounded
+                            || (b.field.depth == 0 && b.n == 32)
+                            || (0..2).all(|axis| {
+                                a.origin[axis] - pad <= b.origin[axis] + b.side
+                                    && a.origin[axis] + a.side + pad >= b.origin[axis]
+                            })
+                        {
+                            kept.push(j);
+                        }
+                    }
+                    begin = end;
+                }
+                records[i].blend_data = [links.len() as u32, kept.len() as u32, 0, 0];
+                links.extend_from_slice(&kept);
+                records[i].blend_data[2] = links.len() as u32;
+                let mut begin = 0;
+                while begin < kept.len() {
+                    let first = kept[begin] as usize;
+                    let mut end = begin + 1;
+                    while end < kept.len()
+                        && all[kept[end] as usize].key == all[first].key
+                        && (kept[end] as usize >= current) == (first >= current)
+                    {
+                        end += 1;
+                    }
+                    links.extend(std::iter::repeat_n(end as u32, end - begin));
+                    begin = end;
+                }
+            }
+            // 旧表示で描いたパッチを隣接表の末尾へ保持する。座標は元の評価区画に
+            // 対する相対値へ戻し、その後のカメラ移動や再分割には依存させない。
+            let old_indices = old
+                .map(|c| {
+                    c.tiles[..c.current]
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| (Arc::as_ptr(t) as usize, i))
+                        .collect::<std::collections::HashMap<_, _>>()
+                })
+                .unwrap_or_default();
+            let mut previous_plans = Vec::new();
+            for i in current..all.len() {
+                let mut previous = self
+                    .frozen_layout
+                    .as_ref()
+                    .and_then(|l| l.previous.get(i - current))
+                    .cloned()
+                    .flatten();
+                if let Some((c, j)) = old.and_then(|c| {
+                    old_indices
+                        .get(&(Arc::as_ptr(&all[i]) as usize))
+                        .map(|&j| (c, j))
+                }) {
+                    let mut patches = c.plans[j].patches.clone();
+                    for patch in &mut patches {
+                        for e in 0..4 {
+                            let axis = if e < 2 { 1 } else { 0 };
+                            patch.origins[e] = (f64::from(patch.origins[e]) + c.camera[axis]
+                                - all[i].origin[axis])
+                                as f32;
+                            let axis = if e < 2 { 0 } else { 1 };
+                            patch.lines[e] = (f64::from(patch.lines[e]) + c.camera[axis]
+                                - all[i].origin[axis])
+                                as f32;
+                        }
+                    }
+                    let mut plan = c.plans[j].clone();
+                    plan.patches = patches;
+                    previous = Some(PreviousPlan {
+                        background: c.records[j].bounds[3] > 0.,
+                        plan,
+                    });
+                }
+                if let Some(p) = &previous {
+                    records[i].draw[0] = links.len() as u32;
+                    records[i].draw[1] = p.plan.patches.len() as u32;
+                    records[i].draw[2] = 4;
+                    links.extend_from_slice(bytemuck::cast_slice::<
+                        crate::shared_patches::Patch,
+                        u32,
+                    >(&p.plan.patches));
+                }
+                previous_plans.push(previous);
+            }
             let atlas = if allocation.reuse {
                 old.unwrap()._atlas.clone()
             } else {
@@ -1734,72 +2161,102 @@ impl CallbackTrait for Frame {
             stats.allocations += usize::from(!metadata_reused) + usize::from(!refs_reused);
             queue.write_buffer(&metadata, 0, bytemuck::cast_slice(&records));
             queue.write_buffer(&refs, 0, bytemuck::cast_slice(&links));
-            let shared_reused = allocation.reuse && metadata_reused && refs_reused;
-            let mut bindings = Vec::new();
-            let mut patches = Vec::new();
-            for tile in &all[..current] {
-                let previous = old.and_then(|c| {
+            let alignment = u64::from(device.limits().min_uniform_buffer_offset_alignment).max(1);
+            let view_stride = (std::mem::size_of::<View>() as u64).div_ceil(alignment) * alignment;
+            let view_length = (current.max(1) as u64) * view_stride;
+            let prior_views =
+                old.filter(|c| c.views.size() >= view_length && c.view_stride == view_stride);
+            let views = if let Some(c) = prior_views {
+                c.views.clone()
+            } else {
+                stats.allocations += 1;
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("地形の視点設定をまとめて転送"),
+                    size: view_length.next_power_of_two(),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            };
+            let previous_slots = old
+                .map(|c| {
                     c.tiles[..c.current]
                         .iter()
-                        .position(|t| Arc::ptr_eq(tile, t))
-                        .map(|i| (c, i))
-                });
-                let patch = if let Some((c, i)) = previous {
-                    c.patches[i].clone()
-                } else {
-                    stats.allocations += 1;
-                    device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("画面分割パッチ"),
-                        size: 16 * std::mem::size_of::<crate::shared_patches::Patch>() as u64,
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    })
-                };
+                        .zip(&c.view_slots)
+                        .map(|(t, &slot)| (Arc::as_ptr(t) as usize, slot))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let view_slots = uniform_slots(
+                &all[..current]
+                    .iter()
+                    .map(|t| Arc::as_ptr(t) as usize)
+                    .collect::<Vec<_>>(),
+                &previous_slots,
+                views.size() / view_stride,
+            );
+            let shared_reused =
+                allocation.reuse && metadata_reused && refs_reused && prior_views.is_some();
+            // 視野外の面は共通の仮設定で保持し、初めて描くときだけ専用設定を作る。
+            let placeholder_patch = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("未表示メッシュ共通の仮パッチ"),
+                size: 64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let first = &all[0];
+            let buffers = [
+                &first.output,
+                &first.view,
+                &placeholder_patch,
+                &atlas,
+                &metadata,
+                &refs,
+                &first.vertices,
+                &first.triangles,
+            ];
+            let entries = buffers
+                .iter()
+                .enumerate()
+                .map(|(binding, buffer)| wgpu::BindGroupEntry {
+                    binding: binding as u32,
+                    resource: buffer.as_entire_binding(),
+                })
+                .collect::<Vec<_>>();
+            let placeholder_binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("未表示メッシュ共通の仮設定"),
+                layout: &self.pipeline.get_bind_group_layout(0),
+                entries: &entries,
+            });
+            stats.allocations += 1;
+            stats.bind_groups += 1;
+            let previous_indices = old
+                .map(|c| {
+                    c.tiles[..c.current]
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| (Arc::as_ptr(t) as usize, i))
+                        .collect::<std::collections::HashMap<_, _>>()
+                })
+                .unwrap_or_default();
+            let mut bindings = Vec::new();
+            let mut patches = Vec::new();
+            let mut bindings_ready = Vec::new();
+            for tile in &all[..current] {
+                let previous = previous_indices
+                    .get(&(Arc::as_ptr(tile) as usize))
+                    .and_then(|&i| old.map(|c| (c, i)))
+                    .filter(|(c, i)| c.bindings_ready[*i]);
+                patches.push(
+                    previous
+                        .map_or_else(|| placeholder_patch.clone(), |(c, i)| c.patches[i].clone()),
+                );
                 if let Some((c, i)) = previous.filter(|_| shared_reused) {
                     bindings.push(c.bindings[i].clone());
-                    patches.push(patch);
-                    continue;
+                    bindings_ready.push(true);
+                } else {
+                    bindings.push(placeholder_binding.clone());
+                    bindings_ready.push(false);
                 }
-                stats.bind_groups += 1;
-                bindings.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("GPUパッチと接合"),
-                    layout: &self.pipeline.get_bind_group_layout(0),
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: tile.output.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: tile.view.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: patch.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: atlas.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 4,
-                            resource: metadata.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 5,
-                            resource: refs.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 6,
-                            resource: tile.vertices.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 7,
-                            resource: tile.triangles.as_entire_binding(),
-                        },
-                    ],
-                }));
-                patches.push(patch);
             }
             let point_patches = if let Some(old) = old {
                 old.point_patches.clone()
@@ -1827,11 +2284,18 @@ impl CallbackTrait for Frame {
                 _atlas: atlas,
                 _links: refs,
                 metadata,
+                view_bytes: vec![0; views.size() as usize],
+                views,
+                view_stride,
+                view_slots,
                 bindings,
                 patches,
+                bindings_ready,
+                placeholder_patch,
                 point_patches,
                 records,
                 plans: Vec::new(),
+                previous_plans,
                 plan_inputs: None,
                 plan_job: None,
                 last_plan: std::time::Instant::now() - std::time::Duration::from_secs(1),
@@ -1976,18 +2440,27 @@ impl CallbackTrait for Frame {
                 offset += p.patches.len() as u32;
             }
             for (i, plan) in cache.plans.iter().enumerate() {
+                if i != 0 && !self.tin && self.wire < 3 && plan.patches.is_empty() {
+                    continue;
+                }
                 let size = (plan.patches.len().max(1)
                     * std::mem::size_of::<crate::shared_patches::Patch>())
                     as u64;
-                if size > cache.patches[i].size() {
-                    stats.allocations += 1;
+                let allocate =
+                    size > cache.patches[i].size() || cache.patches[i] == cache.placeholder_patch;
+                if allocate || !cache.bindings_ready[i] {
+                    stats.allocations += usize::from(allocate);
                     stats.bind_groups += 1;
-                    let patch = device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("境界分割パッチ"),
-                        size: size.next_power_of_two(),
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    });
+                    let patch = if allocate {
+                        device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("境界分割パッチ"),
+                            size: size.next_power_of_two(),
+                            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        })
+                    } else {
+                        cache.patches[i].clone()
+                    };
                     let tile = &all[i];
                     let buffers = [
                         &tile.output,
@@ -2004,7 +2477,17 @@ impl CallbackTrait for Frame {
                         .enumerate()
                         .map(|(binding, b)| wgpu::BindGroupEntry {
                             binding: binding as u32,
-                            resource: b.as_entire_binding(),
+                            resource: if binding == 1 {
+                                wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                    buffer: &cache.views,
+                                    offset: cache.view_slots[i] * cache.view_stride,
+                                    size: std::num::NonZeroU64::new(
+                                        std::mem::size_of::<View>() as u64
+                                    ),
+                                })
+                            } else {
+                                b.as_entire_binding()
+                            },
                         })
                         .collect::<Vec<_>>();
                     cache.bindings[i] = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2013,6 +2496,7 @@ impl CallbackTrait for Frame {
                         entries: &entries,
                     });
                     cache.patches[i] = patch;
+                    cache.bindings_ready[i] = true;
                 }
                 if !plan.patches.is_empty() {
                     queue.write_buffer(&cache.patches[i], 0, bytemuck::cast_slice(&plan.patches));
@@ -2026,6 +2510,8 @@ impl CallbackTrait for Frame {
             let b = crate::shared_data::bounds(t.key);
             r.tile[0] = (b[0] - camera.center[0]) as f32;
             r.tile[1] = (b[1] - camera.center[1]) as f32;
+            r.tile_end[0] = (b[2] - camera.center[0]) as f32;
+            r.tile_end[1] = (b[3] - camera.center[1]) as f32;
         }
         cache.render_camera = camera.clone();
         cache.morph = self.morph;
@@ -2079,11 +2565,20 @@ impl CallbackTrait for Frame {
                         | u32::from(self.colors) * 2
                         | u32::from(!cache.clipped_background) * 4
                         | u32::from(cache.clipped_background) * 8
-                        | u32::from(cache.clipped_background) * 16,
+                        | u32::from(cache.clipped_background) * 16
+                        | 32
+                        | 64,
                 ],
             };
-            queue.write_buffer(&tile.view, 0, bytemuck::bytes_of(&u));
+            let start = (cache.view_slots[i] * cache.view_stride) as usize;
+            let bytes = bytemuck::bytes_of(&u);
+            cache.view_bytes[start..start + bytes.len()].copy_from_slice(bytes);
+            // 地球背景と地点照会が使う共通視点だけは従来の参照先も更新する。
+            if i == 0 {
+                queue.write_buffer(&tile.view, 0, bytes);
+            }
         }
+        queue.write_buffer(&cache.views, 0, &cache.view_bytes);
         let uniform_ms = uniform_started.elapsed().as_secs_f64() * 1000.;
         cache.triangles = 0;
         cache.visible_patches = 0;
@@ -2238,6 +2733,57 @@ impl CallbackTrait for Frame {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn uniform_slots_keep_bindings_when_meshes_reorder() {
+        let original = super::uniform_slots(&[10, 20, 30], &[], 4);
+        let old = [(10, original[0]), (20, original[1]), (30, original[2])];
+        let reordered = super::uniform_slots(&[30, 10, 40], &old, 4);
+        assert_eq!(reordered[0], original[2]);
+        assert_eq!(reordered[1], original[0]);
+        assert_eq!(reordered[2], original[1]);
+    }
+    #[test]
+    fn seam_groups_keep_every_original_neighbor_in_original_order() {
+        use bytemuck::Zeroable;
+        let mut records = Vec::new();
+        let mut keys = Vec::new();
+        let mut densities = Vec::new();
+        for i in 0..512 {
+            let mut record = super::Record::zeroed();
+            record.bounds = [
+                ((i * 47) % 101) as f32,
+                ((i * 71) % 103) as f32,
+                (1 << (i % 5)) as f32,
+                0.,
+            ];
+            record.tile = [record.bounds[0], record.bounds[1], record.bounds[2], 1.];
+            records.push(record);
+            keys.push((13, i / 16, 0));
+            densities.push(16 << (i % 5));
+        }
+        let groups = super::SeamGroups::new(&records, &keys, &densities);
+        for (i, a) in records.iter().enumerate() {
+            let a = a.bounds;
+            let own = (a[2] / 8.).min(2. * a[2] / densities[i] as f32).max(1.);
+            let filter = |j: usize| {
+                let b = records[j].bounds;
+                let pad = own.max((b[2] / 8.).min(2. * b[2] / densities[j] as f32));
+                a[0] - pad <= b[0] + b[2]
+                    && a[0] + a[2] + pad >= b[0]
+                    && a[1] - pad <= b[1] + b[2]
+                    && a[1] + a[2] + pad >= b[1]
+            };
+            let expected = (0..records.len())
+                .filter(|&j| filter(j))
+                .collect::<Vec<_>>();
+            let actual = groups
+                .candidates([a[0] - own, a[1] - own, a[0] + a[2] + own, a[1] + a[2] + own])
+                .into_iter()
+                .filter(|&j| filter(j))
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+        }
+    }
+    #[test]
     fn renderer_reuses_programs_for_flat_and_terrain_views() {
         let backend = if cfg!(windows) {
             wgpu::Backends::DX12
@@ -2313,12 +2859,12 @@ mod tests {
             budget.finish(512);
         }
         assert!(budget.available(512));
-        for _ in 0..16 {
+        for _ in 0..super::MAX_UPLOAD_JOBS {
             assert!(budget.available(32));
             budget.start(32);
         }
         assert!(!budget.available(32));
-        for _ in 0..16 {
+        for _ in 0..super::MAX_UPLOAD_JOBS {
             budget.finish(32);
         }
         assert!(budget.available(512));
@@ -2328,6 +2874,7 @@ mod tests {
         for source in [
             include_str!("sibson_gpu_controls.wgsl").to_string(),
             super::render_shader_source(),
+            super::regular_render_shader_source(),
         ] {
             let module = naga::front::wgsl::parse_str(&source).expect("WGSL parse");
             naga::valid::Validator::new(
@@ -2408,10 +2955,13 @@ mod gpu_tests {
         .enumerate()
         {
             records.push(Record {
+                blend_data: [0; 4],
+                tile_end: [0.; 4],
+                transition: [0; 4],
                 draw: [0; 4],
                 tile: [x, 0., 100., 12.5],
                 bounds: [x, 0., 100., 0.],
-                data: [atlas.len() as u32, n, 8, 4],
+                data: [atlas.len() as u32, n, if i < 2 { 8 } else { 7 }, 4],
                 neighbors: [links.len() as u32, 0, 0, 0],
             });
             links.extend(0..4);
@@ -2526,7 +3076,7 @@ mod control_compute_tests {
                 device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("評価区画数によらない接合の検査"),
             source: wgpu::ShaderSource::Wgsl(format!(
-                "{}\n@group(0) @binding(8) var<storage,read_write> result:array<vec4<f32>>;\n@compute @workgroup_size(1) fn probe(){{result[0]=vec4(blend(vec2(99.,50.),0u,false),1.);result[1]=vec4(blend(vec2(50.,50.),0u,false),1.);}}",
+                "{}\n@group(0) @binding(8) var<storage,read_write> result:array<vec4<f32>>;\n@compute @workgroup_size(1) fn probe(){{result[0]=vec4(blend(vec2(99.,50.),0u,false),1.);result[1]=vec4(blend(vec2(50.,50.),0u,false),1.);result[2]=vec4(blend(vec2(1.,50.),0u,false),1.);}}",
                 render_shader_source()).into()),
         })
             },
@@ -2543,9 +3093,30 @@ mod control_compute_tests {
                 })
             });
         let mut heights = Vec::new();
-        for configuration in 0..3 {
+        let mut left_heights = Vec::new();
+        for configuration in 0..7 {
             let mut fields = vec![([0., 0., 100., 0.], [0., 0., 100., 25.], 100.)];
-            if configuration == 2 {
+            if configuration >= 5 {
+                // 数十万mの辺長をf32で加算すると、接している辺が3cm重なる。
+                // 正確な端点では隣接面として接合し、代替面と誤判定しない。
+                fields.push((
+                    [-500000., -250000., 500000.03125, 1.],
+                    [-500000., -250000., 500000.03125, 25.],
+                    200.,
+                ));
+            } else if configuration >= 3 {
+                // ズームで局所区画の評価値が変わっても、隣タイルへの外挿は固定格子を使う。
+                fields.push(([100., 0., 100., 1.], [100., 0., 100., 25.], 200.));
+                for x in [100., 150.] {
+                    for y in [0., 50.] {
+                        fields.push((
+                            [x, y, 50., 0.],
+                            [100., 0., 100., 25.],
+                            if configuration == 3 { 200. } else { 900. },
+                        ));
+                    }
+                }
+            } else if configuration == 2 {
                 // 元タイルは詳細面に重なるが、局所区画だけを見ると隣接している背景。
                 fields.push(([100., 0., 50., 1.], [-100., -100., 400., 50.], 10000.));
             } else if configuration == 1 {
@@ -2559,18 +3130,34 @@ mod control_compute_tests {
             }
             let mut atlas = Vec::<[f32; 8]>::new();
             let mut records = Vec::new();
-            for (bounds, tile, height) in &fields {
+            for (i, (bounds, tile, height)) in fields.iter().enumerate() {
+                let n = if configuration >= 3 && i == 1 { 32 } else { 1 };
                 records.push(Record {
+                    blend_data: [0; 4],
+                    tile_end: if configuration >= 5 && i == 1 {
+                        [0., 250000., 0., 0.]
+                    } else {
+                        [tile[0] + tile[2], tile[1] + tile[2], 0., 0.]
+                    },
+                    transition: [0; 4],
                     draw: [0, 0, 0, 25f32.to_bits()],
                     bounds: *bounds,
                     tile: *tile,
-                    data: [atlas.len() as u32, 1, 13, fields.len() as u32],
+                    data: [atlas.len() as u32, n, 13, fields.len() as u32],
                     neighbors: [0; 4],
                 });
-                atlas.extend([[*height, 0., 0., 1., *height, 0., 0., 1.]; 4]);
+                atlas.extend(std::iter::repeat_n(
+                    [*height, 0., 0., 1., *height, 0., 0., 1.],
+                    (n + 1).pow(2) as usize,
+                ));
             }
             let mut view = <View as bytemuck::Zeroable>::zeroed();
-            view.extra = [fields.len() as u32, 0, 1, 8];
+            view.extra = [
+                fields.len() as u32,
+                0,
+                1,
+                if configuration == 6 { 8 | 32 } else { 8 },
+            ];
             let make = |contents: &[u8], usage| {
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: None,
@@ -2601,9 +3188,179 @@ mod control_compute_tests {
                 (
                     8,
                     make(
+                        &[0u8; 48],
+                        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                    ),
+                ),
+            ];
+            let entries = buffers
+                .iter()
+                .map(|(binding, b)| wgpu::BindGroupEntry {
+                    binding: *binding,
+                    resource: b.as_entire_binding(),
+                })
+                .collect::<Vec<_>>();
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &entries,
+            });
+            let read = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: 48,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &group, &[]);
+                pass.dispatch_workgroups(1, 1, 1);
+            }
+            encoder.copy_buffer_to_buffer(&buffers[4].1, 0, &read, 0, 48);
+            queue.submit([encoder.finish()]);
+            let (send, receive) = std::sync::mpsc::channel();
+            read.slice(..)
+                .map_async(wgpu::MapMode::Read, move |v| send.send(v).unwrap());
+            let _ = device.poll(wgpu::Maintain::Wait);
+            receive.recv()??;
+            let bytes = read.slice(..).get_mapped_range();
+            let values = bytemuck::cast_slice::<u8, f32>(&bytes);
+            assert!(
+                (values[4] - 100.).abs() < 0.0001,
+                "境界から離れた頂点の高速経路で標高が変わった: {values:?}"
+            );
+            heights.push(values[0]);
+            left_heights.push(values[8]);
+        }
+        assert!(
+            heights[0] > 140. && heights[0] < 160.,
+            "接合されていない: {heights:?}"
+        );
+        assert!(
+            (heights[0] - heights[1]).abs() < 0.0001,
+            "評価区画の分割で地形が動いた: {heights:?}"
+        );
+        assert!(
+            (heights[2] - 100.).abs() < 0.0001,
+            "重なった背景の局所区画が詳細面に混ざった: {heights:?}"
+        );
+        assert!((heights[3] - heights[0]).abs() < 0.0001);
+        assert!(
+            (heights[3] - heights[4]).abs() < 0.0001,
+            "局所区画の切替で外挿した標高が変わった: {heights:?}"
+        );
+        assert!(
+            (left_heights[5] - 100.).abs() < 0.001,
+            "従来の桁落ち条件を再現できない: {left_heights:?}"
+        );
+        assert!(
+            left_heights[6] > 140. && left_heights[6] < 160.,
+            "隣接面を重複面と誤判定した: {left_heights:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn marker_height_uses_the_drawn_triangle_instead_of_bilinear_field() -> anyhow::Result<()> {
+        let backend = if cfg!(windows) {
+            wgpu::Backends::DX12
+        } else {
+            wgpu::Backends::PRIMARY
+        };
+        let Some(app) = crate::remembered_scene_tests::app_with_backend(backend) else {
+            return Ok(());
+        };
+        let device = &app.renderer.state.device;
+        let queue = &app.renderer.state.queue;
+        let module = crate::gpu_profile::timed(
+            "shared_render.rs:device.create_shader_module",
+            || {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label:Some("地点の実描画標高の検査"),
+            source:wgpu::ShaderSource::Wgsl(format!("{}\n@compute @workgroup_size(1) fn probe(){{let m=meshHeight(vec2(50.),0u);result[0]=vec4(m,surface(vec2(50.),0u).x,1.);result[1]=vec4(previousHeight(vec2(50.),1u,blend(vec2(50.),1u,true).x),0.,1.);}}",crate::point_visibility::shader()).into()),
+        })
+            },
+        );
+        let pipeline =
+            crate::gpu_profile::timed("shared_render.rs:device.create_compute_pipeline", || {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: None,
+                    layout: None,
+                    module: &module,
+                    entry_point: Some("probe"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            });
+        for old_level in [12u32, 13] {
+            let atlas = [100f32, 100., 100., 300.].map(|h| [h, 0., 0., 1., h, 0., 0., 1.]);
+            let record = Record {
+                blend_data: [0; 4],
+                tile_end: [0.; 4],
+                transition: [0; 4],
+                bounds: [0., 0., 100., 0.],
+                data: [0, 1, 13, 1],
+                neighbors: [0; 4],
+                tile: [0., 0., 100., 25.],
+                draw: [0, 1, 4, 0],
+            };
+            let patch = crate::shared_patches::Patch {
+                bounds: [0., 0., 100., 1.],
+                edges: [0.; 4],
+                origins: [0.; 4],
+                lines: [0., 100., 0., 100.],
+            };
+            let mut view = <View as bytemuck::Zeroable>::zeroed();
+            view.offset[2] = 1.;
+            view.settings = [100., 0., 1., 0.5];
+            view.extra = [1, 0, 0, 8];
+            let mut old_record = record;
+            old_record.draw[0] = 1;
+            old_record.data[2] = old_level;
+            if old_level == 12 {
+                old_record.tile[2] = 200.;
+            }
+            let records = [record, old_record];
+            let mut links = vec![1u32];
+            links.extend_from_slice(bytemuck::cast_slice::<crate::shared_patches::Patch, u32>(
+                &[patch],
+            ));
+            let make = |bytes: &[u8], usage| {
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: bytes,
+                    usage,
+                })
+            };
+            let buffers = [
+                (
+                    1,
+                    make(bytemuck::cast_slice(&atlas), wgpu::BufferUsages::STORAGE),
+                ),
+                (
+                    2,
+                    make(bytemuck::cast_slice(&records), wgpu::BufferUsages::STORAGE),
+                ),
+                (
+                    3,
+                    make(bytemuck::cast_slice(&links), wgpu::BufferUsages::STORAGE),
+                ),
+                (
+                    4,
+                    make(bytemuck::bytes_of(&view), wgpu::BufferUsages::UNIFORM),
+                ),
+                (
+                    6,
+                    make(
                         &[0u8; 32],
                         wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                     ),
+                ),
+                (
+                    7,
+                    make(bytemuck::bytes_of(&patch), wgpu::BufferUsages::STORAGE),
                 ),
             ];
             let entries = buffers
@@ -2639,156 +3396,20 @@ mod control_compute_tests {
             let _ = device.poll(wgpu::Maintain::Wait);
             receive.recv()??;
             let bytes = read.slice(..).get_mapped_range();
-            let values = bytemuck::cast_slice::<u8, f32>(&bytes);
+            let actual = bytemuck::cast_slice::<u8, f32>(&bytes);
             assert!(
-                (values[4] - 100.).abs() < 0.0001,
-                "境界から離れた頂点の高速経路で標高が変わった: {values:?}"
+                (actual[0] - 200.).abs() < 0.001 && actual[1] == 1.,
+                "実際の三角形上に地点を置けていない: {actual:?}"
             );
-            heights.push(values[0]);
+            assert!(
+                (actual[2] - 175.).abs() < 0.001,
+                "固定スナップショットの旧三角形と新面の中間値が不正: z{old_level} {actual:?}"
+            );
+            assert!(
+                (actual[4] - 200.).abs() < 0.001 && actual[5] == 1.,
+                "旧表示の三角形の高さを再現できていない: {actual:?}"
+            );
         }
-        assert!(
-            heights[0] > 140. && heights[0] < 160.,
-            "接合されていない: {heights:?}"
-        );
-        assert!(
-            (heights[0] - heights[1]).abs() < 0.0001,
-            "評価区画の分割で地形が動いた: {heights:?}"
-        );
-        assert!(
-            (heights[2] - 100.).abs() < 0.0001,
-            "重なった背景の局所区画が詳細面に混ざった: {heights:?}"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn marker_height_uses_the_drawn_triangle_instead_of_bilinear_field() -> anyhow::Result<()> {
-        let backend = if cfg!(windows) {
-            wgpu::Backends::DX12
-        } else {
-            wgpu::Backends::PRIMARY
-        };
-        let Some(app) = crate::remembered_scene_tests::app_with_backend(backend) else {
-            return Ok(());
-        };
-        let device = &app.renderer.state.device;
-        let queue = &app.renderer.state.queue;
-        let module = crate::gpu_profile::timed(
-            "shared_render.rs:device.create_shader_module",
-            || {
-                device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label:Some("地点の実描画標高の検査"),
-            source:wgpu::ShaderSource::Wgsl(format!("{}\n@compute @workgroup_size(1) fn probe(){{let m=meshHeight(vec2(50.),0u);result[0]=vec4(m,surface(vec2(50.),0u).x,1.);}}",crate::point_visibility::shader()).into()),
-        })
-            },
-        );
-        let pipeline =
-            crate::gpu_profile::timed("shared_render.rs:device.create_compute_pipeline", || {
-                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: None,
-                    layout: None,
-                    module: &module,
-                    entry_point: Some("probe"),
-                    compilation_options: Default::default(),
-                    cache: None,
-                })
-            });
-        let atlas = [100f32, 100., 100., 300.].map(|h| [h, 0., 0., 1., h, 0., 0., 1.]);
-        let record = Record {
-            bounds: [0., 0., 100., 0.],
-            data: [0, 1, 13, 1],
-            neighbors: [0; 4],
-            tile: [0., 0., 100., 25.],
-            draw: [0, 1, 4, 0],
-        };
-        let patch = crate::shared_patches::Patch {
-            bounds: [0., 0., 100., 1.],
-            edges: [0.; 4],
-            origins: [0.; 4],
-            lines: [0., 100., 0., 100.],
-        };
-        let mut view = <View as bytemuck::Zeroable>::zeroed();
-        view.offset[2] = 1.;
-        view.settings = [100., 0., 1., 1.];
-        view.extra = [1, 0, 0, 8];
-        let make = |bytes: &[u8], usage| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytes,
-                usage,
-            })
-        };
-        let buffers = [
-            (
-                1,
-                make(bytemuck::cast_slice(&atlas), wgpu::BufferUsages::STORAGE),
-            ),
-            (
-                2,
-                make(bytemuck::bytes_of(&record), wgpu::BufferUsages::STORAGE),
-            ),
-            (
-                3,
-                make(bytemuck::bytes_of(&0u32), wgpu::BufferUsages::STORAGE),
-            ),
-            (
-                4,
-                make(bytemuck::bytes_of(&view), wgpu::BufferUsages::UNIFORM),
-            ),
-            (
-                6,
-                make(
-                    &[0u8; 16],
-                    wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                ),
-            ),
-            (
-                7,
-                make(bytemuck::bytes_of(&patch), wgpu::BufferUsages::STORAGE),
-            ),
-        ];
-        let entries = buffers
-            .iter()
-            .map(|(binding, b)| wgpu::BindGroupEntry {
-                binding: *binding,
-                resource: b.as_entire_binding(),
-            })
-            .collect::<Vec<_>>();
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &entries,
-        });
-        let read = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: 16,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = device.create_command_encoder(&Default::default());
-        {
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &group, &[]);
-            pass.dispatch_workgroups(1, 1, 1);
-        }
-        encoder.copy_buffer_to_buffer(&buffers[4].1, 0, &read, 0, 16);
-        queue.submit([encoder.finish()]);
-        let (send, receive) = std::sync::mpsc::channel();
-        read.slice(..)
-            .map_async(wgpu::MapMode::Read, move |v| send.send(v).unwrap());
-        let _ = device.poll(wgpu::Maintain::Wait);
-        receive.recv()??;
-        let bytes = read.slice(..).get_mapped_range();
-        let actual = bytemuck::cast_slice::<u8, f32>(&bytes);
-        assert!(
-            (actual[0] - 200.).abs() < 0.001 && actual[1] == 1.,
-            "実際の三角形上に地点を置けていない: {actual:?}"
-        );
-        assert!(
-            (actual[2] - 150.).abs() < 0.001,
-            "比較用の数式上の曲面が不正: {actual:?}"
-        );
         Ok(())
     }
 
@@ -3197,6 +3818,9 @@ mod upload_roundtrip_tests {
         // 細タイル外の参照先は標高3の背景であり、細タイル端の傾きを延長しない。
         let records = [
             Record {
+                blend_data: [0; 4],
+                tile_end: [0.; 4],
+                transition: [0; 4],
                 draw: [0; 4],
                 tile: [0., 0., 2., 0.25],
                 bounds: [0., 0., 2., 0.],
@@ -3204,6 +3828,9 @@ mod upload_roundtrip_tests {
                 neighbors: [0; 4],
             },
             Record {
+                blend_data: [0; 4],
+                tile_end: [0.; 4],
+                transition: [0; 4],
                 draw: [0; 4],
                 tile: [-8., -8., 16., 2.],
                 bounds: [-8., -8., 16., 1.],
@@ -3213,10 +3840,13 @@ mod upload_roundtrip_tests {
         ];
         let mut records = records.to_vec();
         records.push(Record {
+            blend_data: [0; 4],
+            tile_end: [0.; 4],
+            transition: [0; 4],
             draw: [0; 4],
             tile: [0., 0., 2., 0.25],
             bounds: [0., 0., 2., 0.],
-            data: [85, 1, 6, 3],
+            data: [85, 1, 5, 3],
             neighbors: [0; 4],
         });
         atlas.extend([[3., 0., 0., 0., 3., 0., 0., 0.]; 4]);

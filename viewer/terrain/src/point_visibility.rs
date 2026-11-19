@@ -287,6 +287,13 @@ pub fn query(
 }
 
 #[cfg(test)]
+impl State {
+    pub(crate) fn is_settled(&self) -> bool {
+        self.request.is_none() && self.pending.is_none()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]

@@ -2,7 +2,7 @@ use crate::{natural_local_gradient, natural_regional_gpu, natural_regional_surfa
 use anyhow::{Context, Result, ensure};
 
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     path::Path,
     sync::Arc,
 };
@@ -231,9 +231,6 @@ impl Database {
         }
         self.trim();
         Ok(())
-    }
-    pub fn cached_keys(&self) -> HashSet<Key> {
-        self.packets.keys().copied().collect()
     }
     fn trim(&mut self) {
         let mut bytes = self.packets.values().map(|p| p.bytes()).sum::<usize>();

@@ -1,7 +1,7 @@
 struct Sample { original: vec4<f32>, adjusted: vec4<f32> }
 struct View { matrix: mat4x4<f32>, offset: vec4<f32>, settings: vec4<f32>, flags: vec4<u32>, extra:vec4<u32>, earth:vec4<f32>, eye:vec4<f32>, frame:vec4<f32> }
 struct Patch { bounds:vec4<f32>, edges:vec4<f32>, origins:vec4<f32>, lines:vec4<f32> }
-struct Record { bounds:vec4<f32>, data:vec4<u32>, neighbors:vec4<u32>, tile:vec4<f32>, draw:vec4<u32> }
+struct Record { bounds:vec4<f32>, data:vec4<u32>, neighbors:vec4<u32>, tile:vec4<f32>, tile_end:vec4<f32>, draw:vec4<u32>, transition:vec4<u32>, blend_data:vec4<u32> }
 @group(0) @binding(0) var<storage,read> samples: array<Sample>;
 @group(0) @binding(1) var<uniform> view: View;
 @group(0) @binding(2) var<storage,read> patches: array<Patch>;
@@ -90,6 +90,12 @@ fn sampleAt(q:vec2<f32>,id:u32)->vec3<f32>{
 fn inside(q:vec2<f32>,r:Record)->bool{
  return all(q>=r.bounds.xy-vec2(.01))&&all(q<=r.bounds.xy+vec2(r.bounds.z+.01));
 }
+// 隣接する粗タイルの辺長は数十万mになる。端点を加算で復元すると
+// 目の前の境界が数cmずれ、隣接面を重なった代替面と誤判定してしまう。
+fn tileEnd(r:Record)->vec2<f32>{
+ if (view.extra.w&32u)!=0u{return r.tile_end.xy;}
+ return r.tile.xy+vec2(r.tile.z);
+}
 fn band(r:Record)->f32{
  if (view.extra.w&16u)!=0u {return r.tile.w;}
  if (view.extra.w&8u)!=0u&&r.neighbors.y!=0u {return bitcast<f32>(r.neighbors.y);}
@@ -97,41 +103,71 @@ fn band(r:Record)->f32{
 }
 fn blend(q:vec2<f32>,owner:u32,old:bool)->vec3<f32>{
  let own=records[owner];
+ let compact=(view.extra.w&64u)!=0u;
+ let neighborBase=select(own.neighbors.x,own.blend_data.x,compact);
+ let neighborCount=select(own.data.w,own.blend_data.y,compact);
+ let groupEndBase=select(own.neighbors.y,own.blend_data.z,compact);
  if view.extra.z==0u{return sampleAt(q,owner);}
  if (view.extra.w&8u)!=0u&&own.draw.w!=0u&&inside(q,own){
-  let edge=min(q-own.tile.xy,own.tile.xy+vec2(own.tile.z)-q);
-  if min(edge.x,edge.y)>bitcast<f32>(own.draw.w){return sampleAt(q,owner);}
+  let edge=min(q-own.tile.xy,tileEnd(own)-q);
+  if min(edge.x,edge.y)>min(own.tile.w,bitcast<f32>(own.draw.w)){return sampleAt(q,owner);}
  }
  var sum=vec3(0.);var weight=0.;var j=0u;
  // 評価領域の数を接合の重みにしない。一つの元タイルから一つの値だけを使う。
  loop {
-  if j>=own.data.w {break;}
-  let first=links[own.neighbors.x+j];let source=records[first];
+  if j>=neighborCount {break;}
+  let first=links[neighborBase+j];let source=records[first];
   let isOld=first>=view.extra.x;
   if (view.extra.w&16u)!=0u {
    let pad=source.tile.w;
-   let distance=max(max(source.tile.x-q.x,q.x-source.tile.x-source.tile.z),max(source.tile.y-q.y,q.y-source.tile.y-source.tile.z));
-   if isOld!=old||distance>=pad {j=links[own.neighbors.y+j];continue;}
+   let distance=max(max(source.tile.x-q.x,q.x-tileEnd(source).x),max(source.tile.y-q.y,q.y-tileEnd(source).y));
+   if isOld!=old||distance>=pad {j=links[groupEndBase+j];continue;}
   }
+  // 同じ元タイルの評価区画では、元タイルの包含関係は共通している。
+  // 区画ごとの反復へ入れると数十区画ぶん同じ判定を繰り返す。
+  let overlap=all(min(tileEnd(source),tileEnd(own))-max(source.tile.xy,own.tile.xy)>vec2(.01));
+  let outside=any(q<source.tile.xy-vec2(.01))||any(q>tileEnd(source)+vec2(.01));
   var chosen=0xffffffffu;var nearest=1e30;var spacing=1e30;var background=1e30;
-  loop {
-   if j>=own.data.w {break;}
-   let id=links[own.neighbors.x+j];let r=records[id];
+  let interior=(q>own.bounds.xy+vec2(.01))&(q<own.bounds.xy+vec2(own.bounds.z-.01));
+  let sourceEdge=(abs(q-own.tile.xy)<vec2(.01))|(abs(q-tileEnd(own))<vec2(.01));
+  if (view.extra.w&16u)!=0u&&own.transition.w!=0u&&all(source.tile.xyz==own.tile.xyz)&&inside(q,own)&&all(interior|sourceEdge) {
+   chosen=owner;j=links[groupEndBase+j];
+  }else{loop {
+   if j>=neighborCount {break;}
+   let id=links[neighborBase+j];let r=records[id];
    if any(r.tile.xyz!=source.tile.xyz)||(id>=view.extra.x)!=isOld {break;}
    j++;
    if isOld!=old {continue;}
-   let overlap=all(min(r.tile.xy+vec2(r.tile.z),own.tile.xy+vec2(own.tile.z))-max(r.tile.xy,own.tile.xy)>vec2(.01));
-   if !old&&overlap&&r.bounds.w>0.&&(own.bounds.w==0.||r.bounds.z>own.bounds.z*1.001){continue;}
-   let d=max(0.,max(max(r.bounds.x-q.x,q.x-r.bounds.x-r.bounds.z),max(r.bounds.y-q.y,q.y-r.bounds.y-r.bounds.z)));
+   if overlap&&r.bounds.w>0.&&(own.bounds.w==0.||r.bounds.z>own.bounds.z*1.001){continue;}
+   // 局所区画の端点にもinsideと同じ許容幅を使う。丸め差だけで
+   // 同じ元タイルの粗い代替面へ戻ることを避ける。
+   let d=max(0.,max(max(r.bounds.x-q.x,q.x-r.bounds.x-r.bounds.z),max(r.bounds.y-q.y,q.y-r.bounds.y-r.bounds.z))-.01);
    let cell=r.bounds.z/f32(r.data.y);
-   if d<nearest||(d==nearest&&(r.bounds.w<background||(r.bounds.w==background&&(cell<spacing||(cell==spacing&&id<chosen))))){
-    chosen=id;nearest=d;spacing=cell;background=r.bounds.w;
+   // 隣の元タイルから外挿する場合は、カメラで出入りする局所区画でなく
+   // 元タイル全体の固定評価格子を使う。近い区画の切替で外挿の傾きを変えない。
+   let full=all(abs(r.bounds.xy-r.tile.xy)<vec2(.01))&&abs(r.bounds.z-r.tile.z)<.01;
+   let fixed=full&&r.data.y==32u;
+   // 元タイル外では固定格子が常に最優先。残りの局所区画を調べても
+   // 結果は変わらないため、元タイル単位の終端表で次の候補群へ進む。
+   if outside&&fixed&&(view.extra.w&16u)!=0u {
+    chosen=id;nearest=d;spacing=cell;background=0.;
+    j=links[groupEndBase+j-1u];break;
    }
+   let rank=select(r.bounds.w,select(select(2.,1.,full),0.,fixed),outside);
+   let better=d<nearest||(d==nearest&&(rank<background||(rank==background&&(cell<spacing||(cell==spacing&&id<chosen)))));
+   if select(better,rank<background||(rank==background&&better),outside){
+    chosen=id;nearest=d;spacing=cell;background=rank;
+   }
+  }
   }
   if chosen==0xffffffffu {continue;}
   let r=records[chosen];
-  let pad=select(band(r),r.tile.w,(view.extra.w&8u)!=0u);
-  let distance=max(max(r.tile.x-q.x,q.x-r.tile.x-r.tile.z),max(r.tile.y-q.y,q.y-r.tile.y-r.tile.z));
+  let sourcePad=select(band(r),r.tile.w,(view.extra.w&8u)!=0u);
+  let pad=select(sourcePad,min(sourcePad,own.tile.w),(view.extra.w&8u)!=0u);
+  let overlappingSource=any(r.tile.xyz!=own.tile.xyz)&&all(min(tileEnd(r),tileEnd(own))-max(r.tile.xy,own.tile.xy)>vec2(.01));
+  let area=select(r.tile.xyz,r.bounds.xyz,overlappingSource);
+  let end=select(tileEnd(r),r.bounds.xy+vec2(r.bounds.z),overlappingSource);
+  let distance=max(max(area.x-q.x,q.x-end.x),max(area.y-q.y,q.y-end.y));
   if distance>=pad {continue;}
   let w=smoothstep(-pad,pad,-distance);
   sum+=sampleAt(q,chosen)*w;weight+=w;
@@ -140,16 +176,132 @@ fn blend(q:vec2<f32>,owner:u32,old:bool)->vec3<f32>{
  return sampleAt(q,owner);
 }
 
+
+// 旧表示の三角形を再現する。数学的な曲面の再評価を遷移の始点にしない。
+fn previousPatch(index:u32)->Patch {
+ var p:Patch;
+ p.bounds=bitcast<vec4<f32>>(vec4(links[index],links[index+1u],links[index+2u],links[index+3u]));
+ p.edges=bitcast<vec4<f32>>(vec4(links[index+4u],links[index+5u],links[index+6u],links[index+7u]));
+ p.origins=bitcast<vec4<f32>>(vec4(links[index+8u],links[index+9u],links[index+10u],links[index+11u]));
+ p.lines=bitcast<vec4<f32>>(vec4(links[index+12u],links[index+13u],links[index+14u],links[index+15u]));
+ return p;
+}
+fn previousBoundaryOwner(q:vec2<f32>,reference:u32)->u32{
+ let own=records[reference];
+ var owner=reference;var found=false;
+ // 共通の粗い格子の端点が、所属する細タイルの外にある場合もある。
+ // その地点を実際に覆う曲面を使い、細タイルの傾きで遠方へ外挿しない。
+ for(var j=0u;j<own.data.w;j++){
+  let id=links[own.neighbors.x+j];if id<view.extra.x{continue;}
+  let r=records[id];if !inside(q,r){continue;}
+  let best=records[owner];
+  if !found||r.bounds.w<best.bounds.w||(r.bounds.w==best.bounds.w&&(r.data.z>best.data.z||(r.data.z==best.data.z&&(r.bounds.z<best.bounds.z||(r.bounds.z==best.bounds.z&&id<owner))))){owner=id;found=true;}
+ }
+ return owner;
+}
+fn previousBoundaryField(q:vec2<f32>,stepX:f32,originX:f32,stepY:f32,originY:f32,owner:u32)->vec3<f32>{
+ let boundary=max(stepX,stepY)>0.;
+ var a=q;var b=q;var t=0.;
+ if boundary {
+  let fx=fract((q.x-originX)/max(stepX,0.000001));
+  let fy=fract((q.y-originY)/max(stepY,0.000001));
+  let betweenX=stepX>0.&&min(fx,1.-fx)>0.00001;
+  let betweenY=stepY>0.&&min(fy,1.-fy)>0.00001;
+  let alongX=select(stepX>=stepY,betweenX,betweenX!=betweenY);
+  let step=select(stepY,stepX,alongX);
+  let origin=select(originY,originX,alongX);
+  let coordinate=select(q.y,q.x,alongX);
+  let start=origin+floor((coordinate-origin)/step)*step;
+  t=clamp((coordinate-start)/step,0.,1.);
+  if alongX{a.x+=start-coordinate;b.x+=start+step-coordinate;}
+  else{a.y+=start-coordinate;b.y+=start+step-coordinate;}
+ }
+ // 内部と境界で重い接合関数を重複展開しない。端点上では一回だけ評価する。
+ let count=select(2u,1u,t<=0.||t>=1.);
+ var value=vec3(0.);
+ for(var i=0u;i<count;i++){
+  let endpoint=select(i,select(0u,1u,t>=1.),count==1u);
+  let weight=select(select(1.-t,t,endpoint>0u),1.,count==1u);
+  var anchor=select(a,b,endpoint>0u);
+  var selected=owner;
+  if boundary {
+   selected=previousBoundaryOwner(anchor,owner);
+   let r=records[selected];
+   anchor=clamp(anchor,r.bounds.xy,r.bounds.xy+vec2(r.bounds.z));
+  }
+  value+=blend(anchor,selected,true)*weight;
+ }
+ return value;
+}
+fn previousVertex(id:u32,part:Patch,owner:u32)->vec3<f32>{
+ let n=u32(part.bounds.w);
+ let ij=vec2(id%(n+1u),id/(n+1u));
+ let corner=(ij.x+ij.y)%3u;
+ var xy=part.bounds.xy+vec2<f32>(ij)*part.bounds.z/f32(n);
+ var stepX=0.;var originX=0.;var stepY=0.;var originY=0.;
+ for(var e=0u;e<4u;e++){
+  let hit=select(select(ij.y==0u,ij.y==n,e==3u),select(ij.x==0u,ij.x==n,e==1u),e<2u);
+  if hit{
+   if e<2u{if part.edges[e]>stepY{stepY=part.edges[e];originY=part.origins[e]+records[owner].bounds.y;}}
+   else{if part.edges[e]>stepX{stepX=part.edges[e];originX=part.origins[e]+records[owner].bounds.x;}}
+  }
+ }
+ var q=records[owner].bounds.xy+xy;
+ if ij.x==0u{q.x=part.lines.x+records[owner].bounds.x;}if ij.x==n{q.x=part.lines.y+records[owner].bounds.x;}
+ if ij.y==0u{q.y=part.lines.z+records[owner].bounds.y;}if ij.y==n{q.y=part.lines.w+records[owner].bounds.y;}
+ // 新しい境界分割では端点を共有済み。途中の頂点だけを共通格子へ縮退させ、
+ // 同一直線上のT字頂点がGPU丸めで1画素の穴になることも避ける。
+ if (view.extra.w&8u)!=0u {
+  if stepX>0.&&ij.x>0u&&ij.x<n {q.x=originX+round((q.x-originX)/stepX)*stepX;}
+  if stepY>0.&&ij.y>0u&&ij.y<n {q.y=originY+round((q.y-originY)/stepY)*stepY;}
+ }
+ let field=previousBoundaryField(q,stepX,originX,stepY,originY,owner);
+ return vec3(q.x,field.x,q.y);
+}
+
+fn previousTriangleHeight(q:vec2<f32>,a:vec3<f32>,b:vec3<f32>,c:vec3<f32>)->vec2<f32>{
+ let u=b.xz-a.xz;let v=c.xz-a.xz;let d=q-a.xz;
+ let det=u.x*v.y-u.y*v.x;if abs(det)<1e-12{return vec2(0.);}
+ let w=vec2(d.x*v.y-d.y*v.x,u.x*d.y-u.y*d.x)/det;
+ if any(w<vec2(-.0001))||w.x+w.y>1.0001{return vec2(0.);}
+ return vec2(a.y+w.x*(b.y-a.y)+w.y*(c.y-a.y),1.);
+}
+fn previousHeight(q:vec2<f32>,owner:u32,fallback:f32)->vec2<f32>{
+ let r=records[owner];
+ for(var j=0u;j<r.draw.y;j++) {
+  let part=previousPatch(r.draw.x+j*16u);let origin=r.bounds.xy+part.bounds.xy;
+  if any(q<origin-vec2(.01))||any(q>origin+vec2(part.bounds.z+.01)){continue;}
+  let n=u32(part.bounds.w);
+  let grid=(q-origin)*f32(n)/part.bounds.z;let vertex=round(grid);
+  // 旧格子の内部頂点と一致する場所は、既に求めた旧曲面の値がそのまま
+  // 描画済み三角形の頂点値になる。四頂点の再評価は境界と新規分割だけにする。
+  if all(abs(grid-vertex)<vec2(.001))&&all(vertex>vec2(0.))&&all(vertex<vec2(f32(n))){return vec2(fallback,1.);}
+  let ij=min(vec2<u32>(max(vec2(0.),floor(grid))),vec2(n-1u));
+  let id=ij.y*(n+1u)+ij.x;
+  let ids=array<u32,4>(id,id+1u,id+n+2u,id+n+1u);
+  var vertices:array<vec3<f32>,4>;
+  for(var k=0u;k<r.draw.z;k++){vertices[k]=previousVertex(ids[k],part,owner);}
+  let first=previousTriangleHeight(q,vertices[0],vertices[1],vertices[2]);if first.y>0.{return first;}
+  let second=previousTriangleHeight(q,vertices[0],vertices[2],vertices[3]);if second.y>0.{return second;}
+ }
+ return vec2(0.);
+}
 fn surfaceFor(q:vec2<f32>,owner:u32,allowMorph:bool)->vec3<f32>{
  let own=records[owner];
  var prior=0xffffffffu;var finest=0u;
- if allowMorph&&view.settings.w<1. {
-  for(var j=0u;j<own.data.w;j++){
+ if allowMorph&&view.settings.w<1.&&view.extra.x<arrayLength(&records) {
+  if own.transition.x>0u {prior=own.transition.x-1u;}
+  else {for(var j=0u;j<own.data.w;j++){
    let id=links[own.neighbors.x+j];
    if id<view.extra.x{continue;}
    let r=records[id];
-   if inside(q,r)&&r.data.z>=finest{prior=id;finest=r.data.z;}
-  }
+   let best=records[select(owner,prior,prior!=0xffffffffu)];
+   // 同じ元タイルの背景を後から列挙しただけで、表示済みの局所詳細面を
+   // 上書きしない。旧表示と同じ優先順位で参照元を選ぶ。
+   if inside(q,r)&&(prior==0xffffffffu||r.bounds.w<best.bounds.w||(r.bounds.w==best.bounds.w&&(r.data.z>finest||(r.data.z==finest&&(r.bounds.z<best.bounds.z||(r.bounds.z==best.bounds.z&&id<prior)))))){
+    prior=id;finest=r.data.z;
+   }
+  }}
  }
  // 新旧の接合関数を一つの呼出し箇所にまとめ、コンパイラーの重複展開を抑える。
  let count=select(1u,2u,prior!=0xffffffffu);
@@ -158,7 +310,9 @@ fn surfaceFor(q:vec2<f32>,owner:u32,allowMorph:bool)->vec3<f32>{
   let old=i>0u;
   let id=select(owner,prior,old);
   let weight=select(1.,select(view.settings.w,1.-view.settings.w,old),count>1u);
-  value+=blend(q,id,old)*weight;
+  var field=blend(q,id,old);
+  if old {let height=previousHeight(q,id,field.x);if height.y>0.{field.x=height.x;}}
+  value+=field*weight;
  }
  return value;
 }

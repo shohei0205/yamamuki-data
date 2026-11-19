@@ -11,6 +11,7 @@ mod graphics_settings;
 mod lod_fade;
 mod map;
 mod markers;
+mod operation_recording;
 mod performance;
 mod point_detail;
 mod point_list;
@@ -129,7 +130,7 @@ struct Observer {
     saved_height: f64,
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum SettingsSection {
     #[default]
     OnlineMap,
@@ -154,6 +155,10 @@ struct Viewer {
     snapshot_status: String,
     snapshot_jobs: Vec<mpsc::Receiver<Result<PathBuf>>>,
     snapshot_notice: Option<(String, std::time::Instant)>,
+    operation_recording: Option<operation_recording::Active>,
+    operation_trace: Option<Arc<operation_recording::Recording>>,
+    operation_playback: Option<operation_recording::Playback>,
+    operation_release_pending: bool,
     observer: Option<Observer>,
     pin_height_job: Option<([f64; 2], mpsc::Receiver<Result<f64>>)>,
     map_pin_elevation: Option<([f64; 2], f64)>,
@@ -401,6 +406,10 @@ impl Viewer {
             snapshot_status: String::new(),
             snapshot_jobs: Vec::new(),
             snapshot_notice: None,
+            operation_recording: None,
+            operation_trace: None,
+            operation_playback: None,
+            operation_release_pending: false,
             observer: None,
             pin_height_job: None,
             map_pin_elevation: None,
@@ -1453,6 +1462,12 @@ impl Viewer {
 }
 
 impl eframe::App for Viewer {
+    fn on_exit(&mut self) {
+        self.flush_operation_recording(&snapshot::quick_directory());
+    }
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        self.operation_input(ctx, input);
+    }
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, MAP_SOURCE_KEY, &self.map_source);
         eframe::set_value(storage, "map_fixed_levels", &self.map_levels);
@@ -1656,7 +1671,21 @@ impl eframe::App for Viewer {
                         self.settings_open = !self.settings_open;
                     }
                     ui.menu_button("スナップショット", |ui| {
-                        if ui.button("即時保存（F8）").clicked() {
+                        if let Some(summary) = self.operation_menu_summary() {
+                            ui.label(summary);
+                            if ui
+                                .add_enabled(
+                                    self.operation_recording.is_none()
+                                        && self.operation_playback.is_none(),
+                                    egui::Button::new("記録した操作を再生"),
+                                )
+                                .clicked()
+                            {
+                                self.replay_operations(ctx);
+                                ui.close_menu();
+                            }
+                        }
+                        if ui.button("即時保存").clicked() {
                             self.quick_snapshot(ctx);
                             ui.close_menu();
                         }
@@ -2467,6 +2496,7 @@ impl eframe::App for Viewer {
                     ),
                 );
             });
+        self.operation_frame_finished(ctx);
     }
 }
 
