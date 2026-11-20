@@ -2908,6 +2908,10 @@ mod tests {
         }
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn renderer_reuses_programs_for_flat_and_terrain_views() {
         let backend = if cfg!(windows) {
             wgpu::Backends::DX12
@@ -3017,10 +3021,18 @@ mod tests {
 mod gpu_tests {
     use super::*;
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn gpu_mixed_seams_and_morph_are_continuous() {
         run_gpu_seams_and_morph(false);
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn gpu_heightmap_mixed_seams_and_morph_are_continuous() {
         run_gpu_seams_and_morph(true);
     }
@@ -3192,6 +3204,10 @@ mod gpu_tests {
 mod control_compute_tests {
     use super::*;
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn seam_height_does_not_depend_on_the_number_of_local_fields() -> anyhow::Result<()> {
         let backend = if cfg!(windows) {
             wgpu::Backends::DX12
@@ -3396,6 +3412,10 @@ mod control_compute_tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn marker_height_uses_the_drawn_triangle_instead_of_bilinear_field() -> anyhow::Result<()> {
         let backend = if cfg!(windows) {
             wgpu::Backends::DX12
@@ -3547,6 +3567,10 @@ mod control_compute_tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn gpu_sibson_reproduces_affine_height_and_normal() {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: if cfg!(windows) {
@@ -3712,6 +3736,10 @@ mod control_compute_tests {
 mod upload_roundtrip_tests {
     use super::*;
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn reverse_depth_keeps_distant_front_faces_in_front() {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: if cfg!(windows) {
@@ -3894,6 +3922,10 @@ mod upload_roundtrip_tests {
         }
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn partial_seam_preserves_xy_and_follows_coarse_edge_on_gpu() -> anyhow::Result<()> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let Some(adapter) = pollster::block_on(instance.request_adapter(&Default::default()))
@@ -4162,6 +4194,10 @@ mod upload_roundtrip_tests {
         Ok(())
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn coarse_background_cannot_cover_sky_above_loaded_fine_ground() -> anyhow::Result<()> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let Some(adapter) = pollster::block_on(instance.request_adapter(&Default::default()))
@@ -4341,6 +4377,10 @@ mod upload_roundtrip_tests {
         Ok(())
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn flat_observer_surface_is_zero_on_gpu() -> anyhow::Result<()> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let Some(adapter) = pollster::block_on(instance.request_adapter(&Default::default()))

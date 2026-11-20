@@ -81,12 +81,23 @@ cargo run --locked --release --manifest-path viewer/Cargo.toml -- --check-terrai
 ## 確認
 
 ```sh
-cargo test --locked --manifest-path viewer/Cargo.toml
+cargo test --locked --release --workspace --manifest-path viewer/Cargo.toml
 cargo run --locked --manifest-path viewer/Cargo.toml -- --check-points points/gsi-peaks/gsi-peaks-source.json
 cargo run --locked --manifest-path viewer/Cargo.toml -- --check-map
 ```
 
 `--check-map` は確認用の地理院タイルを1枚取得するため、ネット接続が必要。
+
+通常のテストは実機GPUを必要とせず、データ形式・復号・LOD選択・座標変換・キャッシュ方針・シェーダーの構文と型を検査する。GitHub ActionsのWindows／macOSの通常CIでは、この範囲のテスト、実行ファイルのビルド、地点JSON・地形SQLiteの読み込みを確認する。配布ビルドでも同じ通常テストと地点JSONの読み込みを確認する。
+
+実際の描画画素・GPUメッシュ・接合・LOD変形・GPUメモリ・シェーダーのバックグラウンドコンパイルの検査は、`gpu-tests`機能を指定してローカルの実機で行う。GPUドライバー・アダプターに依存するため、共有のActionsランナーでは実行しない。複数のGPUテストが同時にコンパイルしないよう逐次実行する。
+
+```sh
+cargo test --locked --release --workspace --manifest-path viewer/Cargo.toml --features gpu-tests -- --test-threads=1
+```
+
+`gpu-tests`を指定しなくてもGPUテストのコードはコンパイルするが、テスト実行は明示的な無視として表示する。省略した実行を、GPU描画の検証済みとは扱わない。シェーダーのNagaによる構文検査は通常CIに残す。実データのスナップショット再生・全国データ比較・処理時間の計測は、従来どおり対象ファイルを用意し、該当テスト名を指定して`--ignored`で実行する。すべての無視テストを一括実行しない。
+
 
 ## 配布版の公開
 

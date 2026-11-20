@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+# 実機GPUによる描画検査はローカルで明示実行する。通常CIはCPU検査のみ。
+gpu-tests = ["yamamuki-terrain-view/gpu-tests"]
+
 [dependencies]
 anyhow = "1"
 eframe = { version = "0.31.1", default-features = false, features = ["wgpu", "default_fonts", "persistence", "x11", "wayland"] }

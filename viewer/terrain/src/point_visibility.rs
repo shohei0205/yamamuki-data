@@ -317,6 +317,10 @@ mod tests {
         .unwrap();
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn gpu_pipeline_is_valid() {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let Some(adapter) = pollster::block_on(instance.request_adapter(&Default::default()))

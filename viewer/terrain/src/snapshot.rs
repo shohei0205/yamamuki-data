@@ -406,6 +406,10 @@ mod tests {
             .collect())
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn heightmap_lod_changes_animate_in_both_directions() -> Result<()> {
         let backend = if cfg!(windows) {
             eframe::wgpu::Backends::DX12
@@ -488,14 +492,26 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn mixed_heightmap_draws_directly_and_masks_missing_heights() -> Result<()> {
         heightmap_draws_and_masks(0)
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn webp_heightmap_draws_directly_and_masks_missing_heights() -> Result<()> {
         heightmap_draws_and_masks(1)
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn minmax_heightmap_draws_directly_and_masks_missing_heights() -> Result<()> {
         heightmap_draws_and_masks(2)
     }
@@ -1448,6 +1464,10 @@ mod tests {
         Ok(())
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn shared_control_buffers_keep_local_field_coordinates() -> Result<()> {
         let backend = if cfg!(windows) {
             eframe::wgpu::Backends::DX12
@@ -2066,6 +2086,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn sea_level_plane_covers_the_screen_at_every_camera_zoom() -> Result<()> {
         let backend = if cfg!(windows) {
             eframe::wgpu::Backends::DX12
@@ -2146,6 +2170,10 @@ mod tests {
         Ok(())
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn globe_gpu_matches_cpu_picking_space_and_close_up() -> Result<()> {
         let backend = if cfg!(windows) {
             eframe::wgpu::Backends::DX12
@@ -2333,6 +2361,10 @@ mod tests {
         Ok(())
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn snapshot_replays_the_same_gpu_positions_and_keeps_transition_fixed() -> Result<()> {
         let Some(mut app) = crate::remembered_scene_tests::app() else {
             return Ok(());

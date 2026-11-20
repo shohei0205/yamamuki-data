@@ -50,8 +50,8 @@ jobs:
           persist-credentials: false
       - name: Rust stable を準備
         run: rustup update stable
-      - name: ビューワのテスト
-        run: cargo +stable test --locked --release --manifest-path viewer/Cargo.toml
+      - name: データ形式・CPUロジック・シェーダー構文のテスト
+        run: cargo +stable test --locked --release --workspace --manifest-path viewer/Cargo.toml
       - name: ビューワのリリースビルド
         run: cargo +stable build --locked --release --manifest-path viewer/Cargo.toml
       - name: Windows版を検証してZIPにまとめる

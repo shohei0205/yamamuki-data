@@ -236,6 +236,21 @@ impl Renderer {
             })
         })
     }
+    // GPUを用意せず、実際に使用する基本版・高品質版の構文も検査できるよう共用する。
+    fn shader_source(basic: bool) -> String {
+        format!(
+            "{}\n{}\n{}\n{}",
+            include_str!("direct_material.wgsl"),
+            include_str!("globe.wgsl"),
+            include_str!("atmosphere.wgsl"),
+            if basic {
+                include_str!("basic_interpolation.wgsl")
+            } else {
+                include_str!("edge_interpolation.wgsl")
+            }
+        )
+    }
+
     #[cfg(test)]
     pub fn new(device: &wgpu::Device) -> Self {
         Self::new_impl(device, None)
@@ -313,20 +328,7 @@ impl Renderer {
         let shader = crate::gpu_profile::timed("元タイル直接参照", || {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("元タイル直接参照"),
-                source: wgpu::ShaderSource::Wgsl(
-                    format!(
-                        "{}\n{}\n{}\n{}",
-                        include_str!("direct_material.wgsl"),
-                        include_str!("globe.wgsl"),
-                        include_str!("atmosphere.wgsl"),
-                        if background.is_some() {
-                            include_str!("basic_interpolation.wgsl")
-                        } else {
-                            include_str!("edge_interpolation.wgsl")
-                        }
-                    )
-                    .into(),
-                ),
+                source: wgpu::ShaderSource::Wgsl(Self::shader_source(background.is_some()).into()),
             })
         });
         let storage = |binding, read_only, visibility| wgpu::BindGroupLayoutEntry {
@@ -444,16 +446,7 @@ impl Renderer {
                 let programs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                         label: Some("高品質画像補間"),
-                        source: wgpu::ShaderSource::Wgsl(
-                            format!(
-                                "{}\n{}\n{}\n{}",
-                                include_str!("direct_material.wgsl"),
-                                include_str!("globe.wgsl"),
-                                include_str!("atmosphere.wgsl"),
-                                include_str!("edge_interpolation.wgsl")
-                            )
-                            .into(),
-                        ),
+                        source: wgpu::ShaderSource::Wgsl(Self::shader_source(false).into()),
                     });
                     std::thread::scope(|scope| {
                         let color = scope.spawn(|| {
@@ -1376,6 +1369,28 @@ fn globe_project_bounds(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn basic_and_filtered_material_shaders_validate_without_gpu() {
+        for basic in [true, false] {
+            let module = naga::front::wgsl::parse_str(&super::Renderer::shader_source(basic))
+                .expect("WGSL parse");
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .expect("WGSL validation");
+        }
+        let module =
+            naga::front::wgsl::parse_str(include_str!("material_bounds.wgsl")).expect("WGSL parse");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("WGSL validation");
+    }
+
+    #[test]
     fn retained_globe_boxes_cover_terrain_when_observer_target_moves() {
         for latitude in [0.2, 0.4, 0.85] {
             let mut camera = Camera::default();
@@ -2005,10 +2020,18 @@ mod tests {
         );
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn native_pixels_crossfade_and_hillshade_on_real_gpu() {
         check_material_pixels(false);
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn background_compilation_preserves_basic_draws_and_switches_to_filtered_draws() {
         check_material_pixels(true);
     }

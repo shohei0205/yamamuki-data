@@ -3054,6 +3054,10 @@ mod remembered_scene_tests {
         ))
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn completed_camera_mesh_updates_do_not_start_a_deformation() -> Result<()> {
         let Some(mut app) = app() else {
             return Ok(());
@@ -3093,6 +3097,10 @@ mod remembered_scene_tests {
         Ok(())
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn turning_back_restores_the_same_gpu_mesh_without_uploading() {
         let Some(mut app) = app() else {
             eprintln!("GPUがないためGPU試験を省略します");
@@ -3197,6 +3205,10 @@ mod remembered_scene_tests {
         Ok(())
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn observer_preparation_is_retained_across_rotation_but_not_zoom() {
         let Some(mut app) = app() else {
             return;
@@ -3261,6 +3273,10 @@ mod remembered_scene_tests {
         }
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn exact_local_mesh_is_reused_when_reserved_samples_are_exhausted() -> Result<()> {
         let Some(mut app) = app() else {
             return Ok(());
@@ -3285,6 +3301,10 @@ mod remembered_scene_tests {
         Ok(())
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn restarting_map_motion_does_not_coarsen_completed_mesh_density() {
         let Some(mut app) = app() else {
             return;
@@ -3316,6 +3336,10 @@ mod remembered_scene_tests {
         }
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn preparation_plan_is_reused_until_the_camera_or_targets_change() {
         let Some(mut app) = app() else {
             return;
@@ -3338,6 +3362,10 @@ mod remembered_scene_tests {
         assert!(!Arc::ptr_eq(&changed, &refined));
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn resident_evicted_after_request_is_requested_again_and_scene_recovers() -> Result<()> {
         let Some(mut app) = app() else {
             return Ok(());
@@ -3365,6 +3393,10 @@ mod remembered_scene_tests {
         Ok(())
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn reordered_cached_fields_do_not_restart_the_transition() -> Result<()> {
         let Some(mut app) = app() else {
             return Ok(());
@@ -3389,6 +3421,10 @@ mod remembered_scene_tests {
         Ok(())
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn arrived_tiles_prepare_during_missing_data_and_active_transition() -> Result<()> {
         let Some(mut app) = app() else {
             return Ok(());
@@ -3420,6 +3456,10 @@ mod remembered_scene_tests {
         Ok(())
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn cached_fields_choose_the_smallest_sufficient_grid() -> Result<()> {
         let Some(mut app) = app() else {
             return Ok(());
@@ -3446,6 +3486,10 @@ mod remembered_scene_tests {
         Ok(())
     }
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn memory_pressure_keeps_background_needed_by_the_incomplete_scene() -> Result<()> {
         let Some(mut app) = app() else {
             return Ok(());
@@ -3475,6 +3519,10 @@ mod remembered_scene_tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn memory_pressure_evicts_oldest_unused_mesh_only() {
         let Some(mut app) = app() else {
             eprintln!("GPUがないためGPU試験を省略します");

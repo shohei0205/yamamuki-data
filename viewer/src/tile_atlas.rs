@@ -226,6 +226,10 @@ impl Image {
 mod tests {
     use super::*;
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
+    )]
     fn thousands_of_tiles_upload_without_exhausting_egui_samplers() {
         use eframe::wgpu;
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
