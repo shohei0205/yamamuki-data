@@ -104,7 +104,7 @@ pub fn import_shared(destination: &mut Connection, path: &Path, identifier: &str
     tx.execute("INSERT INTO datasets(id,kind,title,data_version,format_version,metadata_json) VALUES('gsi-terrain-japan','terrain',?3,?1,1,?2)",params![identifier,metadata.to_string(),title])?;
     let dataset = tx.last_insert_rowid();
     for (&z, &(down, up)) in &levels {
-        let settings = json!({"errorDownMetres":down,"errorUpMetres":up,"anchor":([4,6,9,12].contains(&z)),"interpolation":"sibson","xyStepMetres":0.0625,"heightStepMetres":0.125,"maxParentDepth":2,"maxDependencies":16});
+        let settings = json!({"encoding":ENCODING,"errorDownMetres":down,"errorUpMetres":up,"anchor":([4,6,9,12].contains(&z)),"interpolation":"sibson","xyStepMetres":0.0625,"heightStepMetres":0.125,"maxParentDepth":2,"maxDependencies":16});
         tx.execute(
             "INSERT INTO terrain_levels VALUES(?1,?2,?2,?3)",
             params![dataset, z, settings.to_string()],

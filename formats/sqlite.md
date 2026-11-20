@@ -63,7 +63,7 @@ ORDER BY ordinal;
 
 ## 地形の収録形式
 
-`terrain_levels(dataset_key,level_key,z,settings_json)` と `terrain_tiles(dataset_key,level_key,x,y,encoding,payload)` を使う。制御点形式の版1は [地形のSQLite形式](../terrain/formats/sqlite.md)、レベルごとにハイトマップと混在できる版2は [地形のSQLite形式 版2](../terrain/formats/sqlite-v2.md) を参照する。地形BLOBはコンテナのdataset_keyに依存しないため、地表・地点と同じSQLiteへ統合できる。
+`terrain_levels(dataset_key,level_key,z,settings_json)` と `terrain_tiles(dataset_key,level_key,x,y,encoding,payload)` を使う。制御点とハイトマップをレベルごとに混在できる [地形のSQLite形式 版1](../terrain/formats/sqlite.md) を参照する。地形BLOBはコンテナのdataset_keyに依存しないため、地表・地点と同じSQLiteへ統合できる。
 
 ## 統合時の互換性
 

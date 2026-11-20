@@ -2314,7 +2314,7 @@ pub fn is_terrain(path: &std::path::Path) -> Result<bool> {
     let sets = yamamuki_data_sqlite::datasets(&conn)?;
     if let Some(dataset) = sets.iter().find(|d| d.kind == "terrain") {
         anyhow::ensure!(
-            matches!(dataset.format_version, 1 | 2),
+            dataset.format_version == yamamuki_terrain::sqlite::FORMAT_VERSION,
             "未対応の地形形式です"
         );
         Ok(true)

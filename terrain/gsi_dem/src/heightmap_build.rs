@@ -341,7 +341,7 @@ pub fn build(config: &Path, output: &Path) -> Result<()> {
                 .unwrap()
                 .remove("heightmapSource");
         }
-        tx.execute("INSERT INTO datasets(id,kind,title,data_version,format_version,metadata_json) VALUES('gsi-terrain-japan','terrain','地形（国土地理院標高）',?1,2,?2)",params![cfg.data_version,metadata.to_string()])?;
+        tx.execute("INSERT INTO datasets(id,kind,title,data_version,format_version,metadata_json) VALUES('gsi-terrain-japan','terrain','地形（国土地理院標高）',?1,1,?2)",params![cfg.data_version,metadata.to_string()])?;
         let dataset = tx.last_insert_rowid();
         let natural = cfg
             .levels
@@ -656,6 +656,10 @@ mod tests {
         build(&cfg, &output)?;
         let mut db = Database::open(&output)?;
         assert_eq!(db.validate_all()?, 2);
+        assert_eq!(
+            yamamuki_data_sqlite::datasets(&db.connection)?[0].format_version,
+            1
+        );
         let k = *db.catalog.keys().find(|k| k.0 == 13).unwrap();
         assert_eq!(db.heightmap(k)?.unwrap().sample(0.75, 0.75), Some(10.));
         assert_eq!(db.level_formats[&12], CONTROLS);

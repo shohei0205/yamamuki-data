@@ -114,7 +114,7 @@ SQLite・対応manifest・LICENSEを添付し、`地形：下書き Release 加�
 
 ## レベルごとに制御点とハイトマップを選ぶ
 
-`build`コマンドに[設定例](heightmap.example.json)を渡すと、形式版2のSQLiteを作る。既存の`run`は制御点形式の生成器として維持する。設定ファイル内の相対パスは、その設定ファイルのフォルダーを基準に解決する。
+`build`コマンドに[設定例](heightmap.example.json)を渡すと、形式版1のSQLiteを作る。既存の`run`は制御点形式の生成器として維持する。設定ファイル内の相対パスは、その設定ファイルのフォルダーを基準に解決する。
 
 ```powershell
 & $engine build --config terrain/gsi_dem/heightmap.example.json --output build/terrain/gsi-terrain-mixed.sqlite3
@@ -145,7 +145,7 @@ SQLite・対応manifest・LICENSEを添付し、`地形：下書き Release 加�
 
 生成時に有効DEM画素との上下誤差を測定してレベル設定へ保存する。格子の欠損によって補間できない有効画素も`coverageAudit.unrepresentedDemPixels`に記録する。粗い格子や海岸付近では未表現画素が生じ得るため、実測誤差だけで全画素の被覆を保証したと判断しない。入力は指定フォルダー内のPNGであり、全国の網羅性は取得CSVとの照合が必要。
 
-ビューワーは格子データをGPUへ転送し、頂点・法線と三角形インデックスをGPUで生成する。カメラ・自動LOD・接合・地表やオンライン地図の貼付を共通化する。形式とレベル設定は地形の情報表示でも確認できる。[版2の詳細仕様](../formats/sqlite-v2.md)も参照。
+ビューワーは格子データをGPUへ転送し、頂点・法線と三角形インデックスをGPUで生成する。カメラ・自動LOD・接合・地表やオンライン地図の貼付を共通化する。形式とレベル設定は地形の情報表示でも確認できる。[地形形式の詳細仕様](../formats/sqlite.md)も参照。
 
 ### 形式間の描画速度を比較する
 

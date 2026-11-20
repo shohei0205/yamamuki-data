@@ -57,4 +57,4 @@ $env:TERRAIN_SMOKE_ROOT = (Resolve-Path build/terrain).Path
 cargo test --locked --release --manifest-path terrain/Cargo.toml -p terrain-gsi-dem --test cli -- --ignored --nocapture
 ```
 
-レベルごとに制御点とハイトマップを選ぶ生成手順は[GSI DEMの手順](gsi_dem/README.md#レベルごとに制御点とハイトマップを選ぶ)、混在形式は[SQLite形式版2](formats/sqlite-v2.md)を参照。
+レベルごとに制御点とハイトマップを選ぶ生成手順は[GSI DEMの手順](gsi_dem/README.md#レベルごとに制御点とハイトマップを選ぶ)、混在形式は[SQLite形式版1](formats/sqlite.md)を参照。

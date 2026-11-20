@@ -9,6 +9,10 @@ fn mixed_read_validate_split_and_mismatch() -> anyhow::Result<()> {
     fixture::create_mixed(&mut db)?;
     drop(db);
     let mut source = Database::open(&path)?;
+    assert_eq!(
+        container::datasets(&source.connection)?[0].format_version,
+        1
+    );
     assert_eq!(source.validate_all()?, 8);
     let key = *source.catalog.keys().find(|k| k.0 == 13).unwrap();
     let grid = source.heightmap(key)?.unwrap();
@@ -78,6 +82,10 @@ fn webp_split_test(minmax: bool) -> anyhow::Result<()> {
     }
     drop(db);
     let mut source = Database::open(&path)?;
+    assert_eq!(
+        container::datasets(&source.connection)?[0].format_version,
+        1
+    );
     assert_eq!(source.validate_all()?, 8);
     let key = *source.catalog.keys().find(|k| k.0 == 13).unwrap();
     assert_eq!(source.heightmap(key)?.unwrap().values, expected.values);
@@ -104,5 +112,24 @@ fn webp_split_test(minmax: bool) -> anyhow::Result<()> {
     let edit = container::rusqlite::Connection::open(&path)?;
     edit.execute("UPDATE terrain_levels SET settings_json=json_set(settings_json,'$.webpQuality',80) WHERE level_key=13",[])?;
     assert!(Database::open(&path)?.validate_all().is_err());
+    Ok(())
+}
+
+#[test]
+fn unified_version_requires_encoding_and_rejects_version_two() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("version.sqlite3");
+    let mut db = container::rusqlite::Connection::open(&path)?;
+    container::initialize(&db)?;
+    fixture::create_mixed(&mut db)?;
+    assert!(Database::open(&path).is_ok());
+    db.execute("UPDATE datasets SET format_version=2", [])?;
+    assert!(Database::open(&path).is_err());
+    db.execute("UPDATE datasets SET format_version=1", [])?;
+    db.execute(
+        "UPDATE terrain_levels SET settings_json=json_remove(settings_json,'$.encoding') WHERE z=6",
+        [],
+    )?;
+    assert!(Database::open(&path).is_err());
     Ok(())
 }

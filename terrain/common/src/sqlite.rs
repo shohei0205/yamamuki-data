@@ -9,6 +9,7 @@ use std::{
 };
 
 pub const WORLD: f64 = 40075016.68557849;
+pub const FORMAT_VERSION: i64 = 1;
 pub const ENCODING: &str = "natural-controls-v1";
 pub const COARSE_LEVELS: [(u32, f64); 2] = [(4, 1250.), (5, 625.)];
 pub const LEVELS: [(u32, f64); 8] = [
@@ -151,7 +152,7 @@ impl Database {
         let sets = yamamuki_data_sqlite::datasets(&connection)?;
         let sets = sets
             .iter()
-            .filter(|d| d.kind == "terrain" && matches!(d.format_version, 1 | 2))
+            .filter(|d| d.kind == "terrain" && d.format_version == FORMAT_VERSION)
             .collect::<Vec<_>>();
         ensure!(
             sets.len() == 1,
@@ -164,7 +165,6 @@ impl Database {
             .filter_map(|source| source["attribution"].as_str())
             .collect::<Vec<_>>()
             .join(" ／ ");
-        let format_version = sets[0].format_version;
         let dataset = sets[0].key;
         let generation = sets[0].data_version.clone();
         let mut levels = HashMap::new();
@@ -185,13 +185,9 @@ impl Database {
             for row in rows {
                 let (z, key, raw) = row?;
                 let settings: serde_json::Value = serde_json::from_str(&raw)?;
-                let encoding = if format_version == 1 {
-                    ENCODING
-                } else {
-                    settings["encoding"]
-                        .as_str()
-                        .context("形式版2のレベルにencodingがありません")?
-                };
+                let encoding = settings["encoding"]
+                    .as_str()
+                    .context("地形レベルにencodingがありません")?;
                 ensure!(
                     encoding == ENCODING || crate::heightmap::is_encoding(encoding),
                     "未対応の地形レベル形式です: {encoding}"

@@ -31,7 +31,7 @@ fn create_levels(db: &mut Connection, levels: &[(u32, f64)]) -> Result<()> {
             params![
                 dataset,
                 z,
-                serde_json::json!({"errorDownMetres":error,"errorUpMetres":error}).to_string()
+                serde_json::json!({"encoding":ENCODING,"errorDownMetres":error,"errorUpMetres":error}).to_string()
             ],
         )?;
         let side = WORLD / 2f64.powi(z as i32);
@@ -72,7 +72,6 @@ fn create_levels(db: &mut Connection, levels: &[(u32, f64)]) -> Result<()> {
 /// 読み込み・混在LODの検査用。通常fixtureのz13だけを独立した格子へ置き換える。
 pub fn create_mixed(db: &mut Connection) -> Result<()> {
     create(db)?;
-    db.execute("UPDATE datasets SET format_version=2", [])?;
     let levels = db
         .prepare("SELECT level_key,settings_json FROM terrain_levels")?
         .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
