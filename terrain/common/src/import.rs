@@ -43,7 +43,10 @@ pub fn import_shared(destination: &mut Connection, path: &Path, identifier: &str
         .context("生成結果の品質表がありません")?;
     let quality: serde_json::Value = serde_json::from_str(&raw)?;
     let quality = quality.as_array().context("品質表は配列が必要です")?;
-    ensure!(quality.len() == 8, "品質表はz6〜z13の8レベルが必要です");
+    ensure!(
+        !quality.is_empty() && quality.len() <= 10,
+        "品質表はz4〜z13の収録レベルが必要です"
+    );
     let mut levels = std::collections::BTreeMap::new();
     for level in quality {
         let z = level["z"].as_u64().context("品質表のzが不正です")?;
@@ -54,7 +57,7 @@ pub fn import_shared(destination: &mut Connection, path: &Path, identifier: &str
             .as_f64()
             .context("上向き許容誤差がありません")?;
         ensure!(
-            (6..=13).contains(&z)
+            (4..=13).contains(&z)
                 && down.is_finite()
                 && down > 0.
                 && up.is_finite()
@@ -63,7 +66,8 @@ pub fn import_shared(destination: &mut Connection, path: &Path, identifier: &str
             "品質表のズームが重複または誤差が不正です"
         );
     }
-    let ratio = levels[&6].1 / levels[&6].0;
+    let (_, first) = levels.first_key_value().context("品質表が空です")?;
+    let ratio = first.1 / first.0;
     let mut metadata = json!({"authors":[{"name":"The yamamuki Authors","role":"配布データの編集・加工","url":"https://github.com/shohei0205/yamamuki-data/blob/main/AUTHORS.md"}],"sources":[{"name":"国土地理院の標高タイル（DEM10B）","source":"https://maps.gsi.go.jp/development/demtile.html","license":"公共データ利用規約（第1.0版） https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html","attribution":"地理院タイル（標高タイル）を加工して作成","changes":"標高を記録された上下の許容誤差へ適合・削減し、自由配置制御点と独立・差分Rice圧縮の地形タイルに加工"}],"generation":{"id":generation,"scope":if national{"national"}else{"window-test"},"interpolation":"sibson","lpf":false,"xyStepMetres":0.0625,"heightStepMetres":0.125}});
     if levels
         .values()
@@ -99,8 +103,8 @@ pub fn import_shared(destination: &mut Connection, path: &Path, identifier: &str
     let tx = destination.transaction()?;
     tx.execute("INSERT INTO datasets(id,kind,title,data_version,format_version,metadata_json) VALUES('gsi-terrain-japan','terrain',?3,?1,1,?2)",params![identifier,metadata.to_string(),title])?;
     let dataset = tx.last_insert_rowid();
-    for (z, (down, up)) in levels {
-        let settings = json!({"errorDownMetres":down,"errorUpMetres":up,"anchor":([6,9,12].contains(&z)),"interpolation":"sibson","xyStepMetres":0.0625,"heightStepMetres":0.125,"maxParentDepth":2,"maxDependencies":16});
+    for (&z, &(down, up)) in &levels {
+        let settings = json!({"errorDownMetres":down,"errorUpMetres":up,"anchor":([4,6,9,12].contains(&z)),"interpolation":"sibson","xyStepMetres":0.0625,"heightStepMetres":0.125,"maxParentDepth":2,"maxDependencies":16});
         tx.execute(
             "INSERT INTO terrain_levels VALUES(?1,?2,?2,?3)",
             params![dataset, z, settings.to_string()],
@@ -118,7 +122,7 @@ pub fn import_shared(destination: &mut Connection, path: &Path, identifier: &str
             row.get::<_, u32>(2)?,
         );
         ensure!(
-            (6..=13).contains(&key.0) && key.1 < (1 << key.0) && key.2 < (1 << key.0),
+            levels.contains_key(&key.0) && key.1 < (1 << key.0) && key.2 < (1 << key.0),
             "地形タイル座標が不正です"
         );
         let mut query=source.prepare("SELECT slot,parent_z,parent_x,parent_y FROM parents WHERE z=?1 AND x=?2 AND y=?3 ORDER BY slot")?;

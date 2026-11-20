@@ -406,6 +406,256 @@ mod tests {
             .collect())
     }
     #[test]
+    fn heightmap_lod_changes_animate_in_both_directions() -> Result<()> {
+        let backend = if cfg!(windows) {
+            eframe::wgpu::Backends::DX12
+        } else {
+            eframe::wgpu::Backends::PRIMARY
+        };
+        let Some(app) = crate::remembered_scene_tests::app_with_backend(backend) else {
+            return Ok(());
+        };
+        let mut view = TerrainView::flat(&egui::Context::default(), &app.renderer.state)?;
+        let child = (13, 7234, 3199);
+        let parent = (12, child.1 / 2, child.2 / 2);
+        let packet = |key, height| -> Result<Arc<Packet>> {
+            let map =
+                yamamuki_terrain::heightmap_webp::encode_minmax(8, &vec![Some(height); 121], 90)?.0;
+            Ok(Arc::new(Packet::from_heightmap(key, map, 0)?))
+        };
+        let low = packet(parent, 100.)?;
+        let high = packet(child, 200.)?;
+        view.app.camera.center = [
+            high.origin[0] + high.side / 2.,
+            high.origin[1] + high.side / 2.,
+        ];
+        view.app.camera.height = 200.;
+        view.app.camera.distance = high.side * 1.5;
+        view.app.camera.pitch = 1.56;
+        view.app.camera.yaw = 0.;
+        view.app.camera.globe = false;
+        view.app.camera.viewport = [128., 128.];
+        view.app.resolution = 32;
+        view.app.loading = false;
+        view.app.packets.insert(parent, low.clone());
+        view.app.packets.insert(child, high);
+        let coarse = view.app.renderer.upload(&low, 32)?;
+        view.app.shown = vec![coarse.clone()];
+        view.app.roots = vec![coarse];
+        view.app.frozen_morph = Some(1.);
+        draw(&mut view)?;
+        for (target, from, to) in [(child, 100., 200.), (parent, 200., 100.)] {
+            view.app.transition = Instant::now() - Duration::from_secs(1);
+            view.app.previous.clear();
+            view.app.wanted = vec![target];
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !view.app.scene()? {
+                let _ = app.renderer.state.device.poll(eframe::wgpu::Maintain::Wait);
+                anyhow::ensure!(
+                    Instant::now() < deadline,
+                    "ハイトマップのLOD切替が完了しない"
+                );
+            }
+            assert!(!view.app.previous.is_empty(), "LOD切替で旧面を破棄している");
+            assert!(view.app.transition.elapsed() < Duration::from_millis(450));
+            for t in [0., 0.25, 0.5, 0.75, 1.] {
+                view.app.frozen_morph = Some(t);
+                let raw = draw(&mut view)?;
+                let pixels: &[[f32; 4]] = bytemuck::cast_slice(&raw);
+                let height = pixels[64 * 128 + 64][3].abs() - 10000.;
+                assert!(
+                    (height - (from * (1. - t) + to * t)).abs() < 0.1,
+                    "LOD切替が補間されない: target={target:?} t={t} height={height}"
+                );
+            }
+        }
+        view.app.transition = Instant::now() - Duration::from_secs(1);
+        view.app.previous.clear();
+        let before = view.app.shown.clone();
+        view.app.resolution = 128;
+        view.app.camera.mesh_pixels = 0.05;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !view.app.scene()? {
+            let _ = app.renderer.state.device.poll(eframe::wgpu::Maintain::Wait);
+            anyhow::ensure!(Instant::now() < deadline, "同一LODの分割変更が完了しない");
+        }
+        assert!(!same_meshes(&before, &view.app.shown));
+        assert!(
+            view.app.previous.is_empty(),
+            "同一LODの再分割で不要な変形を開始している"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_heightmap_draws_directly_and_masks_missing_heights() -> Result<()> {
+        heightmap_draws_and_masks(0)
+    }
+    #[test]
+    fn webp_heightmap_draws_directly_and_masks_missing_heights() -> Result<()> {
+        heightmap_draws_and_masks(1)
+    }
+    #[test]
+    fn minmax_heightmap_draws_directly_and_masks_missing_heights() -> Result<()> {
+        heightmap_draws_and_masks(2)
+    }
+    fn heightmap_draws_and_masks(format: u8) -> Result<()> {
+        let backend = if cfg!(windows) {
+            eframe::wgpu::Backends::DX12
+        } else {
+            eframe::wgpu::Backends::PRIMARY
+        };
+        let Some(app) = crate::remembered_scene_tests::app_with_backend(backend) else {
+            return Ok(());
+        };
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("mixed.sqlite3");
+        let mut db = yamamuki_data_sqlite::rusqlite::Connection::open(&path)?;
+        yamamuki_data_sqlite::initialize(&db)?;
+        yamamuki_terrain::fixture::create_mixed(&mut db)?;
+        if format > 0 {
+            let blob: Vec<u8> = db.query_row(
+                "SELECT payload FROM terrain_tiles WHERE level_key=13",
+                [],
+                |r| r.get(0),
+            )?;
+            let map = yamamuki_terrain::heightmap::Heightmap::decode(&blob)?;
+            let heights = (0..map.width())
+                .flat_map(|y| (0..map.width()).map(move |x| (x, y)))
+                .map(|(x, y)| map.height(x, y))
+                .collect::<Vec<_>>();
+            let (_, blob) = if format == 2 {
+                let narrow = heights
+                    .iter()
+                    .map(|h| h.map(|v| -123.456 + v * 0.002))
+                    .collect::<Vec<_>>();
+                yamamuki_terrain::heightmap_webp::encode_minmax(map.cells, &narrow, 90)?
+            } else {
+                yamamuki_terrain::heightmap_webp::encode(map.cells, 0.125, &heights, 90)?
+            };
+            let mut settings: serde_json::Value =
+                serde_json::from_str(&db.query_row::<String, _, _>(
+                    "SELECT settings_json FROM terrain_levels WHERE level_key=13",
+                    [],
+                    |r| r.get(0),
+                )?)?;
+            settings.as_object_mut().unwrap().remove("heightStepMetres");
+            settings["minimumHeightStepMetres"] = serde_json::json!(0.125);
+            settings["heightScale"] = serde_json::json!("per-tile");
+            settings["webpQuality"] = serde_json::json!(90);
+            settings["encoding"] = serde_json::json!(yamamuki_terrain::heightmap::WEBP_ENCODING);
+            let encoding = if format == 2 {
+                yamamuki_terrain::heightmap::WEBP_MINMAX_ENCODING
+            } else {
+                yamamuki_terrain::heightmap::WEBP_ENCODING
+            };
+            if format == 2 {
+                settings
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("minimumHeightStepMetres");
+                settings["heightScale"] = serde_json::json!("min-max");
+                settings["encoding"] = serde_json::json!(encoding);
+            }
+            db.execute(
+                "UPDATE terrain_levels SET settings_json=?1 WHERE level_key=13",
+                [settings.to_string()],
+            )?;
+            db.execute(
+                "UPDATE terrain_tiles SET encoding=?1,payload=?2 WHERE level_key=13",
+                yamamuki_data_sqlite::rusqlite::params![encoding, blob],
+            )?;
+        }
+        drop(db);
+        let mut db = Database::open(&path)?;
+        let key = *db.catalog.keys().find(|k| k.0 == 13).unwrap();
+        let packet = db.packet(key)?;
+        assert!(packet.heightmap.is_some());
+        assert!(packet.sections.iter().all(Vec::is_empty));
+        let ctx = egui::Context::default();
+        let mut view = TerrainView::flat(&ctx, &app.renderer.state)?;
+        view.app.roots.clear();
+        view.app.previous.clear();
+        let tile = view.app.renderer.upload(&packet, 32)?;
+        view.app.camera.center = [
+            tile.origin[0] + tile.side / 2.,
+            tile.origin[1] + tile.side / 2.,
+        ];
+        view.app.camera.height = 200.;
+        view.app.camera.distance = tile.side * 1.5;
+        view.app.camera.pitch = 1.56;
+        view.app.camera.yaw = 0.;
+        view.app.camera.globe = false;
+        view.app.camera.viewport = [256., 256.];
+        view.app.shown = vec![tile];
+        view.app.frozen_morph = Some(1.);
+        let raw = draw(&mut view)?;
+        let pixels: &[[f32; 4]] = bytemuck::cast_slice(&raw);
+        let mut count = 0;
+        for p in pixels.iter().filter(|p| p[3] != 0.) {
+            let u = (view.app.camera.center[0] + p[0] as f64 - packet.origin[0]) / packet.side;
+            let v = (view.app.camera.center[1] + p[1] as f64 - packet.origin[1]) / packet.side;
+            if let Some(h) = packet.heightmap.as_ref().unwrap().sample(u, v) {
+                let x = (u * 32.).clamp(0., 32.);
+                let y = (v * 32.).clamp(0., 32.);
+                let ix = (x.floor() as u32).min(31);
+                let iy = (y.floor() as u32).min(31);
+                let fx = x - ix as f64;
+                let fy = y - iy as f64;
+                let map = packet.heightmap.as_ref().unwrap();
+                let a = map.sample(ix as f64 / 32., iy as f64 / 32.).unwrap();
+                let b = map.sample((ix + 1) as f64 / 32., iy as f64 / 32.).unwrap();
+                let c = map
+                    .sample((ix + 1) as f64 / 32., (iy + 1) as f64 / 32.)
+                    .unwrap();
+                let d = map.sample(ix as f64 / 32., (iy + 1) as f64 / 32.).unwrap();
+                let expected = if fy <= fx {
+                    a * (1. - fx) + b * (fx - fy) + c * fy
+                } else {
+                    a * (1. - fy) + c * fx + d * (fy - fx)
+                };
+                assert!(
+                    ((p[3].abs() - 10000.) as f64 - expected).abs() < 0.02,
+                    "GPU格子の三角形補間が異なる: {u} {v} raw={h} expected={expected} pixel={p:?}"
+                );
+                count += 1;
+            }
+        }
+        assert!(count > 100);
+        view.app.path = path.to_string_lossy().into();
+        view.app.generation = db.generation.clone();
+        let saved = view.snapshot()?;
+        let mut restored = TerrainView::from_snapshot(&ctx, &app.renderer.state, saved.prepare()?)?;
+        assert_eq!(
+            raw,
+            draw(&mut restored)?,
+            "ハイトマップの固定スナップショットが元の描画と一致しない"
+        );
+
+        let parent = Packet::constant_plane((12, key.1 / 2, key.2 / 2), 300.)?;
+        view.app.roots = vec![view.app.renderer.upload(&parent, 32)?];
+        draw_inner(&mut view, false)?;
+        view.app.wire = 3;
+        draw_inner(&mut view, false)?;
+        view.app.wire = 0;
+        view.app.roots.clear();
+
+        let mut map = (**packet.heightmap.as_ref().unwrap()).clone();
+        map.values[5 * 11 + 5] = yamamuki_terrain::heightmap::MISSING;
+        let p = Packet::from_heightmap(key, map, 0)?;
+        view.app.renderer.reset_sources();
+        view.app.shown = vec![view.app.renderer.upload(&p, 32)?];
+        let raw = draw(&mut view)?;
+        let pixels: &[[f32; 4]] = bytemuck::cast_slice(&raw);
+        assert_eq!(
+            pixels[128 * 256 + 128][3],
+            0.,
+            "欠損部分を標高0の面として描いている"
+        );
+        assert!(pixels.iter().any(|p| p[3] != 0.));
+        Ok(())
+    }
+    #[test]
     #[ignore = "操作記録のカメラ履歴で実際の非同期更新を進める"]
     fn external_recorded_camera_frames() -> Result<()> {
         let input: serde_json::Value = serde_json::from_reader(std::fs::File::open(
@@ -1275,6 +1525,165 @@ mod tests {
         );
         if let Some(path) = std::env::var_os("YAMAMUKI_FIXED_POSITION_OUTPUT") {
             std::fs::write(path, draw(&mut replay)?)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "全国データの形式だけを変更して同一視点・同一メッシュの描画と準備時間を比較する"]
+    fn benchmark_external_terrain_formats() -> Result<()> {
+        use serde_json::json;
+        let source: Snapshot = serde_json::from_reader(std::fs::File::open(std::env::var(
+            "YAMAMUKI_SNAPSHOT_TEST_INPUT",
+        )?)?)?;
+        let mut paths = vec![
+            source.path.clone(),
+            PathBuf::from(std::env::var("YAMAMUKI_HEIGHTMAP_DATABASE")?),
+        ];
+        if let Some(reference) = std::env::var_os("YAMAMUKI_HEIGHTMAP_REFERENCE_DATABASE") {
+            paths.push(PathBuf::from(reference));
+        }
+        let formats = paths
+            .iter()
+            .map(|path| -> Result<String> {
+                let db = yamamuki_terrain::sqlite::Database::open(path)?;
+                let formats = db
+                    .level_formats
+                    .values()
+                    .cloned()
+                    .collect::<std::collections::BTreeSet<_>>();
+                Ok(formats.into_iter().collect::<Vec<_>>().join("+"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let baseline = Database::open(&paths[0])?;
+        let mut scenes = Vec::new();
+        for (label, z, distance, pitch) in [
+            ("全国 z6", 6, 3_000_000., 1.3),
+            ("富士周辺 z11", 11, 45_000., 0.8),
+        ] {
+            let mut scene = source.clone();
+            let center = selection::lonlat(138.7274, 35.3606);
+            let side = shared_data::WORLD / 2f64.powi(z as i32);
+            let cx = (center[0] / side).floor() as i32;
+            let cy = (center[1] / side).floor() as i32;
+            let mut keys = baseline
+                .catalog
+                .keys()
+                .copied()
+                .filter(|k| k.0 == z && (z == 6 || (k.1 - cx).abs() <= 2 && (k.2 - cy).abs() <= 2))
+                .collect::<Vec<_>>();
+            keys.sort_unstable();
+            scene.meshes = keys
+                .into_iter()
+                .map(|key| Mesh {
+                    key,
+                    n: 128,
+                    field: shared_field::Field::default(),
+                })
+                .collect();
+            scene.counts = [scene.meshes.len(), 0, 0, 0];
+            scene.camera.center = center;
+            scene.camera.height = if z == 6 { 0. } else { 1000. };
+            scene.camera.distance = distance;
+            scene.camera.yaw = 0.;
+            scene.camera.pitch = pitch;
+            scene.camera.observer = false;
+            scene.camera.viewport = [1920., 1080.];
+            scene.settings[0] = 0.5;
+            scene.layout = None;
+            scenes.push((label, scene));
+        }
+        let mut close = source;
+        close.settings[0] = 0.5;
+        scenes.push(("山地ズーム・保存視点", close));
+        let app = crate::remembered_scene_tests::app_with_backend(eframe::wgpu::Backends::DX12)
+            .ok_or_else(|| anyhow::anyhow!("比較にはGPUが必要です"))?;
+        let ctx = egui::Context::default();
+        let state = &app.renderer.state;
+        let mut automatic = Vec::new();
+        for (variant, path) in paths.iter().enumerate() {
+            let db = Database::open(path)?;
+            for (name, scene) in &scenes {
+                let mut camera = scene.camera.clone();
+                camera.auto = true;
+                camera.level_errors_m = db.level_errors;
+                camera.coarse_level_errors_m = db.coarse_level_errors;
+                let started = Instant::now();
+                let keys = selection::select(&db.catalog, &camera);
+                let selection_ms = started.elapsed().as_secs_f64() * 1000.;
+                let mut counts = std::collections::BTreeMap::<u32, usize>::new();
+                for key in &keys {
+                    *counts.entry(key.0).or_default() += 1;
+                }
+                automatic.push(json!({"scene":name,"format":formats[variant],"levelErrorsMetres":db.level_errors,"selectedLevels":counts,"selectedTiles":keys.len(),"selectionMs":selection_ms}));
+            }
+        }
+        let mut rows = Vec::new();
+        // 実行順を交互にし、共有プログラムの準備は測定から除く。
+        for round in 0..3 {
+            for (name, scene) in &scenes {
+                let order = if round % 2 == 0 {
+                    (0..paths.len()).collect::<Vec<_>>()
+                } else {
+                    (0..paths.len()).rev().collect::<Vec<_>>()
+                };
+                for variant in order {
+                    let mut snapshot = scene.clone();
+                    snapshot.path = paths[variant].clone();
+                    snapshot.file_bytes = std::fs::metadata(&snapshot.path)?.len();
+                    snapshot.generation.clear();
+                    let started = Instant::now();
+                    let prepared = snapshot.prepare()?;
+                    let packet_ms = started.elapsed().as_secs_f64() * 1000.;
+                    let packets = prepared.packets.len();
+                    let packet_bytes = prepared.packets.values().map(|p| p.bytes()).sum::<usize>();
+                    let stored_bytes = prepared
+                        .packets
+                        .values()
+                        .map(|p| p.compressed_bytes)
+                        .sum::<usize>();
+                    let started = Instant::now();
+                    let mut replay = TerrainView::from_snapshot(&ctx, state, prepared)?;
+                    draw_inner(&mut replay, false)?;
+                    let first_ms = started.elapsed().as_secs_f64() * 1000.;
+                    for _ in 0..5 {
+                        draw_inner(&mut replay, false)?;
+                    }
+                    let mut frames = Vec::new();
+                    for _ in 0..32 {
+                        let frame = Instant::now();
+                        draw_inner(&mut replay, false)?;
+                        frames.push(frame.elapsed().as_secs_f64() * 1000.);
+                    }
+                    frames.sort_by(f64::total_cmp);
+                    let metrics = replay.app.renderer.metrics();
+                    let covered_pixels = if round == 0 {
+                        Some(
+                            draw(&mut replay)?
+                                .chunks_exact(16)
+                                .filter(|p| f32::from_le_bytes(p[12..16].try_into().unwrap()) > 0.)
+                                .count(),
+                        )
+                    } else {
+                        None
+                    };
+                    let row = json!({"scene":name,"format":formats[variant],
+                        "round":round,"database":paths[variant],"packetPrepareMs":packet_ms,"coveredPixels":covered_pixels,
+                        "camera":replay.app.camera,"renderSize":scene.layout.as_ref().map_or(scene.camera.viewport.map(|v|v.round() as u32),|l|l.render_size),"meshes":scene.meshes.len(),
+                        "gpuUploadAndFirstFrameMs":first_ms,"frameMedianMs":(frames[15]+frames[16])*0.5,
+                        "frameP95Ms":frames[30],"frameMeanMs":frames.iter().sum::<f64>()/32.,
+                        "triangles":metrics.0,"visiblePatches":metrics.1,"geometryBufferBytes":metrics.2,
+                        "packets":packets,"packetBytes":packet_bytes,"sourcePayloadBytes":stored_bytes});
+                    eprintln!("地形形式比較 {row}");
+                    rows.push(row);
+                    std::fs::write(
+                        std::env::var("YAMAMUKI_TERRAIN_COMPARISON_OUTPUT")?,
+                        serde_json::to_vec_pretty(
+                            &json!({"adapter":format!("{:?}",state.adapter.get_info()),"measurement":"DX12; GPU completion waited each frame; terrain only; OS file cache warm; same camera and grid subdivisions; shader compilation excluded","automaticLod":automatic,"results":rows}),
+                        )?,
+                    )?;
+                }
+            }
         }
         Ok(())
     }

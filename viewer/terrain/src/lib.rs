@@ -36,7 +36,7 @@ struct Request {
     resident: HashSet<Key>,
 }
 enum Message {
-    Catalog(HashMap<Key, usize>, String, String, [f64; 8]),
+    Catalog(HashMap<Key, usize>, String, String, [f64; 8], [f64; 2]),
     Packet(u64, Arc<Packet>, bool),
     Selected(u64, Vec<Key>),
     Ready(u64, usize, f64),
@@ -61,6 +61,32 @@ fn same_meshes(a: &[Arc<shared_render::Tile>], b: &[Arc<shared_render::Tile>]) -
     b.sort_unstable();
     a == b
 }
+// 同じ元タイル内の再分割ではなく、重なる領域の収録レベルが変わった場合だけ遷移する。
+fn heightmap_lod_change(a: &[Arc<shared_render::Tile>], b: &[Arc<shared_render::Tile>]) -> bool {
+    let ancestors = |fine: &[Arc<shared_render::Tile>], coarse: &[Arc<shared_render::Tile>]| {
+        let mut by_key = HashMap::<Key, Vec<&shared_render::Tile>>::new();
+        for tile in coarse {
+            by_key.entry(tile.key).or_default().push(tile);
+        }
+        fine.iter().any(|tile| {
+            (0..tile.key.0).any(|z| {
+                let shift = tile.key.0 - z;
+                by_key
+                    .get(&(z, tile.key.1 >> shift, tile.key.2 >> shift))
+                    .is_some_and(|others| {
+                        others.iter().any(|other| {
+                            (tile.is_heightmap() || other.is_heightmap())
+                                && (0..2).all(|i| {
+                                    tile.origin[i] < other.origin[i] + other.side
+                                        && other.origin[i] < tile.origin[i] + tile.side
+                                })
+                        })
+                    })
+            })
+        })
+    };
+    ancestors(a, b) || ancestors(b, a)
+}
 fn drain_messages(receiver: &mpsc::Receiver<Message>) -> Vec<Message> {
     receiver.try_iter().collect()
 }
@@ -81,11 +107,13 @@ fn worker(
             db.generation.clone(),
             db.credits.clone(),
             db.level_errors,
+            db.coarse_level_errors,
         ));
+        let base_level = db.catalog.keys().map(|k| k.0).min().unwrap_or(6);
         let mut roots = db
             .catalog
             .keys()
-            .filter(|k| k.0 == 6)
+            .filter(|k| k.0 == base_level)
             .copied()
             .collect::<Vec<_>>();
         roots.sort();
@@ -107,6 +135,7 @@ fn worker(
                 request = new;
             }
             request.camera.level_errors_m = db.level_errors;
+            request.camera.coarse_level_errors_m = db.coarse_level_errors;
             let started = Instant::now();
             let keys = selection::select(&db.catalog, &request.camera);
             if !request.camera.auto
@@ -276,6 +305,7 @@ struct App {
     receive: mpsc::Receiver<Message>,
     camera: selection::Camera,
     catalog: HashMap<Key, usize>,
+    base_level: u32,
     packets: HashMap<Key, Arc<Packet>>,
     gpu: HashMap<(Key, u32), Arc<shared_render::Tile>>,
     local_gpu: HashMap<(Key, u32, shared_field::Field), Arc<shared_render::Tile>>,
@@ -350,6 +380,7 @@ impl App {
             receive,
             camera: selection::Camera::default(),
             catalog: HashMap::new(),
+            base_level: 6,
             packets: HashMap::new(),
             gpu: HashMap::new(),
             local_gpu: HashMap::new(),
@@ -414,7 +445,7 @@ impl App {
             .and_then(|i| args.get(i + 1))
             .and_then(|v| v.parse::<u32>().ok())
         {
-            app.camera.maximum = z.clamp(6, 13);
+            app.camera.maximum = z.clamp(4, 13);
             app.camera.auto = false;
         }
         let option = |name: &str| {
@@ -457,8 +488,11 @@ impl App {
     }
     fn desired_resolution(&self, key: Key, field: shared_field::Field) -> (u32, f64) {
         let pixels = field.pixels(key, &self.camera).unwrap_or(0.);
-        let n = if self.resolution == 0 {
-            32
+        let n = if self.resolution == 0 || self.wire >= 3 {
+            self.packets
+                .get(&key)
+                .and_then(|p| p.heightmap.as_ref())
+                .map_or(32, |m| m.cells)
         } else {
             ((pixels / self.camera.mesh_pixels)
                 .ceil()
@@ -642,7 +676,8 @@ impl App {
             .chain(self.local_gpu.keys().map(|(k, _, _)| *k))
             .chain(self.wanted.iter().copied())
             .collect::<HashSet<_>>();
-        self.packets.retain(|k, _| k.0 == 6 || keep.contains(k));
+        self.packets
+            .retain(|k, _| k.0 == self.base_level || keep.contains(k));
     }
     fn preparation_plan(&mut self) -> Arc<Vec<PlannedField>> {
         use std::hash::{Hash, Hasher};
@@ -684,7 +719,7 @@ impl App {
         let mut roots = self
             .packets
             .keys()
-            .filter(|k| k.0 == 6)
+            .filter(|k| k.0 == self.base_level)
             .copied()
             .collect::<Vec<_>>();
         roots.sort();
@@ -708,7 +743,7 @@ impl App {
         for &key in self
             .catalog
             .keys()
-            .filter(|k| k.0 == 6 && self.packets.contains_key(k))
+            .filter(|k| k.0 == self.base_level && self.packets.contains_key(k))
         {
             for field in self.fields(key) {
                 if covered.covers(key, field) {
@@ -847,12 +882,24 @@ impl App {
         }
         // 全領域が揃ってから背景と本体を同時に切り替え、準備途中の穴を作らない。
         if changed {
-            // 分割が異なる旧面を新しい接合格子へ変形すると、境界だけが一時的に
-            // 凹む。全区画が揃った新メッシュへ一括で切り替え、旧面を再評価しない。
+            // 同一LOD内の再分割は即時に切り替える。ハイトマップのLOD変更は、
+            // 保持した旧描画パッチから高さを復元し、450msで新しい面へ補間する。
+            if heightmap_lod_change(&self.shown, &next) {
+                self.previous = self
+                    .shown
+                    .iter()
+                    .chain(&self.local_background)
+                    .chain(&self.roots)
+                    .cloned()
+                    .collect();
+                self.previous_primary = self.shown.len();
+                self.transition = Instant::now();
+            } else {
+                self.previous.clear();
+                self.previous_primary = 0;
+                self.transition = Instant::now() - Duration::from_secs(1);
+            }
             self.shown = next;
-            self.previous.clear();
-            self.previous_primary = 0;
-            self.transition = Instant::now() - Duration::from_secs(1);
         }
         self.local_background = background;
         if self.transition.elapsed() >= Duration::from_millis(450) {
@@ -1020,13 +1067,21 @@ impl eframe::App for App {
             // 通知はArc参照だけなので全件取り込み、GPUへの転送件数は別に制限する。
             for message in drain_messages(&self.receive) {
                 match message {
-                    Message::Catalog(catalog, generation, credits, level_errors) => {
+                    Message::Catalog(
+                        catalog,
+                        generation,
+                        credits,
+                        level_errors,
+                        coarse_level_errors,
+                    ) => {
                         self.camera.level_errors_m = level_errors;
+                        self.camera.coarse_level_errors_m = coarse_level_errors;
+                        self.base_level = catalog.keys().map(|k| k.0).min().unwrap_or(6);
                         let maximum = catalog.keys().map(|k| k.0).max().unwrap_or(6);
                         self.camera.maximum = if self.camera.auto {
                             maximum
                         } else {
-                            self.camera.maximum.min(maximum)
+                            self.camera.maximum.clamp(self.base_level, maximum)
                         };
                         if self.smoke.is_some() {
                             if let Some(z) = std::env::var("YAMAMUKI_TERRAIN_CHECK_LEVEL")
@@ -1146,7 +1201,7 @@ impl eframe::App for App {
                     changed|=ui.checkbox(&mut self.camera.auto,"自動LOD").changed();
                     let old=self.camera.maximum;
                     egui::ComboBox::from_label("最大／固定").selected_text(format!("z{old}")).show_ui(ui,|ui|{
-                        for z in self.catalog.keys().map(|k|k.0).collect::<std::collections::BTreeSet<_>>() {ui.selectable_value(&mut self.camera.maximum,z,format!("z{z}・{}m",self.camera.level_errors_m[(z-6) as usize]));}
+                        for z in self.catalog.keys().map(|k|k.0).collect::<std::collections::BTreeSet<_>>() {let label=format!("z{z}・{}m",self.camera.level_error(z));ui.selectable_value(&mut self.camera.maximum,z,label);}
                     });
                     changed|=old!=self.camera.maximum;
                     changed|=ui.add(egui::Slider::new(&mut self.camera.lod_quality,0.5..=4.).text("LOD精細度")).changed();
@@ -1158,8 +1213,8 @@ impl eframe::App for App {
                     ui.add(egui::Slider::new(&mut self.settings[0],0.0..=1.).text("全域傾き調整"));
                     ui.add(egui::Slider::new(&mut self.settings[1],0.0..=6.).text("陰影の強さ"));
                     ui.checkbox(&mut self.smooth,"滑らかな陰影");
-                    egui::ComboBox::from_id_salt("wire").selected_text(["ワイヤーなし","描画網＋陰影","描画網のみ","制御点TIN＋陰影","制御点TINのみ"][self.wire as usize]).show_ui(ui,|ui|{
-                        for (i,label) in ["ワイヤーなし","描画網＋陰影","描画網のみ","制御点TIN＋陰影","制御点TINのみ"].iter().enumerate(){ui.selectable_value(&mut self.wire,i as u32,*label);}
+                    egui::ComboBox::from_id_salt("wire").selected_text(["ワイヤーなし","描画網＋陰影","描画網のみ","元データ網＋陰影","元データ網のみ"][self.wire as usize]).show_ui(ui,|ui|{
+                        for (i,label) in ["ワイヤーなし","描画網＋陰影","描画網のみ","元データ網＋陰影","元データ網のみ"].iter().enumerate(){ui.selectable_value(&mut self.wire,i as u32,*label);}
                     });
                     ui.checkbox(&mut self.borders,"タイル境界");ui.checkbox(&mut self.colors,"LOD色分け");ui.checkbox(&mut self.join,"異LOD接合");ui.checkbox(&mut self.animate,"LODを滑らかに切替");
                 });
@@ -1171,7 +1226,7 @@ impl eframe::App for App {
             ui.label(format!("左ドラッグ 移動 ／ ホイール 拡大縮小 ／ 右ドラッグ 回転・傾き ／ 表示 {:?} ／ z6常駐 {}枚 ／ GPU {:0.1} MiB",
                 levels,self.roots.len(),self.gpu.values().map(|t|t.bytes as f64).sum::<f64>()/1048576.));
             let (triangles,patches,extra_bytes)=self.renderer.metrics();
-            ui.label(format!("制御点 {} ／ 描画三角形 {} ／ {}パッチ ／ GPU接合・モーフ {:0.1} MiB ／ 表示タイルの圧縮BLOB {:0.1} MiB",
+            ui.label(format!("標高点 {} ／ 描画三角形 {} ／ {}パッチ ／ GPU接合・モーフ {:0.1} MiB ／ 表示タイルの圧縮BLOB {:0.1} MiB",
                 self.shown.iter().map(|t|t.controls).sum::<usize>(),
                 triangles,patches,extra_bytes as f64/1048576.,
                 self.shown.iter().map(|t|t.compressed_bytes as f64).sum::<f64>()/1048576.));
@@ -1661,7 +1716,13 @@ fn projected_material_bands(
     result
 }
 fn wire_control(ui: &mut egui::Ui, wire: &mut u32) {
-    let labels = ["なし", "描画網", "描画網のみ", "制御点", "制御点のみ"];
+    let labels = [
+        "なし",
+        "描画網",
+        "描画網のみ",
+        "元データ網",
+        "元データ網のみ",
+    ];
     // 親メニューと同じ階層管理を使い、選択前に親だけ閉じることを防ぐ。
     ui.menu_button(labels[*wire as usize], |ui| {
         for (i, label) in labels.iter().enumerate() {
@@ -2252,7 +2313,10 @@ pub fn is_terrain(path: &std::path::Path) -> Result<bool> {
     let conn = yamamuki_data_sqlite::open(path)?;
     let sets = yamamuki_data_sqlite::datasets(&conn)?;
     if let Some(dataset) = sets.iter().find(|d| d.kind == "terrain") {
-        anyhow::ensure!(dataset.format_version == 1, "未対応の地形形式です");
+        anyhow::ensure!(
+            matches!(dataset.format_version, 1 | 2),
+            "未対応の地形形式です"
+        );
         Ok(true)
     } else {
         Ok(false)

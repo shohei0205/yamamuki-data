@@ -22,9 +22,9 @@ tempfile = "3"
 yamamuki-data-sqlite = { path = "../surface/common" }
 
 yamamuki-terrain-view = { path = "terrain" }
+yamamuki-terrain = { path = "../terrain/common" }
 
 [dev-dependencies]
-yamamuki-terrain = { path = "../terrain/common" }
 pollster = "0.4"
 
 [target.'cfg(windows)'.dependencies]

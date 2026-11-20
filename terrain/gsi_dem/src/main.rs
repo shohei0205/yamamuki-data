@@ -11,13 +11,35 @@ use std::{
 use terrain_gsi_dem::{natural_inventory, natural_shared_pipeline};
 
 #[derive(Parser)]
-#[command(about = "国土地理院DEMから共通点集合の地形データを生成する")]
+#[command(about = "国土地理院DEMから制御点・ハイトマップの地形データを生成する")]
 struct Args {
     #[command(subcommand)]
     command: Command,
 }
 #[derive(Subcommand)]
 enum Command {
+    /// 完成済みのz6から制御点を削減し、z4・z5を追加する。
+    ExtendCoarse {
+        #[arg(long)]
+        prepared: PathBuf,
+        #[arg(long)]
+        database: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        data_version: String,
+        #[arg(long, num_args = 3)]
+        pilots: Vec<PathBuf>,
+        #[arg(long, default_value_t = 131072)]
+        local_point_limit: usize,
+    },
+    /// レベルごとの形式設定でDEMと制御点SQLiteから配布SQLiteを作る。
+    Build {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// 性能試験用コピーの限定キューだけを削減する。本番DBは拒否する。
     BenchmarkPrune {
         #[arg(long)]
@@ -207,6 +229,25 @@ fn qualify(prepared: &Path, pilots: &[PathBuf]) -> Result<()> {
 }
 fn main() -> Result<()> {
     match Args::parse().command {
+        Command::ExtendCoarse {
+            prepared,
+            database,
+            output,
+            data_version,
+            pilots,
+            local_point_limit,
+        } => natural_shared_pipeline::extend_coarse(
+            &prepared,
+            &database,
+            &output,
+            &data_version,
+            &pilots,
+            local_point_limit,
+        ),
+
+        Command::Build { config, output } => {
+            terrain_gsi_dem::heightmap_build::build(&config, &output)
+        }
         Command::BenchmarkPrune {
             prepared,
             z,

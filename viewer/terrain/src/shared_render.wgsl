@@ -73,6 +73,13 @@ struct Varying {
  @location(3) bary:vec3<f32>,
  @location(4) uv: vec2<f32>,
 }
+// 格子の欠損を標高0として描かない。制御点形式は従来の有効性判定を維持する。
+fn validAt(q:vec2<f32>,owner:u32)->bool{
+ let r=records[owner];if r.tile_end.z<.5{return true;}
+ let n=r.data.y;let uv=clamp((q-r.bounds.xy)/r.bounds.z,vec2(0.),vec2(1.))*f32(n);
+ let ij=min(vec2<u32>(floor(uv)),vec2(n-1u));let f=uv-vec2<f32>(ij);let base=r.data.x+ij.y*(n+1u)+ij.x;
+ return ((1.-f.x)*(1.-f.y)<.000001||atlas[base].original.w>0.)&&(f.x*(1.-f.y)<.000001||atlas[base+1u].original.w>0.)&&((1.-f.x)*f.y<.000001||atlas[base+n+1u].original.w>0.)&&(f.x*f.y<.000001||atlas[base+n+2u].original.w>0.);
+}
 fn sampleAt(q:vec2<f32>,id:u32)->vec3<f32>{
  let r=records[id];let n=r.data.y;
  let uv=clamp((q-r.bounds.xy)/r.bounds.z,vec2(0.),vec2(1.))*f32(n);
@@ -162,6 +169,7 @@ fn blend(q:vec2<f32>,owner:u32,old:bool)->vec3<f32>{
   }
   if chosen==0xffffffffu {continue;}
   let r=records[chosen];
+  if !validAt(q,chosen){continue;}
   let sourcePad=select(band(r),r.tile.w,(view.extra.w&8u)!=0u);
   let pad=select(sourcePad,min(sourcePad,own.tile.w),(view.extra.w&8u)!=0u);
   let overlappingSource=any(r.tile.xyz!=own.tile.xyz)&&all(min(tileEnd(r),tileEnd(own))-max(r.tile.xy,own.tile.xy)>vec2(.01));
@@ -423,6 +431,7 @@ fn coveredByFiner(q:vec2<f32>,height:f32)->bool {
 }
 struct Fragment { @location(0) color:vec4<f32>, @location(1) world:vec4<f32> }
 @fragment fn fs(v:Varying)->Fragment{
+ if !validAt(v.position.xz/view.offset.z,view.flags.w){discard;}
  if (view.extra.w&4u)!=0u&&coveredByFiner(v.position.xz/view.offset.z,v.height){discard;}
  var normal=normalize(v.normal);
  if(view.flags.y==0u){normal=normalize(cross(dpdx(v.position),dpdy(v.position)));if(normal.y<0.){normal=-normal;}}

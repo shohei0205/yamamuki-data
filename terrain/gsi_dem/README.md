@@ -21,6 +21,8 @@
 
 設定プロファイルは `sibson-shared-no-lpf-z6-z13-symmetric-v2`。旧設定の作業結果・完成SQLiteは新設定として再開しない。新しい出力先へ準備・生成・全画素監査を行い、既存の配布SQLiteの設定値だけを書き換えない。
 
+全国生成の対象はz6〜z13とし、z4・z5は生成・配布対象に含めない。
+
 点のXYは1/16m、Zは1/8m単位の整数。Rice・FOR・ゼロ連続を128整数ごとに選択する。外側zlibは使わない。親のXYを正確に継承し、Zの差分を保存する。差分は最大2段、直接親は最大4タイル。
 
 ## 環境
@@ -109,6 +111,54 @@ SQLite・対応manifest・LICENSEを添付し、`地形：下書き Release 加�
 & $tool select-levels build/terrain/gsi-terrain.sqlite3 build/terrain/gsi-terrain-z9.sqlite3 '[6,7,8,9]'
 ```
 
+
+## レベルごとに制御点とハイトマップを選ぶ
+
+`build`コマンドに[設定例](heightmap.example.json)を渡すと、形式版2のSQLiteを作る。既存の`run`は制御点形式の生成器として維持する。設定ファイル内の相対パスは、その設定ファイルのフォルダーを基準に解決する。
+
+```powershell
+& $engine build --config terrain/gsi_dem/heightmap.example.json --output build/terrain/gsi-terrain-mixed.sqlite3
+& $tool validate build/terrain/gsi-terrain-mixed.sqlite3
+```
+
+設定例はz6〜z9を制御点、z10〜z13をハイトマップにする。`dataVersion`は今回の生成に使うUTC日時識別子へ変更する。`controlDatabase`は上の生成・`import-shared`手順で作った配布SQLiteを指定する。制御点のXYZを保ち、選択されない親や別形式へ切り替えた親への参照は独立形式へ符号化し直す。
+
+ハイトマップは`dem14`の元DEMから直接生成し、制御点から作り直さない。全レベルをハイトマップにすれば`controlDatabase`は不要。全レベルを制御点にすれば`dem14`は不要。レベルを減らした構成も生成できる。出力先は新規ファイルとし、失敗時は完成ファイルを残さない。
+
+| 設定 | 内容 |
+|---|---|
+| `levels[].z` | 制御点はz4〜z13、格子はz6〜z13。重複不可 |
+| `levels[].encoding` | 制御点`natural-controls-v1`、16bit格子`heightmap-u16-zstd-v1`、最低最高標高8bit格子`heightmap-u8-webp-minmax-v1`、旧8bit格子`heightmap-u8-webp-v1` |
+| `cellsPerTile` | 格子のみ。8〜256の2の累乗、既定256 |
+| `heightStepMetres` | 16bitでは固定幅、旧8bitでは下限。既定0.125m。最低最高標高方式では指定不要 |
+| `webpQuality` | WebP版のみ。0〜100、既定90 |
+| `errorDownMetres` / `errorUpMetres` | 任意の誤差上限。生成結果または制御点元の品質が満たさなければ失敗 |
+| `window` | 任意。元DEMのz14範囲 `[x最小,y最小,x最大,y最大]`。右下を含まない |
+
+格子は両端と周囲1点の余白を含む。256セルなら259×259点をu16＋Zstandardで保存する。標本化は元DEM画素中心を基準とするバイリニア補間。隣接タイルの共有点は同じ世界座標で生成する。元データにない標高は欠損として残し、海面0mに置き換えない。
+
+8bit WebP非可逆版は`encoding`を`heightmap-u8-webp-minmax-v1`にし、`webpQuality`（既定90、0〜100）を指定する。各タイルの余白を含む最低・最高標高をf64で保存し、その範囲を0〜255の全階調へ割り当てる。`heightStepMetres`の下限を使わず、狭い標高範囲でも全階調を使う。一定標高のタイルはその値を直接復元する。欠損マスクは可逆に保持し、元DEMとの誤差検査はWebP復号後の標高を使う。共有点の標高は隣接タイルで差が生じ得るため、描画側で接合する。
+
+旧`heightmap-u8-webp-v1`は量子化幅の下限と整数基準値を持つ方式として維持する。最低・最高標高方式は別識別子・別ヘッダーのため、以前のデータと取り違えて復元しない。
+
+格子生成・圧縮・DEM全画素との誤差検査はタイル単位で並列実行する。`RAYON_NUM_THREADS`でスレッド数を指定できる。32タイルずつ処理してメモリ使用量を抑え、SQLiteへの書き込み順は固定する。
+
+生成時に有効DEM画素との上下誤差を測定してレベル設定へ保存する。格子の欠損によって補間できない有効画素も`coverageAudit.unrepresentedDemPixels`に記録する。粗い格子や海岸付近では未表現画素が生じ得るため、実測誤差だけで全画素の被覆を保証したと判断しない。入力は指定フォルダー内のPNGであり、全国の網羅性は取得CSVとの照合が必要。
+
+ビューワーは格子データをGPUへ転送し、頂点・法線と三角形インデックスをGPUで生成する。カメラ・自動LOD・接合・地表やオンライン地図の貼付を共通化する。形式とレベル設定は地形の情報表示でも確認できる。[版2の詳細仕様](../formats/sqlite-v2.md)も参照。
+
+### 形式間の描画速度を比較する
+
+地形スナップショットのJSONを入力し、同じ視点・同じメッシュ分割で制御点版とハイトマップ版を測る。全国z6、富士山周辺z11、保存視点の3条件で、読み込みとCPU準備、GPU転送から初回描画まで、準備後のフレーム時間を別々に記録する。両SQLiteに対象タイルが必要。WindowsのDX12対応GPUで実行する。
+
+```powershell
+$env:YAMAMUKI_SNAPSHOT_TEST_INPUT = 'build/terrain/comparison-view.terrain.json'
+$env:YAMAMUKI_HEIGHTMAP_DATABASE = 'build/terrain/gsi-terrain-heightmap.sqlite3'
+$env:YAMAMUKI_TERRAIN_COMPARISON_OUTPUT = 'build/terrain/comparison.json'
+cargo test --release --locked --manifest-path viewer/terrain/Cargo.toml benchmark_external_terrain_formats -- --ignored --nocapture --test-threads=1
+```
+
+入力JSONはビューワー全体の`.snapshot.json.gz`ではなく、地形描画部のスナップショット。制御点版のパスはJSONの`path`から取得する。ファイルのOSキャッシュは温まった状態で、GPUの共用プログラムのコンパイル時間は計測から除く。地表・オンライン地図のテクスチャ描画を含まない。固定格子と制御点形式は同じレベルでも精度が異なるため、`terrain_levels.settings_json`の誤差と被覆の監査結果も併記する。
 
 ## 制御点削減の実行と計測
 

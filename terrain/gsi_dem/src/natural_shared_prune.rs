@@ -457,7 +457,7 @@ fn localize_queue(s: &Store, z: i64, root: &Path) -> Result<()> {
     {
         return Ok(());
     }
-    ensure!((6..=13).contains(&z), "品質範囲外です");
+    ensure!((4..=13).contains(&z), "品質範囲外です");
     progress(
         root,
         json!({"stage":"prune-reorder","z":z,"complete":false,"note":"残りの候補をWebタイル順へ整理。旧キューと点集合は保持"}),

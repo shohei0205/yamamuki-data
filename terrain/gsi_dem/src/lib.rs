@@ -5,3 +5,5 @@ pub mod natural_inventory;
 pub mod natural_shared_pipeline;
 pub mod natural_shared_resources;
 pub mod natural_shared_store;
+
+pub mod heightmap_build;

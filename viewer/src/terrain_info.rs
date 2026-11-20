@@ -9,6 +9,7 @@ use std::{
 use yamamuki_data_sqlite as db;
 struct Level {
     z: u32,
+    encoding: String,
     tiles: u64,
     points: u64,
     bytes: u64,
@@ -20,10 +21,11 @@ struct Data {
     bytes: u64,
 }
 fn read(path: &Path) -> Result<Data> {
-    let conn = db::open(path)?;
-    let dataset = db::datasets(&conn)?
+    let terrain = yamamuki_terrain::sqlite::Database::open(path)?;
+    let conn = &terrain.connection;
+    let dataset = db::datasets(conn)?
         .into_iter()
-        .find(|d| d.kind == "terrain")
+        .find(|d| d.key == terrain.dataset)
         .context("地形がありません")?;
     let mut levels = BTreeMap::new();
     let mut q = conn.prepare(
@@ -35,6 +37,7 @@ fn read(path: &Path) -> Result<Data> {
             row.get::<_, i64>(0)?,
             Level {
                 z: row.get(1)?,
+                encoding: terrain.level_formats[&row.get::<_, u32>(1)?].clone(),
                 tiles: 0,
                 points: 0,
                 bytes: 0,
@@ -42,20 +45,25 @@ fn read(path: &Path) -> Result<Data> {
             },
         );
     }
-    let mut q=conn.prepare("SELECT level_key,length(payload),substr(payload,1,16) FROM terrain_tiles WHERE dataset_key=?1")?;
+    let keys_by_zoom = levels
+        .iter()
+        .map(|(&key, level)| (level.z, key))
+        .collect::<BTreeMap<_, _>>();
+    // 形式ごとのヘッダー判定と格納点数は描画と同じ共通リーダーを使う。
+    for (&(z, _, _), &count) in &terrain.catalog {
+        levels
+            .get_mut(&keys_by_zoom[&z])
+            .context("収録レベルがありません")?
+            .points += count as u64;
+    }
+    let mut q=conn.prepare("SELECT level_key,COUNT(*),SUM(length(payload)) FROM terrain_tiles WHERE dataset_key=?1 GROUP BY level_key")?;
     let mut rows = q.query([dataset.key])?;
     while let Some(row) = rows.next()? {
         let level = levels
             .get_mut(&row.get::<_, i64>(0)?)
             .context("収録レベルがありません")?;
-        let header: Vec<u8> = row.get(2)?;
-        anyhow::ensure!(
-            header.len() == 16 && &header[..4] == b"NTS1",
-            "未対応の地形タイルです"
-        );
-        level.tiles += 1;
-        level.bytes += row.get::<_, u64>(1)?;
-        level.points += u32::from_le_bytes(header[12..16].try_into()?) as u64;
+        level.tiles = row.get(1)?;
+        level.bytes = row.get(2)?;
     }
     let mut levels = levels.into_values().collect::<Vec<_>>();
     levels.sort_by_key(|l| l.z);
@@ -64,6 +72,19 @@ fn read(path: &Path) -> Result<Data> {
         levels,
         bytes: std::fs::metadata(path)?.len(),
     })
+}
+fn encoding_label(encoding: &str) -> &str {
+    use yamamuki_terrain::{
+        heightmap::{ENCODING as GRID, WEBP_ENCODING, WEBP_MINMAX_ENCODING},
+        sqlite::ENCODING,
+    };
+    match encoding {
+        ENCODING => "制御点",
+        GRID => "16bit Zstandard",
+        WEBP_ENCODING => "8bit WebP",
+        WEBP_MINMAX_ENCODING => "8bit WebP（最低・最高）",
+        _ => encoding,
+    }
 }
 pub struct Info {
     path: PathBuf,
@@ -105,7 +126,7 @@ impl Info {
         }
         egui::Window::new("地形ファイルの情報")
             .open(&mut self.open)
-            .default_size([650., 480.])
+            .default_size([820., 480.])
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.strong(self.path.file_name().unwrap_or_default().to_string_lossy());
@@ -128,9 +149,6 @@ impl Info {
                                 set.format_version
                             ));
                             ui.label(format!("ファイルサイズ {} B", data.bytes));
-                            ui.label(
-                                "自然近傍補間 / XY 1/16 m・標高 1/8 m / Rice併用の独立・差分格納",
-                            );
                             ui.separator();
                             ui.strong("レベルごとの収録量");
                             egui::Grid::new("terrain-level-stats")
@@ -138,8 +156,9 @@ impl Info {
                                 .show(ui, |ui| {
                                     for title in [
                                         "レベル",
+                                        "形式",
                                         "タイル数",
-                                        "制御点数",
+                                        "標高点数",
                                         "圧縮データ",
                                         "上方 / 下方誤差",
                                     ] {
@@ -148,6 +167,7 @@ impl Info {
                                     ui.end_row();
                                     for l in &data.levels {
                                         ui.label(format!("z{}", l.z));
+                                        ui.label(encoding_label(&l.encoding)).on_hover_text(&l.encoding);
                                         ui.label(l.tiles.to_string());
                                         ui.label(l.points.to_string());
                                         ui.label(format!("{:.2} MiB", l.bytes as f64 / 1048576.))
@@ -161,7 +181,7 @@ impl Info {
                                     }
                                 });
                             ui.small(
-                                "制御点数は各タイルの格納点数の合計です。共有点の重複を含みます。",
+                                "標高点数は各タイルの格納点数の合計です。共有点やハイトマップの余白を含みます。",
                             );
                             ui.separator();
                             ui.strong("Metadata JSON（出典・利用条件・生成設定）");
@@ -187,6 +207,110 @@ impl Info {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn terrain_info_counts_mixed_heightmap_formats() -> Result<()> {
+        use yamamuki_terrain::heightmap::{
+            ENCODING, Heightmap, WEBP_ENCODING, WEBP_MINMAX_ENCODING,
+        };
+        for encoding in [ENCODING, WEBP_ENCODING, WEBP_MINMAX_ENCODING] {
+            let dir = tempfile::tempdir()?;
+            let path = dir.path().join("mixed.sqlite3");
+            let mut conn = db::rusqlite::Connection::open(&path)?;
+            db::initialize(&conn)?;
+            yamamuki_terrain::fixture::create_mixed(&mut conn)?;
+            if encoding != ENCODING {
+                let bytes: Vec<u8> = conn.query_row(
+                    "SELECT payload FROM terrain_tiles WHERE level_key=13",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let map = Heightmap::decode(&bytes)?;
+                let heights = (0..map.width())
+                    .flat_map(|y| (0..map.width()).map(move |x| (x, y)))
+                    .map(|(x, y)| map.height(x, y))
+                    .collect::<Vec<_>>();
+                let (quality, payload) = if encoding == WEBP_MINMAX_ENCODING {
+                    (
+                        100,
+                        yamamuki_terrain::heightmap_webp::encode_minmax(map.cells, &heights, 100)?
+                            .1,
+                    )
+                } else {
+                    (
+                        90,
+                        yamamuki_terrain::heightmap_webp::encode(map.cells, 0.125, &heights, 90)?.1,
+                    )
+                };
+                let raw: String = conn.query_row(
+                    "SELECT settings_json FROM terrain_levels WHERE level_key=13",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let mut settings: serde_json::Value = serde_json::from_str(&raw)?;
+                settings.as_object_mut().unwrap().remove("heightStepMetres");
+                settings["encoding"] = serde_json::json!(encoding);
+                settings["webpQuality"] = serde_json::json!(quality);
+                settings["heightScale"] = serde_json::json!(if encoding == WEBP_MINMAX_ENCODING {
+                    "min-max"
+                } else {
+                    "per-tile"
+                });
+                if encoding == WEBP_ENCODING {
+                    settings["minimumHeightStepMetres"] = serde_json::json!(0.125);
+                }
+                conn.execute(
+                    "UPDATE terrain_levels SET settings_json=?1 WHERE level_key=13",
+                    [settings.to_string()],
+                )?;
+                conn.execute(
+                    "UPDATE terrain_tiles SET encoding=?1,payload=?2 WHERE level_key=13",
+                    db::rusqlite::params![encoding, payload],
+                )?;
+            }
+            let expected_bytes: u64 =
+                conn.query_row("SELECT SUM(length(payload)) FROM terrain_tiles", [], |r| {
+                    r.get(0)
+                })?;
+            drop(conn);
+            let data = read(&path)?;
+            assert_eq!(data.levels.len(), 8);
+            let level = data.levels.iter().find(|l| l.z == 13).unwrap();
+            assert_eq!(level.encoding, encoding);
+            assert_eq!(level.tiles, 1);
+            assert_eq!(level.points, 121);
+            assert_eq!(
+                data.levels.iter().map(|l| l.bytes).sum::<u64>(),
+                expected_bytes
+            );
+            assert!(
+                data.levels
+                    .iter()
+                    .filter(|l| l.z < 13)
+                    .all(|l| l.encoding == yamamuki_terrain::sqlite::ENCODING)
+            );
+            let conn = db::rusqlite::Connection::open(&path)?;
+            conn.execute(
+                "UPDATE terrain_tiles SET encoding='unknown' WHERE level_key=13",
+                [],
+            )?;
+            assert!(read(&path).is_err());
+        }
+        Ok(())
+    }
+    #[test]
+    #[ignore = "指定された実際の全国SQLiteで情報表示を検証する"]
+    fn terrain_info_reads_external_sqlite() -> Result<()> {
+        let path = PathBuf::from(std::env::var("YAMAMUKI_TERRAIN_INFO_TEST_DATABASE")?);
+        let data = read(&path)?;
+        anyhow::ensure!(!data.levels.is_empty(), "収録レベルが空です");
+        for l in &data.levels {
+            eprintln!(
+                "z{} {}: {}タイル / {}標高点 / {} B",
+                l.z, l.encoding, l.tiles, l.points, l.bytes
+            );
+        }
+        Ok(())
+    }
     #[test]
     fn terrain_info_counts_saved_tiles_and_points() -> Result<()> {
         let path = std::env::temp_dir().join(format!(

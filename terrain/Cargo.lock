@@ -247,9 +247,9 @@ checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 
 [[package]]
 name = "errno"
-version = "0.3.15"
+version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e35d6e78f4cebb90e51d543db8fe41528851d6deeef6ef21ebd4bfdc1e784776"
+checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys",
@@ -325,6 +325,12 @@ dependencies = [
  "libc",
  "r-efi",
 ]
+
+[[package]]
+name = "glob"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "hash32"
@@ -438,6 +444,17 @@ dependencies = [
  "cc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "libwebp-sys"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b3a87b44e34d17161e4f17d92a463d596cb13825dcd1758ed18fd3a721e189c"
+dependencies = [
+ "cc",
+ "glob",
+ "pkg-config",
 ]
 
 [[package]]
@@ -757,6 +774,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "yamamuki-data-sqlite",
  "yamamuki-terrain",
  "zstd",
 ]
@@ -834,6 +852,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "delaunator",
+ "libwebp-sys",
  "rayon",
  "robust",
  "rstar",
@@ -843,6 +862,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "yamamuki-data-sqlite",
+ "zstd",
 ]
 
 [[package]]

@@ -32,6 +32,13 @@ const LEVELS: [(i64, f64); 8] = {
     }
     levels
 };
+const COARSE_LEVELS: [(i64, f64); 2] = [
+    (5, yamamuki_terrain::sqlite::COARSE_LEVELS[1].1),
+    (4, yamamuki_terrain::sqlite::COARSE_LEVELS[0].1),
+];
+#[path = "natural_coarse_extension.rs"]
+mod coarse_extension;
+pub use coarse_extension::execute as extend_coarse;
 const FINEST_ERROR: f64 = LEVELS[0].1;
 const PROFILE: &str = "sibson-shared-no-lpf-z6-z13-symmetric-v2";
 #[derive(Clone)]
@@ -2002,7 +2009,12 @@ fn certify(s: &Store, z: i64, inputs: &[Input], dem: &mut Dem, root: &Path) -> R
                                 if minimum_angle(&p, b) <= value + 1e-7 {
                                     return Ok(false);
                                 }
-                                let error = LEVELS.iter().find(|v| v.0 == z).unwrap().1;
+                                let error = LEVELS
+                                    .iter()
+                                    .chain(COARSE_LEVELS.iter())
+                                    .find(|v| v.0 == z)
+                                    .unwrap()
+                                    .1;
                                 for input in &affected {
                                     let range = parallel_prune::sample_range(input, influence);
                                     if range[0] >= range[2] || range[1] >= range[3] {
@@ -2061,7 +2073,12 @@ fn certify(s: &Store, z: i64, inputs: &[Input], dem: &mut Dem, root: &Path) -> R
                             if minimum_angle(after, b) <= value + 1e-7 {
                                 return Ok(false);
                             }
-                            let error = LEVELS.iter().find(|v| v.0 == z).unwrap().1;
+                            let error = LEVELS
+                                .iter()
+                                .chain(COARSE_LEVELS.iter())
+                                .find(|v| v.0 == z)
+                                .unwrap()
+                                .1;
                             audit_affected_cached(
                                 s,
                                 z,
@@ -2256,7 +2273,12 @@ fn certify(s: &Store, z: i64, inputs: &[Input], dem: &mut Dem, root: &Path) -> R
             }
         }
         if changes == 0 {
-            let error = LEVELS.iter().find(|v| v.0 == z).unwrap().1;
+            let error = LEVELS
+                .iter()
+                .chain(COARSE_LEVELS.iter())
+                .find(|v| v.0 == z)
+                .unwrap()
+                .1;
             let (ok, max, valid) = if local_checks && error_proofs.count() < inputs.len() {
                 (false, 0., 0)
             } else {
@@ -2453,11 +2475,21 @@ fn point_digest(p: &[[i32; 3]]) -> String {
     h.finalize().iter().map(|v| format!("{v:02x}")).collect()
 }
 fn pack(s: &Store, job: &Value, inputs: &[Input], root: &Path, window: &[u32]) -> Result<()> {
+    pack_levels(s, job, inputs, root, window, &LEVELS)
+}
+fn pack_levels(
+    s: &Store,
+    job: &Value,
+    inputs: &[Input],
+    root: &Path,
+    window: &[u32],
+    levels: &[(i64, f64)],
+) -> Result<()> {
     let out = root.join("terrain-shared.partial.sqlite3");
     let c = distribution(&out, &job["generation_id"])?;
     // 親点検索用は作業DBへ置く。配布DBに冗長な点一覧を入れない。
     s.db.execute_batch("CREATE TABLE IF NOT EXISTS packed_points(z INTEGER,x INTEGER,y INTEGER,id INTEGER,idx INTEGER,PRIMARY KEY(z,x,y,id)) WITHOUT ROWID;CREATE INDEX IF NOT EXISTS packed_id ON packed_points(z,id);")?;
-    for &(z, _) in LEVELS.iter().rev() {
+    for &(z, _) in levels.iter().rev() {
         s.cache_level(z)?;
         let mut sums=s.db.prepare("SELECT (x >> ?2),(y >> ?2),sum(valid) FROM audit WHERE z=?1 GROUP BY (x >> ?2),(y >> ?2)")?;
         let valid_counts = sums
@@ -2523,7 +2555,7 @@ fn pack(s: &Store, job: &Value, inputs: &[Input], root: &Path, window: &[u32]) -
                 let mut kind = "NQC1";
                 let mut parent_keys = Vec::new();
                 let mut depth = 0;
-                if ![6, 9, 12].contains(&z) {
+                if ![4, 6, 9, 12].contains(&z) {
                     let mut counts = BTreeMap::<Key, usize>::new();
                     if c.query_row(
                         "SELECT 1 FROM tiles WHERE z=? AND x=? AND y=?",
@@ -2751,6 +2783,14 @@ fn verify_distribution(root: &Path) -> Result<Value> {
     Ok(json!({"tiles":count,"maximum_dependency_tiles":max_deps,"integer_roundtrip":true}))
 }
 fn audit_saved(root: &Path, inputs: &[Input], dem: &mut Dem) -> Result<Value> {
+    audit_saved_levels(root, inputs, dem, &LEVELS)
+}
+fn audit_saved_levels(
+    root: &Path,
+    inputs: &[Input],
+    dem: &mut Dem,
+    levels: &[(i64, f64)],
+) -> Result<Value> {
     let c = Connection::open_with_flags(
         distribution_path(root),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -2760,7 +2800,7 @@ fn audit_saved(root: &Path, inputs: &[Input], dem: &mut Dem) -> Result<Value> {
     let mut tested = 0u64;
     let mut maximum_up = 0f64;
     let mut maximum_down = 0f64;
-    for &(z, error) in LEVELS.iter().rev() {
+    for &(z, error) in levels.iter().rev() {
         let mut curves: BTreeMap<Key, crate::natural_surface::Surface> = BTreeMap::new();
         let mut curve_order = VecDeque::new();
         let mut curve_points = 0usize;
@@ -3049,7 +3089,12 @@ pub fn benchmark_prune(root: &Path, z: i64, limit: usize) -> Result<()> {
         cache: HashMap::new(),
         order: VecDeque::new(),
     };
-    let error = LEVELS.iter().find(|v| v.0 == z).unwrap().1;
+    let error = LEVELS
+        .iter()
+        .chain(COARSE_LEVELS.iter())
+        .find(|v| v.0 == z)
+        .unwrap()
+        .1;
     parallel_prune::run(
         &s,
         z,

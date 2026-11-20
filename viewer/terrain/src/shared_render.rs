@@ -66,6 +66,7 @@ pub struct Tile {
     pub field: crate::shared_field::Field,
     local: bool,
     compute: wgpu::BindGroup,
+    heightmap: bool,
     _sources: Arc<SourceBuffers>,
     view: wgpu::Buffer,
     output: wgpu::Buffer,
@@ -76,6 +77,9 @@ pub struct Tile {
 }
 
 impl Tile {
+    pub fn is_heightmap(&self) -> bool {
+        self.heightmap
+    }
     pub fn local_field(&self) -> bool {
         self.local
     }
@@ -231,6 +235,7 @@ impl LandcoverGpu {
 #[derive(Clone)]
 struct SharedPipelines {
     compute: wgpu::ComputePipeline,
+    height_compute: wgpu::ComputePipeline,
     pipeline: wgpu::RenderPipeline,
     fast_pipeline: wgpu::RenderPipeline,
     fallback: wgpu::RenderPipeline,
@@ -265,6 +270,7 @@ pub struct Renderer {
     depth: wgpu::Texture,
     size: [u32; 2],
     compute: wgpu::ComputePipeline,
+    height_compute: wgpu::ComputePipeline,
     indices: Arc<std::collections::HashMap<u32, wgpu::Buffer>>,
 
     pipeline: wgpu::RenderPipeline,
@@ -650,6 +656,62 @@ fn regular_render_shader_source() -> String {
     source
 }
 
+fn gpu_grid_indices(
+    d: &wgpu::Device,
+    q: &wgpu::Queue,
+) -> Arc<std::collections::HashMap<u32, wgpu::Buffer>> {
+    let shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("GPU格子インデックス"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("grid_indices.wgsl").into()),
+    });
+    let pipeline = d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("GPU格子インデックス"),
+        layout: None,
+        module: &shader,
+        entry_point: Some("main"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let mut encoder = d.create_command_encoder(&Default::default());
+    let mut indices = std::collections::HashMap::new();
+    for level in 0..=9 {
+        let n = 1u32 << level;
+        let buffer = d.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("GPUで生成する共有分割"),
+            size: u64::from(6 * n * n) * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDEX,
+            mapped_at_creation: false,
+        });
+        let uniform = d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[n, 0, 0, 0]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let group = d.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffer.as_entire_binding(),
+                },
+            ],
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups((n * n).div_ceil(64), 1, 1);
+        }
+        indices.insert(n, buffer);
+    }
+    q.submit([encoder.finish()]);
+    Arc::new(indices)
+}
 impl Renderer {
     pub fn interpolation_pending(&self) -> bool {
         self.direct_renderer.interpolation_pending()
@@ -829,29 +891,24 @@ impl Renderer {
                         "地形GPU初期化: 描画まで {:.2}ms",
                         started.elapsed().as_secs_f64() * 1000.
                     );
-                    let indices = Arc::new(
-                        (0..=9)
-                            .map(|level| {
-                                let n = 1u32 << level;
-                                let mut ids = Vec::with_capacity((6 * n * n) as usize);
-                                for y in 0..n {
-                                    for x in 0..n {
-                                        let a = y * (n + 1) + x;
-                                        ids.extend([a, a + 1, a + n + 2, a, a + n + 2, a + n + 1]);
-                                    }
-                                }
-                                (
-                                    n,
-                                    d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                        label: Some("共有分割テンプレート"),
-                                        contents: bytemuck::cast_slice(&ids),
-                                        usage: wgpu::BufferUsages::INDEX,
-                                    }),
-                                )
-                            })
-                            .collect(),
-                    );
+                    let indices = gpu_grid_indices(d, &state.queue);
                     SharedPipelines {
+                        height_compute: {
+                            let module = d.create_shader_module(wgpu::ShaderModuleDescriptor {
+                                label: Some("ハイトマップ頂点生成"),
+                                source: wgpu::ShaderSource::Wgsl(
+                                    include_str!("heightmap_gpu.wgsl").into(),
+                                ),
+                            });
+                            d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                                label: Some("ハイトマップ頂点生成"),
+                                layout: None,
+                                module: &module,
+                                entry_point: Some("main"),
+                                compilation_options: Default::default(),
+                                cache: None,
+                            })
+                        },
                         compute: compute_job
                             .join()
                             .expect("曲面評価プログラムの準備が停止しました"),
@@ -873,6 +930,7 @@ impl Renderer {
             .clone();
         let SharedPipelines {
             compute,
+            height_compute,
             pipeline,
             fast_pipeline,
             fallback,
@@ -923,6 +981,7 @@ impl Renderer {
             depth,
             size,
             compute,
+            height_compute,
 
             pipeline,
             fast_pipeline,
@@ -1267,29 +1326,56 @@ impl Renderer {
             buffers
         } else {
             let buffers = Arc::new(SourceBuffers {
-                sections: p
-                    .sections
-                    .iter()
-                    .map(|bytes| {
-                        d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("共有する制御点・補助情報"),
-                            contents: if bytes.is_empty() { &[0; 4] } else { bytes },
-                            usage: wgpu::BufferUsages::STORAGE,
+                sections: if let Some(map) = &p.heightmap {
+                    let mut raw = map
+                        .values
+                        .iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .collect::<Vec<_>>();
+                    raw.resize(raw.len().next_multiple_of(4), 0);
+                    (0..4)
+                        .map(|i| {
+                            d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("標高格子"),
+                                contents: if i == 0 { &raw } else { &[0; 4] },
+                                usage: wgpu::BufferUsages::STORAGE,
+                            })
                         })
-                    })
-                    .collect(),
+                        .collect()
+                } else {
+                    p.sections
+                        .iter()
+                        .map(|bytes| {
+                            d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("共有する制御点・補助情報"),
+                                contents: if bytes.is_empty() { &[0; 4] } else { bytes },
+                                usage: wgpu::BufferUsages::STORAGE,
+                            })
+                        })
+                        .collect()
+                },
                 vertices: d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("共有する制御点XYZ"),
-                    contents: bytemuck::cast_slice(&p.vertices),
+                    contents: if p.vertices.is_empty() {
+                        &[0; 16]
+                    } else {
+                        bytemuck::cast_slice(&p.vertices)
+                    },
                     usage: wgpu::BufferUsages::STORAGE,
                 }),
                 triangles: d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("共有する制御点TIN"),
-                    contents: bytemuck::cast_slice(&p.triangles),
+                    contents: if p.triangles.is_empty() {
+                        &[0; 4]
+                    } else {
+                        bytemuck::cast_slice(&p.triangles)
+                    },
                     usage: wgpu::BufferUsages::STORAGE,
                 }),
-                bytes: p.sections.iter().map(|b| b.len().max(4)).sum::<usize>()
-                    + p.vertices.len() * 16
+                bytes: p.heightmap.as_ref().map_or_else(
+                    || p.sections.iter().map(|b| b.len().max(4)).sum::<usize>(),
+                    |m| (m.values.len() * 2).next_multiple_of(4) + 12,
+                ) + p.vertices.len() * 16
                     + p.triangles.len() * 4,
             });
             self.sources.insert(p.key, Arc::downgrade(&buffers));
@@ -1300,7 +1386,9 @@ impl Renderer {
         let output = d.create_buffer(&wgpu::BufferDescriptor {
             label: Some("GPU曲面"),
             size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         // bounds・lookup・counts・settingsを16byte境界の4レコードに並べる。
@@ -1319,7 +1407,7 @@ impl Renderer {
         for v in [n, 0, 0, 0u32] {
             params.extend(v.to_le_bytes());
         }
-        for v in [1000f32, 1f32, 0., 0.] {
+        for v in [1000f32, 1f32, p.side as f32, 0.] {
             params.extend(v.to_le_bytes());
         }
         let uniform = d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1327,36 +1415,57 @@ impl Renderer {
             contents: &params,
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let compute = d.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.compute.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: controls[0].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: controls[1].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: controls[2].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: controls[3].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: output.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: uniform.as_entire_binding(),
-                },
-            ],
-        });
+        let compute = if p.heightmap.is_some() {
+            d.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("標高格子の頂点生成設定"),
+                layout: &self.height_compute.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: controls[0].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: output.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: uniform.as_entire_binding(),
+                    },
+                ],
+            })
+        } else {
+            d.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &self.compute.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: controls[0].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: controls[1].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: controls[2].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: controls[3].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: output.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: uniform.as_entire_binding(),
+                    },
+                ],
+            })
+        };
         let view = d.create_buffer(&wgpu::BufferDescriptor {
             label: Some("タイルカメラ"),
             size: std::mem::size_of::<View>() as u64,
@@ -1373,6 +1482,7 @@ impl Renderer {
             side,
             field,
             local: field.depth > 0,
+            heightmap: p.heightmap.is_some(),
             compute,
             _sources: sources.clone(),
             view,
@@ -1393,7 +1503,11 @@ impl Renderer {
                 label: Some("自然近傍補間"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.compute);
+            pass.set_pipeline(if p.heightmap.is_some() {
+                &self.height_compute
+            } else {
+                &self.compute
+            });
             pass.set_bind_group(0, &tile.compute, &[]);
             pass.dispatch_workgroups((tile.n + 1).div_ceil(8), (tile.n + 1).div_ceil(8), 1);
         }
@@ -1816,7 +1930,7 @@ impl CallbackTrait for Frame {
                         [
                             (b[2] - camera.center[0]) as f32,
                             (b[3] - camera.center[1]) as f32,
-                            0.,
+                            f32::from(t.heightmap),
                             0.,
                         ]
                     },
@@ -2556,7 +2670,16 @@ impl CallbackTrait for Frame {
                     self.settings[1],
                     self.morph,
                 ],
-                flags: [tile.n, u32::from(self.smooth), self.wire, i as u32],
+                flags: [
+                    tile.n,
+                    u32::from(self.smooth),
+                    if tile.heightmap && self.wire >= 3 {
+                        self.wire - 2
+                    } else {
+                        self.wire
+                    },
+                    i as u32,
+                ],
                 extra: [
                     current as u32,
                     u32::from(self.tin),
@@ -2582,20 +2705,18 @@ impl CallbackTrait for Frame {
         let uniform_ms = uniform_started.elapsed().as_secs_f64() * 1000.;
         cache.triangles = 0;
         cache.visible_patches = 0;
-        if !self.tin && self.wire != 4 {
-            cache.triangles = cache
-                .plans
-                .iter()
-                .flat_map(|p| &p.groups)
-                .map(|(n, r)| 2 * u64::from(*n).pow(2) * u64::from(r.end - r.start))
-                .sum();
-            cache.visible_patches = cache.plans.iter().map(|p| p.patches.len()).sum();
-        }
-        if self.tin || self.wire >= 3 {
-            cache.triangles += all[..current]
-                .iter()
-                .map(|t| u64::from(t.triangle_indices) / 3)
-                .sum::<u64>();
+        for (i, plan) in cache.plans.iter().enumerate() {
+            if (!self.tin || all[i].heightmap) && (self.wire != 4 || all[i].heightmap) {
+                cache.triangles += plan
+                    .groups
+                    .iter()
+                    .map(|(n, r)| 2 * u64::from(*n).pow(2) * u64::from(r.end - r.start))
+                    .sum::<u64>();
+                cache.visible_patches += plan.patches.len();
+            }
+            if !all[i].heightmap && (self.tin || self.wire >= 3) {
+                cache.triangles += u64::from(all[i].triangle_indices / 3);
+            }
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("全国地形"),
@@ -2646,7 +2767,7 @@ impl CallbackTrait for Frame {
             }
             let fallback = i >= self.tiles.len();
             pass.set_bind_group(0, &cache.bindings[i], &[]);
-            if !self.tin && self.wire != 4 {
+            if (!self.tin || all[i].heightmap) && (self.wire != 4 || all[i].heightmap) {
                 pass.set_pipeline(if fallback {
                     &self.fallback
                 } else {
@@ -2657,7 +2778,10 @@ impl CallbackTrait for Frame {
                     pass.draw_indexed(0..6 * n * n, 0, range.clone());
                 }
             }
-            if (self.tin || self.wire >= 3) && !(camera.globe && all[i].key == (0, 0, 0)) {
+            if !all[i].heightmap
+                && (self.tin || self.wire >= 3)
+                && !(camera.globe && all[i].key == (0, 0, 0))
+            {
                 pass.set_pipeline(if fallback {
                     &self.control_fallback
                 } else {
@@ -2875,6 +2999,8 @@ mod tests {
             include_str!("sibson_gpu_controls.wgsl").to_string(),
             super::render_shader_source(),
             super::regular_render_shader_source(),
+            include_str!("heightmap_gpu.wgsl").to_string(),
+            include_str!("grid_indices.wgsl").to_string(),
         ] {
             let module = naga::front::wgsl::parse_str(&source).expect("WGSL parse");
             naga::valid::Validator::new(
@@ -2892,6 +3018,13 @@ mod gpu_tests {
     use super::*;
     #[test]
     fn gpu_mixed_seams_and_morph_are_continuous() {
+        run_gpu_seams_and_morph(false);
+    }
+    #[test]
+    fn gpu_heightmap_mixed_seams_and_morph_are_continuous() {
+        run_gpu_seams_and_morph(true);
+    }
+    fn run_gpu_seams_and_morph(heightmap: bool) {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: if cfg!(target_os = "windows") {
                 wgpu::Backends::DX12
@@ -2956,7 +3089,7 @@ mod gpu_tests {
         {
             records.push(Record {
                 blend_data: [0; 4],
-                tile_end: [0.; 4],
+                tile_end: [0., 0., if heightmap { 1. } else { 0. }, 0.],
                 transition: [0; 4],
                 draw: [0; 4],
                 tile: [x, 0., 100., 12.5],

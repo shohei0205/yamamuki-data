@@ -20,6 +20,7 @@ pub fn bounds((z, x, y): Key) -> [f64; 4] {
     ]
 }
 pub struct Packet {
+    pub heightmap: Option<Arc<yamamuki_terrain::heightmap::Heightmap>>,
     pub key: Key,
     pub origin: [f64; 2],
     pub side: f64,
@@ -33,6 +34,36 @@ pub struct Packet {
     pub timings_ms: [f64; 4],
 }
 impl Packet {
+    pub fn from_heightmap(
+        key: Key,
+        map: yamamuki_terrain::heightmap::Heightmap,
+        compressed_bytes: usize,
+    ) -> Result<Self> {
+        map.validate()?;
+        let b = bounds(key);
+        let side = b[2] - b[0];
+        let n = map.cells;
+        let index_bounds = [
+            (map.offset_metres + map.base as f64 * map.step) as f32,
+            map.step as f32,
+            map.cells as f32,
+            map.halo as f32,
+        ];
+        Ok(Self {
+            heightmap: Some(Arc::new(map)),
+            key,
+            origin: [b[0], b[1]],
+            side,
+            sections: std::array::from_fn(|_| Vec::new()),
+            index_bounds,
+            controls: ((n + 1) * (n + 1)) as usize,
+            compressed_bytes,
+            density: vec![(n / 32).max(1).pow(2); 1024],
+            vertices: Vec::new(),
+            triangles: Vec::new(),
+            timings_ms: [0.; 4],
+        })
+    }
     /// 地形OFFの景色表示に使う、標高0mの一枚の平面。
     pub fn flat() -> Result<Self> {
         Self::constant_plane((0, 0, 0), 0.)
@@ -65,6 +96,7 @@ impl Packet {
             at += length;
         }
         Ok(Self {
+            heightmap: None,
             key,
             origin: [area[0], area[1]],
             side,
@@ -92,6 +124,14 @@ impl Packet {
         })
     }
     pub fn elevation_at(&self, world: [f64; 2], amount: f64) -> Result<f64> {
+        if let Some(map) = &self.heightmap {
+            return map
+                .sample(
+                    (world[0] - self.origin[0]) / self.side,
+                    (world[1] - self.origin[1]) / self.side,
+                )
+                .context("この地点は標高欠損です");
+        }
         let model = Fast::certified(
             self.vertices
                 .iter()
@@ -127,7 +167,9 @@ impl Packet {
         Ok(h0 + (h1 - h0) * amount.clamp(0., 1.))
     }
     pub fn bytes(&self) -> usize {
-        self.sections.iter().map(Vec::len).sum::<usize>()
+        let height_bytes = self.heightmap.as_ref().map_or(0, |m| m.values.len() * 2);
+        height_bytes
+            + self.sections.iter().map(Vec::len).sum::<usize>()
             + self.vertices.len() * 16
             + self.triangles.len() * 4
     }
@@ -136,6 +178,7 @@ pub struct Database {
     db: yamamuki_terrain::sqlite::Database,
     pub catalog: HashMap<Key, usize>,
     pub level_errors: [f64; 8],
+    pub coarse_level_errors: [f64; 2],
     pub generation: String,
     pub credits: String,
     packets: HashMap<Key, Arc<Packet>>,
@@ -149,12 +192,28 @@ impl Database {
         let catalog = db
             .catalog
             .iter()
-            .map(|(&(z, x, y), &n)| ((z, x as i32, y as i32), n))
+            .map(|(&(z, x, y), &n)| {
+                (
+                    (z, x as i32, y as i32),
+                    if db
+                        .level_formats
+                        .get(&z)
+                        .is_some_and(|v| yamamuki_terrain::heightmap::is_encoding(v))
+                    {
+                        n.div_ceil(64)
+                    } else {
+                        n
+                    },
+                )
+            })
             .collect();
         let mut level_errors = ERRORS;
+        let mut coarse_level_errors = [1250., 625.];
         for (&z, &error) in &db.level_errors {
             if (6..=13).contains(&z) {
                 level_errors[(z - 6) as usize] = error;
+            } else if (4..=5).contains(&z) {
+                coarse_level_errors[(z - 4) as usize] = error;
             }
         }
         let generation = db.generation.clone();
@@ -168,6 +227,7 @@ impl Database {
             db,
             catalog,
             level_errors,
+            coarse_level_errors,
             generation,
             credits,
             packets: HashMap::new(),
@@ -179,6 +239,14 @@ impl Database {
             return Ok(packet.clone());
         }
         let started = std::time::Instant::now();
+        if let Some(map) = self.db.heightmap((key.0, key.1 as u32, key.2 as u32))? {
+            let bytes = self.db.tile_size((key.0, key.1 as u32, key.2 as u32))?;
+            let packet = Arc::new(Packet::from_heightmap(key, map, bytes)?);
+            self.order.push_back(key);
+            self.packets.insert(key, packet.clone());
+            self.trim();
+            return Ok(packet);
+        }
         let integers = self.db.points((key.0, key.1 as u32, key.2 as u32))?;
         let decoded = started.elapsed();
         let compressed_bytes = self.db.tile_size((key.0, key.1 as u32, key.2 as u32))?;
@@ -198,6 +266,15 @@ impl Database {
         for &key in keys {
             if let Some(packet) = self.packets.get(&key) {
                 emit(packet.clone());
+                continue;
+            }
+            if self
+                .db
+                .level_formats
+                .get(&key.0)
+                .is_some_and(|v| yamamuki_terrain::heightmap::is_encoding(v))
+            {
+                emit(self.packet(key)?);
                 continue;
             }
             let started = std::time::Instant::now();
@@ -254,7 +331,12 @@ impl Database {
     pub fn check(path: &Path) -> Result<()> {
         let mut db = Self::open(path)?;
         let mut report = Vec::new();
-        for z in 6..=13 {
+        let levels = db
+            .catalog
+            .keys()
+            .map(|k| k.0)
+            .collect::<std::collections::BTreeSet<_>>();
+        for z in levels {
             let key = db
                 .catalog
                 .keys()
@@ -334,6 +416,7 @@ fn prepare_packet(
         }
     }
     let packet = Arc::new(Packet {
+        heightmap: None,
         timings_ms: [
             decoded,
             modeled - decoded,
@@ -545,6 +628,7 @@ mod height_tests {
     }
     fn plane(flat: bool) -> Packet {
         Packet {
+            heightmap: None,
             key: (13, 0, 0),
             origin: [10000., 20000.],
             side: 1000.,

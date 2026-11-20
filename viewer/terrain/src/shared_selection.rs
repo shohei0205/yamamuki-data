@@ -16,6 +16,8 @@ pub struct Camera {
     /// SQLiteに記録した誤差を使う。旧スナップショットでは従来値を維持する。
     #[serde(default = "legacy_level_errors")]
     pub level_errors_m: [f64; 8],
+    #[serde(default = "coarse_level_errors")]
+    pub coarse_level_errors_m: [f64; 2],
     /// 描画・曲面評価の目標間隔。カメラ停止後に段階的に小さくする（論理px）。
     pub mesh_pixels: f64,
     pub fov_y: f64,
@@ -23,6 +25,9 @@ pub struct Camera {
     pub observer: bool,
     #[serde(default)]
     pub globe: bool,
+}
+fn coarse_level_errors() -> [f64; 2] {
+    [1250., 625.]
 }
 fn legacy_level_errors() -> [f64; 8] {
     ERRORS
@@ -40,6 +45,7 @@ impl Default for Camera {
             auto: true,
             lod_quality: 2.0,
             level_errors_m: ERRORS,
+            coarse_level_errors_m: coarse_level_errors(),
             mesh_pixels: 3.0,
             fov_y: std::f64::consts::FRAC_PI_4,
             observer: false,
@@ -351,21 +357,41 @@ impl Camera {
         let distance = (dx * dx + dy * dy + dz * dz).sqrt();
         (distance <= self.far_depth()).then_some(distance.max(0.2))
     }
+    pub fn level_error(&self, z: u32) -> f64 {
+        match z {
+            0..=4 => self.coarse_level_errors_m[0],
+            5 => self.coarse_level_errors_m[1],
+            _ => self.level_errors_m[(z.clamp(6, 13) - 6) as usize],
+        }
+    }
     pub(crate) fn projected(&self, key: Key) -> (bool, f64) {
         let depth = self.preparation_depth(crate::shared_data::bounds(key));
         (
             depth.is_some(),
-            self.level_errors_m[(key.0.clamp(6, 13) - 6) as usize] * self.viewport[1]
+            self.level_error(key.0) * self.viewport[1]
                 / (2. * self.tan_half_fov() * depth.unwrap_or(f64::INFINITY)),
         )
     }
 }
 pub fn select(catalog: &HashMap<Key, usize>, camera: &Camera) -> Vec<Key> {
+    let levels = catalog.keys().map(|k| k.0).collect::<BTreeSet<_>>();
+    let Some(&minimum) = levels.first() else {
+        return Vec::new();
+    };
+    let start = if camera.auto {
+        minimum
+    } else {
+        levels
+            .range(..=camera.maximum)
+            .next_back()
+            .copied()
+            .unwrap_or(minimum)
+    };
     let face_budget = if camera.observer { 500_000 } else { 250_000 };
     let tile_budget = if camera.observer { 192 } else { 96 };
     let mut selected: BTreeSet<_> = catalog
         .keys()
-        .filter(|k| k.0 == if camera.auto { 6 } else { camera.maximum } && camera.projected(**k).0)
+        .filter(|k| k.0 == start && camera.projected(**k).0)
         .copied()
         .collect();
     if camera.auto {
@@ -381,10 +407,35 @@ pub fn select(catalog: &HashMap<Key, usize>, camera: &Camera) -> Vec<Key> {
             if error <= 3.0 / camera.lod_quality.clamp(0.5, 4.0) {
                 break;
             }
-            let children: Vec<_> = (0..2)
-                .flat_map(|y| (0..2).map(move |x| (key.0 + 1, key.1 * 2 + x, key.2 * 2 + y)))
-                .filter(|k| catalog.contains_key(k) && camera.projected(*k).0)
-                .collect();
+            let next = levels
+                .range((
+                    std::ops::Bound::Excluded(key.0),
+                    std::ops::Bound::Included(camera.maximum),
+                ))
+                .next()
+                .copied();
+            let children = if let Some(z) = next {
+                if z == key.0 + 1 {
+                    (0..2)
+                        .flat_map(|y| (0..2).map(move |x| (z, key.1 * 2 + x, key.2 * 2 + y)))
+                        .filter(|k| catalog.contains_key(k) && camera.projected(*k).0)
+                        .collect::<Vec<_>>()
+                } else {
+                    let shift = z - key.0;
+                    catalog
+                        .keys()
+                        .filter(|k| {
+                            k.0 == z
+                                && (k.1 >> shift) == key.1
+                                && (k.2 >> shift) == key.2
+                                && camera.projected(**k).0
+                        })
+                        .copied()
+                        .collect()
+                }
+            } else {
+                Vec::new()
+            };
             let cost: usize = children.iter().map(|k| catalog[k]).sum();
             if children.is_empty()
                 || faces - catalog[&key] + cost > face_budget
@@ -712,6 +763,30 @@ mod tests {
 mod map_camera_tests {
     use super::*;
     #[test]
+    fn coarse_levels_have_distinct_errors_and_legacy_snapshots_are_readable() {
+        let mut camera = Camera::default();
+        assert_eq!(camera.level_error(4), 1250.);
+        assert_eq!(camera.level_error(5), 625.);
+        for z in [4, 5] {
+            let side = WORLD / 2f64.powi(z as i32);
+            let key = (
+                z,
+                (camera.center[0] / side) as i32,
+                (camera.center[1] / side) as i32,
+            );
+            let before = camera.projected(key).1;
+            camera.coarse_level_errors_m[(z - 4) as usize] *= 0.5;
+            assert!((camera.projected(key).1 / before - 0.5).abs() < 1e-12);
+        }
+        let mut value = serde_json::to_value(&camera).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("coarse_level_errors_m");
+        let restored: Camera = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.coarse_level_errors_m, [1250., 625.]);
+    }
+    #[test]
     fn lod_uses_dataset_error_and_old_snapshots_keep_previous_values() {
         let mut camera = Camera::default();
         let side = WORLD / 64.;
@@ -815,5 +890,27 @@ mod culling_benchmarks {
             start.elapsed().as_secs_f64() * 1000.,
             visible
         );
+    }
+}
+
+#[cfg(test)]
+mod subset_tests {
+    use super::*;
+    #[test]
+    fn starts_at_available_level_and_crosses_missing_levels() {
+        let mut c = Camera::default();
+        c.center = lonlat(138.7274, 35.3606);
+        c.distance = 1000.;
+        c.pitch = 1.56;
+        c.maximum = 13;
+        let key = |z| {
+            let s = WORLD / 2f64.powi(z as i32);
+            (z, (c.center[0] / s) as i32, (c.center[1] / s) as i32)
+        };
+        let catalog = HashMap::from([(key(9), 1), (key(13), 1)]);
+        let high = key(13);
+        assert_eq!(select(&catalog, &c), vec![high]);
+        let catalog = HashMap::from([(high, 1)]);
+        assert_eq!(select(&catalog, &c), vec![high]);
     }
 }
