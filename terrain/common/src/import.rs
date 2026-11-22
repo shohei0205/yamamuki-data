@@ -68,7 +68,7 @@ pub fn import_shared(destination: &mut Connection, path: &Path, identifier: &str
     }
     let (_, first) = levels.first_key_value().context("品質表が空です")?;
     let ratio = first.1 / first.0;
-    let mut metadata = json!({"authors":[{"name":"The yamamuki Authors","role":"配布データの編集・加工","url":"https://github.com/shohei0205/yamamuki-data/blob/main/AUTHORS.md"}],"sources":[{"name":"国土地理院の標高タイル（DEM10B）","source":"https://maps.gsi.go.jp/development/demtile.html","license":"公共データ利用規約（第1.0版） https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html","attribution":"地理院タイル（標高タイル）を加工して作成","changes":"標高を記録された上下の許容誤差へ適合・削減し、自由配置制御点と独立・差分Rice圧縮の地形タイルに加工"}],"generation":{"id":generation,"scope":if national{"national"}else{"window-test"},"interpolation":"sibson","lpf":false,"xyStepMetres":0.0625,"heightStepMetres":0.125}});
+    let mut metadata = json!({"authors":[{"name":"The yamamuki Authors","role":"配布データの編集・加工","url":"https://github.com/shohei0205/yamamuki-data/blob/main/AUTHORS.md"}],"sources":[{"name":"国土地理院の標高タイル（DEM10B）","source":"https://maps.gsi.go.jp/development/demtile.html","license":"公共データ利用規約（第1.0版） https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html","attribution":"地理院タイル（標高タイル）を加工して作成","changes":"標高を記録された上下の許容誤差へ適合・削減し、自由配置制御点と独立・差分Rice/Zstandard圧縮の地形タイルに加工"}],"generation":{"id":generation,"scope":if national{"national"}else{"window-test"},"interpolation":"sibson","lpf":false,"xyStepMetres":0.0625,"heightStepMetres":0.125}});
     if levels
         .values()
         .all(|(down, up)| (*up / *down - ratio).abs() < 1e-12)

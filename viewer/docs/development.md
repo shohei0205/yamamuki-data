@@ -98,3 +98,16 @@ GPU資源の連続描画検証は `cargo test --release --locked --manifest-path
 使用中のwgpu 24の永続 `PipelineCache` APIはVulkanのみ対応している。現在優先しているWindowsのDirect3D 12とmacOSのMetalでは、このAPIで再起動後に再利用できるキャッシュを保存できない。同じGPUデバイス内でのプログラム共用は継続する。永続キャッシュの導入には、Direct3D 12側のコンパイル済みコードを保存・復元できるバックエンド対応、または対応バックエンドの採用が必要になる。今回の高速化はDirect3D 12のまま再起動後も効く。
 
 GPU描画の検査は`--features gpu-tests -- --test-threads=1`を指定する。実データの計測には入力ファイルと対象テスト名を指定し、必要な場合だけ`--ignored`を付ける。通常CIの範囲と区別して結果を記録する。
+
+操作記録の途中画面を調べる場合は、`YAMAMUKI_OPERATION_TEST_INPUT`に展開した操作記録JSON、`YAMAMUKI_OPERATION_IMAGE_DIR`に出力先を指定し、`external_recorded_camera_frames`を個別に`--ignored --nocapture --test-threads=1`で実行する。5フレームごと（記録終了後は20フレームごと）の縮小画像を保存する。`YAMAMUKI_OPERATION_CAPTURE_FRAME`にフレーム番号を指定すると、そのフレームの位置バッファと地形スナップショットも保存する。
+
+スナップショットの地形情報には `diagnostics`、F8操作記録の各フレームには `terrain_diagnostics` を保存する。実際に描画したタイルのキー・評価区画・分割数・描画パッチの分割数別件数に加え、要求中のタイル、選択世代、読み込み・補間・シーン準備の進行状態、キャッシュ件数とGPU元データ容量を記録する。入力の再生で症状が再現しない場合も、記録時のメッシュ切り替えを比較できる。診断情報は再生を強制するものではなく、非同期処理の完了時刻は再現しない。旧スナップショットも読み込める。記録には画像やメッシュの頂点本体を追加しないが、フレーム数とタイル数に応じて保存容量が増える。
+
+GPUカリング比較は、地形スナップショットJSONを `YAMAMUKI_SNAPSHOT_TEST_INPUT` に指定し、`benchmark_external_gpu_culling` を `--ignored --nocapture --test-threads=1` で実行する。同じ視点・LODの地理座標、標高、陰影の差と欠落画素を検査し、実際の間接描画命令の可視パッチ数とフレーム時間を報告する。GPUからの命令読み戻しは、この手動ベンチマークだけで行う。
+
+
+CPU計画を置き換えるGPU分割計画の比較は、同じ入力変数を指定して `compare_external_gpu_planner` を `--ignored --nocapture --test-threads=1` で実行する。従来方式と分割数・接合座標を照合し、統合した間接描画経路で欠落画素、XY位置・標高5cm超、陰影0.001超の差がないことを検査する。計画は各方式8回の中央値、描画は各32フレームの平均を出す。GPU計画は8回の反復でも区画・密度・接合情報がビット単位で一致することを検査する。初回GPUプログラム準備を含む切り替え待ちは別に報告する。GPU計画経路では通常動作でも必要な範囲の計画結果をCPUへ読み戻し、テストでは読み戻したバイト数も報告する。
+
+外部データ不要のGPU計画検査は `cargo test --release --locked --manifest-path viewer/Cargo.toml -p yamamuki-terrain-view --features gpu-tests gpu_planner::tests -- --test-threads=1` で実行する。平面・球面、俯瞰・景色、視点方向の変更、背景被覆、隣接辺、再計画、三角形予算超過、パッチ数急増時の追加読み戻し、空入力、不正な格子のエラーを検査する。WindowsはDirect3D 12、macOSはMetalを対象とする。通常CIではGPU実行を行わず、WGSLの構文・型を検査する。
+
+`YAMAMUKI_GPU_PLAN_PROFILE=1` はGPU計画を区間ごとに同期実行し、処理区間の時間をログへ出す診断用設定。CPUの投入・同期待ちも含むためGPU演算単独の時間ではない。通常の並列実行を区切るため、速度の比較時には外す。

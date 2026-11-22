@@ -2552,7 +2552,7 @@ fn pack_levels(
                     .map(|p| [p[0] - origin[0], p[1] - origin[1], p[2]])
                     .collect::<Vec<_>>();
                 let mut blob = natural_codec::independent(&local)?;
-                let mut kind = "NQC1";
+                let mut kind = if blob.starts_with(b"NQZ1"){"NQZ1"}else{"NQC1"};
                 let mut parent_keys = Vec::new();
                 let mut depth = 0;
                 if ![4, 6, 9, 12].contains(&z) {
@@ -2623,14 +2623,14 @@ fn pack_levels(
                             "差分復号不一致"
                         );
                         if delta.len() + candidates.len() * 24 < blob.len() {
+                            kind = if delta.starts_with(b"NDZ1"){"NDZ1"}else{"NDC1"};
                             blob = delta;
-                            kind = "NDC1";
                             parent_keys = candidates;
                             depth = parent_depth;
                         }
                     }
                 }
-                if kind == "NQC1" {
+                if kind == "NQC1" || kind=="NQZ1" {
                     ensure!(
                         natural_codec::decode_global(&blob, [origin[0], origin[1]], &[])? == points,
                         "独立復号不一致"

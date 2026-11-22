@@ -1,4 +1,4 @@
-//! Rice・FOR・ゼロ連続をブロックごとに比較するNQC1/NDC1エンコーダー。
+//! Rice・FOR・ゼロ連続と大きなブロック＋Zstandardを比較する可逆制御点符号化。
 use anyhow::{Result, ensure};
 pub fn var(mut v: u64, out: &mut Vec<u8>) {
     while v >= 128 {
@@ -19,9 +19,12 @@ fn put_bits(out: &mut Vec<u8>, cursor: &mut usize, v: u64, width: usize) {
     }
 }
 pub fn stream(values: &[i64]) -> Result<Vec<u8>> {
+    stream_block(values, 128)
+}
+pub(crate) fn stream_block(values: &[i64], block: usize) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     var(values.len() as u64, &mut out);
-    for v in values.chunks(128) {
+    for v in values.chunks(block) {
         ensure!(
             v.iter().all(|&x| x > -(1i64 << 62) && x < (1i64 << 62)),
             "整数の符号化範囲外です"
@@ -112,7 +115,7 @@ fn pack(
         out.extend(b);
     }
     ensure!(out.len() <= 16777216, "圧縮BLOBが上限を超えました");
-    Ok(out)
+    crate::natural_codec_zstd::recompress(&out)
 }
 pub fn independent(points: &[[i32; 3]]) -> Result<Vec<u8>> {
     let mut c = vec![Vec::new(); 3];
@@ -191,8 +194,8 @@ pub fn decode_global(
     origin: [i32; 2],
     parents: &[Vec<[i32; 3]>],
 ) -> Result<Vec<[i32; 3]>> {
-    reader::decode_global(bytes, origin, parents)
-        .map_err(|_| anyhow::anyhow!("全国整数BLOBの復元に失敗しました"))
+    let parents = parents.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    decode_global_refs(bytes, origin, &parents)
 }
 #[cfg(test)]
 mod integer_tests {
@@ -220,4 +223,25 @@ mod integer_tests {
 pub fn decode_stream(bytes: &[u8], limit: usize) -> Result<Vec<i64>> {
     reader::limited_stream(bytes, limit)
         .map_err(|_| anyhow::anyhow!("整数ストリームの復元に失敗しました"))
+}
+
+pub fn decode_global_refs(
+    bytes: &[u8],
+    origin: [i32; 2],
+    parents: &[&[[i32; 3]]],
+) -> Result<Vec<[i32; 3]>> {
+    if bytes.starts_with(b"NQZ1") || bytes.starts_with(b"NDZ1") {
+        crate::natural_codec_zstd::decode(bytes, origin, parents)
+    } else {
+        decode_global_block_refs(bytes, origin, parents, 128)
+    }
+}
+pub(crate) fn decode_global_block_refs(
+    bytes: &[u8],
+    origin: [i32; 2],
+    parents: &[&[[i32; 3]]],
+    block: usize,
+) -> Result<Vec<[i32; 3]>> {
+    reader::decode_global_block_refs(bytes, origin, parents, block)
+        .map_err(|_| anyhow::anyhow!("全国整数BLOBの復元に失敗しました"))
 }

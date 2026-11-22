@@ -242,3 +242,14 @@ mod tests {
         }
     }
 }
+
+/// 常時計測は時刻差だけにし、診断JSONの構築は保存時に行う。
+#[derive(Default, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Timings {
+    pub previous_frame_cpu_ms: Option<f32>,
+    pub update_ms: f64,
+    pub materials_ms: f64,
+    pub terrain_ms: f64,
+    pub markers_ms: f64,
+}

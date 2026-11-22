@@ -145,6 +145,7 @@ struct Viewer {
     settings_open: bool,
     vsync: bool,
     running_vsync: bool,
+    haze: graphics_settings::Haze,
     drag_anchor: Option<yamamuki_terrain_view::Hit>,
     drag_hit_job: Option<mpsc::Receiver<Result<Option<yamamuki_terrain_view::Hit>>>>,
     settings_section: SettingsSection,
@@ -152,6 +153,7 @@ struct Viewer {
     snapshot_canvas: Option<[f32; 2]>,
     last_canvas_size: [f32; 2],
     performance: performance::Overlay,
+    frame_timings: performance::Timings,
     snapshot_status: String,
     snapshot_jobs: Vec<mpsc::Receiver<Result<PathBuf>>>,
     snapshot_notice: Option<(String, std::time::Instant)>,
@@ -226,6 +228,10 @@ impl Viewer {
         match self.settings_section {
             SettingsSection::Graphics => {
                 self.vsync = false;
+                self.haze = graphics_settings::Haze::default();
+                if let Err(e) = graphics_settings::save_haze(self.haze) {
+                    self.error = Some(format!("描画設定を保存できません: {e:#}"));
+                }
                 if let Err(e) = graphics_settings::save(self.vsync) {
                     self.error = Some(format!("描画設定を保存できません: {e:#}"));
                 }
@@ -295,6 +301,14 @@ impl Viewer {
                 ui.add_space(6.);
                 match self.settings_section {
                     SettingsSection::Graphics => {
+                        let changed = ui.checkbox(&mut self.haze.enabled, "霞を表示").changed();
+                        let strength_changed = ui.add_enabled(self.haze.enabled,
+                            egui::Slider::new(&mut self.haze.strength, 0.0..=2.0).text("霞の強さ")).changed();
+                        if changed || strength_changed {
+                            if let Err(e) = graphics_settings::save_haze(self.haze) {
+                                self.error = Some(format!("描画設定を保存できません: {e:#}"));
+                            }
+                        }
                         if ui.checkbox(&mut self.vsync, "垂直同期（VSync）を待つ").changed() {
                             if let Err(e) = graphics_settings::save(self.vsync) {self.error=Some(format!("描画設定を保存できません: {e:#}"));}
                         }
@@ -341,6 +355,16 @@ impl Viewer {
                         }
                     }
                     SettingsSection::Terrain => {
+                        let mut elevation_colors = self.terrain.as_ref().is_some_and(|t| t.elevation_colors());
+                        if ui.add_enabled(self.terrain.is_some(),
+                            egui::Checkbox::new(&mut elevation_colors, "標高別の色分け"))
+                            .on_hover_text("地形の標高色を優先して表示します。地形SQLiteの読み込みが必要です。")
+                            .changed() {
+                            if let Some(terrain) = self.terrain.as_mut() {
+                                terrain.set_elevation_colors(elevation_colors);
+                            }
+                        }
+                        ui.separator();
                         if let Some(terrain) = &mut self.terrain {
                             ui.strong("自動LOD");
                             terrain.lod_controls(ui);
@@ -379,7 +403,7 @@ impl Viewer {
                             {
                                 observer.fov = degrees.to_radians();
                             }
-                            ui.label("左ドラッグ：見回す ／ 右ドラッグ：左右で向き・上下で高さ ／ ホイール：視野角");
+                            ui.label("左ドラッグ：位置を固定して見回す ／ 右ドラッグ：回転・傾き ／ ホイール：視野角 ／ Shift＋ホイール：高さ");
                         } else {
                             ui.label("「選択地点から見る」または「選択座標から見る」で地点視点にすると設定できます。");
                         }
@@ -396,6 +420,7 @@ impl Viewer {
             settings_open: false,
             vsync: graphics_settings::load(),
             running_vsync: graphics_settings::load(),
+            haze: graphics_settings::load_haze(),
             drag_anchor: None,
             drag_hit_job: None,
             settings_section: SettingsSection::default(),
@@ -403,6 +428,7 @@ impl Viewer {
             snapshot_canvas: None,
             last_canvas_size: [800., 600.],
             performance: performance::Overlay::default(),
+            frame_timings: performance::Timings::default(),
             snapshot_status: String::new(),
             snapshot_jobs: Vec::new(),
             snapshot_notice: None,
@@ -860,6 +886,42 @@ impl Viewer {
             self.marker_mesh = None;
         }
     }
+    fn pan_observer_to_anchor(
+        &mut self,
+        rect: Rect,
+        pointer: Pos2,
+        anchor: yamamuki_terrain_view::Hit,
+    ) {
+        let Some(observer) = self.observer.clone() else {
+            return;
+        };
+        let height = observer_height(
+            observer.elevation,
+            observer.terrain_elevation,
+            observer.from_pin,
+            observer.eye_offset,
+        );
+        let Some(terrain) = self.active_terrain_mut() else {
+            return;
+        };
+        terrain.set_observer_camera(
+            observer.world,
+            height,
+            observer.yaw,
+            observer.pitch,
+            observer.fov,
+            rect,
+        );
+        if let Some([yaw, pitch]) =
+            terrain
+                .projection()
+                .observer_grab_angles(rect, anchor.world, anchor.height, pointer)
+        {
+            let observer = self.observer.as_mut().unwrap();
+            observer.yaw = yaw;
+            observer.pitch = pitch;
+        }
+    }
     fn refresh_observer_point(&mut self) {
         if self.observer.is_none() {
             return;
@@ -886,14 +948,22 @@ impl Viewer {
             return;
         }
         let (world, elevation) = point.unwrap();
+        let previous_origin = self.observer.as_ref().and_then(|observer| {
+            observer
+                .point_index
+                .zip(self.points.as_ref())
+                .map(|(index, points)| {
+                    let point = points.point(index);
+                    points::project(point.latitude, point.longitude)
+                })
+        });
         let observer = self.observer.as_mut().unwrap();
-        if observer.world != world || observer.point_index != self.selected {
-            observer.eye_offset = 2.;
+        if observer.point_index != self.selected {
             observer.terrain_elevation = None;
             observer.height_revision = None;
+            observer.world = observer_relocated_world(observer.world, previous_origin, world);
         }
         observer.point_index = self.selected;
-        observer.world = world;
         observer.elevation = elevation;
     }
     fn update_observer_height(&mut self, ctx: &egui::Context) {
@@ -953,7 +1023,7 @@ impl Viewer {
         rect: Rect,
         view: map::View,
         dragging: bool,
-        frame: &eframe::Frame,
+        state: Option<&eframe::egui_wgpu::RenderState>,
         material_pass: usize,
         zoom_override: Option<f64>,
     ) -> bool {
@@ -969,15 +1039,12 @@ impl Viewer {
         } else {
             None
         };
-        let fade_backend = frame
-            .wgpu_render_state()
-            .filter(|_| !preparing_flat_preview)
-            .map(|state| {
-                let renderer = self
-                    .lod_renderer
-                    .get_or_insert_with(|| lod_fade::Renderer::new(state));
-                (state, &*renderer)
-            });
+        let fade_backend = state.filter(|_| !preparing_flat_preview).map(|state| {
+            let renderer = self
+                .lod_renderer
+                .get_or_insert_with(|| lod_fade::Renderer::new(state));
+            (state, &*renderer)
+        });
         let failed = if self.show_online_map {
             if let Some(index) = self
                 .tiles
@@ -1037,11 +1104,11 @@ impl Viewer {
     fn terrain_base(
         &mut self,
         ui: &egui::Ui,
-        frame: &eframe::Frame,
+        state: Option<&eframe::egui_wgpu::RenderState>,
         rect: Rect,
         dragging: bool,
     ) -> bool {
-        let Some(state) = frame.wgpu_render_state() else {
+        let Some(state) = state else {
             return false;
         };
         if self.active_terrain().unwrap().level_colors() {
@@ -1061,6 +1128,12 @@ impl Viewer {
                 .set_materials([None, None, None]);
             return false;
         }
+        let haze = if self.haze.enabled {
+            self.haze.strength
+        } else {
+            0.
+        };
+        self.active_terrain_mut().unwrap().set_haze_strength(haze);
         // これはタイル取得の座標系だけで、画像へのラスタライズは行わない。
         let size = rect.width().max(rect.height()).max(1.);
         let material_rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(size, size));
@@ -1103,7 +1176,7 @@ impl Viewer {
                     material_rect,
                     view,
                     dragging,
-                    frame,
+                    Some(state),
                     (i + 1) * 3 + part,
                     zoom,
                 );
@@ -1314,16 +1387,13 @@ impl Viewer {
         if clicked {
             self.marker_popup = hovered.is_some();
             if let Some(mark) = hovered {
-                // 同じ地点の再クリックでも、手動で変更した高さをリセットする。
-                if let Some(observer) = &mut self.observer {
-                    observer.eye_offset = 2.;
-                }
                 self.selected = Some(mark.index);
                 self.list.reveal(mark.index);
             }
             painter.ctx().request_repaint();
         }
         if self.marker_popup
+            && (self.observer.is_none() || hovered.is_some_and(|m| Some(m.index) == self.selected))
             && let Some(index) = self
                 .selected
                 .filter(|index| marks.iter().any(|mark| mark.index == *index))
@@ -1344,7 +1414,17 @@ impl Viewer {
                     position,
                     format!(
                         "{}\n{}\n標高 {}　ID {}",
-                        point.name,
+                        self.observer.as_ref().map_or_else(
+                            || point.name.clone(),
+                            |observer| {
+                                observer_point_hover(
+                                    &point.name,
+                                    observer.world,
+                                    [point.latitude, point.longitude],
+                                    self.list.location_label(index),
+                                )
+                            }
+                        ),
                         coordinate_label([point.latitude, point.longitude]),
                         elevation,
                         point.id
@@ -1360,7 +1440,20 @@ impl Viewer {
                 painter,
                 rect,
                 screen(mark),
-                points.point(mark.index).name.clone(),
+                {
+                    let point = points.point(mark.index);
+                    self.observer.as_ref().map_or_else(
+                        || point.name.clone(),
+                        |observer| {
+                            observer_point_hover(
+                                &point.name,
+                                observer.world,
+                                [point.latitude, point.longitude],
+                                self.list.location_label(mark.index),
+                            )
+                        },
+                    )
+                },
                 false,
                 None,
             );
@@ -1498,6 +1591,11 @@ impl eframe::App for Viewer {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let update_started = std::time::Instant::now();
+        self.frame_timings = performance::Timings {
+            previous_frame_cpu_ms: frame.info().cpu_usage.map(|v| v * 1000.),
+            ..Default::default()
+        };
         FIRST_FRAME_MS.get_or_init(|| {
             let elapsed = STARTUP_STARTED
                 .get_or_init(std::time::Instant::now)
@@ -1760,7 +1858,7 @@ impl eframe::App for Viewer {
                     ui.separator();
                     ui.label(
                         egui::RichText::new(
-                            if self.observer.is_some() {"地点視点：左ドラッグで見回す　／　右ドラッグは左右で向き・上下で高さ　／　ホイールで視野角"} else {"左ドラッグで移動　／　右ドラッグで回転・傾き　／　ホイールで拡大縮小　／　クリックで座標"},
+                            if self.observer.is_some() {"地点視点：左ドラッグで位置を固定して見回す　／　右ドラッグで回転・傾き　／　ホイールで視野角　／　Shift＋ホイールで高さ"} else {"左ドラッグで移動　／　右ドラッグで回転・傾き　／　ホイールで拡大縮小　／　クリックで座標"},
                         )
                         .color(appearance::MUTED)
                         .small(),
@@ -1996,6 +2094,14 @@ impl eframe::App for Viewer {
         }
         if !self.snapshot_frozen {
             self.refresh_observer_point();
+            let haze = if self.haze.enabled {
+                self.haze.strength
+            } else {
+                0.
+            };
+            if let Some(terrain) = self.terrain.as_mut() {
+                terrain.set_haze_strength(haze);
+            }
         }
         if !self.snapshot_frozen {
             self.update_observer_height(ctx);
@@ -2101,7 +2207,7 @@ impl eframe::App for Viewer {
                 }
                 // ボタンを押した時点の描画済み地形を選び、ドラッグ開始閾値を超える前に取得する。
                 let primary_down = ctx.input(|i| i.pointer.primary_down());
-                if !primary_down || self.observer.is_some() || self.snapshot_frozen {
+                if !primary_down || self.snapshot_frozen {
                     self.drag_anchor = None;
                     self.drag_hit_job = None;
                 } else if response.hovered() && ctx.input(|i| i.pointer.primary_pressed()) {
@@ -2134,15 +2240,19 @@ impl eframe::App for Viewer {
                             input.pointer.delta()
                         }
                     });
-                    if let Some(observer) = self.observer.as_mut() {
-                        let sensitivity = observer_drag_sensitivity(observer.fov);
-                        observer.yaw -= f64::from(d.x) * sensitivity;
+                    if self.observer.is_some() {
                         if rotating {
-                            // 上へドラッグすると視点を上げる。見上げ・見下ろしは左ドラッグで行う。
-                            observer.eye_offset -= f64::from(d.y);
-                        } else {
+                            let observer = self.observer.as_mut().unwrap();
+                            let sensitivity = observer_drag_sensitivity(observer.fov);
+                            observer.yaw -= f64::from(d.x) * sensitivity;
                             observer.pitch =
                                 (observer.pitch + f64::from(d.y) * sensitivity).clamp(-1.5, 1.5);
+                        } else if response.dragged_by(egui::PointerButton::Primary) {
+                            if let Some(anchor) = self.drag_anchor {
+                                let pointer =
+                                    response.interact_pointer_pos().unwrap_or(rect.center());
+                                self.pan_observer_to_anchor(rect, pointer, anchor);
+                            }
                         }
                     } else if rotating {
                         self.view.orientation.orbit(d);
@@ -2187,11 +2297,16 @@ impl eframe::App for Viewer {
                 }
                 let pointer = response.hover_pos();
                 if let Some(pointer) = pointer {
-                    let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
+                    let shift_height = self.observer.is_some() && ctx.input(|i| i.modifiers.shift);
+                    let scroll = ctx.input(|i| observer_scroll_delta(i.smooth_scroll_delta, shift_height));
                     if !self.snapshot_frozen && scroll != 0. {
                         if let Some(observer) = self.observer.as_mut() {
-                            observer.fov = (observer.fov * (-f64::from(scroll) * 0.002).exp())
-                                .clamp(15f64.to_radians(), 100f64.to_radians());
+                            if shift_height {
+                                observer.eye_offset += f64::from(scroll) / 10.;
+                            } else {
+                                observer.fov = (observer.fov * (-f64::from(scroll) * 0.002).exp())
+                                    .clamp(15f64.to_radians(), 100f64.to_radians());
+                            }
                         } else if self.active_terrain().is_some() {
                             let center = self.view.center;
                             let zoom = self.view.zoom;
@@ -2265,12 +2380,16 @@ impl eframe::App for Viewer {
                                 .set_map_camera(center, zoom, yaw, tilt, rect);
                         }
                     }
-                    let failed = self.terrain_base(ui, frame, rect, dragging);
+                    let material_started = std::time::Instant::now();
+                    let failed = self.terrain_base(ui, frame.wgpu_render_state(), rect, dragging);
+                    self.frame_timings.materials_ms = material_started.elapsed().as_secs_f64()*1000.;
+                    let terrain_started = std::time::Instant::now();
                     self.active_terrain_mut().unwrap().show(ui, frame, rect);
+                    self.frame_timings.terrain_ms = terrain_started.elapsed().as_secs_f64()*1000.;
                     self.mark_view = None;
                     failed
                 } else {
-                    self.paint_base(ui, &painter, rect, self.view, dragging, frame, 0, None)
+                    self.paint_base(ui, &painter, rect, self.view, dragging, frame.wgpu_render_state(), 0, None)
                 };
                 let click_position = response.interact_pointer_pos().filter(|pos| {
                     !self.snapshot_frozen
@@ -2289,8 +2408,10 @@ impl eframe::App for Viewer {
                                 .is_some_and(|actions| actions.response.rect.contains(*pos))
                     })
                 });
+                let markers_started = std::time::Instant::now();
                 let marker_picked =
                     self.paint_markers(&painter, rect, marker_pointer, click_position.is_some());
+                self.frame_timings.markers_ms = markers_started.elapsed().as_secs_f64()*1000.;
                 if let Some(position) = click_position {
                     self.map_hit_job = None;
                     if marker_picked {
@@ -2385,32 +2506,26 @@ impl eframe::App for Viewer {
                 let zoom_height = zoom.size().y;
                 let mut badge_offset = zoom_height + 16.;
                 painter.galley(position, zoom, appearance::INK);
-                if let Some(observer) = &self.observer {
-                    let height = observer_height(
-                        observer.elevation,
-                        observer.terrain_elevation,
-                        observer.from_pin,
-                        observer.eye_offset,
-                    );
-                    let label = painter.layout_no_wrap(
-                        format!("視点標高 {height:.1} m"),
-                        egui::FontId::proportional(13.),
-                        appearance::INK,
-                    );
-                    let position = rect.right_bottom()
-                        - label.size()
-                        - egui::vec2(17., 14. + zoom_height + 16.);
-                    let badge =
-                        Rect::from_min_size(position, label.size()).expand2(egui::vec2(7., 4.));
-                    painter.rect_filled(badge, 7, appearance::PAPER);
-                    painter.rect_stroke(
-                        badge,
-                        7,
-                        egui::Stroke::new(1_f32, appearance::LINE),
-                        egui::StrokeKind::Inside,
-                    );
-                    badge_offset += label.size().y + 16.;
-                    painter.galley(position, label, appearance::INK);
+                if let Some(observer) = self.observer.as_mut() {
+                    let height = observer_height(observer.elevation, observer.terrain_elevation,
+                        observer.from_pin, observer.eye_offset);
+                    let mut edited = height;
+                    egui::Area::new(egui::Id::new("observer-height-controls"))
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(rect.right_bottom() - egui::vec2(260., zoom_height + 53.))
+                        .show(ctx, |ui| {
+                            egui::Frame::new().fill(appearance::PAPER).corner_radius(7).inner_margin(4.).show(ui, |ui| {
+                                ui.add_enabled_ui(!self.snapshot_frozen, |ui| ui.horizontal(|ui| {
+                                    ui.label("視点標高");
+                                    if ui.small_button("−").on_hover_text("1m下げる").clicked() { edited -= 1.; }
+                                    ui.add(egui::DragValue::new(&mut edited).speed(0.1).fixed_decimals(1).suffix(" m"))
+                                        .on_hover_text("標高を直接入力。Shift＋ホイールでも上下移動できます。");
+                                    if ui.small_button("＋").on_hover_text("1m上げる").clicked() { edited += 1.; }
+                                }));
+                            });
+                        });
+                    if edited.is_finite() { observer.eye_offset += edited - height; }
+                    badge_offset += 36.;
                 }
                 let mut stats = performance::CacheStats::default();
                 for tiles in &self.tiles {
@@ -2496,6 +2611,7 @@ impl eframe::App for Viewer {
                     ),
                 );
             });
+        self.frame_timings.update_ms = update_started.elapsed().as_secs_f64() * 1000.;
         self.operation_frame_finished(ctx);
     }
 }
@@ -2786,6 +2902,38 @@ fn main() -> Result<()> {
     result
 }
 
+// 地点を選び直しても、右ドラッグで加えた水平移動量を引き継ぐ。
+fn observer_relocated_world(
+    world: [f64; 2],
+    previous: Option<[f64; 2]>,
+    next: [f64; 2],
+) -> [f64; 2] {
+    previous.map_or(next, |old| {
+        let dx = (world[0] - old[0] + 0.5).rem_euclid(1.) - 0.5;
+        [
+            (next[0] + dx).rem_euclid(1.),
+            (next[1] + world[1] - old[1]).clamp(0., 1.),
+        ]
+    })
+}
+// eguiはShift＋ホイールの縦入力を横スクロールへ変換する。
+fn observer_scroll_delta(delta: egui::Vec2, height: bool) -> f32 {
+    if height { delta.x + delta.y } else { delta.y }
+}
+fn observer_point_hover(
+    name: &str,
+    world: [f64; 2],
+    coordinates: [f64; 2],
+    location: &str,
+) -> String {
+    let km = point_detail::coordinate_distance_km(points::unproject(world), coordinates);
+    let distance = if km < 1. {
+        format!("{:.0} m", km * 1000.)
+    } else {
+        format!("{km:.2} km")
+    };
+    format!("{name}\n現在位置から {distance}\n所在地 {location}")
+}
 // 同じドラッグ量で画面上の移動量が大きく変わらないよう、投影倍率に合わせる。
 fn observer_drag_sensitivity(fov: f64) -> f64 {
     0.006 * (fov * 0.5).tan() / (45f64.to_radians() * 0.5).tan()
@@ -2794,7 +2942,109 @@ fn observer_drag_sensitivity(fov: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    #[test]
+    #[ignore = "実スナップショットで地図の全距離帯のCPU準備を計測する"]
+    fn benchmark_external_viewer_material_preparation() -> Result<()> {
+        let ctx = egui::Context::default();
+        let instance = eframe::wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default(), None))?;
+        let format = eframe::wgpu::TextureFormat::Rgba8Unorm;
+        let state = eframe::egui_wgpu::RenderState {
+            adapter,
+            available_adapters: Vec::new(),
+            device: device.clone(),
+            queue,
+            target_format: format,
+            renderer: Arc::new(eframe::epaint::mutex::RwLock::new(
+                eframe::egui_wgpu::Renderer::new(&device, format, None, 1, false),
+            )),
+        };
+        let client = reqwest::blocking::Client::builder()
+            .proxy(reqwest::Proxy::all("http://127.0.0.1:9")?)
+            .build()?;
+        let mut viewer = Viewer::new(&ctx, client, None);
+        let prepared = snapshot::prepare(std::path::Path::new(&std::env::var(
+            "YAMAMUKI_VIEWER_TEST_SNAPSHOT",
+        )?))?;
+        viewer.restore_snapshot(&ctx, Some(&state), prepared)?;
+        let rect = Rect::from_min_size(
+            Pos2::ZERO,
+            egui::vec2(viewer.last_canvas_size[0], viewer.last_canvas_size[1]),
+        );
+        for i in 0..12 {
+            let mut material = 0.;
+            let mut markers = 0.;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let start = std::time::Instant::now();
+                        viewer.terrain_base(ui, Some(&state), rect, true);
+                        material = start.elapsed().as_secs_f64() * 1000.;
+                        let start = std::time::Instant::now();
+                        viewer.paint_markers(ui.painter(), rect, None, false);
+                        markers = start.elapsed().as_secs_f64() * 1000.;
+                    });
+                },
+            );
+            std::hint::black_box(output);
+            eprintln!("全距離帯CPU frame={i} materials={material:.2}ms markers={markers:.2}ms");
+        }
+        Ok(())
+    }
+    #[test]
+    fn shift_wheel_height_reads_egui_horizontal_scroll_conversion() {
+        let ctx = egui::Context::default();
+        let modifiers = egui::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let mut observed = 0.;
+        let _ = ctx.run(
+            egui::RawInput {
+                modifiers,
+                events: vec![egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: egui::vec2(0., 1.),
+                    modifiers,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                ctx.input(|i| {
+                    assert_eq!(i.smooth_scroll_delta.y, 0.);
+                    observed = observer_scroll_delta(i.smooth_scroll_delta, true);
+                })
+            },
+        );
+        assert!(observed > 0., "Shift＋ホイールが高さ変更へ届かない");
+        assert_eq!(observer_scroll_delta(egui::vec2(3., 7.), false), 7.);
+        assert_eq!(observer_scroll_delta(egui::vec2(-4., 0.), true), -4.);
+    }
+    #[test]
+    fn observer_selection_preserves_manual_horizontal_adjustment() {
+        let old = [0.8, 0.4];
+        let moved = [0.8001, 0.4002];
+        let next = [0.9, 0.3];
+        let actual = observer_relocated_world(moved, Some(old), next);
+        assert!((actual[0] - 0.9001).abs() < 1e-12);
+        assert!((actual[1] - 0.3002).abs() < 1e-12);
+        assert_eq!(observer_relocated_world(moved, Some(old), old), moved);
+    }
+    #[test]
+    fn observer_hover_uses_current_eye_and_location() {
+        let origin = points::project(0., 0.);
+        let label = observer_point_hover("山", origin, [0., 1.], "東京都");
+        assert!(label.contains("111.20 km") && label.contains("所在地 東京都"));
+        let moved = points::project(0., 1.);
+        let label = observer_point_hover("山", moved, [0., 1.], "未判定");
+        assert!(label.contains("0 m") && label.contains("所在地 未判定"));
+    }
     #[test]
     fn observer_drag_slows_down_with_zoom_without_changing_direction() {
         let normal = observer_drag_sensitivity(45f64.to_radians());
@@ -3375,6 +3625,27 @@ mod surface_palette_checks {
             self.0.insert(key.to_owned(), value);
         }
         fn flush(&mut self) {}
+    }
+    #[test]
+    fn terrain_color_checkbox_is_visible_without_loaded_terrain() {
+        let ctx = egui::Context::default();
+        let mut viewer = Viewer::new(&ctx, map::client().unwrap(), None);
+        viewer.settings_open = true;
+        viewer.settings_section = SettingsSection::Terrain;
+        let mut visible = false;
+        for _ in 0..3 {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 800.))),
+                    ..Default::default()
+                },
+                |ctx| viewer.settings_window(ctx),
+            );
+            visible = output.shapes.iter().any(
+                |s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "標高別の色分け"),
+            );
+        }
+        assert!(visible, "地形未読み込みでも標高色の設定を表示する");
     }
     #[test]
     fn settings_reset_is_limited_to_selected_tab() {

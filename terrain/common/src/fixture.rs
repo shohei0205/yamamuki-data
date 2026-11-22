@@ -68,39 +68,3 @@ fn create_levels(db: &mut Connection, levels: &[(u32, f64)]) -> Result<()> {
     tx.commit()?;
     Ok(())
 }
-
-/// 読み込み・混在LODの検査用。通常fixtureのz13だけを独立した格子へ置き換える。
-pub fn create_mixed(db: &mut Connection) -> Result<()> {
-    create(db)?;
-    let levels = db
-        .prepare("SELECT level_key,settings_json FROM terrain_levels")?
-        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (z, raw) in levels {
-        let mut settings: serde_json::Value = serde_json::from_str(&raw)?;
-        settings["encoding"] = serde_json::json!(if z == 13 {
-            crate::heightmap::ENCODING
-        } else {
-            ENCODING
-        });
-        if z == 13 {
-            settings["cellsPerTile"] = serde_json::json!(8);
-            settings["halo"] = serde_json::json!(1);
-            settings["heightStepMetres"] = serde_json::json!(0.125);
-            settings["interpolation"] = serde_json::json!("bilinear");
-        }
-        db.execute(
-            "UPDATE terrain_levels SET settings_json=?2 WHERE level_key=?1",
-            params![z, settings.to_string()],
-        )?;
-    }
-    let heights = (0..121)
-        .map(|i| Some(100. + (i % 11) as f64 * 10. + (i / 11) as f64 * 5.))
-        .collect::<Vec<_>>();
-    let map = crate::heightmap::Heightmap::quantize(8, 0.125, &heights)?;
-    db.execute(
-        "UPDATE terrain_tiles SET encoding=?1,payload=?2 WHERE level_key=13",
-        params![crate::heightmap::ENCODING, map.encode()?],
-    )?;
-    Ok(())
-}

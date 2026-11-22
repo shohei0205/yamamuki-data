@@ -274,12 +274,16 @@ fn nearby_points(
 }
 
 fn distance_km(origin: &Point, point: &Point) -> f64 {
-    let dlat = (point.latitude - origin.latitude).to_radians();
-    let dlon = (point.longitude - origin.longitude).to_radians();
+    coordinate_distance_km(
+        [origin.latitude, origin.longitude],
+        [point.latitude, point.longitude],
+    )
+}
+pub(crate) fn coordinate_distance_km(origin: [f64; 2], point: [f64; 2]) -> f64 {
+    let dlat = (point[0] - origin[0]).to_radians();
+    let dlon = (point[1] - origin[1]).to_radians();
     let a = (dlat / 2.).sin().powi(2)
-        + origin.latitude.to_radians().cos()
-            * point.latitude.to_radians().cos()
-            * (dlon / 2.).sin().powi(2);
+        + origin[0].to_radians().cos() * point[0].to_radians().cos() * (dlon / 2.).sin().powi(2);
     6371.0088 * 2. * a.clamp(0., 1.).sqrt().asin()
 }
 

@@ -15,6 +15,7 @@ pub struct Plan {
     pub patches: Vec<Patch>,
     pub groups: Vec<(u32, std::ops::Range<u32>)>,
 }
+#[derive(Clone)]
 pub struct Input {
     pub origin: [f64; 2],
     pub side: f64,
@@ -56,6 +57,19 @@ pub fn plan(inputs: &[Input], camera: &Camera) -> Vec<Plan> {
             t.origin[1] + t.side,
         ]) else {
             continue;
+        };
+        // 景色モードの粗密は視線方向で変えない。可視判定だけを方角に従わせる。
+        let depth = if camera.observer {
+            camera
+                .preparation_depth([
+                    t.origin[0],
+                    t.origin[1],
+                    t.origin[0] + t.side,
+                    t.origin[1] + t.side,
+                ])
+                .unwrap_or(depth)
+        } else {
+            depth
         };
         // 評価格子が細かくても、画面上で小さなタイルを1024パッチには分けない。
         let pixels = t.side * scale * camera.viewport[1] / (2. * camera.tan_half_fov() * depth);
@@ -107,6 +121,13 @@ pub fn plan(inputs: &[Input], camera: &Camera) -> Vec<Plan> {
                 }
                 continue;
             }
+            let depth = if camera.observer {
+                camera
+                    .preparation_depth([ox, oy, ox + side, oy + side])
+                    .unwrap_or(depth)
+            } else {
+                depth
+            };
             let pixels =
                 side * scale * camera.viewport[1] / (2. * camera.tan_half_fov() * depth.max(0.2));
             let max = (((t.n / k.min(8)).max(1) as f64 * side / (t.side / k as f64))
@@ -366,6 +387,33 @@ mod tests {
             side,
             n,
             covered_by: Vec::new(),
+        }
+    }
+    #[test]
+    fn observer_rotation_keeps_distant_patch_density() {
+        let world = crate::selection::lonlat(140.1, 36.2);
+        let mut camera = Camera::default();
+        camera.set_observer(world, 600., 0., 0., 0.85, [1600., 900.]);
+        let bounds = [
+            world[0] - 500.,
+            world[1] - 30500.,
+            world[0] + 500.,
+            world[1] - 29500.,
+        ];
+        camera.mesh_pixels = 1000. * camera.preparation_scale() * 900.
+            / (2. * camera.tan_half_fov() * camera.preparation_depth(bounds).unwrap() * 63.5);
+        let mut expected = None;
+        for step in -30..=30 {
+            camera.set_observer(world, 600., step as f64 * 0.01, 0., 0.85, [1600., 900.]);
+            let tile = input(world[0] - 500., world[1] - 30500., 1000., 128);
+            let plans = plan(&[tile], &camera);
+            let shape: Vec<_> = plans[0].patches.iter().map(|p| p.bounds).collect();
+            assert!(!shape.is_empty());
+            if let Some(previous) = &expected {
+                assert_eq!(&shape, previous, "方角だけで遠方の描画分割が変わる");
+            } else {
+                expected = Some(shape);
+            }
         }
     }
     #[test]

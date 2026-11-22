@@ -51,7 +51,8 @@ CREATE TABLE terrain_levels (
     level_key INTEGER NOT NULL,
     z INTEGER NOT NULL CHECK(z BETWEEN 0 AND 30),
     settings_json TEXT NOT NULL CHECK(json_valid(settings_json) AND json_type(settings_json) = 'object'),
-    PRIMARY KEY(dataset_key, level_key)
+    PRIMARY KEY(dataset_key, level_key),
+    UNIQUE(dataset_key, z)
 ) WITHOUT ROWID, STRICT;
 
 CREATE TABLE terrain_tiles (

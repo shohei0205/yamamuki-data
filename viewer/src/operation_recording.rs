@@ -25,8 +25,12 @@ pub(crate) struct Recording {
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct InputFrame {
     elapsed_ms: f64,
+    #[serde(default)]
+    performance: performance::Timings,
     input: egui::RawInput,
     after: Option<CameraState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terrain_diagnostics: Option<yamamuki_terrain_view::snapshot::Diagnostics>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct CameraState {
@@ -214,8 +218,10 @@ impl Viewer {
             let elapsed_ms = active.started.elapsed().as_secs_f64() * 1000.;
             active.recording.frames.push(InputFrame {
                 elapsed_ms,
+                performance: performance::Timings::default(),
                 input,
                 after: None,
+                terrain_diagnostics: None,
             });
             if raw.events.iter().any(|e| f8(e, false)) || !raw.focused {
                 active.stopping = true;
@@ -226,6 +232,8 @@ impl Viewer {
     pub(crate) fn operation_frame_finished(&mut self, ctx: &egui::Context) {
         if let Some(active) = &mut self.operation_recording {
             if let Some(frame) = active.recording.frames.last_mut() {
+                frame.performance = self.frame_timings;
+                frame.terrain_diagnostics = self.terrain.as_ref().map(|t| t.snapshot_diagnostics());
                 frame.after = Some(CameraState {
                     view: self.view,
                     observer: self.observer.clone(),

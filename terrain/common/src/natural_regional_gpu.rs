@@ -430,7 +430,6 @@ pub fn packet(
         ("maxCellVertices", json!(cells.iter().map(Vec::len).max())),
         ("unsafeLeaves", json!(0)),
         ("format", json!("Sibson-GPU-controls-v1")),
-        ("noHeightmap", json!(true)),
         ("noTriangleMesh", json!(true)),
     ] {
         info[k] = v;

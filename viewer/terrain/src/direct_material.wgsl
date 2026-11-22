@@ -110,7 +110,7 @@ fn difference(p:vec4<f32>)->f32{
  var shaded=linear(clamp(gamma(color.rgb)*q.z,vec3(0.),vec3(1.)));
  if params.earth.w>0. {
   let point=earthPosition(q.xy,abs(q.w)-10000.,params.earth,params.eye.w);
-  shaded=airHaze(shaded,params.eye.xyz,point,params.earth.z);
+  shaded=airHaze(shaded,params.eye.xyz,point,params.earth.z,params.earth.w);
  }
  return vec4(shaded,color.a);
 }

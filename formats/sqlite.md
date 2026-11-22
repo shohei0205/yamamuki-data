@@ -6,7 +6,7 @@
 
 1. SQLiteを読み取り専用で開く。配布物は単体のSQLiteファイルで、別ファイルのWALは必要ない。SQLiteのページサイズはライブラリに判定させる。
 2. `PRAGMA application_id` が `1498235970`（`0x594D4442`、YMDB）、`PRAGMA user_version` が `1` であることを確かめる。未知のコンテナ版は対応外として扱う。
-3. 次のクエリで一覧を取得する。複数の種別が入っていても、対応しているデータセットだけ選択できるようにする。
+3. 次のクエリで一覧を取得する。複数の種別が入っている場合は、読み手が対応する種別と形式版を選ぶ。現行ビューワで開ける構成は [統合 SQLite を開く](../viewer/README.md#統合-sqlite-を開く) を参照。
 
 ```sql
 SELECT dataset_key, id, kind, title, data_version, format_version, metadata_json
@@ -63,7 +63,7 @@ ORDER BY ordinal;
 
 ## 地形の収録形式
 
-`terrain_levels(dataset_key,level_key,z,settings_json)` と `terrain_tiles(dataset_key,level_key,x,y,encoding,payload)` を使う。制御点とハイトマップをレベルごとに混在できる [地形のSQLite形式 版1](../terrain/formats/sqlite.md) を参照する。地形BLOBはコンテナのdataset_keyに依存しないため、地表・地点と同じSQLiteへ統合できる。
+`terrain_levels(dataset_key,level_key,z,settings_json)` と `terrain_tiles(dataset_key,level_key,x,y,encoding,payload)` を使う。[地形のSQLite形式 版1](../terrain/formats/sqlite.md) を参照する。地形BLOBはコンテナのdataset_keyに依存しないため、地表・地点と同じSQLiteへ統合できる。現行の地形リーダーが開けるのは、対応する形式版の地形データセットが1件のファイル。公開用の地形SQLiteには地形データセット1件だけを収録する。
 
 ## 統合時の互換性
 

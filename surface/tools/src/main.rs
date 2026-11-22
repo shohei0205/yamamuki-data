@@ -163,11 +163,7 @@ fn main() -> Result<()> {
                 datasets.len() == 1 && datasets[0].kind == "terrain",
                 "地形データセットを1件指定してください"
             );
-            let mut query = connection
-                .prepare("SELECT z FROM terrain_levels WHERE dataset_key=? ORDER BY z")?;
-            let levels = query
-                .query_map([datasets[0].key], |r| r.get::<_, u32>(0))?
-                .collect::<db::rusqlite::Result<Vec<_>>>()?;
+            let levels = db::terrain_zooms(&connection, datasets[0].key)?;
             println!("{}", serde_json::json!({"terrain":levels}));
             Ok(())
         }

@@ -11,7 +11,7 @@ use std::{
 use terrain_gsi_dem::{natural_inventory, natural_shared_pipeline};
 
 #[derive(Parser)]
-#[command(about = "国土地理院DEMから制御点・ハイトマップの地形データを生成する")]
+#[command(about = "国土地理院DEMから制御点の地形データを生成する")]
 struct Args {
     #[command(subcommand)]
     command: Command,
@@ -32,13 +32,6 @@ enum Command {
         pilots: Vec<PathBuf>,
         #[arg(long, default_value_t = 131072)]
         local_point_limit: usize,
-    },
-    /// レベルごとの形式設定でDEMと制御点SQLiteから配布SQLiteを作る。
-    Build {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
     },
     /// 性能試験用コピーの限定キューだけを削減する。本番DBは拒否する。
     BenchmarkPrune {
@@ -245,9 +238,6 @@ fn main() -> Result<()> {
             local_point_limit,
         ),
 
-        Command::Build { config, output } => {
-            terrain_gsi_dem::heightmap_build::build(&config, &output)
-        }
         Command::BenchmarkPrune {
             prepared,
             z,

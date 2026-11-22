@@ -66,7 +66,6 @@ pub struct Tile {
     pub field: crate::shared_field::Field,
     local: bool,
     compute: wgpu::BindGroup,
-    heightmap: bool,
     _sources: Arc<SourceBuffers>,
     view: wgpu::Buffer,
     output: wgpu::Buffer,
@@ -77,9 +76,6 @@ pub struct Tile {
 }
 
 impl Tile {
-    pub fn is_heightmap(&self) -> bool {
-        self.heightmap
-    }
     pub fn local_field(&self) -> bool {
         self.local
     }
@@ -235,7 +231,6 @@ impl LandcoverGpu {
 #[derive(Clone)]
 struct SharedPipelines {
     compute: wgpu::ComputePipeline,
-    height_compute: wgpu::ComputePipeline,
     pipeline: wgpu::RenderPipeline,
     fast_pipeline: wgpu::RenderPipeline,
     fallback: wgpu::RenderPipeline,
@@ -250,6 +245,8 @@ struct SharedPipelines {
 #[derive(Default)]
 struct PipelineCache(Arc<std::sync::OnceLock<SharedPipelines>>);
 pub struct Renderer {
+    gpu_culler: Arc<std::sync::OnceLock<crate::gpu_culling::Pipelines>>,
+    gpu_planner: Arc<std::sync::OnceLock<Arc<crate::gpu_planner::Planner>>>,
     pub state: RenderState,
     sources: std::collections::HashMap<Key, Weak<SourceBuffers>>,
     uploads: Arc<UploadBudget>,
@@ -270,7 +267,6 @@ pub struct Renderer {
     depth: wgpu::Texture,
     size: [u32; 2],
     compute: wgpu::ComputePipeline,
-    height_compute: wgpu::ComputePipeline,
     indices: Arc<std::collections::HashMap<u32, wgpu::Buffer>>,
 
     pipeline: wgpu::RenderPipeline,
@@ -339,8 +335,10 @@ pub(crate) struct PrepareStats {
     pub bind_groups: usize,
 }
 struct PreparedPlan {
-    plans: Vec<crate::shared_patches::Plan>,
+    plans: Result<Vec<crate::shared_patches::Plan>, String>,
     pose: [f64; 10],
+    gpu: bool,
+    elapsed_ms: f64,
 }
 // 接合候補を元タイルごとの外接矩形で絞り、全評価区画の総当たりを避ける。
 struct SeamGroups {
@@ -420,6 +418,7 @@ fn uniform_slots(ids: &[usize], previous: &[(usize, u64)], capacity: u64) -> Vec
     slots.into_iter().map(Option::unwrap).collect()
 }
 struct CachedScene {
+    gpu_cull: Option<crate::gpu_culling::Scene>,
     stats: PrepareStats,
     owner_texture: egui::TextureId,
     clipped_background: bool,
@@ -447,6 +446,8 @@ struct CachedScene {
     previous_plans: Vec<Option<PreviousPlan>>,
     plan_inputs: Option<Arc<Vec<crate::shared_patches::Input>>>,
     plan_job: Option<std::sync::Mutex<std::sync::mpsc::Receiver<PreparedPlan>>>,
+    plans_from_gpu: bool,
+    planning_error: Option<String>,
     last_plan: std::time::Instant,
     camera: [f64; 10],
     triangles: u64,
@@ -656,62 +657,6 @@ fn regular_render_shader_source() -> String {
     source
 }
 
-fn gpu_grid_indices(
-    d: &wgpu::Device,
-    q: &wgpu::Queue,
-) -> Arc<std::collections::HashMap<u32, wgpu::Buffer>> {
-    let shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("GPU格子インデックス"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("grid_indices.wgsl").into()),
-    });
-    let pipeline = d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("GPU格子インデックス"),
-        layout: None,
-        module: &shader,
-        entry_point: Some("main"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    let mut encoder = d.create_command_encoder(&Default::default());
-    let mut indices = std::collections::HashMap::new();
-    for level in 0..=9 {
-        let n = 1u32 << level;
-        let buffer = d.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("GPUで生成する共有分割"),
-            size: u64::from(6 * n * n) * 4,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDEX,
-            mapped_at_creation: false,
-        });
-        let uniform = d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(&[n, 0, 0, 0]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let group = d.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: buffer.as_entire_binding(),
-                },
-            ],
-        });
-        {
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &group, &[]);
-            pass.dispatch_workgroups((n * n).div_ceil(64), 1, 1);
-        }
-        indices.insert(n, buffer);
-    }
-    q.submit([encoder.finish()]);
-    Arc::new(indices)
-}
 impl Renderer {
     pub fn interpolation_pending(&self) -> bool {
         self.direct_renderer.interpolation_pending()
@@ -891,24 +836,29 @@ impl Renderer {
                         "地形GPU初期化: 描画まで {:.2}ms",
                         started.elapsed().as_secs_f64() * 1000.
                     );
-                    let indices = gpu_grid_indices(d, &state.queue);
-                    SharedPipelines {
-                        height_compute: {
-                            let module = d.create_shader_module(wgpu::ShaderModuleDescriptor {
-                                label: Some("ハイトマップ頂点生成"),
-                                source: wgpu::ShaderSource::Wgsl(
-                                    include_str!("heightmap_gpu.wgsl").into(),
-                                ),
-                            });
-                            d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                                label: Some("ハイトマップ頂点生成"),
-                                layout: None,
-                                module: &module,
-                                entry_point: Some("main"),
-                                compilation_options: Default::default(),
-                                cache: None,
+                    let indices = Arc::new(
+                        (0..=9)
+                            .map(|level| {
+                                let n = 1u32 << level;
+                                let mut ids = Vec::with_capacity((6 * n * n) as usize);
+                                for y in 0..n {
+                                    for x in 0..n {
+                                        let a = y * (n + 1) + x;
+                                        ids.extend([a, a + 1, a + n + 2, a, a + n + 2, a + n + 1]);
+                                    }
+                                }
+                                (
+                                    n,
+                                    d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                        label: Some("共有分割テンプレート"),
+                                        contents: bytemuck::cast_slice(&ids),
+                                        usage: wgpu::BufferUsages::INDEX,
+                                    }),
+                                )
                             })
-                        },
+                            .collect(),
+                    );
+                    SharedPipelines {
                         compute: compute_job
                             .join()
                             .expect("曲面評価プログラムの準備が停止しました"),
@@ -930,7 +880,6 @@ impl Renderer {
             .clone();
         let SharedPipelines {
             compute,
-            height_compute,
             pipeline,
             fast_pipeline,
             fallback,
@@ -959,6 +908,8 @@ impl Renderer {
         let positions = position_target(d, size);
         let positions_view = positions.create_view(&Default::default());
         Self {
+            gpu_culler: Default::default(),
+            gpu_planner: Default::default(),
             frozen_layout: None,
             sources: Default::default(),
             uploads: Default::default(),
@@ -981,7 +932,6 @@ impl Renderer {
             depth,
             size,
             compute,
-            height_compute,
 
             pipeline,
             fast_pipeline,
@@ -1079,6 +1029,22 @@ impl Renderer {
         self.landcover.refresh(&self.state.device);
     }
 
+    pub(crate) fn planning_status(&self) -> (bool, Option<String>) {
+        let renderer = self.state.renderer.read();
+        renderer
+            .callback_resources
+            .get::<CachedScene>()
+            .map(|c| (c.plan_job.is_some(), c.planning_error.clone()))
+            .unwrap_or_default()
+    }
+    #[cfg(test)]
+    pub(crate) fn gpu_plan_ready(&self) -> bool {
+        let renderer = self.state.renderer.read();
+        renderer
+            .callback_resources
+            .get::<CachedScene>()
+            .is_some_and(|c| c.plans_from_gpu && c.plan_job.is_none() && c.planning_error.is_none())
+    }
     #[cfg(test)]
     pub(crate) fn prepare_stats(&self) -> PrepareStats {
         self.state
@@ -1229,10 +1195,70 @@ impl Renderer {
                             .patches
                             .iter()
                             .map(|b| b.size() as usize)
-                            .sum::<usize>(),
+                            .sum::<usize>()
+                        + cache.gpu_cull.as_ref().map_or(0, |c| c.bytes())
+                        + self.gpu_planner.get().map_or(0, |p| p.bytes()),
                 )
             })
             .unwrap_or((0, 0, 0))
+    }
+    pub(crate) fn snapshot_diagnostics(&self) -> Option<crate::snapshot::DisplayDiagnostics> {
+        let renderer = self.state.renderer.read();
+        let c = renderer.callback_resources.get::<CachedScene>()?;
+        if c.owner_texture != self.texture {
+            return None;
+        }
+        let meshes = c
+            .tiles
+            .iter()
+            .enumerate()
+            .map(|(i, tile)| {
+                let mut mesh = crate::snapshot::DiagnosticMesh::new(tile);
+                if let Some(plan) = c.plans.get(i).filter(|_| i < c.current) {
+                    let mut divisions = std::collections::BTreeMap::new();
+                    for patch in &plan.patches {
+                        *divisions.entry(patch.bounds[3] as u32).or_insert(0) += 1;
+                    }
+                    mesh.patch_count = Some(plan.patches.len());
+                    mesh.patch_divisions = Some(divisions);
+                }
+                mesh
+            })
+            .collect();
+        Some(crate::snapshot::DisplayDiagnostics {
+            camera: c.render_camera.clone(),
+            meshes,
+            primary: c.primary,
+            current: c.current,
+            morph: c.morph,
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn planning_test_state(
+        &self,
+    ) -> Option<(Arc<Vec<crate::shared_patches::Input>>, Camera)> {
+        let renderer = self.state.renderer.read();
+        let cache = renderer.callback_resources.get::<CachedScene>()?;
+        Some((
+            cache.plan_inputs.as_ref()?.clone(),
+            cache.render_camera.clone(),
+        ))
+    }
+    #[cfg(test)]
+    pub(crate) fn indirect_arguments(&self) -> Vec<(u32, wgpu::Buffer)> {
+        let renderer = self.state.renderer.read();
+        renderer
+            .callback_resources
+            .get::<CachedScene>()
+            .and_then(|c| c.gpu_cull.as_ref())
+            .map(|c| {
+                c.draws
+                    .iter()
+                    .flatten()
+                    .map(|d| (d.n, d.arguments.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
     pub(crate) fn snapshot_display(
         &self,
@@ -1326,56 +1352,29 @@ impl Renderer {
             buffers
         } else {
             let buffers = Arc::new(SourceBuffers {
-                sections: if let Some(map) = &p.heightmap {
-                    let mut raw = map
-                        .values
-                        .iter()
-                        .flat_map(|v| v.to_le_bytes())
-                        .collect::<Vec<_>>();
-                    raw.resize(raw.len().next_multiple_of(4), 0);
-                    (0..4)
-                        .map(|i| {
-                            d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                label: Some("標高格子"),
-                                contents: if i == 0 { &raw } else { &[0; 4] },
-                                usage: wgpu::BufferUsages::STORAGE,
-                            })
+                sections: p
+                    .sections
+                    .iter()
+                    .map(|bytes| {
+                        d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("共有する制御点・補助情報"),
+                            contents: if bytes.is_empty() { &[0; 4] } else { bytes },
+                            usage: wgpu::BufferUsages::STORAGE,
                         })
-                        .collect()
-                } else {
-                    p.sections
-                        .iter()
-                        .map(|bytes| {
-                            d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                label: Some("共有する制御点・補助情報"),
-                                contents: if bytes.is_empty() { &[0; 4] } else { bytes },
-                                usage: wgpu::BufferUsages::STORAGE,
-                            })
-                        })
-                        .collect()
-                },
+                    })
+                    .collect(),
                 vertices: d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("共有する制御点XYZ"),
-                    contents: if p.vertices.is_empty() {
-                        &[0; 16]
-                    } else {
-                        bytemuck::cast_slice(&p.vertices)
-                    },
+                    contents: bytemuck::cast_slice(&p.vertices),
                     usage: wgpu::BufferUsages::STORAGE,
                 }),
                 triangles: d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("共有する制御点TIN"),
-                    contents: if p.triangles.is_empty() {
-                        &[0; 4]
-                    } else {
-                        bytemuck::cast_slice(&p.triangles)
-                    },
+                    contents: bytemuck::cast_slice(&p.triangles),
                     usage: wgpu::BufferUsages::STORAGE,
                 }),
-                bytes: p.heightmap.as_ref().map_or_else(
-                    || p.sections.iter().map(|b| b.len().max(4)).sum::<usize>(),
-                    |m| (m.values.len() * 2).next_multiple_of(4) + 12,
-                ) + p.vertices.len() * 16
+                bytes: p.sections.iter().map(|b| b.len().max(4)).sum::<usize>()
+                    + p.vertices.len() * 16
                     + p.triangles.len() * 4,
             });
             self.sources.insert(p.key, Arc::downgrade(&buffers));
@@ -1386,9 +1385,7 @@ impl Renderer {
         let output = d.create_buffer(&wgpu::BufferDescriptor {
             label: Some("GPU曲面"),
             size,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         // bounds・lookup・counts・settingsを16byte境界の4レコードに並べる。
@@ -1407,7 +1404,7 @@ impl Renderer {
         for v in [n, 0, 0, 0u32] {
             params.extend(v.to_le_bytes());
         }
-        for v in [1000f32, 1f32, p.side as f32, 0.] {
+        for v in [1000f32, 1f32, 0., 0.] {
             params.extend(v.to_le_bytes());
         }
         let uniform = d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1415,57 +1412,36 @@ impl Renderer {
             contents: &params,
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let compute = if p.heightmap.is_some() {
-            d.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("標高格子の頂点生成設定"),
-                layout: &self.height_compute.get_bind_group_layout(0),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: controls[0].as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: output.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: uniform.as_entire_binding(),
-                    },
-                ],
-            })
-        } else {
-            d.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &self.compute.get_bind_group_layout(0),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: controls[0].as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: controls[1].as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: controls[2].as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: controls[3].as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: output.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: uniform.as_entire_binding(),
-                    },
-                ],
-            })
-        };
+        let compute = d.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.compute.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: controls[0].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: controls[1].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: controls[2].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: controls[3].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: output.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: uniform.as_entire_binding(),
+                },
+            ],
+        });
         let view = d.create_buffer(&wgpu::BufferDescriptor {
             label: Some("タイルカメラ"),
             size: std::mem::size_of::<View>() as u64,
@@ -1482,7 +1458,6 @@ impl Renderer {
             side,
             field,
             local: field.depth > 0,
-            heightmap: p.heightmap.is_some(),
             compute,
             _sources: sources.clone(),
             view,
@@ -1503,11 +1478,7 @@ impl Renderer {
                 label: Some("自然近傍補間"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(if p.heightmap.is_some() {
-                &self.height_compute
-            } else {
-                &self.compute
-            });
+            pass.set_pipeline(&self.compute);
             pass.set_bind_group(0, &tile.compute, &[]);
             pass.dispatch_workgroups((tile.n + 1).div_ceil(8), (tile.n + 1).div_ceil(8), 1);
         }
@@ -1702,6 +1673,8 @@ impl Renderer {
         Callback::new_paint_callback(
             rect,
             Frame {
+                gpu_culler: self.gpu_culler.clone(),
+                gpu_planner: self.gpu_planner.clone(),
                 wake: self.wake.clone(),
                 owner_texture: self.texture,
                 frozen_layout: self.frozen_layout.clone(),
@@ -1760,6 +1733,8 @@ impl Renderer {
     }
 }
 struct Frame {
+    gpu_culler: Arc<std::sync::OnceLock<crate::gpu_culling::Pipelines>>,
+    gpu_planner: Arc<std::sync::OnceLock<Arc<crate::gpu_planner::Planner>>>,
     wake: egui::Context,
     owner_texture: egui::TextureId,
     hit_state: Arc<std::sync::Mutex<crate::hit_test::State>>,
@@ -1930,7 +1905,7 @@ impl CallbackTrait for Frame {
                         [
                             (b[2] - camera.center[0]) as f32,
                             (b[3] - camera.center[1]) as f32,
-                            f32::from(t.heightmap),
+                            0.,
                             0.,
                         ]
                     },
@@ -2385,6 +2360,7 @@ impl CallbackTrait for Frame {
             };
             stats.rebuild_ms = rebuild_started.elapsed().as_secs_f64() * 1000.;
             resources.insert(CachedScene {
+                gpu_cull: None,
                 stats,
                 owner_texture: self.owner_texture,
                 clipped_background: false,
@@ -2412,6 +2388,8 @@ impl CallbackTrait for Frame {
                 previous_plans,
                 plan_inputs: None,
                 plan_job: None,
+                plans_from_gpu: false,
+                planning_error: None,
                 last_plan: std::time::Instant::now() - std::time::Duration::from_secs(1),
                 camera: [f64::NAN; 10],
                 triangles: 0,
@@ -2439,10 +2417,21 @@ impl CallbackTrait for Frame {
         if let Some(result) = prepared {
             match result {
                 Ok(prepared) => {
-                    cache.plans = prepared.plans;
+                    cache.plans_from_gpu = prepared.gpu;
                     cache.camera = prepared.pose;
-                    cache.plans_uploaded = false;
-                    cache.clipped_background = true;
+                    stats.plan_ms = prepared.elapsed_ms;
+                    match prepared.plans {
+                        Ok(plans) => {
+                            cache.plans = plans;
+                            cache.plans_uploaded = false;
+                            cache.clipped_background = true;
+                            cache.planning_error = None;
+                        }
+                        Err(error) => {
+                            eprintln!("GPU分割計画: {error}");
+                            cache.planning_error = Some(error);
+                        }
+                    }
                     cache.plan_job = None;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -2456,7 +2445,9 @@ impl CallbackTrait for Frame {
             install_snapshot_layout(cache, layout, queue);
             cache.clipped_background = layout.clipped_background;
         } else if cache.plan_job.is_none()
-            && (!cache.clipped_background
+            && (cache.planning_error.is_none() || cache.plans_from_gpu != camera.gpu_planning)
+            && (cache.plans_from_gpu != camera.gpu_planning
+                || !cache.clipped_background
                 || cache.plans.is_empty()
                 || (pose != cache.camera
                     && cache.last_plan.elapsed() >= std::time::Duration::from_millis(100)))
@@ -2503,7 +2494,7 @@ impl CallbackTrait for Frame {
                         .collect::<Vec<_>>(),
                 )
             });
-            if cache.plans.is_empty() {
+            if cache.plans.is_empty() && !camera.gpu_planning {
                 // 初回だけは代替計画がないため作成する。視点変更は常に背景で準備する。
                 let started = std::time::Instant::now();
                 cache.plans = crate::shared_patches::plan(inputs, camera);
@@ -2511,15 +2502,37 @@ impl CallbackTrait for Frame {
                 cache.plans_uploaded = false;
                 cache.clipped_background = true;
                 cache.camera = pose;
+                cache.plans_from_gpu = false;
+                cache.planning_error = None;
             } else {
                 let inputs = Arc::clone(inputs);
                 let camera = camera.clone();
                 let wake = self.wake.clone();
                 let (send, receive) = std::sync::mpsc::channel();
                 cache.plan_job = Some(std::sync::Mutex::new(receive));
+                let planner = self.gpu_planner.clone();
+                let device = device.clone();
+                let queue = queue.clone();
                 std::thread::spawn(move || {
-                    let plans = crate::shared_patches::plan(&inputs, &camera);
-                    let _ = send.send(PreparedPlan { plans, pose });
+                    let started = std::time::Instant::now();
+                    let gpu = camera.gpu_planning;
+                    let plans = if gpu {
+                        // CPUの可視判定・分割・接合計画は呼ばない。
+                        planner
+                            .get_or_init(|| {
+                                Arc::new(crate::gpu_planner::Planner::new(&device, &queue))
+                            })
+                            .plan(&inputs, &camera)
+                            .map_err(|e| e.to_string())
+                    } else {
+                        Ok(crate::shared_patches::plan(&inputs, &camera))
+                    };
+                    let _ = send.send(PreparedPlan {
+                        plans,
+                        pose,
+                        gpu,
+                        elapsed_ms: started.elapsed().as_secs_f64() * 1000.,
+                    });
                     wake.request_repaint();
                 });
             }
@@ -2531,6 +2544,9 @@ impl CallbackTrait for Frame {
             );
         }
         if !cache.plans_uploaded {
+            if let Some(scene) = &mut cache.gpu_cull {
+                scene.invalidate_plan();
+            }
             let all_patches = cache
                 .plans
                 .iter()
@@ -2670,16 +2686,7 @@ impl CallbackTrait for Frame {
                     self.settings[1],
                     self.morph,
                 ],
-                flags: [
-                    tile.n,
-                    u32::from(self.smooth),
-                    if tile.heightmap && self.wire >= 3 {
-                        self.wire - 2
-                    } else {
-                        self.wire
-                    },
-                    i as u32,
-                ],
+                flags: [tile.n, u32::from(self.smooth), self.wire, i as u32],
                 extra: [
                     current as u32,
                     u32::from(self.tin),
@@ -2690,7 +2697,8 @@ impl CallbackTrait for Frame {
                         | u32::from(cache.clipped_background) * 8
                         | u32::from(cache.clipped_background) * 16
                         | 32
-                        | 64,
+                        | 64
+                        | u32::from(self.settings[2] >= 0.5) * 128,
                 ],
             };
             let start = (cache.view_slots[i] * cache.view_stride) as usize;
@@ -2705,18 +2713,64 @@ impl CallbackTrait for Frame {
         let uniform_ms = uniform_started.elapsed().as_secs_f64() * 1000.;
         cache.triangles = 0;
         cache.visible_patches = 0;
-        for (i, plan) in cache.plans.iter().enumerate() {
-            if (!self.tin || all[i].heightmap) && (self.wire != 4 || all[i].heightmap) {
-                cache.triangles += plan
-                    .groups
-                    .iter()
-                    .map(|(n, r)| 2 * u64::from(*n).pow(2) * u64::from(r.end - r.start))
-                    .sum::<u64>();
-                cache.visible_patches += plan.patches.len();
+        if !self.tin && self.wire != 4 {
+            cache.triangles = cache
+                .plans
+                .iter()
+                .flat_map(|p| &p.groups)
+                .map(|(n, r)| 2 * u64::from(*n).pow(2) * u64::from(r.end - r.start))
+                .sum();
+            cache.visible_patches = cache.plans.iter().map(|p| p.patches.len()).sum();
+        }
+        if self.tin || self.wire >= 3 {
+            cache.triangles += all[..current]
+                .iter()
+                .map(|t| u64::from(t.triangle_indices) / 3)
+                .sum::<u64>();
+        }
+        let gpu_culling = (camera.gpu_culling || camera.gpu_planning) && !self.tin && self.wire < 3;
+        if gpu_culling {
+            let pipelines = self
+                .gpu_culler
+                .get_or_init(|| crate::gpu_culling::Pipelines::new(device));
+            let scene = cache.gpu_cull.get_or_insert_with(|| {
+                crate::gpu_culling::Scene::new(
+                    device,
+                    pipelines,
+                    &cache._atlas,
+                    &cache.metadata,
+                    all.len(),
+                )
+            });
+            for (i, plan) in cache.plans.iter().enumerate() {
+                let tile = &all[i];
+                for (group, (n, range)) in plan.groups.iter().enumerate() {
+                    scene.group(
+                        device,
+                        pipelines,
+                        i,
+                        group,
+                        *n,
+                        range.clone(),
+                        camera.gpu_planning,
+                        [
+                            &tile.output,
+                            &cache.views,
+                            &cache.patches[i],
+                            &cache._atlas,
+                            &cache.metadata,
+                            &cache._links,
+                            &tile.vertices,
+                            &tile.triangles,
+                        ],
+                        cache.view_slots[i] * cache.view_stride,
+                        std::mem::size_of::<View>() as u64,
+                        &self.pipeline.get_bind_group_layout(0),
+                    );
+                }
+                scene.truncate(i, plan.groups.len());
             }
-            if !all[i].heightmap && (self.tin || self.wire >= 3) {
-                cache.triangles += u64::from(all[i].triangle_indices / 3);
-            }
+            scene.encode(encoder, pipelines, camera.gpu_planning);
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("全国地形"),
@@ -2767,21 +2821,29 @@ impl CallbackTrait for Frame {
             }
             let fallback = i >= self.tiles.len();
             pass.set_bind_group(0, &cache.bindings[i], &[]);
-            if (!self.tin || all[i].heightmap) && (self.wire != 4 || all[i].heightmap) {
+            if !self.tin && self.wire != 4 {
                 pass.set_pipeline(if fallback {
                     &self.fallback
                 } else {
                     &self.pipeline
                 });
-                for (n, range) in &plan.groups {
-                    pass.set_index_buffer(self.indices[n].slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..6 * n * n, 0, range.clone());
+                if gpu_culling {
+                    for draw in &cache.gpu_cull.as_ref().unwrap().draws[i] {
+                        pass.set_bind_group(0, &draw.binding, &[]);
+                        pass.set_index_buffer(
+                            self.indices[&draw.n].slice(..),
+                            wgpu::IndexFormat::Uint32,
+                        );
+                        pass.draw_indexed_indirect(&draw.arguments, 0);
+                    }
+                } else {
+                    for (n, range) in &plan.groups {
+                        pass.set_index_buffer(self.indices[n].slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(0..6 * n * n, 0, range.clone());
+                    }
                 }
             }
-            if !all[i].heightmap
-                && (self.tin || self.wire >= 3)
-                && !(camera.globe && all[i].key == (0, 0, 0))
-            {
+            if (self.tin || self.wire >= 3) && !(camera.globe && all[i].key == (0, 0, 0)) {
                 pass.set_pipeline(if fallback {
                     &self.control_fallback
                 } else {
@@ -3003,8 +3065,6 @@ mod tests {
             include_str!("sibson_gpu_controls.wgsl").to_string(),
             super::render_shader_source(),
             super::regular_render_shader_source(),
-            include_str!("heightmap_gpu.wgsl").to_string(),
-            include_str!("grid_indices.wgsl").to_string(),
         ] {
             let module = naga::front::wgsl::parse_str(&source).expect("WGSL parse");
             naga::valid::Validator::new(
@@ -3026,17 +3086,6 @@ mod gpu_tests {
         ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
     )]
     fn gpu_mixed_seams_and_morph_are_continuous() {
-        run_gpu_seams_and_morph(false);
-    }
-    #[test]
-    #[cfg_attr(
-        not(feature = "gpu-tests"),
-        ignore = "実機GPUでの描画検査。--features gpu-tests -- --test-threads=1で実行する"
-    )]
-    fn gpu_heightmap_mixed_seams_and_morph_are_continuous() {
-        run_gpu_seams_and_morph(true);
-    }
-    fn run_gpu_seams_and_morph(heightmap: bool) {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: if cfg!(target_os = "windows") {
                 wgpu::Backends::DX12
@@ -3101,7 +3150,7 @@ mod gpu_tests {
         {
             records.push(Record {
                 blend_data: [0; 4],
-                tile_end: [0., 0., if heightmap { 1. } else { 0. }, 0.],
+                tile_end: [0.; 4],
                 transition: [0; 4],
                 draw: [0; 4],
                 tile: [x, 0., 100., 12.5],

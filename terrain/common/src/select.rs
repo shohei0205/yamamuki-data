@@ -47,15 +47,9 @@ pub fn copy_levels(destination: &mut Connection, input: &Path, zooms: &[u32]) ->
             let y: u32 = row.get(1)?;
             let encoding: String = row.get(2)?;
             let payload: Vec<u8> = row.get(3)?;
-            let parents = if encoding == ENCODING {
-                crate::sqlite::Tile::decode(&payload)?.parents
-            } else if crate::heightmap::is_encoding(&encoding) {
-                crate::heightmap::Heightmap::decode(&payload)?;
-                Vec::new()
-            } else {
-                anyhow::bail!("未対応の地形形式です")
-            };
-            for parent in parents {
+            ensure!(encoding == ENCODING, "未対応の地形形式です");
+            let tile = crate::sqlite::Tile::decode(&payload)?;
+            for parent in tile.parents {
                 ensure!(
                     selected.contains(&parent.0) && source.catalog.contains_key(&parent),
                     "分割後に親タイルが欠けます: {:?} -> {:?}",

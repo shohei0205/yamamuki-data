@@ -32,11 +32,7 @@ fn source_identity(source: &Path, baseline: &Path) -> Result<(Value, Vec<u32>, S
     );
     let base = yamamuki_terrain::sqlite::Database::open(baseline)?;
     ensure!(
-        base.level_formats.len() == 8
-            && base
-                .level_formats
-                .iter()
-                .all(|(z, v)| (6..=13).contains(z) && v == yamamuki_terrain::sqlite::ENCODING),
+        base.level_errors.len() == 8 && (6..=13).all(|z| base.level_errors.contains_key(&z)),
         "基準SQLiteには制御点z6〜z13が必要です"
     );
     let raw: String = base.connection.query_row(

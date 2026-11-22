@@ -27,8 +27,8 @@ fn airDepth(eye:vec3<f32>,point:vec3<f32>,r:f32)->vec2<f32>{
  }
  return density*step;
 }
-fn airHaze(color:vec3<f32>,eye:vec3<f32>,point:vec3<f32>,r:f32)->vec3<f32>{
+fn airHaze(color:vec3<f32>,eye:vec3<f32>,point:vec3<f32>,r:f32,strength:f32)->vec3<f32>{
  if distance(eye,point)<1.{return color;}
- let depth=airDepth(eye,point,r);let amount=1.-exp(-depth.x/130000.-depth.y/70000.);
+ let depth=airDepth(eye,point,r);let amount=1.-exp(-(depth.x/130000.+depth.y/70000.)*strength);
  return mix(color,airSky(eye,point-eye,r),clamp(amount,0.,1.));
 }

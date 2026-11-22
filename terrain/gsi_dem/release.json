@@ -4,7 +4,7 @@
   "packages": {
     "all": {
       "releaseId": "gsi-terrain",
-      "fileName": "gsi-terrain-z12.sqlite3",
+      "fileName": "gsi-terrain-z13.sqlite3",
       "layers": [
         "terrain"
       ],
@@ -16,7 +16,8 @@
           9,
           10,
           11,
-          12
+          12,
+          13
         ]
       },
       "splitPackages": [
@@ -62,6 +63,23 @@
               9,
               10,
               11
+            ]
+          }
+        },
+        {
+          "fileName": "gsi-terrain-z12.sqlite3",
+          "layers": [
+            "terrain"
+          ],
+          "levels": {
+            "terrain": [
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12
             ]
           }
         }

@@ -159,6 +159,30 @@ pub fn decode_tile(encoding: i64, bytes: &[u8], pixels: u32) -> Result<DynamicIm
     Ok(image)
 }
 
+/// 登録したズームに実タイルがあり、同じズームが重複していないことを確認する。
+pub fn terrain_zooms(db: &Connection, dataset: i64) -> Result<Vec<u32>> {
+    let mut query = db.prepare(
+        "SELECT l.z, EXISTS(
+             SELECT 1 FROM terrain_tiles t
+             WHERE t.dataset_key=l.dataset_key AND t.level_key=l.level_key
+         )
+         FROM terrain_levels l WHERE l.dataset_key=?1 ORDER BY l.z",
+    )?;
+    let mut rows = query.query([dataset])?;
+    let mut zooms = Vec::new();
+    while let Some(row) = rows.next()? {
+        let z: u32 = row.get(0)?;
+        ensure!(zooms.last() != Some(&z), "地形のズームz{z}が重複しています");
+        ensure!(
+            row.get::<_, bool>(1)?,
+            "地形のズームz{z}にタイルがありません"
+        );
+        zooms.push(z);
+    }
+    ensure!(!zooms.is_empty(), "地形のズームがありません");
+    Ok(zooms)
+}
+
 pub fn validate(db: &Connection) -> Result<()> {
     let result: String = db.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     ensure!(result == "ok", "SQLiteの整合性検査に失敗: {result}");
@@ -169,6 +193,10 @@ pub fn validate(db: &Connection) -> Result<()> {
     let datasets = datasets(db)?;
     ensure!(!datasets.is_empty(), "データセットがありません");
     for dataset in datasets {
+        if dataset.kind == "terrain" {
+            terrain_zooms(db, dataset.key)
+                .with_context(|| format!("地形データセット {}", dataset.id))?;
+        }
         if let Some(expected) = dataset.metadata.get("pointCount") {
             let actual: u64 = db.query_row(
                 "SELECT count(*) FROM point_records WHERE dataset_key=?1",

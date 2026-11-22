@@ -73,13 +73,6 @@ struct Varying {
  @location(3) bary:vec3<f32>,
  @location(4) uv: vec2<f32>,
 }
-// 格子の欠損を標高0として描かない。制御点形式は従来の有効性判定を維持する。
-fn validAt(q:vec2<f32>,owner:u32)->bool{
- let r=records[owner];if r.tile_end.z<.5{return true;}
- let n=r.data.y;let uv=clamp((q-r.bounds.xy)/r.bounds.z,vec2(0.),vec2(1.))*f32(n);
- let ij=min(vec2<u32>(floor(uv)),vec2(n-1u));let f=uv-vec2<f32>(ij);let base=r.data.x+ij.y*(n+1u)+ij.x;
- return ((1.-f.x)*(1.-f.y)<.000001||atlas[base].original.w>0.)&&(f.x*(1.-f.y)<.000001||atlas[base+1u].original.w>0.)&&((1.-f.x)*f.y<.000001||atlas[base+n+1u].original.w>0.)&&(f.x*f.y<.000001||atlas[base+n+2u].original.w>0.);
-}
 fn sampleAt(q:vec2<f32>,id:u32)->vec3<f32>{
  let r=records[id];let n=r.data.y;
  let uv=clamp((q-r.bounds.xy)/r.bounds.z,vec2(0.),vec2(1.))*f32(n);
@@ -134,10 +127,10 @@ fn blend(q:vec2<f32>,owner:u32,old:bool)->vec3<f32>{
   // 区画ごとの反復へ入れると数十区画ぶん同じ判定を繰り返す。
   let overlap=all(min(tileEnd(source),tileEnd(own))-max(source.tile.xy,own.tile.xy)>vec2(.01));
   let outside=any(q<source.tile.xy-vec2(.01))||any(q>tileEnd(source)+vec2(.01));
-  var chosen=0xffffffffu;var nearest=1e30;var spacing=1e30;var background=1e30;
+  var chosen=0xffffffffu;var fixedId=0xffffffffu;var nearest=1e30;var spacing=1e30;var background=1e30;
   let interior=(q>own.bounds.xy+vec2(.01))&(q<own.bounds.xy+vec2(own.bounds.z-.01));
   let sourceEdge=(abs(q-own.tile.xy)<vec2(.01))|(abs(q-tileEnd(own))<vec2(.01));
-  if (view.extra.w&16u)!=0u&&own.transition.w!=0u&&all(source.tile.xyz==own.tile.xyz)&&inside(q,own)&&all(interior|sourceEdge) {
+  if (view.extra.w&16u)!=0u&&own.transition.w!=0u&&all(source.tile.xyz==own.tile.xyz)&&inside(q,own)&&all(interior|sourceEdge)&&min(min(q.x-own.tile.x,q.y-own.tile.y),min(tileEnd(own).x-q.x,tileEnd(own).y-q.y))>own.tile.w {
    chosen=owner;j=links[groupEndBase+j];
   }else{loop {
    if j>=neighborCount {break;}
@@ -156,20 +149,17 @@ fn blend(q:vec2<f32>,owner:u32,old:bool)->vec3<f32>{
    let fixed=full&&r.data.y==32u;
    // 元タイル外では固定格子が常に最優先。残りの局所区画を調べても
    // 結果は変わらないため、元タイル単位の終端表で次の候補群へ進む。
-   if outside&&fixed&&(view.extra.w&16u)!=0u {
-    chosen=id;nearest=d;spacing=cell;background=0.;
-    j=links[groupEndBase+j-1u];break;
-   }
-   let rank=select(r.bounds.w,select(select(2.,1.,full),0.,fixed),outside);
+   if fixed {fixedId=id;}
+   // 内外で参照面を切り替えず、境界上の細かい区画を共通に選ぶ。
+   let legacyRank=select(r.bounds.w,select(select(2.,1.,full),0.,fixed),outside);
+   let rank=select(legacyRank,r.bounds.w,(view.extra.w&16u)!=0u);
    let better=d<nearest||(d==nearest&&(rank<background||(rank==background&&(cell<spacing||(cell==spacing&&id<chosen)))));
-   if select(better,rank<background||(rank==background&&better),outside){
-    chosen=id;nearest=d;spacing=cell;background=rank;
-   }
+   if select(select(better,rank<background||(rank==background&&better),outside),better,(view.extra.w&16u)!=0u){chosen=id;nearest=d;spacing=cell;background=rank;}
+
   }
   }
   if chosen==0xffffffffu {continue;}
   let r=records[chosen];
-  if !validAt(q,chosen){continue;}
   let sourcePad=select(band(r),r.tile.w,(view.extra.w&8u)!=0u);
   let pad=select(sourcePad,min(sourcePad,own.tile.w),(view.extra.w&8u)!=0u);
   let overlappingSource=any(r.tile.xyz!=own.tile.xyz)&&all(min(tileEnd(r),tileEnd(own))-max(r.tile.xy,own.tile.xy)>vec2(.01));
@@ -178,7 +168,15 @@ fn blend(q:vec2<f32>,owner:u32,old:bool)->vec3<f32>{
   let distance=max(max(area.x-q.x,q.x-end.x),max(area.y-q.y,q.y-end.y));
   if distance>=pad {continue;}
   let w=smoothstep(-pad,pad,-distance);
-  sum+=sampleAt(q,chosen)*w;weight+=w;
+  var sampled=sampleAt(q,chosen);
+  if fixedId!=0xffffffffu&&(view.extra.w&16u)!=0u {
+   // 両側で同じ固定曲面へ連続的に寄せる。外側だけを固定曲面にすると
+   // 境界の参照元が入れ替わる瞬間に標高と陰影が跳ぶ。
+   let u=clamp(1.+min(distance,0.)/max(pad,.001),0.,1.);
+   let fade=u*u*(3.-2.*u);
+   sampled=mix(sampled,sampleAt(q,fixedId),fade);
+  }
+  sum+=sampled*w;weight+=w;
  }
  if weight>1e-6{return sum/weight;}
  return sampleAt(q,owner);
@@ -409,7 +407,8 @@ fn meshVertex(id:u32,part:Patch,owner:u32)->Varying{
  let p=vec3(q.x*view.offset.z,field.x,q.y*view.offset.z);
  var out:Varying;out.clip=view.matrix*vec4(earthLocal(q,field.x),1.);out.position=p;
  out.normal=normalize(vec3(-field.y/view.offset.z,1.,-field.z/view.offset.z));
- out.height=field.x;out.uv=xy/view.settings.x;
+ // 評価区画の分割線ではなく、読み込んだ元タイルの境界を表示する。
+ out.height=field.x;out.uv=(q-records[owner].tile.xy)/records[owner].tile.z;
  out.bary=vec3(select(0.,1.,corner%3u==0u),select(0.,1.,corner%3u==1u),select(0.,1.,corner%3u==2u));return out;
 }
 fn gridVertex(id:u32,instance:u32)->Varying{return meshVertex(id,patches[instance],view.flags.w);}
@@ -429,9 +428,17 @@ fn coveredByFiner(q:vec2<f32>,height:f32)->bool {
  }
  return false;
 }
+// 海面から高山まで、標高の節点間を連続補間する。
+fn elevationColor(height:f32)->vec3<f32>{
+ if height<0.{return mix(vec3(.10,.28,.48),vec3(.35,.65,.77),clamp((height+1000.)/1000.,0.,1.));}
+ if height<200.{return mix(vec3(.32,.58,.33),vec3(.63,.73,.40),height/200.);}
+ if height<1000.{return mix(vec3(.63,.73,.40),vec3(.78,.70,.44),(height-200.)/800.);}
+ if height<2000.{return mix(vec3(.78,.70,.44),vec3(.62,.45,.31),(height-1000.)/1000.);}
+ if height<3000.{return mix(vec3(.62,.45,.31),vec3(.75,.73,.69),(height-2000.)/1000.);}
+ return mix(vec3(.75,.73,.69),vec3(.97,.97,.95),clamp((height-3000.)/1000.,0.,1.));
+}
 struct Fragment { @location(0) color:vec4<f32>, @location(1) world:vec4<f32> }
 @fragment fn fs(v:Varying)->Fragment{
- if !validAt(v.position.xz/view.offset.z,view.flags.w){discard;}
  if (view.extra.w&4u)!=0u&&coveredByFiner(v.position.xz/view.offset.z,v.height){discard;}
  var normal=normalize(v.normal);
  if(view.flags.y==0u){normal=normalize(cross(dpdx(v.position),dpdy(v.position)));if(normal.y<0.){normal=-normal;}}
@@ -444,8 +451,10 @@ struct Fragment { @location(0) color:vec4<f32>, @location(1) world:vec4<f32> }
   let channels=abs(fract(vec3(hue)+vec3(0.,2./3.,1./3.))*6.-3.);
   base=.95*mix(vec3(1.),clamp(channels-1.,vec3(0.),vec3(1.)),.7);
  }
- var color=clamp(base*select(shade,1.,landcover.settings.w>0.),vec3(0.),vec3(1.));
- var materialWeight=select(1.,-1.,(view.extra.w&2u)!=0u);
+ let elevationMode=(view.extra.w&128u)!=0u;
+ if elevationMode{base=elevationColor(v.height);}
+ var color=clamp(base*select(shade,1.,landcover.settings.w>0.&&!elevationMode),vec3(0.),vec3(1.));
+ var materialWeight=select(1.,-1.,(view.extra.w&2u)!=0u||elevationMode);
  let width=max(fwidth(v.bary),vec3(.0001));
  let edge=min(min(v.bary.x/width.x,v.bary.y/width.y),v.bary.z/width.z);
  if view.flags.z>0u&&view.flags.z<=2u{
@@ -466,7 +475,7 @@ struct Fragment { @location(0) color:vec4<f32>, @location(1) world:vec4<f32> }
  let q=records[view.flags.w].tile.xy+v.xy;
  let p=vec3(q.x*view.offset.z,v.z,q.y*view.offset.z);
  var out:Varying;out.clip=view.matrix*vec4(earthLocal(q,v.z),1.);out.position=p;out.height=v.z;out.normal=vec3(0.,1.,0.);
- out.uv=(q-records[view.flags.w].bounds.xy)/view.settings.x;out.bary=vec3(select(0.,1.,id%3u==0u),select(0.,1.,id%3u==1u),select(0.,1.,id%3u==2u));return out;
+ out.uv=(q-records[view.flags.w].tile.xy)/records[view.flags.w].tile.z;out.bary=vec3(select(0.,1.,id%3u==0u),select(0.,1.,id%3u==1u),select(0.,1.,id%3u==2u));return out;
 }
 @fragment fn control_fs(v:Varying)->Fragment{
  if coveredByFiner(v.position.xz/view.offset.z,v.height){discard;}
@@ -475,8 +484,9 @@ struct Fragment { @location(0) color:vec4<f32>, @location(1) world:vec4<f32> }
  let light=normalize(vec3(-.55,1.,.65));
  let flat=.39+.70*light.y;
  let shade=clamp(flat+.70*(max(dot(normal,light),0.)-light.y)*view.settings.z,.08,1.3);
- let base=landcoverColor(v.position,mix(vec3(.41,.49,.33),vec3(.65,.62,.47),smoothstep(900.,3800.,v.height)));
- var color=clamp(base*select(shade,1.,landcover.settings.w>0.),vec3(0.),vec3(1.));
+ var base=landcoverColor(v.position,mix(vec3(.41,.49,.33),vec3(.65,.62,.47),smoothstep(900.,3800.,v.height)));
+ if (view.extra.w&128u)!=0u{base=elevationColor(v.height);}
+ var color=clamp(base*select(shade,1.,landcover.settings.w>0.&&(view.extra.w&128u)==0u),vec3(0.),vec3(1.));
  let width=max(fwidth(v.bary),vec3(.0001));
  let edge=min(min(v.bary.x/width.x,v.bary.y/width.y),v.bary.z/width.z);
  if view.extra.y==0u{
@@ -485,7 +495,7 @@ struct Fragment { @location(0) color:vec4<f32>, @location(1) world:vec4<f32> }
   if (view.flags.z==2u||view.flags.z==4u)&&edge>1.{discard;}
   color=mix(vec3(.035,.055,.04),color,smoothstep(.15,.45,edge));
  }
- return Fragment(vec4(linear(color),1.),vec4(v.position.xz/view.offset.z,shade,select(-1.,1.,view.extra.y!=0u && (view.flags.z==0u || edge>1.))*(v.height+10000.)));
+ return Fragment(vec4(linear(color),1.),vec4(v.position.xz/view.offset.z,shade,select(-1.,1.,view.extra.y!=0u && (view.flags.z==0u || edge>1.) && (view.extra.w&128u)==0u)*(v.height+10000.)));
 }
 
 fn starHash(p:vec2<f32>)->f32{return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}

@@ -11,6 +11,28 @@ fn container() -> Connection {
 }
 
 #[test]
+fn terrain_zoom_is_unique_per_dataset() {
+    let conn = container();
+    conn.execute_batch(
+        "INSERT INTO datasets VALUES(1,'one','terrain','地形1','2026',1,'{}');
+         INSERT INTO datasets VALUES(2,'two','terrain','地形2','2026',1,'{}');
+         INSERT INTO terrain_levels VALUES(1,1,6,'{}');
+         INSERT INTO terrain_levels VALUES(2,1,6,'{}');
+         INSERT INTO terrain_tiles VALUES(1,1,1,1,'test',x'01');
+         INSERT INTO terrain_tiles VALUES(2,1,1,1,'test',x'01');",
+    )
+    .unwrap();
+    let error = conn
+        .execute("INSERT INTO terrain_levels VALUES(1,2,6,'{}')", [])
+        .unwrap_err();
+    assert_eq!(
+        error.sqlite_error_code(),
+        Some(db::rusqlite::ErrorCode::ConstraintViolation)
+    );
+    db::validate(&conn).unwrap();
+}
+
+#[test]
 fn combines_three_dataset_types_without_changing_payloads() {
     let surface = container();
     let mut png = Cursor::new(Vec::new());

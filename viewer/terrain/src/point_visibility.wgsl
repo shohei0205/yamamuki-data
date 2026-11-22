@@ -21,7 +21,7 @@ fn triangleHeight(q:vec2<f32>,a:vec3<f32>,b:vec3<f32>,c:vec3<f32>)->vec2<f32>{
 }
 // 数式上の曲面ではなく、実際に描いた三角形の高さへ地点を置く。
 fn meshHeight(q:vec2<f32>,owner:u32)->vec2<f32>{
- if (view.extra.y!=0u||view.flags.z==4u)&&records[owner].tile_end.z<.5{return vec2(0.);}
+ if view.extra.y!=0u||view.flags.z==4u{return vec2(0.);}
  let r=records[owner];
  for(var j=0u;j<r.draw.y;j++) {
   let part=patches[r.draw.x+j];let origin=r.bounds.xy+part.bounds.xy;
@@ -46,7 +46,7 @@ fn meshHeight(q:vec2<f32>,owner:u32)->vec2<f32>{
  let id=index.x;if id>=arrayLength(&queries){return;}
  let q=queries[id];var owner=0xffffffffu;var z=0u;var side=1e30;
  for(var i=0u;i<view.extra.x;i++){
-  let r=records[i];if r.draw.y>0u&&inside(q.xy,r)&&validAt(q.xy,i)&&(r.data.z>z||(r.data.z==z&&r.bounds.z<side)){owner=i;z=r.data.z;side=r.bounds.z;}
+  let r=records[i];if r.draw.y>0u&&inside(q.xy,r)&&(r.data.z>z||(r.data.z==z&&r.bounds.z<side)){owner=i;z=r.data.z;side=r.bounds.z;}
  }
  var height=2.;
  if owner!=0xffffffffu{

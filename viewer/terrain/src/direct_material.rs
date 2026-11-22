@@ -755,7 +755,7 @@ impl Renderer {
                     latitude.sin() as f32,
                     latitude.cos() as f32,
                     crate::globe::RADIUS as f32,
-                    1.,
+                    camera.haze_strength as f32,
                 ];
                 params.eye = [
                     (back.x * camera.distance) as f32,

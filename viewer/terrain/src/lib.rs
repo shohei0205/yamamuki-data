@@ -5,6 +5,8 @@ pub use yamamuki_terrain::{
 };
 mod catalog_cache;
 mod globe;
+mod gpu_culling;
+mod gpu_planner;
 mod gpu_profile;
 mod hit_test;
 pub use hit_test::Hit;
@@ -60,32 +62,6 @@ fn same_meshes(a: &[Arc<shared_render::Tile>], b: &[Arc<shared_render::Tile>]) -
     a.sort_unstable();
     b.sort_unstable();
     a == b
-}
-// 同じ元タイル内の再分割ではなく、重なる領域の収録レベルが変わった場合だけ遷移する。
-fn heightmap_lod_change(a: &[Arc<shared_render::Tile>], b: &[Arc<shared_render::Tile>]) -> bool {
-    let ancestors = |fine: &[Arc<shared_render::Tile>], coarse: &[Arc<shared_render::Tile>]| {
-        let mut by_key = HashMap::<Key, Vec<&shared_render::Tile>>::new();
-        for tile in coarse {
-            by_key.entry(tile.key).or_default().push(tile);
-        }
-        fine.iter().any(|tile| {
-            (0..tile.key.0).any(|z| {
-                let shift = tile.key.0 - z;
-                by_key
-                    .get(&(z, tile.key.1 >> shift, tile.key.2 >> shift))
-                    .is_some_and(|others| {
-                        others.iter().any(|other| {
-                            (tile.is_heightmap() || other.is_heightmap())
-                                && (0..2).all(|i| {
-                                    tile.origin[i] < other.origin[i] + other.side
-                                        && other.origin[i] < tile.origin[i] + tile.side
-                                })
-                        })
-                    })
-            })
-        })
-    };
-    ancestors(a, b) || ancestors(b, a)
 }
 fn drain_messages(receiver: &mpsc::Receiver<Message>) -> Vec<Message> {
     receiver.try_iter().collect()
@@ -151,6 +127,28 @@ fn worker(
             }
             send(Message::Selected(request.version, keys.clone()));
             let mut interrupted = false;
+            // 近景の詳細待ちに全国最粗レベルを露出させない。祖先を先に背景へ渡す。
+            let fallback = selection::fallback_ancestors(&db.catalog, &keys)
+                .into_iter()
+                .filter(|key| !request.resident.contains(key))
+                .collect::<Vec<_>>();
+            for batch in fallback.chunks(parallelism) {
+                match requests.try_recv() {
+                    Ok(new) => {
+                        next = Some(new);
+                        interrupted = true;
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
+                    Err(mpsc::TryRecvError::Empty) => {}
+                }
+                db.packet_batch(batch, &|packet| {
+                    send(Message::Packet(request.version, packet, true))
+                })?;
+            }
+            if interrupted {
+                continue;
+            }
             let mut pending = keys
                 .iter()
                 .copied()
@@ -282,13 +280,27 @@ struct RememberedScene {
     tiles: Vec<Arc<shared_render::Tile>>,
     background: Vec<Arc<shared_render::Tile>>,
 }
-fn same_observer_direction(a: &selection::Camera, b: &selection::Camera) -> bool {
-    let ea = a.eye();
-    let eb = b.eye();
+fn same_remembered_view(a: &selection::Camera, b: &selection::Camera) -> bool {
+    // 地点視点は眼の位置、俯瞰視点は注視点を基準に方向区画を決める。
+    let ea = if a.observer {
+        a.eye()
+    } else {
+        [a.center[0], a.center[1], a.height]
+    };
+    let eb = if b.observer {
+        b.eye()
+    } else {
+        [b.center[0], b.center[1], b.height]
+    };
     let distance = ((ea[0] - eb[0]).hypot(ea[1] - eb[1])) * a.scale();
     let horizontal = 2. * (a.tan_half_fov() * a.viewport[0] / a.viewport[1]).atan();
     let yaw = (a.yaw - b.yaw).sin().atan2((a.yaw - b.yaw).cos()).abs();
-    distance < 50.
+    a.observer == b.observer
+        && a.globe == b.globe
+        && a.maximum == b.maximum
+        && a.auto == b.auto
+        && a.lod_quality == b.lod_quality
+        && distance < 50.
         && (ea[2] - eb[2]).abs() < 50.
         && yaw < horizontal * 0.1
         && (a.pitch - b.pitch).abs() < a.fov_y * 0.1
@@ -320,6 +332,7 @@ struct App {
     transition: Instant,
     wanted: Vec<Key>,
     pending_roots: VecDeque<Key>,
+    fallback_keys: HashSet<Key>,
     scene_pending: bool,
     preparation: Option<(u64, Arc<Vec<PlannedField>>)>,
     preparation_camera: Option<selection::Camera>,
@@ -395,6 +408,7 @@ impl App {
             transition: Instant::now() - Duration::from_secs(1),
             wanted: Vec::new(),
             pending_roots: VecDeque::new(),
+            fallback_keys: HashSet::new(),
             scene_pending: false,
             preparation: None,
             preparation_camera: None,
@@ -488,11 +502,8 @@ impl App {
     }
     fn desired_resolution(&self, key: Key, field: shared_field::Field) -> (u32, f64) {
         let pixels = field.pixels(key, &self.camera).unwrap_or(0.);
-        let n = if self.resolution == 0 || self.wire >= 3 {
-            self.packets
-                .get(&key)
-                .and_then(|p| p.heightmap.as_ref())
-                .map_or(32, |m| m.cells)
+        let n = if self.resolution == 0 {
+            32
         } else {
             ((pixels / self.camera.mesh_pixels)
                 .ceil()
@@ -560,15 +571,38 @@ impl App {
         if self.shown.is_empty() {
             return;
         }
+        let mut anchor = self.camera.clone();
         if let Some(i) = self
             .remembered
             .iter()
-            .position(|s| same_observer_direction(&self.camera, &s.camera))
+            .position(|s| same_remembered_view(&self.camera, &s.camera))
         {
-            self.remembered.remove(i);
+            let stored = self.remembered.remove(i).unwrap();
+            // 近い視点を毎回新しい基準へ移すと、連続回転で元の記録が消える。
+            // 同じ視点の精細化だけを更新し、方向区画の基準は動かさない。
+            let exact = stored.camera.center == self.camera.center
+                && stored.camera.height == self.camera.height
+                && stored.camera.distance == self.camera.distance
+                && stored.camera.yaw == self.camera.yaw
+                && stored.camera.pitch == self.camera.pitch
+                && stored.camera.fov_y == self.camera.fov_y
+                && stored.camera.viewport == self.camera.viewport;
+            let finest_step = |tiles: &[Arc<shared_render::Tile>]| {
+                tiles
+                    .iter()
+                    .map(|tile| tile.side / tile.n as f64)
+                    .fold(f64::INFINITY, f64::min)
+            };
+            let old_step = finest_step(&stored.tiles);
+            let new_step = finest_step(&self.shown);
+            if new_step > old_step || (!exact && new_step >= old_step) {
+                self.remembered.push_back(stored);
+                return;
+            }
+            anchor = stored.camera;
         }
         self.remembered.push_back(RememberedScene {
-            camera: self.camera.clone(),
+            camera: anchor,
             tiles: self.shown.clone(),
             background: self.local_background.clone(),
         });
@@ -580,7 +614,7 @@ impl App {
         let Some(i) = self
             .remembered
             .iter()
-            .rposition(|s| same_observer_direction(&self.camera, &s.camera))
+            .rposition(|s| same_remembered_view(&self.camera, &s.camera))
         else {
             return;
         };
@@ -882,24 +916,12 @@ impl App {
         }
         // 全領域が揃ってから背景と本体を同時に切り替え、準備途中の穴を作らない。
         if changed {
-            // 同一LOD内の再分割は即時に切り替える。ハイトマップのLOD変更は、
-            // 保持した旧描画パッチから高さを復元し、450msで新しい面へ補間する。
-            if heightmap_lod_change(&self.shown, &next) {
-                self.previous = self
-                    .shown
-                    .iter()
-                    .chain(&self.local_background)
-                    .chain(&self.roots)
-                    .cloned()
-                    .collect();
-                self.previous_primary = self.shown.len();
-                self.transition = Instant::now();
-            } else {
-                self.previous.clear();
-                self.previous_primary = 0;
-                self.transition = Instant::now() - Duration::from_secs(1);
-            }
+            // 分割が異なる旧面を新しい接合格子へ変形すると、境界だけが一時的に
+            // 凹む。全区画が揃った新メッシュへ一括で切り替え、旧面を再評価しない。
             self.shown = next;
+            self.previous.clear();
+            self.previous_primary = 0;
+            self.transition = Instant::now() - Duration::from_secs(1);
         }
         self.local_background = background;
         if self.transition.elapsed() >= Duration::from_millis(450) {
@@ -1102,6 +1124,9 @@ impl eframe::App for App {
                         let key = packet.key;
                         self.packets.insert(key, packet);
                         if root {
+                            if key.0 != self.base_level && !self.fallback_keys.contains(&key) {
+                                continue;
+                            }
                             scene_changed |= self.camera.projected(key).0;
                             if !self.roots.iter().any(|t| t.key == key)
                                 && !self.pending_roots.contains(&key)
@@ -1121,6 +1146,25 @@ impl eframe::App for App {
                                 self.remembered_until_selection = None;
                             }
                             self.wanted = keys;
+                            let mut fallback_keys = self.wanted.clone();
+                            fallback_keys.extend(self.shown.iter().map(|tile| tile.key));
+                            let keep = selection::fallback_ancestors(&self.catalog, &fallback_keys)
+                                .into_iter()
+                                .collect::<HashSet<_>>();
+                            self.roots.retain(|tile| {
+                                tile.key.0 == self.base_level || keep.contains(&tile.key)
+                            });
+                            self.pending_roots
+                                .retain(|key| key.0 == self.base_level || keep.contains(key));
+                            self.fallback_keys = keep;
+                            for &key in &self.fallback_keys {
+                                if self.packets.contains_key(&key)
+                                    && !self.roots.iter().any(|tile| tile.key == key)
+                                    && !self.pending_roots.contains(&key)
+                                {
+                                    self.pending_roots.push_front(key);
+                                }
+                            }
                             scene_changed = true;
                         }
                     }
@@ -1213,8 +1257,8 @@ impl eframe::App for App {
                     ui.add(egui::Slider::new(&mut self.settings[0],0.0..=1.).text("全域傾き調整"));
                     ui.add(egui::Slider::new(&mut self.settings[1],0.0..=6.).text("陰影の強さ"));
                     ui.checkbox(&mut self.smooth,"滑らかな陰影");
-                    egui::ComboBox::from_id_salt("wire").selected_text(["ワイヤーなし","描画網＋陰影","描画網のみ","元データ網＋陰影","元データ網のみ"][self.wire as usize]).show_ui(ui,|ui|{
-                        for (i,label) in ["ワイヤーなし","描画網＋陰影","描画網のみ","元データ網＋陰影","元データ網のみ"].iter().enumerate(){ui.selectable_value(&mut self.wire,i as u32,*label);}
+                    egui::ComboBox::from_id_salt("wire").selected_text(["ワイヤーなし","描画網＋陰影","描画網のみ","制御点TIN＋陰影","制御点TINのみ"][self.wire as usize]).show_ui(ui,|ui|{
+                        for (i,label) in ["ワイヤーなし","描画網＋陰影","描画網のみ","制御点TIN＋陰影","制御点TINのみ"].iter().enumerate(){ui.selectable_value(&mut self.wire,i as u32,*label);}
                     });
                     ui.checkbox(&mut self.borders,"タイル境界");ui.checkbox(&mut self.colors,"LOD色分け");ui.checkbox(&mut self.join,"異LOD接合");ui.checkbox(&mut self.animate,"LODを滑らかに切替");
                 });
@@ -1226,7 +1270,7 @@ impl eframe::App for App {
             ui.label(format!("左ドラッグ 移動 ／ ホイール 拡大縮小 ／ 右ドラッグ 回転・傾き ／ 表示 {:?} ／ z6常駐 {}枚 ／ GPU {:0.1} MiB",
                 levels,self.roots.len(),self.gpu.values().map(|t|t.bytes as f64).sum::<f64>()/1048576.));
             let (triangles,patches,extra_bytes)=self.renderer.metrics();
-            ui.label(format!("標高点 {} ／ 描画三角形 {} ／ {}パッチ ／ GPU接合・モーフ {:0.1} MiB ／ 表示タイルの圧縮BLOB {:0.1} MiB",
+            ui.label(format!("制御点 {} ／ 描画三角形 {} ／ {}パッチ ／ GPU接合・モーフ {:0.1} MiB ／ 表示タイルの圧縮BLOB {:0.1} MiB",
                 self.shown.iter().map(|t|t.controls).sum::<usize>(),
                 triangles,patches,extra_bytes as f64/1048576.,
                 self.shown.iter().map(|t|t.compressed_bytes as f64).sum::<f64>()/1048576.));
@@ -1510,6 +1554,54 @@ pub struct Projection {
     camera: selection::Camera,
 }
 impl Projection {
+    /// 視点位置を固定し、掴んだ地点がカーソルへ来る方位・傾きだけを求める。
+    pub fn observer_grab_angles(
+        &self,
+        rect: egui::Rect,
+        world: [f64; 2],
+        height: f64,
+        pointer: egui::Pos2,
+    ) -> Option<[f64; 2]> {
+        let source = &self.camera;
+        if !source.observer {
+            return None;
+        }
+        let eye = source.eye();
+        let project = |yaw: f64, pitch: f64| {
+            let mut camera = source.clone();
+            camera.set_observer(
+                [eye[0], eye[1]],
+                eye[2],
+                yaw,
+                pitch,
+                source.fov_y,
+                source.viewport,
+            );
+            Projection { camera }.screen(rect, world, height)
+        };
+        let mut angles = [source.yaw, source.pitch];
+        for _ in 0..8 {
+            let at = project(angles[0], angles[1])?;
+            let error = pointer - at;
+            if error.length() < 0.1 {
+                break;
+            }
+            let step = 0.001;
+            let dx = (project(angles[0] + step, angles[1])? - at) / step as f32;
+            let dy = (project(angles[0], angles[1] + step)? - at) / step as f32;
+            let det = f64::from(dx.x) * f64::from(dy.y) - f64::from(dx.y) * f64::from(dy.x);
+            if det.abs() < 1e-8 {
+                return None;
+            }
+            let yaw =
+                (f64::from(error.x) * f64::from(dy.y) - f64::from(error.y) * f64::from(dy.x)) / det;
+            let pitch =
+                (f64::from(dx.x) * f64::from(error.y) - f64::from(dx.y) * f64::from(error.x)) / det;
+            angles[0] += yaw.clamp(-0.25, 0.25);
+            angles[1] = (angles[1] + pitch.clamp(-0.25, 0.25)).clamp(-1.5, 1.5);
+        }
+        Some(angles)
+    }
     /// 貼付画像の準備前に、地形の標高範囲を含む保守的な視野判定を行う。
     pub fn tile_visible(&self, bounds: [f64; 4]) -> bool {
         self.camera
@@ -1677,13 +1769,19 @@ fn projected_material_bands(
 ) -> Vec<([f64; 4], f64)> {
     let eye = c.eye();
     let center = [eye[0] / shared_data::WORLD, eye[1] / shared_data::WORLD];
+    let scale = c.preparation_scale();
+    // 景色モードの最遠景を可視矩形の幅で決めると、回転だけで地図LODが変わる。
+    let observer_limit = c.far_depth() / (scale * shared_data::WORLD);
+    let overview_span = if c.observer {
+        2. * observer_limit
+    } else {
+        (regions[0][2] - regions[0][0]).max(regions[0][3] - regions[0][1])
+    };
     let mut result = vec![(
         regions[0],
-        (rect.width().max(rect.height()) as f64
-            / (256. * (regions[0][2] - regions[0][0]).max(regions[0][3] - regions[0][1]) * 1.02))
-            .log2(),
+        (rect.width().max(rect.height()) as f64 / (256. * overview_span * 1.02)).log2(),
     )];
-    let mut radius = (minimum_span / 2.).max(64. / (c.scale() * shared_data::WORLD));
+    let mut radius = (minimum_span / 2.).max(64. / (scale * shared_data::WORLD));
     let limit = (0..2)
         .flat_map(|axis| {
             [
@@ -1693,6 +1791,11 @@ fn projected_material_bands(
         })
         .fold(0., f64::max)
         .max(radius);
+    let limit = if c.observer {
+        observer_limit.max(radius)
+    } else {
+        limit
+    };
     for _ in 0..20 {
         let bounds = [
             center[0] - radius,
@@ -1701,10 +1804,10 @@ fn projected_material_bands(
             center[1] + radius,
         ];
         // 内側の境界（半径の半分）を基準に、横方向の2画素に必要な密度を確保する。
-        let horizontal = radius * shared_data::WORLD * c.scale() / 2.;
+        let horizontal = radius * shared_data::WORLD * scale / 2.;
         let vertical = eye[2] - eye[2].clamp(-500., 4500.);
         let distance = horizontal.hypot(vertical).max(1.);
-        let zoom = (shared_data::WORLD * c.scale() * rect.height() as f64
+        let zoom = (shared_data::WORLD * scale * rect.height() as f64
             / (1024. * c.tan_half_fov() * distance))
             .log2();
         result.push((bounds, zoom));
@@ -1716,13 +1819,7 @@ fn projected_material_bands(
     result
 }
 fn wire_control(ui: &mut egui::Ui, wire: &mut u32) {
-    let labels = [
-        "なし",
-        "描画網",
-        "描画網のみ",
-        "元データ網",
-        "元データ網のみ",
-    ];
+    let labels = ["なし", "描画網", "描画網のみ", "制御点TIN", "制御点TINのみ"];
     // 親メニューと同じ階層管理を使い、選択前に親だけ閉じることを防ぐ。
     ui.menu_button(labels[*wire as usize], |ui| {
         for (i, label) in labels.iter().enumerate() {
@@ -1831,6 +1928,7 @@ impl TerrainView {
             [rect.width() as f64, rect.height() as f64],
         ) {
             if !self.app.path.is_empty() {
+                self.app.restore_remembered_scene();
                 self.app.queued = true;
                 self.app.settled = false;
             }
@@ -2163,6 +2261,8 @@ impl TerrainView {
         self.app.borders = false;
         self.app.colors = false;
         self.app.wire = 0;
+        self.app.camera.gpu_culling = false;
+        self.app.camera.gpu_planning = false;
         self.app.camera.lod_quality = selection::Camera::default().lod_quality;
         let maximum = self
             .app
@@ -2181,6 +2281,13 @@ impl TerrainView {
         self.app.last_interaction = Instant::now();
     }
 
+    pub fn set_haze_strength(&mut self, strength: f64) {
+        self.app.camera.haze_strength = if strength.is_finite() {
+            strength.clamp(0., 2.)
+        } else {
+            1.
+        };
+    }
     pub fn interpolation_pending(&self) -> bool {
         self.app.renderer.interpolation_pending()
     }
@@ -2190,9 +2297,32 @@ impl TerrainView {
     pub fn level_colors(&self) -> bool {
         self.app.colors
     }
+    pub fn elevation_colors(&self) -> bool {
+        self.app.settings[2] >= 0.5
+    }
+    pub fn set_elevation_colors(&mut self, enabled: bool) {
+        self.app.settings[2] = if enabled { 1. } else { 0. };
+    }
     pub fn display_controls(&mut self, ui: &mut egui::Ui) {
         ui.add(egui::Slider::new(&mut self.app.settings[0], 0.0..=1.).text("傾き調整"));
         ui.add(egui::Slider::new(&mut self.app.settings[1], 0.0..=3.).text("地形の陰影の強さ"));
+        ui.add_enabled_ui(!self.app.camera.gpu_planning, |ui| {
+            ui.checkbox(
+                &mut self.app.camera.gpu_culling,
+                "GPUカリング＋間接描画（試験）",
+            );
+        });
+        ui.checkbox(
+            &mut self.app.camera.gpu_planning,
+            "GPUで可視判定・分割計画（試験）",
+        );
+        let (pending, error) = self.app.renderer.planning_status();
+        if self.app.camera.gpu_planning && pending {
+            ui.small("GPU分割計画を準備中");
+        }
+        if let Some(error) = error {
+            ui.colored_label(egui::Color32::RED, error);
+        }
         ui.checkbox(&mut self.app.join, "境界接合");
         ui.checkbox(&mut self.app.animate, "LODを滑らかに切替");
         ui.checkbox(&mut self.app.borders, "タイル境界");
@@ -2606,6 +2736,11 @@ mod notification_tests {
         let handle = std::thread::spawn(move || {
             worker(source, requests, messages, egui::Context::default())
         });
+        let db = shared_data::Database::open(&path)?;
+        let expected_fallback =
+            selection::fallback_ancestors(&db.catalog, &selection::select(&db.catalog, &camera));
+        drop(db);
+        let mut received_fallback = HashSet::new();
         let mut selected = false;
         let mut delivered = false;
         loop {
@@ -2616,10 +2751,21 @@ mod notification_tests {
                     assert!(!keys.is_empty());
                     selected = true;
                 }
-                Message::Packet(version, _, root) => {
-                    assert!(selected && !root);
+                Message::Packet(version, packet, root) => {
+                    assert!(selected);
                     assert_eq!(version, 2);
-                    delivered = true;
+                    if root {
+                        assert!(packet.key.0 < 13 && packet.key.0 >= 6);
+                        received_fallback.insert(packet.key);
+                    } else {
+                        assert!(
+                            expected_fallback
+                                .iter()
+                                .all(|key| received_fallback.contains(key)),
+                            "代替の祖先を先に準備していない"
+                        );
+                        delivered = true;
+                    }
                 }
                 Message::Ready(version, ..) => {
                     assert!(delivered);
@@ -2656,6 +2802,76 @@ mod notification_tests {
 #[cfg(test)]
 mod projection_tests {
     use super::*;
+    #[test]
+    fn observer_grab_keeps_ground_under_pointer_on_globe() {
+        let origin = selection::lonlat(140.1, 36.2);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200., 800.));
+        for pitch in [0.2, 0.5, 1.2] {
+            let mut camera = selection::Camera {
+                globe: true,
+                ..Default::default()
+            };
+            camera.set_observer(origin, 100., 0.8, pitch, 0.8, [1200., 800.]);
+            let projection = Projection {
+                camera: camera.clone(),
+            };
+            let anchor = projection.world_at_height(rect, rect.center(), 0.).unwrap();
+            let pointer = rect.center() + egui::vec2(70., 35.);
+            let angles = projection
+                .observer_grab_angles(rect, anchor, 0., pointer)
+                .unwrap();
+            let eye = camera.eye();
+            camera.set_observer(
+                [eye[0], eye[1]],
+                eye[2],
+                angles[0],
+                angles[1],
+                0.8,
+                [1200., 800.],
+            );
+            let after = camera.eye();
+            assert!(
+                eye.iter().zip(after).all(|(a, b)| (a - b).abs() < 1e-6),
+                "ドラッグで現在位置が動いた"
+            );
+            let screen = Projection { camera }.screen(rect, anchor, 0.).unwrap();
+            assert!(
+                screen.distance(pointer) < 0.5,
+                "掴んだ位置がカーソルへ追従しない: {screen:?}"
+            );
+        }
+    }
+    #[test]
+    fn observer_map_lod_does_not_follow_visible_bounds() {
+        let mut camera = selection::Camera::default();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600., 900.));
+        let mut reference: Option<Vec<f64>> = None;
+        for (yaw, span) in [(0., 0.001), (0.7, 0.01), (1.4, 0.1), (0., 0.001)] {
+            camera.set_observer(
+                selection::lonlat(140.1, 36.2),
+                550.,
+                yaw,
+                0.3,
+                0.85,
+                [1600., 900.],
+            );
+            let eye = camera.eye();
+            let x = eye[0] / shared_data::WORLD;
+            let y = eye[1] / shared_data::WORLD;
+            let area = [x - span, y - span, x + span, y + span];
+            let bands = projected_material_bands(&camera, rect, 0.00002, [area; 3]);
+            let levels: Vec<_> = bands.iter().map(|v| v.1).collect();
+            if let Some(old) = &reference {
+                assert_eq!(old.len(), levels.len(), "方角で距離帯数が変わる");
+                assert!(
+                    old.iter().zip(&levels).all(|(a, b)| (a - b).abs() < 1e-8),
+                    "方角でオンライン地図のLODが変わる"
+                );
+            } else {
+                reference = Some(levels);
+            }
+        }
+    }
     #[test]
     fn observer_images_use_gradual_distance_levels() {
         let mut camera = selection::Camera::default();
@@ -3022,6 +3238,23 @@ mod wire_menu_tests {
 #[cfg(test)]
 mod remembered_scene_tests {
     use super::*;
+    #[test]
+    fn orbit_cache_direction_uses_target_instead_of_moving_eye() {
+        let a = selection::Camera {
+            distance: 1_000_000.,
+            pitch: 0.2,
+            ..Default::default()
+        };
+        let mut b = a.clone();
+        b.pitch += 0.02;
+        assert!(same_remembered_view(&a, &b));
+        b.center[0] += 1000.;
+        assert!(!same_remembered_view(&a, &b));
+        b = a.clone();
+        b.maximum = 12;
+        assert!(!same_remembered_view(&a, &b));
+    }
+
     pub(super) fn app() -> Option<App> {
         app_with_backend(eframe::wgpu::Backends::all())
     }
@@ -3052,6 +3285,57 @@ mod remembered_scene_tests {
             "national",
             None,
         ))
+    }
+    #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUでメッシュの再利用を検査する"
+    )]
+    fn orbit_pitch_roundtrip_restores_prepared_mesh_without_uploading() {
+        let Some(mut app) = app() else {
+            return;
+        };
+        let center = [0.8892653752263564, 0.3921356730222418];
+        let zoom = 18.77777736816143;
+        let yaw = 0.3792136609554291;
+        let tilt = 80f64.to_radians();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2686., 1562.8125));
+        app.camera.set_map_view(
+            center,
+            zoom,
+            yaw,
+            tilt,
+            [rect.width() as f64, rect.height() as f64],
+        );
+        let original = app.camera.clone();
+        app.path = "俯瞰の上下往復を検査するfixture".into();
+        let packet = Packet::constant_plane((13, 7284, 3212), 200.).unwrap();
+        let detailed = app.renderer.upload(&packet, 2).unwrap();
+        let other = app.renderer.upload(&packet, 1).unwrap();
+        app.shown = vec![detailed.clone()];
+        app.remember_scene();
+        for i in 1..=70 {
+            app.camera.pitch = original.pitch + (1.4 - original.pitch) * i as f64 / 70.;
+            app.shown = vec![other.clone()];
+            app.remember_scene();
+        }
+        assert!(app.remembered.len() > 2 && app.remembered.len() <= 32);
+        let bytes = app.renderer.source_bytes();
+        let mut view = TerrainView {
+            app,
+            label: String::new(),
+            automatic_maximum: None,
+        };
+        view.set_map_camera(center, zoom, yaw, tilt, rect);
+        assert!(
+            Arc::ptr_eq(&view.app.shown[0], &detailed),
+            "俯瞰の往復で詳細メッシュが復帰しない"
+        );
+        assert_eq!(view.app.renderer.source_bytes(), bytes);
+        assert_eq!(
+            view.app.remembered_until_selection,
+            Some(view.app.version + 1)
+        );
     }
     #[test]
     #[cfg_attr(

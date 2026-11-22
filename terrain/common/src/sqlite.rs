@@ -95,7 +95,7 @@ impl Tile {
         );
         let controls = bytes[at + 4..].to_vec();
         ensure!(
-            &controls[..4] == b"NQC1" || &controls[..4] == b"NDC1",
+            [b"NQC1", b"NDC1", b"NQZ1", b"NDZ1"].contains(&controls[..4].try_into().unwrap()),
             "制御点形式が未対応です"
         );
         ensure!(
@@ -103,7 +103,7 @@ impl Tile {
                 && u32::from_le_bytes(controls[8..12].try_into()?) as usize == parent_count,
             "制御点ヘッダーと外側ヘッダーが不一致です"
         );
-        if &controls[..4] == b"NQC1" {
+        if &controls[..4] == b"NQC1" || &controls[..4] == b"NQZ1" {
             ensure!(parents.is_empty(), "独立タイルに親参照があります");
         }
         Ok(Self {
@@ -135,8 +135,6 @@ pub struct Database {
     pub catalog: HashMap<Key, usize>,
     /// 元DEMに対する上下の許容誤差の大きい方。表示側のLOD選択に使う。
     pub level_errors: HashMap<u32, f64>,
-    pub level_formats: HashMap<u32, String>,
-    pub level_settings: HashMap<u32, serde_json::Value>,
     cache: HashMap<Key, Arc<Vec<[i32; 3]>>>,
 }
 impl Database {
@@ -166,11 +164,10 @@ impl Database {
             .collect::<Vec<_>>()
             .join(" ／ ");
         let dataset = sets[0].key;
+        yamamuki_data_sqlite::terrain_zooms(&connection, dataset)?;
         let generation = sets[0].data_version.clone();
         let mut levels = HashMap::new();
         let mut level_errors = HashMap::new();
-        let mut level_formats = HashMap::new();
-        let mut level_settings = HashMap::new();
         {
             let mut query = connection.prepare(
                 "SELECT z,level_key,settings_json FROM terrain_levels WHERE dataset_key=?1",
@@ -185,53 +182,12 @@ impl Database {
             for row in rows {
                 let (z, key, raw) = row?;
                 let settings: serde_json::Value = serde_json::from_str(&raw)?;
-                let encoding = settings["encoding"]
-                    .as_str()
-                    .context("地形レベルにencodingがありません")?;
-                ensure!(
-                    encoding == ENCODING || crate::heightmap::is_encoding(encoding),
-                    "未対応の地形レベル形式です: {encoding}"
-                );
-                if crate::heightmap::is_encoding(encoding) {
-                    let cells = settings["cellsPerTile"]
-                        .as_u64()
-                        .context("格子セル数がありません")?;
+                if let Some(encoding) = settings.get("encoding") {
                     ensure!(
-                        (8..=256).contains(&cells)
-                            && cells.is_power_of_two()
-                            && settings["halo"] == 1
-                            && settings["interpolation"] == "bilinear",
-                        "格子レベル設定が不正です"
-                    );
-                    if encoding != crate::heightmap::WEBP_MINMAX_ENCODING {
-                        let step = settings[if encoding == crate::heightmap::WEBP_ENCODING {
-                            "minimumHeightStepMetres"
-                        } else {
-                            "heightStepMetres"
-                        }]
-                        .as_f64()
-                        .context("標高量子化幅がありません")?;
-                        ensure!(
-                            step.is_finite() && step >= 0.001 && step <= 100.,
-                            "標高量子化幅が不正です"
-                        );
-                    }
-                }
-                if encoding == crate::heightmap::WEBP_MINMAX_ENCODING {
-                    ensure!(
-                        settings["webpQuality"].as_u64().is_some_and(|q| q <= 100)
-                            && settings["heightScale"] == "min-max",
-                        "最低・最高標高WebPレベル設定が不正です"
-                    );
-                } else if encoding == crate::heightmap::WEBP_ENCODING {
-                    ensure!(
-                        settings["webpQuality"].as_u64().is_some_and(|q| q <= 100)
-                            && settings["heightScale"] == "per-tile",
-                        "WebP格子レベル設定が不正です"
+                        encoding == ENCODING,
+                        "未対応の地形レベル形式です: {encoding}"
                     );
                 }
-                level_formats.insert(z, encoding.to_string());
-                level_settings.insert(z, settings.clone());
                 let up = settings["errorUpMetres"]
                     .as_f64()
                     .context("上向き許容誤差がありません")?;
@@ -250,7 +206,7 @@ impl Database {
             }
         }
         let catalog = if read_index {
-            Self::read_index(&connection, dataset, &level_formats)?
+            Self::read_index(&connection, dataset)?
         } else {
             HashMap::new()
         };
@@ -261,34 +217,24 @@ impl Database {
             credits,
             levels,
             level_errors,
-            level_formats,
-            level_settings,
             catalog,
             cache: HashMap::new(),
         })
     }
-    fn read_index(
-        connection: &Connection,
-        dataset: i64,
-        formats: &HashMap<u32, String>,
-    ) -> Result<HashMap<Key, usize>> {
+    fn read_index(connection: &Connection, dataset: i64) -> Result<HashMap<Key, usize>> {
         let mut catalog = HashMap::new();
         {
-            let mut stmt=connection.prepare("SELECT l.z,t.x,t.y,t.encoding,substr(t.payload,1,72) FROM terrain_tiles t JOIN terrain_levels l USING(dataset_key,level_key) WHERE dataset_key=?1")?;
+            let mut stmt=connection.prepare("SELECT l.z,t.x,t.y,t.encoding,substr(t.payload,1,20) FROM terrain_tiles t JOIN terrain_levels l USING(dataset_key,level_key) WHERE dataset_key=?1")?;
             let mut rows = stmt.query([dataset])?;
             while let Some(row) = rows.next()? {
                 let key = (row.get(0)?, row.get(1)?, row.get(2)?);
                 ensure!(
-                    Some(&row.get::<_, String>(3)?) == formats.get(&key.0),
+                    row.get::<_, String>(3)? == ENCODING,
                     "未対応の地形圧縮形式です"
                 );
                 let header: Vec<u8> = row.get(4)?;
                 ensure!(
-                    header.len() >= 20
-                        && ((formats[&key.0] == ENCODING && &header[..4] == b"NTS1")
-                            || (crate::heightmap::is_encoding(&formats[&key.0])
-                                && header.len() == 72
-                                && crate::heightmap::matches_encoding(&formats[&key.0], &header))),
+                    header.len() == 20 && &header[..4] == b"NTS1",
                     "地形タイルヘッダーが不正です"
                 );
                 ensure!(
@@ -307,7 +253,7 @@ impl Database {
         Ok(catalog)
     }
     pub fn load_catalog(&mut self) -> Result<()> {
-        self.catalog = Self::read_index(&self.connection, self.dataset, &self.level_formats)?;
+        self.catalog = Self::read_index(&self.connection, self.dataset)?;
         Ok(())
     }
     pub fn use_catalog(&mut self, catalog: HashMap<Key, usize>) -> Result<()> {
@@ -332,50 +278,8 @@ impl Database {
     }
     pub fn tile(&self, key: Key) -> Result<Tile> {
         let (encoding,bytes):(String,Vec<u8>)=self.connection.query_row("SELECT encoding,payload FROM terrain_tiles WHERE dataset_key=?1 AND level_key=?2 AND x=?3 AND y=?4",params![self.dataset,self.levels.get(&key.0).context("親または指定ズームがありません")?,key.1,key.2],|r|Ok((r.get(0)?,r.get(1)?)))?;
-        ensure!(
-            encoding == ENCODING
-                && self
-                    .level_formats
-                    .get(&key.0)
-                    .is_some_and(|v| v == ENCODING),
-            "制御点以外の地形を親参照または制御点として読み込めません"
-        );
+        ensure!(encoding == ENCODING, "未対応の地形圧縮形式です");
         Tile::decode(&bytes)
-    }
-    pub fn heightmap(&self, key: Key) -> Result<Option<crate::heightmap::Heightmap>> {
-        let expected = self
-            .level_formats
-            .get(&key.0)
-            .context("ズームがありません")?;
-        if !crate::heightmap::is_encoding(expected) {
-            return Ok(None);
-        }
-        let (encoding,bytes):(String,Vec<u8>)=self.connection.query_row("SELECT encoding,payload FROM terrain_tiles WHERE dataset_key=?1 AND level_key=?2 AND x=?3 AND y=?4",params![self.dataset,self.levels[&key.0],key.1,key.2],|r|Ok((r.get(0)?,r.get(1)?)))?;
-        ensure!(&encoding == expected, "レベルとタイルの形式が一致しません");
-        ensure!(
-            crate::heightmap::matches_encoding(expected, &bytes),
-            "タイル本文と圧縮形式が一致しません"
-        );
-        let map = crate::heightmap::Heightmap::decode(&bytes)?;
-        let settings = &self.level_settings[&key.0];
-        ensure!(
-            settings["cellsPerTile"] == map.cells
-                && settings["halo"] == map.halo
-                && if expected == crate::heightmap::WEBP_MINMAX_ENCODING {
-                    settings["webpQuality"].as_u64()
-                        == Some(u32::from_le_bytes(bytes[72..76].try_into()?) as u64)
-                } else if expected == crate::heightmap::WEBP_ENCODING {
-                    settings["minimumHeightStepMetres"]
-                        .as_f64()
-                        .is_some_and(|v| map.step >= v)
-                        && settings["webpQuality"].as_u64()
-                            == Some(u32::from_le_bytes(bytes[68..72].try_into()?) as u64)
-                } else {
-                    settings["heightStepMetres"].as_f64() == Some(map.step)
-                },
-            "レベルとハイトマップの寸法・量子化幅が一致しません"
-        );
-        Ok(Some(map))
     }
     pub fn points(&mut self, key: Key) -> Result<Arc<Vec<[i32; 3]>>> {
         if let Some(points) = self.cache.get(&key) {
@@ -433,13 +337,11 @@ impl Database {
         let mut parents = Vec::new();
         for parent in tile.parents {
             ensure!(parent.0 < key.0, "親タイルは粗いズームでなければなりません");
-            parents.push(
-                self.restore(parent, deps, depth + 1, tiles)?
-                    .as_ref()
-                    .clone(),
-            );
+            parents.push(self.restore(parent, deps, depth + 1, tiles)?);
         }
-        let points = natural_codec::decode_global(&tile.controls, tile.origin, &parents)?;
+        let parent_slices = parents.iter().map(|p| p.as_slice()).collect::<Vec<_>>();
+        let points =
+            natural_codec::decode_global_refs(&tile.controls, tile.origin, &parent_slices)?;
         ensure!(
             points.len() == tile.count && point_hash(&points) == tile.hash,
             "地形XYZの点数またはSHA-256が一致しません"
@@ -452,14 +354,33 @@ impl Database {
         let mut keys = self.catalog.keys().copied().collect::<Vec<_>>();
         keys.sort_unstable();
         for (i, key) in keys.iter().enumerate() {
-            if self.heightmap(*key)?.is_none() {
-                self.points(*key)
-                    .with_context(|| format!("地形タイル {:?}", key))?;
-            }
+            self.points(*key)
+                .and_then(|points| validate_control_geometry(&points))
+                .with_context(|| format!("地形タイル {:?}", key))?;
             if (i + 1) % 1024 == 0 {
                 eprintln!("地形照合 {}/{}", i + 1, keys.len());
             }
         }
         Ok(keys.len())
     }
+}
+
+fn validate_control_geometry(points: &[[i32; 3]]) -> Result<()> {
+    ensure!(points.len() >= 3, "地形には3点以上の制御点が必要です");
+    let mut xy = HashSet::with_capacity(points.len());
+    for &[x, y, _] in points {
+        ensure!(xy.insert((x, y)), "地形制御点のXYが重複しています");
+    }
+
+    let [x0, y0, _] = points[0].map(i64::from);
+    let [x1, y1, _] = points[1].map(i64::from);
+    // 復号時に投影範囲を検査するため、整数の外積はi64の範囲に収まる。
+    ensure!(
+        points[2..].iter().any(|point| {
+            let [x, y, _] = point.map(i64::from);
+            (x1 - x0) * (y - y0) != (y1 - y0) * (x - x0)
+        }),
+        "地形制御点が一直線上にあります"
+    );
+    Ok(())
 }

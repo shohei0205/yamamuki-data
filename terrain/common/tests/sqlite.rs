@@ -60,6 +60,75 @@ fn tampered_hash_is_rejected() {
     assert!(db.points(key).is_err());
 }
 #[test]
+fn reads_control_levels_without_an_encoding_setting() {
+    let (file, db) = database();
+    drop(db);
+    common::rusqlite::Connection::open(file.path())
+        .unwrap()
+        .execute(
+            "UPDATE terrain_levels SET settings_json=json_remove(settings_json,'$.encoding')",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        Database::open(file.path()).unwrap().validate_all().unwrap(),
+        8
+    );
+}
+
+#[test]
+fn a_declared_zoom_with_no_tiles_is_rejected() {
+    let (file, db) = database();
+    drop(db);
+    let conn = common::rusqlite::Connection::open(file.path()).unwrap();
+    conn.execute("DELETE FROM terrain_tiles WHERE level_key=13", [])
+        .unwrap();
+    assert!(
+        common::terrain_zooms(&conn, 1)
+            .unwrap_err()
+            .to_string()
+            .contains("z13")
+    );
+    assert!(common::validate(&conn).is_err());
+    assert!(Database::open(file.path()).is_err());
+    assert!(Database::open_metadata(file.path()).is_err());
+}
+
+#[test]
+fn geometry_validation_rejects_degenerate_points_with_a_valid_hash() {
+    use yamamuki_terrain::{natural_codec, sqlite::point_hash};
+
+    for (points, expected) in [
+        (vec![[0, 0, 0]], "3点以上"),
+        (vec![[0, 0, 0], [2, 0, 0], [0, 2, 0], [0, 0, 9]], "XYが重複"),
+        (vec![[0, 0, 0], [2, 2, 0], [4, 4, 9]], "一直線"),
+    ] {
+        let (file, db) = database();
+        let key = *db.catalog.keys().find(|key| key.0 == 6).unwrap();
+        drop(db);
+        let tile = Tile {
+            origin: [0, 0],
+            parents: Vec::new(),
+            count: points.len(),
+            hash: point_hash(&points),
+            controls: natural_codec::independent(&points).unwrap(),
+        };
+        let conn = common::rusqlite::Connection::open(file.path()).unwrap();
+        conn.execute(
+            "UPDATE terrain_tiles SET payload=?1 WHERE level_key=6",
+            [tile.encode().unwrap()],
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut reader = Database::open(file.path()).unwrap();
+        assert_eq!(reader.points(key).unwrap().as_ref(), &points);
+        let error = reader.validate_all().unwrap_err();
+        assert!(format!("{error:#}").contains(expected), "{error:#}");
+    }
+}
+
+#[test]
 fn unknown_encoding_is_rejected() {
     let (file, _db) = database();
     common::rusqlite::Connection::open(file.path())

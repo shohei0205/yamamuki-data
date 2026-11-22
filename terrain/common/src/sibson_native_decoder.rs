@@ -47,31 +47,45 @@ struct Bits<'a> {
     limit: usize,
 }
 impl Bits<'_> {
-    fn read(&mut self, mut width: usize) -> R<u64> {
-        if self.bit.checked_add(width).ok_or(())? > self.limit {
+    fn word(&self) -> u64 {
+        let start = self.bit >> 3;
+        if let Some(bytes) = self.bytes.get(start..start + 8) {
+            u64::from_le_bytes(bytes.try_into().unwrap())
+        } else {
+            let mut bytes = [0u8; 8];
+            let tail = &self.bytes[start..];
+            bytes[..tail.len()].copy_from_slice(tail);
+            u64::from_le_bytes(bytes)
+        }
+    }
+    fn read(&mut self, width: usize) -> R<u64> {
+        if width > 64 || self.bit.checked_add(width).ok_or(())? > self.limit {
             return Err(());
         }
-        let mut value = 0;
-        let mut shift = 0;
-        while width > 0 {
-            let offset = self.bit & 7;
-            let n = width.min(8 - offset);
-            value |= (((self.bytes[self.bit >> 3] >> offset) as u64) & ((1 << n) - 1)) << shift;
-            self.bit += n;
-            shift += n;
-            width -= n;
+        if width == 0 {
+            return Ok(0);
         }
-        Ok(value)
+        let offset = self.bit & 7;
+        let mut value = self.word() >> offset;
+        if width > 64 - offset {
+            value |= u64::from(*self.bytes.get((self.bit >> 3) + 8).ok_or(())?) << (64 - offset);
+        }
+        self.bit += width;
+        Ok(value
+            & if width == 64 {
+                u64::MAX
+            } else {
+                (1u64 << width) - 1
+            })
     }
     fn unary(&mut self) -> R<u64> {
-        let mut zeros = 0;
+        let mut zeros = 0u64;
         loop {
             if self.bit >= self.limit {
                 return Err(());
             }
-            let available = (8 - (self.bit & 7)).min(self.limit - self.bit);
-            let value = self.bytes[self.bit >> 3] >> (self.bit & 7);
-            let n = (value.trailing_zeros() as usize).min(available);
+            let available = (64 - (self.bit & 7)).min(self.limit - self.bit);
+            let n = ((self.word() >> (self.bit & 7)).trailing_zeros() as usize).min(available);
             self.bit += n;
             zeros += n as u64;
             if n < available {
@@ -81,10 +95,14 @@ impl Bits<'_> {
         }
     }
 }
+
 fn signed(value: u64) -> i64 {
     ((value >> 1) as i64) ^ -((value & 1) as i64)
 }
 pub(crate) fn stream(bytes: &[u8]) -> R<Vec<i64>> {
+    stream_block(bytes, 128)
+}
+pub(crate) fn stream_block(bytes: &[u8], block: usize) -> R<Vec<i64>> {
     let mut r = Reader::new(bytes);
     let count = usize::try_from(r.var()?).map_err(|_| ())?;
     if count > MAX {
@@ -94,7 +112,7 @@ pub(crate) fn stream(bytes: &[u8]) -> R<Vec<i64>> {
     while out.len() < count {
         let size = usize::try_from(r.var()?).map_err(|_| ())?;
         let mut b = Reader::new(r.take(size)?);
-        let n = (count - out.len()).min(128);
+        let n = (count - out.len()).min(block);
         match b.byte()? {
             0 => {
                 let base = signed(b.var()?);
@@ -278,6 +296,23 @@ pub(crate) fn decode_global(
     origin: [i32; 2],
     parents: &[Vec<[i32; 3]>],
 ) -> R<Vec<[i32; 3]>> {
+    decode_global_block(bytes, origin, parents, 128)
+}
+pub(crate) fn decode_global_block(
+    bytes: &[u8],
+    origin: [i32; 2],
+    parents: &[Vec<[i32; 3]>],
+    block: usize,
+) -> R<Vec<[i32; 3]>> {
+    let parents = parents.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    decode_global_block_refs(bytes, origin, &parents, block)
+}
+pub(crate) fn decode_global_block_refs(
+    bytes: &[u8],
+    origin: [i32; 2],
+    parents: &[&[[i32; 3]]],
+    block: usize,
+) -> R<Vec<[i32; 3]>> {
     if bytes.len() > 16777216 || parents.len() > 4 {
         return Err(());
     }
@@ -305,7 +340,7 @@ pub(crate) fn decode_global(
         if Reader::new(b).var()? > n as u64 {
             return Err(());
         }
-        columns.push(stream(b)?);
+        columns.push(stream_block(b, block)?);
     }
     let mut out = vec![[0; 3]; n];
     if magic == b"NQC1" {
@@ -393,6 +428,52 @@ pub(crate) fn decode_global(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn word_reads_match_reference_at_all_offsets_and_widths() {
+        let bytes = (0..32u8)
+            .map(|v| v.wrapping_mul(73).wrapping_add(19))
+            .collect::<Vec<_>>();
+        for offset in 0..8 {
+            for width in 0..=64 {
+                let mut reader = Bits {
+                    bytes: &bytes,
+                    bit: offset,
+                    limit: bytes.len() * 8,
+                };
+                let expected = (0..width).fold(0u64, |v, i| {
+                    v | (u64::from((bytes[(offset + i) / 8] >> ((offset + i) % 8)) & 1) << i)
+                });
+                assert_eq!(reader.read(width), Ok(expected));
+                assert_eq!(reader.bit, offset + width);
+            }
+        }
+    }
+    #[test]
+    fn unary_word_scan_checks_the_declared_end() {
+        let mut bytes = [0u8; 32];
+        bytes[16] = 4;
+        let mut reader = Bits {
+            bytes: &bytes,
+            bit: 5,
+            limit: 256,
+        };
+        assert_eq!(reader.unary(), Ok(125));
+        assert_eq!(reader.bit, 131);
+        let mut reader = Bits {
+            bytes: &bytes,
+            bit: 5,
+            limit: 130,
+        };
+        assert!(reader.unary().is_err());
+        let mut reader = Bits {
+            bytes: &bytes,
+            bit: 250,
+            limit: 256,
+        };
+        assert!(reader.read(7).is_err());
+        assert!(reader.read(65).is_err());
+    }
+
     fn point() -> Vec<u8> {
         let mut b = b"NQC1".to_vec();
         for v in [1_u32, 0, 1, 0.0625_f32.to_bits(), 0.125_f32.to_bits()] {

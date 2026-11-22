@@ -25,6 +25,16 @@ pub struct Camera {
     pub observer: bool,
     #[serde(default)]
     pub globe: bool,
+    #[serde(default = "default_haze_strength")]
+    pub haze_strength: f64,
+    #[serde(default)]
+    pub gpu_culling: bool,
+    /// 可視判定・分割・接合計画もGPUに移す比較用の設定。
+    #[serde(default)]
+    pub gpu_planning: bool,
+}
+fn default_haze_strength() -> f64 {
+    1.
 }
 fn coarse_level_errors() -> [f64; 2] {
     [1250., 625.]
@@ -50,6 +60,9 @@ impl Default for Camera {
             fov_y: std::f64::consts::FRAC_PI_4,
             observer: false,
             globe: false,
+            haze_strength: 1.,
+            gpu_culling: false,
+            gpu_planning: false,
         }
     }
 }
@@ -208,6 +221,28 @@ impl Camera {
         } else {
             0.
         };
+        // 視錐台が粗い箱に収まると、箱の六面はすべて視錐台の外にある。
+        // 面の交差だけでは不可視と誤判定するため、カメラを含む領域を先に残す。
+        let eye = if self.globe {
+            let local = back * self.distance + DVec3::Y * self.height;
+            let world = crate::globe::world(self.center, local);
+            [
+                world[0],
+                world[1],
+                (local + DVec3::Y * crate::globe::RADIUS).length() - crate::globe::RADIUS,
+            ]
+        } else {
+            self.eye()
+        };
+        if eye[0] >= bounds[0]
+            && eye[0] <= bounds[2]
+            && eye[1] >= bounds[1]
+            && eye[1] <= bounds[3]
+            && eye[2] >= -500. - curvature_pad
+            && eye[2] <= 4500. + curvature_pad
+        {
+            return Some(near);
+        }
         // 箱の中心ではなく面を切り、カメラを内包するタイルも評価する。
         let vertices: [[f64; 3]; 8] = std::array::from_fn(|i| {
             let d = if self.globe {
@@ -373,6 +408,24 @@ impl Camera {
         )
     }
 }
+/// 詳細待ちの代替用に、同じ場所の収録済み祖先を細かい順で返す。
+pub(crate) fn fallback_ancestors(catalog: &HashMap<Key, usize>, keys: &[Key]) -> Vec<Key> {
+    let levels = catalog.keys().map(|k| k.0).collect::<BTreeSet<_>>();
+    let mut found = BTreeSet::new();
+    for &(z, x, y) in keys {
+        for &parent in levels.range(..z) {
+            let shift = z - parent;
+            let key = (parent, x >> shift, y >> shift);
+            if catalog.contains_key(&key) {
+                found.insert(key);
+            }
+        }
+    }
+    let mut result = found.into_iter().collect::<Vec<_>>();
+    result.sort_by(|a, b| b.0.cmp(&a.0).then(a.cmp(b)));
+    result
+}
+
 pub fn select(catalog: &HashMap<Key, usize>, camera: &Camera) -> Vec<Key> {
     let levels = catalog.keys().map(|k| k.0).collect::<BTreeSet<_>>();
     let Some(&minimum) = levels.first() else {
@@ -762,6 +815,65 @@ mod tests {
 #[cfg(test)]
 mod map_camera_tests {
     use super::*;
+    #[test]
+    fn fallback_uses_available_ancestors_without_changing_target_lod() {
+        let catalog = [
+            (4, 0, 0),
+            (6, 1, 1),
+            (9, 8, 8),
+            (12, 64, 64),
+            (13, 128, 128),
+        ]
+        .into_iter()
+        .map(|key| (key, 100))
+        .collect();
+        let wanted = vec![(13, 128, 128), (13, 129, 128)];
+        assert_eq!(
+            fallback_ancestors(&catalog, &wanted),
+            vec![(12, 64, 64), (9, 8, 8), (6, 1, 1), (4, 0, 0)]
+        );
+        assert_eq!(wanted, vec![(13, 128, 128), (13, 129, 128)]);
+    }
+    #[test]
+    fn close_globe_camera_keeps_finest_available_terrain() {
+        let center = [35636784.46139589, 15713884.009933315];
+        let mut camera = Camera {
+            center,
+            height: 500.,
+            distance: 842.0419797972355,
+            yaw: 0.17279961705207825,
+            pitch: 1.2593323151257376,
+            viewport: [2686., 1562.8125],
+            maximum: 13,
+            auto: true,
+            lod_quality: 2.,
+            globe: true,
+            ..Camera::default()
+        };
+        let key = |z: u32| {
+            (
+                z,
+                (center[0] / WORLD * 2f64.powi(z as i32)) as i32,
+                (center[1] / WORLD * 2f64.powi(z as i32)) as i32,
+            )
+        };
+        for minimum in [4, 6, 9] {
+            let catalog: HashMap<_, _> = (minimum..=13).map(|z| (key(z), 100)).collect();
+            for maximum in [9, 12, 13, 20] {
+                camera.maximum = maximum;
+                let finest = key(maximum.min(13));
+                for distance in [4000., 2000., 1000., 842.0419797972355, 500., 200.] {
+                    camera.distance = distance;
+                    let keys = select(&catalog, &camera);
+                    assert!(
+                        keys.contains(&finest),
+                        "地形が消える: min={minimum} max={maximum} distance={distance} {keys:?}"
+                    );
+                    assert!(keys.iter().all(|k| k.0 <= maximum.min(13)));
+                }
+            }
+        }
+    }
     #[test]
     fn coarse_levels_have_distinct_errors_and_legacy_snapshots_are_readable() {
         let mut camera = Camera::default();

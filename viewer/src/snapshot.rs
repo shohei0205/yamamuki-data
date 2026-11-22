@@ -18,6 +18,10 @@ pub(crate) struct Snapshot {
     format: String,
     version: u32,
     viewer_version: String,
+    #[serde(default)]
+    performance: performance::Timings,
+    #[serde(default)]
+    haze: graphics_settings::Haze,
     canvas_size: [f32; 2],
     view: map::View,
     observer: Option<Observer>,
@@ -133,14 +137,21 @@ impl Viewer {
         let terrain = self
             .terrain
             .as_ref()
-            .filter(|_| self.show_terrain)
-            .map(|t| t.snapshot())
+            .map(|t| {
+                if self.show_terrain {
+                    t.snapshot()
+                } else {
+                    t.snapshot_without_meshes()
+                }
+            })
             .transpose()?;
         let snapshot = Snapshot {
             recording: None,
             format: "yamamuki-viewer-snapshot".into(),
             version: 1,
             viewer_version: env!("CARGO_PKG_VERSION").into(),
+            performance: self.frame_timings,
+            haze: self.haze,
             canvas_size: self.last_canvas_size,
             view: self.view,
             observer: self.observer.clone(),
@@ -357,6 +368,7 @@ impl Viewer {
         self.observer = s.observer;
         self.map_source = s.map_source;
         self.map_levels = s.map_levels;
+        self.haze = s.haze;
         self.lod = s.lod;
         self.surface_lod = s.surface_lod;
         self.map_borders = s.map_borders;
@@ -381,7 +393,7 @@ impl Viewer {
         self.loading_surface = None;
         self.mark_view = None;
         self.snapshot_canvas = Some(s.canvas_size);
-        if self.terrain.is_none()
+        if (!self.show_terrain || self.terrain.is_none())
             && let Some(state) = state
         {
             let mut flat = yamamuki_terrain_view::TerrainView::flat(ctx, state)?;
@@ -437,6 +449,83 @@ mod tests {
         assert_eq!(prepare(&b)?.snapshot.view.zoom, 18.5);
         Ok(())
     }
+    #[test]
+    #[cfg_attr(
+        not(feature = "gpu-tests"),
+        ignore = "実機GPUで非表示の地形を固定表示から復元する"
+    )]
+    fn snapshot_retains_hidden_terrain_before_its_first_draw() -> Result<()> {
+        use anyhow::Context;
+        use eframe::{egui_wgpu, wgpu};
+
+        let ctx = egui::Context::default();
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
+            .ok_or_else(|| anyhow::anyhow!("試験に必要なGPUがありません"))?;
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default(), None))?;
+        let target_format = wgpu::TextureFormat::Rgba8Unorm;
+        let renderer = egui_wgpu::Renderer::new(&device, target_format, None, 1, false);
+        let state = egui_wgpu::RenderState {
+            adapter,
+            available_adapters: Vec::new(),
+            device,
+            queue,
+            target_format,
+            renderer: Arc::new(eframe::epaint::mutex::RwLock::new(renderer)),
+        };
+
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("terrain.sqlite3");
+        let mut db = yamamuki_data_sqlite::rusqlite::Connection::open(&path)?;
+        yamamuki_data_sqlite::initialize(&db)?;
+        yamamuki_terrain::fixture::create(&mut db)?;
+        drop(db);
+
+        let mut viewer = Viewer::new(&ctx, reqwest::blocking::Client::new(), None);
+        viewer.terrain = Some(yamamuki_terrain_view::TerrainView::new(&ctx, &state, path)?);
+        viewer.show_terrain = false;
+
+        let mut input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::F8,
+                physical_key: Some(egui::Key::F8),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        viewer.operation_input(&ctx, &mut input);
+        viewer.flush_operation_recording(dir.path());
+        let file = std::fs::read_dir(dir.path())?
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .find(|path| path.extension().is_some_and(|ext| ext == "gz"))
+            .context("操作記録が保存されませんでした")?;
+        let mut restored = Viewer::new(&ctx, reqwest::blocking::Client::new(), None);
+        restored.restore_snapshot(&ctx, Some(&state), prepare(&file)?)?;
+        assert!(restored.terrain.is_some());
+        assert!(restored.flat_terrain.is_some());
+        assert!(!restored.show_terrain);
+        assert!(restored.snapshot_frozen);
+
+        let recording = restored
+            .operation_trace
+            .clone()
+            .context("操作記録がありません")?;
+        let mut initial = prepare_value((*recording.initial).clone())?;
+        initial.replay = Some(recording);
+        restored.restore_snapshot(&ctx, Some(&state), initial)?;
+        assert!(!restored.snapshot_frozen);
+        assert!(!restored.show_terrain);
+        restored.show_terrain = true;
+        assert_eq!(
+            restored.active_terrain().unwrap().label(),
+            viewer.terrain.as_ref().unwrap().label(),
+        );
+        Ok(())
+    }
+
     #[test]
     fn gzip_snapshot_restores_view_and_layer_settings_without_moving() -> Result<()> {
         let ctx = egui::Context::default();
