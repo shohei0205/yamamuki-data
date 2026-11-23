@@ -87,7 +87,7 @@
     "max_direct_parents": 4,
     "max_dependency_tiles_including_self": 16,
     "max_chain_levels": 3,
-    "max_points_per_tile": 262144,
+    "max_points_per_tile": null,
     "max_blob_bytes": 16777216,
     "fallback": "independent-if-smaller-or-dependency-limit"
   },

@@ -1,4 +1,52 @@
 use crate::natural_regional_surface::Fast;
+/// 共円四角形の対角線を除き、タイルの部分集合でも同じ近傍を使う。
+fn stable_edge(m: &Fast, i: usize, j: usize, r2: f64) -> bool {
+    let mut common = m.base.incident[i]
+        .iter()
+        .copied()
+        .filter(|t| m.base.incident[j].contains(t));
+    if let (Some(a), Some(b)) = (common.next(), common.next()) {
+        let a = m.base.circles[a];
+        let b = m.base.circles[b];
+        if (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) <= 1e-14 * r2.max(1.) {
+            return false;
+        }
+    }
+    true
+}
+pub const FIXED_SLOPE_MODE: &str = "local-hermite-v1";
+pub const AUTOMATIC_SLOPE_MODE: &str = "control-coherence-v1";
+/// 一周近傍の方向別勾配が、局所平面に従う度合いを距離で正規化して求める。
+/// 頂点の配置と標高だけを使い、元DEMや保存した点別係数を参照しない。
+pub fn automatic_amounts(m: &Fast, gradients: &[[f64; 2]]) -> Vec<f64> {
+    assert_eq!(m.base.points.len(), gradients.len());
+    m.base
+        .points
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let (mut energy, mut residual) = (0., 0.);
+            for &j in &m.base.neighbors[i] {
+                let q = m.base.points[j];
+                let dx = q[0] - p[0];
+                let dy = q[1] - p[1];
+                let r2 = dx * dx + dy * dy;
+                if r2 <= 0. || !stable_edge(m, i, j, r2) {
+                    continue;
+                }
+                let dz = q[2] - p[2];
+                let error = dz - gradients[i][0] * dx - gradients[i][1] * dy;
+                energy += dz * dz / r2;
+                residual += error * error / r2;
+            }
+            if energy <= 1e-24 {
+                return 0.;
+            }
+            let coherence = (1. - residual / energy).clamp(0., 1.);
+            coherence * coherence
+        })
+        .collect()
+}
 // 共有するDelaunay一周近傍だけで傾きを決める。全域連立方程式は作らない。
 pub fn local_gradients(m: &Fast) -> Vec<[f64; 2]> {
     m.base
@@ -24,16 +72,8 @@ pub fn local_gradients(m: &Fast) -> Vec<[f64; 2]> {
                 }
                 // 共円四角形の対角線はVoronoi辺の長さが0で、選び方が一意でない。
                 // その辺を傾きの近傍から除き、部分集合の再三角化にも依存させない。
-                let mut common = m.base.incident[i]
-                    .iter()
-                    .copied()
-                    .filter(|t| m.base.incident[j].contains(t));
-                if let (Some(a), Some(b)) = (common.next(), common.next()) {
-                    let a = m.base.circles[a];
-                    let b = m.base.circles[b];
-                    if (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) <= 1e-14 * r2.max(1.) {
-                        continue;
-                    }
+                if !stable_edge(m, i, j, r2) {
+                    continue;
                 }
                 let w = 1. / r2;
                 xx += w * x * x;
@@ -63,6 +103,74 @@ pub fn local_gradients(m: &Fast) -> Vec<[f64; 2]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn automatic_amounts_are_planar_and_independent_of_scale_and_offset() {
+        let points = (0..9)
+            .flat_map(|y| {
+                (0..9).map(move |x| {
+                    [
+                        x as f64 * 10.,
+                        y as f64 * 10.,
+                        3. * x as f64 + 2. * y as f64,
+                    ]
+                })
+            })
+            .collect::<Vec<_>>();
+        let m = Fast::new(points.clone()).unwrap();
+        let amounts = automatic_amounts(&m, &local_gradients(&m));
+        assert!(amounts[40] > 0.999999);
+        let changed = points
+            .iter()
+            .map(|p| [p[0] * 7. + 1000., p[1] * 7. - 2000., p[2] * 4. + 9000.])
+            .collect();
+        let n = Fast::new(changed).unwrap();
+        let other = automatic_amounts(&n, &local_gradients(&n));
+        for (a, b) in amounts.iter().zip(other) {
+            assert!((a - b).abs() < 1e-10);
+            assert!((0.0..=1.0).contains(a));
+        }
+        let flat = Fast::new(points.iter().map(|p| [p[0], p[1], 100.]).collect()).unwrap();
+        assert!(
+            automatic_amounts(&flat, &local_gradients(&flat))
+                .iter()
+                .all(|a| *a == 0.)
+        );
+        let mut peak = points;
+        peak[40][2] = 1000.;
+        let peak = Fast::new(peak).unwrap();
+        assert_eq!(automatic_amounts(&peak, &local_gradients(&peak))[40], 0.);
+    }
+    #[test]
+    fn automatic_amounts_match_in_shared_neighborhoods() {
+        let points = (0..11)
+            .flat_map(|y| {
+                (0..11).map(move |x| {
+                    [
+                        x as f64 * 10.,
+                        y as f64 * 10.,
+                        (x * x + 3 * y * y + x * y) as f64,
+                    ]
+                })
+            })
+            .collect::<Vec<_>>();
+        let m = Fast::new(points.clone()).unwrap();
+        let amounts = automatic_amounts(&m, &local_gradients(&m));
+        let subset = points
+            .iter()
+            .copied()
+            .filter(|p| p[0] >= 10. && p[0] <= 90. && p[1] >= 10. && p[1] <= 90.)
+            .rev()
+            .collect();
+        let n = Fast::new(subset).unwrap();
+        let other = automatic_amounts(&n, &local_gradients(&n));
+        for (i, p) in n.base.points.iter().enumerate() {
+            if p[0] < 30. || p[0] > 70. || p[1] < 30. || p[1] > 70. {
+                continue;
+            }
+            let j = points.iter().position(|q| q == p).unwrap();
+            assert!((amounts[j] - other[i]).abs() < 1e-10);
+        }
+    }
     #[test]
     fn cocircular_grid_gradient_is_independent_of_subset_and_order() {
         let points = (0..11)

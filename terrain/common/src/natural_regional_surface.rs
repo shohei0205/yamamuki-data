@@ -124,17 +124,51 @@ pub struct RemovalWork {
 pub struct Fast {
     pub base: Surface,
     cells: Vec<OnceLock<Vec<[f64; 2]>>>,
+    fixed_slope: bool,
+    fixed_gradients: OnceLock<Vec<[f64; 2]>>,
 }
 impl Fast {
+    pub fn with_fixed_slope(mut self, enabled: bool) -> Self {
+        self.fixed_slope = enabled;
+        self
+    }
+    pub fn is_fixed_slope(&self) -> bool {
+        self.fixed_slope
+    }
+    /// 一点の接続変更は隣接頂点の最小二乗勾配にも影響する。
+    /// その頂点が使われる旧外接円をすべて再監査の対象にする。
+    pub fn influence_faces(&self, id: usize) -> std::collections::BTreeSet<usize> {
+        let mut faces = self.base.incident[id]
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        if self.fixed_slope {
+            for &v in &self.base.neighbors[id] {
+                faces.extend(self.base.incident[v].iter().copied());
+            }
+        }
+        faces
+    }
+
     pub fn certified(points: Vec<[f64; 3]>) -> Result<Self> {
         let base = Surface::certified(points)?;
         let cells = (0..base.points.len()).map(|_| OnceLock::new()).collect();
-        Ok(Self { base, cells })
+        Ok(Self {
+            base,
+            cells,
+            fixed_slope: false,
+            fixed_gradients: OnceLock::new(),
+        })
     }
     pub fn new(points: Vec<[f64; 3]>) -> Result<Self> {
         let base = Surface::new(points)?;
         let cells = (0..base.points.len()).map(|_| OnceLock::new()).collect();
-        Ok(Self { base, cells })
+        Ok(Self {
+            base,
+            cells,
+            fixed_slope: false,
+            fixed_gradients: OnceLock::new(),
+        })
     }
     // 元の面の検証済み点から一つだけ削除するため、XY重複の再検査は不要。
     pub fn without_point(&self, index: usize) -> Result<Self> {
@@ -148,7 +182,12 @@ impl Fast {
             .collect();
         let base = Surface::verified_subset(points)?;
         let cells = (0..base.points.len()).map(|_| OnceLock::new()).collect();
-        Ok(Self { base, cells })
+        Ok(Self {
+            base,
+            cells,
+            fixed_slope: self.fixed_slope,
+            fixed_gradients: OnceLock::new(),
+        })
     }
     // 削減試行の大半は棄却される。照会した点のセルだけ従来と同じ式で作る。
     fn cell(&self, i: usize) -> &Vec<[f64; 2]> {
@@ -173,6 +212,10 @@ impl Fast {
                 });
             if valid { ring } else { Vec::new() }
         })
+    }
+    pub fn basis_borrowed<'w>(&self, q: [f64; 2], w: &'w mut Work) -> Result<&'w [(usize, f64)]> {
+        self.fill_basis(q, w)?;
+        Ok(&w.weights)
     }
     pub fn basis(&self, q: [f64; 2], w: &mut Work) -> Result<Vec<(usize, f64)>> {
         self.fill_basis(q, w)?;
@@ -321,6 +364,9 @@ impl Fast {
         q: [f64; 2],
         work: &mut RemovalWork,
     ) -> Result<Option<f64>> {
+        if self.fixed_slope {
+            return Ok(None);
+        }
         let ns = &self.base.neighbors[id];
         if ns.len() < 3 || ns.len() > 64 || self.base.topology.hull.contains(&id) {
             return Ok(None);
@@ -404,6 +450,13 @@ impl Fast {
         Ok(value.is_finite().then_some(value))
     }
     pub fn evaluate(&self, q: [f64; 2], w: &mut Work) -> Result<f64> {
+        if self.fixed_slope {
+            let gradients = self
+                .fixed_gradients
+                .get_or_init(|| crate::natural_local_gradient::local_gradients(self));
+            return crate::local_slope::Prepared::borrowed(self, gradients)
+                .evaluate(q, None, 1., w);
+        }
         self.fill_basis(q, w)?;
         let value = w
             .weights
@@ -438,6 +491,10 @@ impl Fast {
         samples: impl Iterator<Item = ([f64; 2], f64)>,
         start: usize,
     ) -> Result<[f64; 2]> {
+        // H0の正の面積重みによる区間保証は、H1の接平面には流用しない。
+        if self.fixed_slope {
+            return Ok([f64::INFINITY; 2]);
+        }
         let center = [(rect[0] + rect[2]) * 0.5, (rect[1] + rect[3]) * 0.5];
         let (face, _) = self.base.locate(center, start)?;
         let ids = &self.base.topology.triangles[face * 3..face * 3 + 3];
@@ -484,7 +541,7 @@ impl Fast {
             f64::NEG_INFINITY,
             f64::NEG_INFINITY,
         ];
-        for &t in &self.base.incident[i] {
+        for t in self.influence_faces(i) {
             let c = self.base.circles[t];
             let r = c[2].sqrt() + margin;
             b[0] = b[0].min(c[0] - r);
@@ -501,6 +558,16 @@ impl Fast {
             .faces_for_point(q)
             .unwrap_or_else(|_| self.base.faces_for_rect([q[0], q[1], q[0], q[1]]))
         {
+            let ids = &self.base.topology.triangles[t * 3..t * 3 + 3];
+            if self.fixed_slope {
+                for &id in ids {
+                    let d = self.deletion_box(id, 0.);
+                    b[0] = b[0].min(d[0]);
+                    b[1] = b[1].min(d[1]);
+                    b[2] = b[2].max(d[2]);
+                    b[3] = b[3].max(d[3]);
+                }
+            }
             let c = self.base.circles[t];
             let r = c[2].sqrt();
             b[0] = b[0].min(c[0] - r);

@@ -4680,11 +4680,14 @@ dependencies = [
  "naga",
  "png 0.18.1",
  "pollster",
+ "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "wgpu",
  "yamamuki-data-sqlite",
  "yamamuki-terrain",
+ "zstd",
 ]
 
 [[package]]

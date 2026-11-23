@@ -75,7 +75,7 @@ $dem = 'D:/Work/EarthData/GSI/DEM10B/14'
 & $engine verify --prepared build/terrain/national
 ```
 
-`verify` は保存済み制御点と親参照を復元し、整数ハッシュ、元DEM全画素、同品質の境界を監査する。生成時の誤差保証は元DEM有効画素上の自然近傍曲面が対象であり、C1調整量・画面メッシュ分割・異品質境界の表示変更を含む最終ピクセルの保証ではない。
+`verify` は保存済み制御点と親参照を復元し、整数ハッシュ、元DEM全画素、同品質の境界を監査する。生成時の誤差保証は元DEM有効画素上の自然近傍曲面が対象であり、C1調整量・画面メッシュ分割・異品質境界の表示変更を含む最終ピクセルの保証ではない。後述の `fit-slopes`・`prune-slopes` は、これとは別に局所係数付き曲面を倍率1で監査する。
 
 ## 配布SQLiteと公開
 
@@ -87,6 +87,98 @@ $version = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
 & $tool import-shared build/terrain/national/terrain-shared.sqlite3 build/terrain/gsi-terrain.sqlite3 $version
 & $tool validate build/terrain/gsi-terrain.sqlite3
 ```
+
+### 元DEMに合わせた局所傾き調整
+
+制御点ごとに0〜1の傾き調整係数を持たせる場合は、取り込み後に次を実行する。`--prepared` はそのSQLiteの生成に使った準備ディレクトリを指定する。固定した元PNGのSHA-256と生成世代が一致しない入力は拒否する。
+
+```powershell
+& $engine fit-slopes --prepared build/terrain/national --database build/terrain/gsi-terrain.sqlite3 --output build/terrain/gsi-terrain-local-slope.sqlite3 --data-version $version
+& $tool validate build/terrain/gsi-terrain-local-slope.sqlite3
+```
+
+制御点の削減結果とXYZを維持し、元DEMの全有効画素から8bit係数を求めてNPA1本文へ保存する。同じレベルの共有点では値を統一し、CPU・GPUの両方で係数も自然近傍補間する。誤差保証は調整倍率1だけを対象とし、補正前の曲面の誤差は制約しない。ビューワーもこのデータは倍率1で開き、表示設定のリセット時も1へ戻す。ビューワーの傾き調整は局所係数に掛ける全体倍率になる。追加の削減には次の `prune-slopes` を使う。入力SQLiteは変更せず、XYZ・ハッシュ・元DEM誤差の照合後に新規出力を確定する。公開する場合は以降の手順のDatabaseにこの出力を指定する。
+
+`--window x0 y0 x1 y1` でz14の半開区間へ学習を絞れる。外形全体が窓内に入る地形タイルだけを学習し、窓外のタイルに影響する共有点は係数0にする。出力には未学習タイルも残るため全国版の代わりに公開しない。`metadata.generation.localSlopeWindowZ14` と `scope=window-test` を記録する。再学習済みのNPA1入力の再学習には対応しない。
+
+槍ヶ岳周辺のz14窓 `[14456,6412,14460,6416]` の5タイル・2,097,152画素で、全体倍率1のRMSEは9.8013mから9.3228mになった。上下許容誤差を満たし、整数XYZは全タイルで一致した。全国への適用・容量比較は別途行う。
+
+### 局所係数を使った制御点の追加削減
+
+```powershell
+& $engine prune-slopes --prepared build/terrain/national --database build/terrain/gsi-terrain-local-slope.sqlite3 --output build/terrain/gsi-terrain-local-slope-pruned.sqlite3 --data-version $version
+& $tool validate build/terrain/gsi-terrain-local-slope-pruned.sqlite3
+```
+
+最終曲面を倍率1で評価して制御点を追加削減する。残った点の係数は維持し、点の削除後に補間の重みと勾配を再計算する。補正前の倍率0では誤差を超える候補も、倍率1で許容値を満たせば認める。共有点、その隣接点、および他のタイルから親参照されるタイルは維持する。タイルの外側へ影響が及ぶ削除と、最小角度10度を下回る削除は行わない。
+
+各候補の変更領域、削減後の全画素、保存点から再構築した全画素を順に監査し、最後にすべてのタイルのXYZ・SHA-256・親参照を確認する。検査失敗時は完成ファイルを残さない。`--window` で対象タイルを絞り、`--candidate-limit N` で1タイルあたりの試行数を制限できる。未指定では対象の全候補を試す。削減数などは `metadata.generation.localSlopePruning` に記録する。
+
+槍ヶ岳周辺の上記窓に入るz13の4タイルでは、3,635候補から175点を追加削減した。1,048,576画素の最大誤差は15.624583mで、許容値15.625m以内だった。親タイル・共有点を維持し、保存後の全XYZ照合も成功した。この試験は地域限定であり、全国版はまだ生成していない。
+
+### 係数を保存しない自動計算方式の地域比較
+
+```powershell
+& $engine compare-automatic-slopes --prepared build/terrain/national --database build/terrain/gsi-terrain.sqlite3 --stored-database build/terrain/gsi-terrain-local-slope-pruned.sqlite3 --output build/terrain/automatic-slope-comparison --data-version $version --z 13 --window 14456 6412 14460 6416
+```
+
+`--database` は補正前の完成SQLite、`--stored-database` は同じ元DEMから作った係数保存方式のSQLite。対象領域が全体として窓内に収まるタイルを比較する。元DEMのSHA-256と生成世代を確認し、自動係数の最終曲面を倍率1で監査する。許容誤差を超える場所には、XY=1/16m・標高=1/8mへ量子化したDEM制御点を追加する。`--point-limit` は共通点集合の点数上限で、既定131072点。収束しない場合は完成ディレクトリを作らない。
+
+この入口は地域比較用。全国の基本生成器を置き換えない。基準版・保存係数版・自動係数版を、同じ領域・独立圧縮・XYZ辞書順・32mの周辺領域と完全な一周近傍という条件へ揃える。自動係数版は点の追加後に、係数を再計算しながら追加削減する。削減後もNPA1を使わず、係数を配布物へ記録しない。
+
+出力は `baseline.sqlite3`（倍率0の基準面）、`stored.sqlite3`、`automatic.sqlite3`、`automatic-pruned.sqlite3` と、全画素誤差・容量を含む `comparison.json`。対象レベルだけを収録し、親タイルを含めた容量差を混ぜない。生成途中は一時ディレクトリを使い、全検査が成功してから出力ディレクトリを確定する。各SQLiteをネイティブビューワーで開いて比較できる。
+
+槍ヶ岳周辺z13・4タイル・1,048,576有効画素での比較結果：
+
+| 方式 | 制御点数（共有分を含む） | タイル本文 | SQLite全体 | RMSE | 最大誤差 |
+|---|---:|---:|---:|---:|---:|
+| 基準面（倍率0） | 8,657 | 36,060 bytes | 50,176 bytes | 5.4235m | 15.6246m |
+| 保存係数＋削減 | 8,482 | 41,523 bytes | 57,344 bytes | 5.1898m | 15.6246m |
+| 自動係数＋削減 | 9,463 | 38,816 bytes | 53,760 bytes | 5.0846m | 15.6249m |
+
+自動係数へ単純に切り替えた場合は17,668画素が誤差超過し、最大31.1541mだった。共通点集合へ1,056点を追加して適合させ、出力タイルから329点を削減した。点順序・支持領域も揃えた比較では、タイル本文は保存係数版から約6.5%減ったが、基準面より約7.6%大きい。全国の容量へは外挿しない。
+
+自動係数の式は[形式仕様](../formats/sqlite.md#制御点からの自動傾き係数)に記載する。係数は読み込み時に計算し、ネイティブビューワーでは既存のGPU制御点領域へ転送して再利用する。毎フレーム近傍を調べ直す処理は行わない。
+
+### 係数1固定と突起抑制の地域比較
+
+上の比較コマンドに `--fixed` を付けると、点別係数なしで滑らかなH1曲面を使う。出力は `fixed.sqlite3`、`fixed-pruned.sqlite3` と基準面・保存係数版・比較JSONになる。係数1で元DEMの誤差を監査し、さらに周囲8画素に対する突出量が元DEMより0.5m超増える箇所を補点する。固定1の曲面で生成した後も、山頂・窪地を保持し、突起を再発させる削除を拒否する。全国生成の置き換えではなく地域試験用である。
+
+実データの独立した形状監査は次で行う。環境変数には生成したファイルと準備ディレクトリの絶対パスを指定する。
+
+```powershell
+$env:YAMAMUKI_FIXED_SHAPE_DB = (Resolve-Path build/terrain/fixed-slope-comparison/fixed-pruned.sqlite3).Path
+$env:YAMAMUKI_FIXED_SHAPE_PREPARED = (Resolve-Path build/terrain/national).Path
+cargo test --release --locked --manifest-path terrain/Cargo.toml -p terrain-gsi-dem real_fixed_surface_has_no_new_sharp_peaks -- --ignored --nocapture
+```
+
+試験では山頂へ近づく方向ごとの傾きを確認し、元DEMにある本来のピークは突出量の比較対象として残す。判定は元DEM格子上であり、あらゆる表示倍率での外観を保証するものではない。
+
+### 山の形・稜線を読むための斜面の平滑化
+
+`--fixed --smooth-slopes` は、細かな鉛直起伏を省いたDEMを生成前の基準にする。元PNGを書き換えず、主要な山頂・窪地・稜線・谷筋を保護する。画面だけをぼかす処理ではなく、平滑化後の標高へ制御点の高さと配置を適合し直す。
+
+```powershell
+& $engine compare-automatic-slopes --fixed --smooth-slopes --prepared build/terrain/national --database build/terrain/gsi-terrain.sqlite3 --stored-database build/terrain/gsi-terrain-local-slope-pruned.sqlite3 --output build/terrain/smoothed-slope-comparison --data-version $version --z 13 --window 14456 6412 14460 6416
+```
+
+既定はσ=4 DEM画素（槍ヶ岳付近で約30m）、標高変更の上限15m。二つのガウス平滑化を組み合わせて広い斜面の曲率による標高のずれを相殺し、短い周期の凹凸を落とす。複数スケールの勾配・曲率から主要な稜線・谷筋を保護し、半径12画素で有意な山頂・窪地は元DEMの標高を維持する。原DEMの3×3標高範囲にも制限し、フィルターが新しい極値を作るのを抑える。
+
+周囲1枚分のDEMタイルも読み、SHA-256を検査してから処理する。欠損は埋めない。対象域と周辺域を共通に処理するため、タイルごとの独立平滑化による継ぎ目を作らない。元DEM、平面・二次曲面、欠損、重複領域の一致、特徴点の保存をテストする。平滑化後は1cm単位へ揃えて再現性を確認する。
+
+誤差保証は**平滑化後のDEMに対する倍率1**で評価する。原DEMとの差は別途 `comparison.json.rawDemComparisonAfterPruning` に記録する。`sourceSmoothing` に設定・原本の識別子・対象窓・処理後標高のSHA-256・変更量・最高標高を保存する。追加削減では細かな局所極値をすべて保護せず、特徴点マスクで選んだ主要地形を保護する。突起監査も平滑化後のDEMを基準に継続する。ビューワーは従来と同じ固定1の曲面を描画でき、元DEMや平滑化処理を必要としない。
+
+槍ヶ岳z13・4タイルで、既存の固定1版と比較した結果：
+
+| 項目 | 平滑化前 | 平滑化後 |
+|---|---:|---:|
+| 制御点数（共有分を含む） | 10,910 | 7,923 |
+| タイル本文 | 44,125 bytes | 33,781 bytes |
+| SQLite全体 | 58,880 bytes | 49,664 bytes |
+| 斜面の曲面粗さ（同じ画素・保護域を除外した4近傍ラプラシアンRMS） | 1.5577m | 0.8683m |
+| 元DEM格子上の描画曲面の最高標高 | 3180.75m | 3180.75m |
+
+平滑化後DEMに対する最大誤差は15.5991m、原DEMに対する最大差は30.1541m。斜面の曲面粗さは約44%、SQLiteは約15.7%減った。これは地域限定の比較であり、全国版への適用・容量の外挿は行っていない。
 
 ソースと生成器のコミットを記録してからDraftを用意する。生成日時には実際の生成完了日時をUTCで指定する。
 
@@ -146,3 +238,55 @@ cargo run --locked --release --manifest-path viewer/Cargo.toml -- --terrain buil
 - 国土地理院の [標高タイル](https://maps.gsi.go.jp/development/demtile.html)（DEM10B）を加工して作成。
 - 利用条件は [国土地理院コンテンツ利用規約](https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html)。利用時は「地理院タイル（標高タイル）を加工して作成」と表示し、加工内容を明記する。
 - データセットの `metadata.sources` と配布 `LICENSE.txt` にも出典・利用条件・帰属表示・加工内容を収録する。
+
+### 全国用の平滑化基準の準備
+
+地域試験と同じ `ridge-preserving-gaussian-v2`（σ4画素、最大変化15m）を、z14の8×8タイルと周囲1タイルの窓で分割処理する。元PNG・既存の全国SQLiteは変更しない。
+
+```powershell
+& $engine prepare-smoothed-slopes --prepared build/terrain/national-symmetric-v2/run --output build/terrain/national-smoothed-fixed-v1/smoothed-dem
+```
+
+`smoothed-dem.work.sqlite3` は生成用キャッシュであり、配布用地形SQLiteではない。センチメートル単位の標高と主要地形保護マスクをZstandardで保存し、窓単位のトランザクションで確定する。同じコマンドで再開できるが、元DEM世代・原本一覧ハッシュ・設定・実行バイナリが一致する必要がある。再開時は完了済み本文のSHA-256も照合する。`progress.json` の `complete` は平滑化基準の準備完了を表し、地形の適合・削減・全レベル監査の完了ではない。
+
+### 平滑化DEM・固定係数1で全国生成する
+
+上の全国前処理を完了してから、固定係数1専用の新しい作業領域を作る。従来版の作業SQLite・監査キャッシュは流用しない。完成済みの制御点SQLiteはXY配置の初期値として読み取り、標高を平滑化済みDEMへ合わせ直す。元の誤差保証を引き継ぐ操作ではなく、全画素を再評価する。
+
+```powershell
+& $engine prepare-fixed-terrain `
+  --prepared build/terrain/national-symmetric-v2/run `
+  --smoothed build/terrain/national-smoothed-fixed-v1/smoothed-dem/smoothed-dem.work.sqlite3 `
+  --seed-database build/terrain/codec-optimized/gsi-terrain.sqlite3 `
+  --output build/terrain/national-smoothed-fixed-v1/run
+```
+
+`--prepared` と `--seed-database` は同じ原DEM世代である必要がある。上記はローカル配置例であり、それぞれ手元の検証済み原本一覧・完成済み制御点SQLiteのパスへ置き換える。平滑化キャッシュの原本一覧・設定・件数を確認し、原DEMのPNGも本実行時にSHA-256で再照合する。
+
+同じ `prepare-fixed-terrain` で別の三つの試験ディレクトリを作り、各地域を `run --window ...` で生成する。全レベルの生成・誤差・形状・接合・整数復号が成功した三地域を `qualify` に渡してから、窓を指定せず全国実行する。
+
+```powershell
+& $engine qualify --prepared build/terrain/national-smoothed-fixed-v1/run --pilots $yari $fuji $tsukuba
+& $engine run --prepared build/terrain/national-smoothed-fixed-v1/run
+& $engine verify --prepared build/terrain/national-smoothed-fixed-v1/run
+& $cli import-shared build/terrain/national-smoothed-fixed-v1/run/terrain-shared.sqlite3 build/terrain/national-smoothed-fixed-v1/gsi-terrain.sqlite3 $version
+& $cli validate build/terrain/national-smoothed-fixed-v1/gsi-terrain.sqlite3
+```
+
+生成対象はz6〜z13。各レベルの上下許容誤差は従来の表と同じで、基準は平滑化後DEM、評価倍率は1とする。8bitの点別係数は保存しない。勾配を復元する `local-hermite-v1` は適合・削減・保存後の全画素監査で共通に使う。点の追加・削除では隣接点の勾配も変わるため、自然近傍の変更域に加えて隣接点の支持域を再監査する。従来のSibson面にだけ成立する区間保証は固定曲面の受理判定に使わない。
+
+保護マスク内の主要な山頂・窪地は、半径12画素・突出量3mを基準に制御点へ追加し、各レベルで削減から保護する。点数を固定上限に収めるために保護点を省かない。各レベルでは元の細レベルに含まれる点だけを残す。周囲8画素への突出量が平滑化DEMより0.5m超増える箇所は補点し、角度・誤差も再監査する。粗レベルの補修には一段細かいレベルの点を使う。配布用整数XYZの復元後も同じ曲面で誤差・余分な突起・接合を検査する。
+
+`run` は窓単位の前処理とは別のチェックポイントを持つ。同じ設定・原本・実行バイナリで同じコマンドを実行すると再開する。`stop-requested` を作ると未確定処理を取り消して停止でき、再開前にそのファイルを取り除く。最終検査を通過するまでは `terrain-shared.partial.sqlite3` を完成版として扱わない。`progress.json` の `complete=true`・`distributable=true` は地形の全段階が完了した場合だけ記録される。
+
+生成器の局所点数と配布タイルの点数には、131,072点・262,144点という固定上限を設けない。`--local-point-limit`・地域試験の `--point-limit` は診断時に明示する任意の上限で、既定は無制限。形式のu32表現、バイト数・整数演算・メモリの確保可否、実測の資源制限は検査する。再利用領域やキャッシュの大きさを調整しても、補間に必要な支持点を切り捨てない。
+
+### 全国生成の進捗HTML
+
+生成を動かしたまま、別のターミナルで次を実行する。Python 3の標準ライブラリだけを使い、生成用SQLiteは読み取り専用で参照する。
+
+```powershell
+python terrain/gsi_dem/scripts/progress_html.py --job-root build/terrain/national-smoothed-fixed-v1 --prepared run-unlimited
+```
+
+作業ディレクトリの `progress.html` をブラウザーで開く。10秒間隔で、レベル別の処理段階、現在の工程の処理率・候補数・削減点数・速度・残り時間目安・最大メモリを更新する。`--once` で一回だけ出力できる。残り時間は現在の工程だけの目安で、全国生成全体の完了予測ではない。`job-status.json` はローカル実行管理スクリプト、`progress.json` と作業SQLiteは生成器が記録する。

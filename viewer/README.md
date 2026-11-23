@@ -35,6 +35,12 @@ cargo run --locked --release --manifest-path viewer/Cargo.toml -- --terrain buil
 
 地点は[版6](../points/schemas/data-v6.schema.json)と[版5](../points/schemas/data-v5.schema.json)に対応する。地表と地形のSQLiteは内容から種類を判別する。収録形式は[地表](../surface/formats/sqlite.md)・[地形](../terrain/formats/sqlite.md)、データの生成手順は[地表データ](../surface/README.md)・[地形データ](../terrain/README.md)を参照。
 
+### 生成途中の平滑化済みDEMを開く
+
+地形生成用の `smoothed-dem.work.sqlite3` も「地形SQLiteを開く」から読み込める。レイヤー名は「平滑化済み標高（作業用DEM）」となり、制御点へ変換する前の地形を3D表示する。通常の地形と同じく、オンライン地図・地表データ・地点を重ねられる。
+
+初回だけ広域表示用の縮小キャッシュを準備するため、全国データでは時間がかかる。画面に準備状況を表示し、次回はそのキャッシュを再利用する。拡大時の表示z13は元のz14標高タイル4枚を512×512画素のまま使用する。標高のない場所を0mとして埋めず、生成に使うSQLiteは変更しない。レイヤーの「i」で元の格子の収録数と平滑化設定を確認できる。
+
 ### 統合 SQLite を開く
 
 地形を表示するには、対応する地形データセットが1件のファイルを開く。同じファイルに対応する地表データがあれば、地形に重ねて表示する。地点も重ねる場合は、地点JSONまたは地点SQLiteを別に開く。地形と同じファイルに収録された地点は、地形を開く操作では読み込まれない。

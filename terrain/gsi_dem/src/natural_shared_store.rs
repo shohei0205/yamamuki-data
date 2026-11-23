@@ -149,6 +149,17 @@ fn bounds_circle(c: [f64; 3]) -> [f64; 4] {
     ]
 }
 impl Store {
+    pub fn fixed_slope(&self) -> Result<bool> {
+        Ok(self
+            .db
+            .query_row("SELECT value FROM meta WHERE key='fixed-slope'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()?
+            .as_deref()
+            == Some("1"))
+    }
+
     pub fn enable_deletion_certificates(&self, z: i64) {
         self.certificates.activate(z);
     }
@@ -156,10 +167,7 @@ impl Store {
         self.certificates.stats()
     }
     pub fn open(path: &Path, limit: usize) -> Result<Self> {
-        ensure!(
-            (16..=262144).contains(&limit),
-            "局所点数予算は16～262144の範囲です"
-        );
+        ensure!(limit >= 16, "診断用の局所点数予算は16以上です");
         let db = Connection::open(path)?;
         db.busy_timeout(std::time::Duration::from_secs(30))?;
         db.execute_batch("PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;PRAGMA cache_size=-65536;PRAGMA wal_autocheckpoint=4096;
@@ -283,6 +291,56 @@ impl Store {
         )?;
         Ok(())
     }
+    /// 最精細の適合前後に限り、画素中心の量子化点を正しい標高へ揃える。
+    /// 粗品質が作成済みなら、共有XYZを壊す更新は拒否する。
+    pub fn replace_finest_height(&self, p: [i32; 3]) -> Result<bool> {
+        let old = self
+            .db
+            .query_row(
+                "SELECT id,h FROM points WHERE x=?1 AND y=?2",
+                params![p[0], p[1]],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i32>(1)?)),
+            )
+            .optional()?;
+        let Some((id, h)) = old else {
+            return Ok(false);
+        };
+        if h == p[2] {
+            return Ok(false);
+        }
+        ensure!(
+            !self.db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM active WHERE id=?1 AND z<>13)",
+                [id],
+                |r| r.get::<_, bool>(0)
+            )?,
+            "粗品質の作成後に共通標高は変更できません"
+        );
+        let epoch = self.epoch(13)?;
+        self.db
+            .execute("UPDATE points SET h=?2 WHERE id=?1", params![id, p[2]])?;
+        self.bump(13)?;
+        self.certificates.invalidate();
+        if let Some(c) = self.point_cache.borrow_mut().as_mut() {
+            if c.z == 13 && c.epoch == epoch {
+                let tree = Arc::make_mut(&mut c.tree);
+                ensure!(
+                    tree.remove(&IndexedPoint {
+                        id,
+                        point: [p[0] as f64 / 16., p[1] as f64 / 16., h as f64 / 8.]
+                    })
+                    .is_some(),
+                    "更新する標高点が索引にありません"
+                );
+                tree.insert(IndexedPoint {
+                    id,
+                    point: [p[0] as f64 / 16., p[1] as f64 / 16., p[2] as f64 / 8.],
+                });
+                c.epoch = epoch + 1;
+            }
+        }
+        Ok(true)
+    }
     pub fn insert(&self, z: i64, p: [i32; 3], guard: bool) -> Result<bool> {
         self.certificates.invalidate();
         let previous_epoch = self.epoch(z)?;
@@ -296,7 +354,14 @@ impl Store {
             params![p[0], p[1]],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
-        ensure!(h == p[2], "同じXYへ異なる標高を登録しようとしました");
+        ensure!(
+            h == p[2],
+            "同じXYへ異なる標高を登録しようとしました: XY={},{} 登録済み={} 指定={}",
+            p[0],
+            p[1],
+            h,
+            p[2]
+        );
         tx.execute(
             "INSERT OR IGNORE INTO point_index VALUES(?,?,?,?,?)",
             params![id, p[0], p[0], p[1], p[1]],
@@ -502,7 +567,8 @@ impl Store {
                     .enumerate()
                     .filter_map(|(i, &p)| (i != k).then_some(p))
                     .collect(),
-            )?,
+            )?
+            .with_fixed_slope(patch.model.is_fixed_slope()),
             ids: patch.ids.iter().copied().filter(|&v| v != id).collect(),
             epoch: patch.epoch + 1,
             origin: patch.origin,
@@ -869,7 +935,12 @@ impl Store {
         else {
             return Ok(b);
         };
-        let budget = (self.limit / 4).max(4);
+        // 再利用領域の大きさだけを調整する。支持閉包や配布点数は打ち切らない。
+        let budget = if self.limit == usize::MAX {
+            32768
+        } else {
+            (self.limit / 4).max(4)
+        };
         for _ in 0..32 {
             let padding = ((b[2] - b[0]).max(b[3] - b[1])
                 * std::env::var("TERRAIN_SUPPORT_PADDING")
@@ -1094,7 +1165,7 @@ impl Store {
                 let hint_face = m.base.locate(center, 0)?.0;
                 return Ok(Patch {
                     id_index: OnceLock::new(),
-                    model: m,
+                    model: m.with_fixed_slope(self.fixed_slope()?),
                     hint_face,
                     point_limit: self.limit,
                     ids,

@@ -267,6 +267,7 @@ pub struct Renderer {
     depth: wgpu::Texture,
     size: [u32; 2],
     compute: wgpu::ComputePipeline,
+    dem_compute: std::sync::OnceLock<wgpu::ComputePipeline>,
     indices: Arc<std::collections::HashMap<u32, wgpu::Buffer>>,
 
     pipeline: wgpu::RenderPipeline,
@@ -461,6 +462,10 @@ fn install_snapshot_layout(cache: &mut CachedScene, layout: &LayoutSnapshot, _: 
     }
 }
 fn source_seam_band(packet: &Packet) -> f32 {
+    if let Some(g) = &packet.dem_grid {
+        return (packet.side / g.cells as f64) as f32;
+    }
+
     let density = packet.density.iter().copied().max().unwrap_or(1).max(1) as f64;
     (2. * packet.side / (32. * density.sqrt()))
         .min(packet.side / 8.)
@@ -932,7 +937,7 @@ impl Renderer {
             depth,
             size,
             compute,
-
+            dem_compute: std::sync::OnceLock::new(),
             pipeline,
             fast_pipeline,
             fallback,
@@ -1352,29 +1357,54 @@ impl Renderer {
             buffers
         } else {
             let buffers = Arc::new(SourceBuffers {
-                sections: p
-                    .sections
-                    .iter()
-                    .map(|bytes| {
-                        d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("共有する制御点・補助情報"),
-                            contents: if bytes.is_empty() { &[0; 4] } else { bytes },
-                            usage: wgpu::BufferUsages::STORAGE,
+                sections: if let Some(grid) = &p.dem_grid {
+                    (0..4)
+                        .map(|i| {
+                            d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("作業用DEMの標高格子"),
+                                contents: if i == 0 {
+                                    bytemuck::cast_slice(&grid.values)
+                                } else {
+                                    &[0; 4]
+                                },
+                                usage: wgpu::BufferUsages::STORAGE,
+                            })
                         })
-                    })
-                    .collect(),
+                        .collect()
+                } else {
+                    p.sections
+                        .iter()
+                        .map(|bytes| {
+                            d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("共有する制御点・補助情報"),
+                                contents: if bytes.is_empty() { &[0; 4] } else { bytes },
+                                usage: wgpu::BufferUsages::STORAGE,
+                            })
+                        })
+                        .collect()
+                },
                 vertices: d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("共有する制御点XYZ"),
-                    contents: bytemuck::cast_slice(&p.vertices),
+                    contents: if p.vertices.is_empty() {
+                        &[0; 16]
+                    } else {
+                        bytemuck::cast_slice(&p.vertices)
+                    },
                     usage: wgpu::BufferUsages::STORAGE,
                 }),
                 triangles: d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("共有する制御点TIN"),
-                    contents: bytemuck::cast_slice(&p.triangles),
+                    contents: if p.triangles.is_empty() {
+                        &[0; 4]
+                    } else {
+                        bytemuck::cast_slice(&p.triangles)
+                    },
                     usage: wgpu::BufferUsages::STORAGE,
                 }),
-                bytes: p.sections.iter().map(|b| b.len().max(4)).sum::<usize>()
-                    + p.vertices.len() * 16
+                bytes: p.dem_grid.as_ref().map_or_else(
+                    || p.sections.iter().map(|b| b.len().max(4)).sum::<usize>(),
+                    |g| g.values.len() * 4 + 12,
+                ) + p.vertices.len() * 16
                     + p.triangles.len() * 4,
             });
             self.sources.insert(p.key, Arc::downgrade(&buffers));
@@ -1404,7 +1434,7 @@ impl Renderer {
         for v in [n, 0, 0, 0u32] {
             params.extend(v.to_le_bytes());
         }
-        for v in [1000f32, 1f32, 0., 0.] {
+        for v in [1000f32, 1f32, p.side as f32, 0.] {
             params.extend(v.to_le_bytes());
         }
         let uniform = d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1412,36 +1442,75 @@ impl Renderer {
             contents: &params,
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let compute = d.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.compute.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: controls[0].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: controls[1].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: controls[2].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: controls[3].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: output.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: uniform.as_entire_binding(),
-                },
-            ],
-        });
+        let dem_pipeline = if p.dem_grid.is_some() {
+            Some(self.dem_compute.get_or_init(|| {
+                let shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("作業用DEMのGPU格子"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("dem_grid_gpu.wgsl").into()),
+                });
+                d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("作業用DEMのGPU格子"),
+                    layout: None,
+                    module: &shader,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            }))
+        } else {
+            None
+        };
+        let compute = if let Some(pipeline) = dem_pipeline {
+            d.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("DEM格子の設定"),
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: controls[0].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: output.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: uniform.as_entire_binding(),
+                    },
+                ],
+            })
+        } else {
+            d.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &self.compute.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: controls[0].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: controls[1].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: controls[2].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: controls[3].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: output.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: uniform.as_entire_binding(),
+                    },
+                ],
+            })
+        };
         let view = d.create_buffer(&wgpu::BufferDescriptor {
             label: Some("タイルカメラ"),
             size: std::mem::size_of::<View>() as u64,
@@ -1478,7 +1547,7 @@ impl Renderer {
                 label: Some("自然近傍補間"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.compute);
+            pass.set_pipeline(dem_pipeline.unwrap_or(&self.compute));
             pass.set_bind_group(0, &tile.compute, &[]);
             pass.dispatch_workgroups((tile.n + 1).div_ceil(8), (tile.n + 1).div_ceil(8), 1);
         }

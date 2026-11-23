@@ -18,8 +18,36 @@ struct Data {
     dataset: db::Dataset,
     levels: Vec<Level>,
     bytes: u64,
+    preview: bool,
 }
 fn read(path: &Path) -> Result<Data> {
+    if let Some(source) = yamamuki_terrain::dem_cache::Source::try_open(path)? {
+        let h = source.header;
+        let tiles = h.tiles.len() as u64;
+        let bytes = h.tiles.values().map(|&n| n as u64).sum();
+        let metadata = serde_json::json!({"source":"国土地理院の標高タイル（DEM10B）","attribution":"地理院タイル（標高タイル）を加工して作成","identity":h.identity,"view":"制御点への変換前の平滑化済み標高格子"});
+        return Ok(Data {
+            dataset: db::Dataset {
+                key: 0,
+                id: "smoothed-dem-cache".into(),
+                kind: "terrain".into(),
+                title: yamamuki_terrain_view::dem_preview::TITLE.into(),
+                data_version: h.stamp,
+                format_version: 1,
+                metadata,
+            },
+            levels: vec![Level {
+                z: 14,
+                tiles,
+                points: tiles * 65536,
+                bytes,
+                settings: serde_json::json!({"pixels":256,"heightUnit":"centimetres","missing":"i32-min","encoding":"zstd","protectionMask":true}),
+            }],
+            bytes: h.bytes,
+            preview: true,
+        });
+    }
+
     let terrain = yamamuki_terrain::sqlite::Database::open(path)?;
     let conn = &terrain.connection;
     let dataset = db::datasets(conn)?
@@ -69,6 +97,7 @@ fn read(path: &Path) -> Result<Data> {
         dataset,
         levels,
         bytes: std::fs::metadata(path)?.len(),
+        preview: false,
     })
 }
 pub struct Info {
@@ -129,10 +158,10 @@ impl Info {
                             ui.strong(&set.title);
                             ui.label(format!("データセットID {}", set.id));
                             ui.label(format!("データ版 {}", set.data_version));
-                            ui.label(format!(
-                                "SQLite コンテナ版1 / 地形形式 版{}",
-                                set.format_version
-                            ));
+                            if data.preview {
+                                ui.label("生成用の平滑化DEMキャッシュ（配布用地形SQLiteとは異なる形式）");
+                                ui.label("表示z13は元のz14タイル4枚を512×512画素で表示します。z6〜z12は閲覧用の縮小表示です。");
+                            }else{ui.label(format!("SQLite コンテナ版1 / 地形形式 版{}",set.format_version));}
                             ui.label(format!("ファイルサイズ {} B", data.bytes));
                             ui.separator();
                             ui.strong("レベルごとの収録量");
@@ -142,7 +171,7 @@ impl Info {
                                     for title in [
                                         "レベル",
                                         "タイル数",
-                                        "制御点数",
+                                        if data.preview{"標高画素数"}else{"制御点数"},
                                         "圧縮データ",
                                         "上方 / 下方誤差",
                                     ] {
@@ -155,17 +184,11 @@ impl Info {
                                         ui.label(l.points.to_string());
                                         ui.label(format!("{:.2} MiB", l.bytes as f64 / 1048576.))
                                             .on_hover_text(format!("{} B", l.bytes));
-                                        ui.label(format!(
-                                            "{} / {} m",
-                                            l.settings["errorUpMetres"],
-                                            l.settings["errorDownMetres"]
-                                        ));
+                                        if data.preview{ui.label("変換前の格子");}else{ui.label(format!("{} / {} m",l.settings["errorUpMetres"],l.settings["errorDownMetres"]));}
                                         ui.end_row();
                                     }
                                 });
-                            ui.small(
-                                "制御点数は各タイルの格納点数の合計です。共有点はタイルごとに数えます。",
-                            );
+                            ui.small(if data.preview{"元の標高格子の収録数です。閲覧用縮小キャッシュは別ファイルに保存し、このSQLiteは変更しません。"}else{"制御点数は各タイルの格納点数の合計です。共有点はタイルごとに数えます。"});
                             ui.separator();
                             ui.strong("Metadata JSON（出典・利用条件・生成設定）");
                             crate::appearance::json_view(

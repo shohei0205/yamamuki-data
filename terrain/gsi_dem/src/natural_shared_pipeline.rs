@@ -1,5 +1,7 @@
 #[path = "natural_shared_fit_cache.rs"]
 mod fit_cache;
+#[path = "natural_fixed_shape.rs"]
+mod fixed_shape;
 #[path = "natural_shared_prune.rs"]
 mod parallel_prune;
 use crate::{
@@ -41,6 +43,11 @@ mod coarse_extension;
 pub use coarse_extension::execute as extend_coarse;
 const FINEST_ERROR: f64 = LEVELS[0].1;
 const PROFILE: &str = "sibson-shared-no-lpf-z6-z13-symmetric-v2";
+const FIXED_PROFILE: &str = "local-hermite-smoothed-z6-z13-v1";
+fn fixed_job(job: &Value) -> bool {
+    job["settings"]["profile"] == FIXED_PROFILE
+}
+
 #[derive(Clone)]
 struct Input {
     x: i32,
@@ -146,6 +153,18 @@ impl Dem {
         }
         DEM_CACHE_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let read_started = Instant::now();
+        if self.root.is_file() {
+            let a = Arc::new(crate::national_smoothing::read_tile(&self.root, i.x, i.y)?.0);
+            let cache_limit = dem_cache_limit();
+            if self.cache.len() >= cache_limit {
+                if let Some(old) = self.order.pop_front() {
+                    self.cache.remove(&old);
+                }
+            }
+            self.cache.insert(key, a.clone());
+            self.order.push_back(key);
+            return Ok(a);
+        }
         let path = self
             .root
             .join("14")
@@ -244,7 +263,7 @@ fn affected_inputs(inputs: &[Input], index: &rstar::RTree<InputBox>, b: [f64; 4]
 fn nearest_fine(s: &Store, z: i64, q: [f64; 2]) -> Result<Option<i64>> {
     let max_radius = q[0].abs() + q[1].abs() + WORLD * 2.;
     let mut radius = STEP * 2.;
-    let mut st=s.db.prepare("SELECT p.id,((p.x-?7)*(p.x-?7)+(p.y-?8)*(p.y-?8))/256. FROM point_index i CROSS JOIN points p ON p.id=i.id CROSS JOIN active a ON a.id=p.id AND a.z=?1 WHERE i.x1>=?3 AND i.y1>=?4 AND i.x0<=?5 AND i.y0<=?6 AND p.guard=0 AND NOT EXISTS(SELECT 1 FROM active b WHERE b.z=?2 AND b.id=p.id) ORDER BY 2,p.id LIMIT 1")?;
+    let mut st=s.db.prepare("SELECT p.id,((p.x-?7)*(p.x-?7)+(p.y-?8)*(p.y-?8))/256. FROM point_index i CROSS JOIN points p ON p.id=i.id CROSS JOIN active a ON a.id=p.id AND a.z=?1 WHERE i.x1>=?3 AND i.y1>=?4 AND i.x0<=?5 AND i.y0<=?6 AND p.guard<>1 AND NOT EXISTS(SELECT 1 FROM active b WHERE b.z=?2 AND b.id=p.id) ORDER BY 2,p.id LIMIT 1")?;
     loop {
         let found = st
             .query_row(
@@ -316,7 +335,8 @@ fn initialize_internal(
     );
     let config = &job["settings"];
     ensure!(
-        config["profile"] == PROFILE && config["generation"]["lpf"] == false,
+        (config["profile"] == PROFILE || config["profile"] == FIXED_PROFILE)
+            && config["generation"]["lpf"] == false,
         "旧設定との混在です"
     );
     ensure!(
@@ -362,7 +382,15 @@ fn initialize_internal(
                 .is_none(),
         "性能試験用DBを全国本番へ流用できません"
     );
-    let identity = json!({"generation":job["generation_id"],"window":window,"algorithm":"shared-certified-symmetric-v2"});
+    if fixed_job(&job) {
+        ensure!(
+            config["generation"]["slope_mode"] == "local-hermite-v1"
+                && config["generation"]["error_evaluation_multiplier"] == 1,
+            "固定係数1の設定が不正です"
+        );
+        s.db.execute("INSERT OR REPLACE INTO meta VALUES('fixed-slope','1')", [])?;
+    }
+    let identity = json!({"generation":job["generation_id"],"window":window,"algorithm":if fixed_job(&job){"shared-fixed-hermite-smoothed-v1"}else{"shared-certified-symmetric-v2"}});
     if let Some(old) =
         s.db.query_row("SELECT value FROM meta WHERE key='identity'", [], |r| {
             r.get::<_, String>(0)
@@ -836,6 +864,247 @@ fn audit_affected_cached(
 }
 /// 未生成地域の巨大な空円を避ける初期点。各PNGの実在する最高点を一つ置く。
 /// 初期点は固定せず、通常の誤差条件による削減対象とする。
+fn seed_fixed_features(s: &Store, inputs: &[Input], dem: &mut Dem, root: &Path) -> Result<()> {
+    let stage = "seed-fixed-features-v1";
+    if state(s, stage)?.is_some() {
+        return Ok(());
+    }
+    let lookup = inputs
+        .iter()
+        .map(|i| ((i.x, i.y), i))
+        .collect::<HashMap<_, _>>();
+    let cursor =
+        s.db.query_row(
+            "SELECT value FROM meta WHERE key='seed-feature-cursor'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|v| v.parse::<usize>())
+        .transpose()?
+        .unwrap_or(0);
+    for (n, input) in inputs.iter().enumerate().skip(cursor) {
+        let (center, mask) = crate::national_smoothing::read_tile(&dem.root, input.x, input.y)?;
+        let mut neighbors = HashMap::new();
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                if let Some(i) = lookup.get(&(input.x + dx, input.y + dy)) {
+                    neighbors.insert((dx, dy), dem.read(i)?);
+                }
+            }
+        }
+        let get = |x: i32, y: i32| -> Option<f64> {
+            neighbors
+                .get(&(x.div_euclid(256), y.div_euclid(256)))
+                .map(|a| a[(y.rem_euclid(256) * 256 + x.rem_euclid(256)) as usize])
+                .filter(|v| v.is_finite())
+        };
+        let mut anchors = Vec::new();
+        for k in 0..65536 {
+            if mask[k] == 0 || !center[k].is_finite() {
+                continue;
+            }
+            let (x, y) = ((k % 256) as i32, (k / 256) as i32);
+            let h = center[k];
+            let (mut peak, mut pit) = (true, true);
+            // 同高の平坦域は座標順で代表を一つにし、平地の全画素を固定しない。
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    if dx == 0 && dy == 0 {
+                        continue;
+                    }
+                    if let Some(v) = get(x + dx, y + dy) {
+                        let tie = v == h && (dy < 0 || dy == 0 && dx < 0);
+                        peak &= v <= h && !tie;
+                        pit &= v >= h && !tie;
+                    } else {
+                        peak = false;
+                        pit = false;
+                    }
+                }
+            }
+            if !peak && !pit {
+                continue;
+            }
+            let mut lo = h;
+            let mut hi = h;
+            for dy in -12..=12 {
+                for dx in -12..=12 {
+                    if let Some(v) = get(x + dx, y + dy) {
+                        lo = lo.min(v);
+                        hi = hi.max(v);
+                        peak &= v <= h;
+                        pit &= v >= h;
+                    }
+                }
+            }
+            if peak && h - lo >= 3. || pit && hi - h >= 3. {
+                anchors.push(quant([
+                    (input.x as f64 * 256. + x as f64 + 0.5) * STEP,
+                    (input.y as f64 * 256. + y as f64 + 0.5) * STEP,
+                    h,
+                ])?);
+            }
+        }
+        if !anchors.is_empty() {
+            // 既存のXYは、画素中心そのものの保護標高へ揃えてから追加する。
+            let tx = s.db.unchecked_transaction()?;
+            for q in &anchors {
+                tx.execute(
+                    "UPDATE points SET h=?3 WHERE x=?1 AND y=?2 AND guard<>1",
+                    params![q[0], q[1], q[2]],
+                )?;
+            }
+            tx.commit()?;
+            s.bump(13)?;
+            s.insert_batch(13, &anchors)?;
+            let tx = s.db.unchecked_transaction()?;
+            for q in &anchors {
+                tx.execute(
+                    "UPDATE points SET guard=2 WHERE x=?1 AND y=?2 AND guard=0",
+                    params![q[0], q[1]],
+                )?;
+            }
+            tx.commit()?;
+        }
+        s.db.execute(
+            "INSERT OR REPLACE INTO meta VALUES('seed-feature-cursor',?1)",
+            [(n + 1).to_string()],
+        )?;
+        if n % 32 == 0 || n + 1 == inputs.len() {
+            progress(
+                root,
+                json!({"stage":"seed-fixed-features","done":n+1,"total":inputs.len(),"complete":false}),
+            )?;
+        }
+    }
+    done(
+        s,
+        stage,
+        json!({"policy":"protected maxima and minima of smoothed DEM; radius 12 pixels, prominence 3m; retained at all levels","epoch":s.epoch(13)?}),
+    )?;
+    Ok(())
+}
+fn seed_reference(
+    s: &Store,
+    job: &Value,
+    inputs: &[Input],
+    dem: &mut Dem,
+    root: &Path,
+    window: &[u32],
+) -> Result<()> {
+    if state(s, "seed-global-v1")?.is_some() {
+        return Ok(());
+    }
+    let path = Path::new(
+        job["identity"]["seed_database"]
+            .as_str()
+            .context("初期点SQLiteがありません")?,
+    );
+    ensure!(
+        natural_inventory::hash_file(path)?
+            == job["identity"]["seed_database_sha256"]
+                .as_str()
+                .context("初期点SHA256がありません")?,
+        "初期点SQLiteが変更されています"
+    );
+    let mut db = yamamuki_terrain::sqlite::Database::open(path)?;
+    let mut keys = db
+        .catalog
+        .keys()
+        .copied()
+        .filter(|k| {
+            k.0 == 13 && (window.is_empty() || crate::local_slope::fully_inside(*k, window))
+        })
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    let source = inputs
+        .iter()
+        .map(|i| ((i.x, i.y), i))
+        .collect::<HashMap<_, _>>();
+    let mut next =
+        s.db.query_row(
+            "SELECT value FROM meta WHERE key='seed-reference-cursor'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|v| v.parse::<usize>())
+        .transpose()?
+        .unwrap_or(0);
+    while next < keys.len() {
+        let key = keys[next];
+        let mut points = Vec::new();
+        for p in db.points(key)?.iter() {
+            let px = f64::from(p[0]) / 16. / STEP - 0.5;
+            let py = f64::from(p[1]) / 16. / STEP - 0.5;
+            let x = px.floor() as i32;
+            let y = py.floor() as i32;
+            let mut weight = 0.;
+            let mut h = 0.;
+            for (dx, dy, w) in [
+                (0, 0, (1. - px.fract()) * (1. - py.fract())),
+                (1, 0, px.fract() * (1. - py.fract())),
+                (0, 1, (1. - px.fract()) * py.fract()),
+                (1, 1, px.fract() * py.fract()),
+            ] {
+                if w <= 1e-15 {
+                    continue;
+                }
+                let gx = x + dx;
+                let gy = y + dy;
+                if let Some(i) = source.get(&(gx.div_euclid(256), gy.div_euclid(256))) {
+                    let v = dem.read(i)?[(gy.rem_euclid(256) * 256 + gx.rem_euclid(256)) as usize];
+                    if v.is_finite() {
+                        h += v * w;
+                        weight += w;
+                    }
+                }
+            }
+            let gx = px.round() as i32;
+            let gy = py.round() as i32;
+            let expected = quant([(gx as f64 + 0.5) * STEP, (gy as f64 + 0.5) * STEP, 0.])?;
+            if expected[0] == p[0] && expected[1] == p[1] {
+                if let Some(input) = source.get(&(gx.div_euclid(256), gy.div_euclid(256))) {
+                    let v =
+                        dem.read(input)?[(gy.rem_euclid(256) * 256 + gx.rem_euclid(256)) as usize];
+                    if v.is_finite() {
+                        h = v;
+                        weight = 1.;
+                    }
+                }
+            }
+            points.push([
+                p[0],
+                p[1],
+                if weight > 0.999 {
+                    (h / weight * 8.).round() as i32
+                } else {
+                    p[2]
+                },
+            ]);
+        }
+        s.insert_batch(13, &points)?;
+        db.clear_decoded_cache();
+        next += 1;
+        s.db.execute(
+            "INSERT OR REPLACE INTO meta VALUES('seed-reference-cursor',?1)",
+            [next.to_string()],
+        )?;
+        if next % 16 == 0 || next == keys.len() {
+            progress(
+                root,
+                json!({"stage":"seed-fixed-reference","done":next,"total":keys.len(),"complete":false}),
+            )?;
+        }
+    }
+    done(
+        s,
+        "seed-global-v1",
+        json!({"policy":"existing finest XY seeds; heights refitted to smoothed DEM; all output audited again","tiles":keys.len(),"epoch":s.epoch(13)?}),
+    )?;
+    Ok(())
+}
 fn seed_global(s: &Store, inputs: &[Input], dem: &Dem, root: &Path) -> Result<()> {
     if state(s, "seed-global-v1")?.is_some() {
         return Ok(());
@@ -940,7 +1209,16 @@ fn proposal_insert(
         "適合提案の局所点数予算を超過しました"
     );
     let local = [xy[0] - p.origin[0], xy[1] - p.origin[1]];
+    let mut affected = BTreeSet::new();
     for face in p.model.base.faces_for_point(local)? {
+        affected.insert(face);
+        if p.model.is_fixed_slope() {
+            for &id in &p.model.base.topology.triangles[face * 3..face * 3 + 3] {
+                affected.extend(p.model.influence_faces(id));
+            }
+        }
+    }
+    for face in affected {
         let mut c = p.model.base.circles[face];
         c[0] += p.origin[0];
         c[1] += p.origin[1];
@@ -948,7 +1226,8 @@ fn proposal_insert(
     }
     p.model
         .insert_local_from([local[0], local[1], q[2] as f64 / 8.], p.hint_face)?;
-    for &face in p.model.base.incident.last().context("挿入頂点なし")? {
+    let inserted = p.model.base.points.len() - 1;
+    for face in p.model.influence_faces(inserted) {
         let mut c = p.model.base.circles[face];
         c[0] += p.origin[0];
         c[1] += p.origin[1];
@@ -2435,7 +2714,10 @@ fn restore(
         .map(|&k| restore(db, k, cache, stack))
         .collect::<Result<Vec<_>>>()?;
     let points = natural_codec::decode_global(&blob, [ox, oy], &p)?;
-    ensure!(points.len() <= 262144, "復元点数上限超過");
+    ensure!(
+        u32::try_from(points.len()).is_ok(),
+        "復元点数が形式のu32範囲を超過"
+    );
     stack.remove(&key);
     cache.insert(key, points.clone());
     ensure!(cache.len() <= 16, "推移依存上限超過");
@@ -2527,7 +2809,7 @@ fn pack_levels(
                 })
                 .collect::<BTreeSet<_>>();
             ensure!(
-                selected.len() <= 262144,
+                u32::try_from(selected.len()).is_ok(),
                 "タイル支持点数が上限超過。支持点を省略しません"
             );
             let ids = selected.iter().map(|&i| patch.ids[i]).collect::<Vec<_>>();
@@ -2552,7 +2834,11 @@ fn pack_levels(
                     .map(|p| [p[0] - origin[0], p[1] - origin[1], p[2]])
                     .collect::<Vec<_>>();
                 let mut blob = natural_codec::independent(&local)?;
-                let mut kind = if blob.starts_with(b"NQZ1"){"NQZ1"}else{"NQC1"};
+                let mut kind = if blob.starts_with(b"NQZ1") {
+                    "NQZ1"
+                } else {
+                    "NQC1"
+                };
                 let mut parent_keys = Vec::new();
                 let mut depth = 0;
                 if ![4, 6, 9, 12].contains(&z) {
@@ -2567,7 +2853,7 @@ fn pack_levels(
                     {
                         counts.insert(Key(z - 1, x / 2, y / 2), 0);
                     }
-                    let mut lookup=s.db.prepare("SELECT x,y FROM packed_points WHERE z=? AND id=? AND EXISTS(SELECT 1 FROM points p WHERE p.id=packed_points.id AND p.guard=0) ORDER BY y,x")?;
+                    let mut lookup=s.db.prepare("SELECT x,y FROM packed_points WHERE z=? AND id=? AND EXISTS(SELECT 1 FROM points p WHERE p.id=packed_points.id AND p.guard<>1) ORDER BY y,x")?;
                     for &id in &ids {
                         for row in lookup.query_map(params![z - 1, id], |r| {
                             Ok(Key(z - 1, r.get(0)?, r.get(1)?))
@@ -2623,14 +2909,18 @@ fn pack_levels(
                             "差分復号不一致"
                         );
                         if delta.len() + candidates.len() * 24 < blob.len() {
-                            kind = if delta.starts_with(b"NDZ1"){"NDZ1"}else{"NDC1"};
+                            kind = if delta.starts_with(b"NDZ1") {
+                                "NDZ1"
+                            } else {
+                                "NDC1"
+                            };
                             blob = delta;
                             parent_keys = candidates;
                             depth = parent_depth;
                         }
                     }
                 }
-                if kind == "NQC1" || kind=="NQZ1" {
+                if kind == "NQC1" || kind == "NQZ1" {
                     ensure!(
                         natural_codec::decode_global(&blob, [origin[0], origin[1]], &[])? == points,
                         "独立復号不一致"
@@ -2678,6 +2968,9 @@ fn pack_levels(
             }
         }
     }
+    if fixed_job(job) {
+        c.execute("INSERT OR REPLACE INTO metadata VALUES('fixed_slope_generation',?1)",[json!({"slopeMode":"local-hermite-v1","errorEvaluationMultiplier":1,"sourceSmoothing":job["source_smoothing"],"fixedSlopeAdjustment":{"mode":"local-hermite-v1","certifiedMultiplier":1,"peakGuardMetres":0.5,"storedCoefficientBytes":0,"featureProtectionFinestOnly":false}}).to_string()])?;
+    }
     for (k, v) in [
         ("format", json!("national-shared-xyz-v1")),
         ("algorithm", json!("shared-certified-local-v1")),
@@ -2695,7 +2988,11 @@ fn pack_levels(
         ("source_window_z14", json!(window)),
         (
             "error_domain",
-            json!("valid original DEM pixel centers; base Sibson; display C1 excluded"),
+            json!(if fixed_job(job) {
+                "valid smoothed DEM pixel centers; local-hermite-v1; fixed multiplier 1"
+            } else {
+                "valid original DEM pixel centers; base Sibson; display C1 excluded"
+            }),
         ),
         (
             "scope",
@@ -2797,11 +3094,16 @@ fn audit_saved_levels(
     )?;
     let work = Connection::open(root.join("verified.sqlite3"))?;
     work.execute_batch("CREATE TABLE IF NOT EXISTS audits(z INTEGER,x INTEGER,y INTEGER,hash TEXT,valid INTEGER,up REAL,down REAL,PRIMARY KEY(z,x,y)) WITHOUT ROWID")?;
+    let source = inputs
+        .iter()
+        .map(|i| ((i.x, i.y), i))
+        .collect::<HashMap<_, _>>();
+    let mut shape_pixels = 0u64;
     let mut tested = 0u64;
     let mut maximum_up = 0f64;
     let mut maximum_down = 0f64;
     for &(z, error) in levels.iter().rev() {
-        let mut curves: BTreeMap<Key, crate::natural_surface::Surface> = BTreeMap::new();
+        let mut curves: BTreeMap<Key, crate::natural_regional_surface::Fast> = BTreeMap::new();
         let mut curve_order = VecDeque::new();
         let mut curve_points = 0usize;
         for (n, i) in inputs.iter().enumerate() {
@@ -2820,8 +3122,10 @@ fn audit_saved_levels(
                 );
                 continue;
             };
-            let audit_key =
-                format!("direct-Surface-certified-angle-symmetric-v4:E{error}:{checksum}");
+            let audit_key = format!(
+                "direct-certified-angle-v5:fixed={}:E{error}:{checksum}",
+                dem.root.is_file()
+            );
             if let Some(old) = work
                 .query_row(
                     "SELECT hash FROM audits WHERE z=? AND x=? AND y=?",
@@ -2847,15 +3151,16 @@ fn audit_saved_levels(
                         ]
                     })
                     .collect();
-                let model = crate::natural_surface::Surface::certified(points)?;
-                while curve_points + model.points.len() > 500_000 && !curves.is_empty() {
+                let model = crate::natural_regional_surface::Fast::certified(points)?
+                    .with_fixed_slope(dem.root.is_file());
+                while curve_points + model.base.points.len() > 500_000 && !curves.is_empty() {
                     if let Some(old) = curve_order.pop_front() {
                         if let Some(m) = curves.remove(&old) {
-                            curve_points -= m.points.len();
+                            curve_points -= m.base.points.len();
                         }
                     }
                 }
-                curve_points += model.points.len();
+                curve_points += model.base.points.len();
                 curves.insert(key, model);
                 curve_order.push_back(key);
             }
@@ -2869,15 +3174,14 @@ fn audit_saved_levels(
                 b[3] - key.2 as f64 * side,
             ];
             ensure!(
-                minimum_angle_surface(model, local) >= 10. - 1e-7,
+                minimum_angle_surface(&model.base, local) >= 10. - 1e-7,
                 "保存後の最小角監査が未達 z{z}"
             );
             let raster = dem.read(i)?;
             let blocks = (0..16)
                 .into_par_iter()
                 .map(|block| -> Result<(f64, f64, u64)> {
-                    let mut w = crate::natural_surface::Workspace::default();
-                    let mut start = 0;
+                    let mut w = Work::default();
                     let mut up = 0f64;
                     let mut down = 0f64;
                     let mut valid = 0;
@@ -2890,9 +3194,8 @@ fn audit_saved_levels(
                             (i.x as f64 * 256. + (index % 256) as f64 + 0.5) * STEP,
                             (i.y as f64 * 256. + (index / 256) as f64 + 0.5) * STEP,
                         ];
-                        let delta = model.evaluate_reusing(
+                        let delta = model.evaluate(
                             [q[0] - key.1 as f64 * side, q[1] - key.2 as f64 * side],
-                            &mut start,
                             &mut w,
                         )? - h;
                         up = up.max(delta);
@@ -2902,6 +3205,15 @@ fn audit_saved_levels(
                     Ok((up, down, valid))
                 })
                 .collect::<Result<Vec<_>>>()?;
+            if model.is_fixed_slope() {
+                shape_pixels += fixed_shape::audit_saved(
+                    model,
+                    [key.1 as f64 * side, key.2 as f64 * side],
+                    i,
+                    &source,
+                    dem,
+                )?;
+            }
             let up = blocks.iter().map(|v| v.0).fold(0f64, f64::max);
             let down = blocks.iter().map(|v| v.1).fold(0f64, f64::max);
             let valid: u64 = blocks.iter().map(|v| v.2).sum();
@@ -2928,10 +3240,13 @@ fn audit_saved_levels(
     }
     let(count,total,up,down):(i64,i64,f64,f64)=work.query_row("SELECT count(*),coalesce(sum(valid),0),coalesce(max(up),0),coalesce(max(down),0) FROM audits",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
     Ok(
-        json!({"audit_blocks":count,"total_audited_pixels":total,"maximum_up":up,"maximum_down":down,"newly_tested_pixels":tested,"maximum_up_this_run":maximum_up,"maximum_down_this_run":maximum_down,"evaluator":"direct-Surface / decoded-distribution-XYZ","all_valid_pixels":true}),
+        json!({"audit_blocks":count,"total_audited_pixels":total,"maximum_up":up,"maximum_down":down,"newly_tested_pixels":tested,"maximum_up_this_run":maximum_up,"maximum_down_this_run":maximum_down,"evaluator":if dem.root.is_file(){"local-hermite-v1 multiplier 1 / decoded-distribution-XYZ"}else{"direct-Sibson / decoded-distribution-XYZ"},"shape_audited_pixels_this_run":shape_pixels,"new_sharp_peaks":if dem.root.is_file(){Some(0)}else{None},"peak_guard_metres":if dem.root.is_file(){Some(0.5)}else{None},"all_valid_pixels":true}),
     )
 }
 fn verify_seams(root: &Path) -> Result<Value> {
+    let job: Value = serde_json::from_slice(&fs::read(root.join("job.json"))?)?;
+    let slope_fixed = fixed_job(&job);
+
     let c = Connection::open_with_flags(
         distribution_path(root),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -2967,6 +3282,7 @@ fn verify_seams(root: &Path) -> Result<Value> {
                     })
                     .collect();
                 crate::natural_regional_surface::Fast::certified(points)
+                    .map(|m| m.with_fixed_slope(slope_fixed))
             });
             let [a, b] = models;
             let (a, b) = (a?, b?);
@@ -3165,13 +3481,52 @@ pub fn execute(root: &Path, limit: usize, mode: &str, window: Vec<u32>) -> Resul
             cache: HashMap::new(),
             order: VecDeque::new(),
         };
+        if fixed_job(&job) {
+            let raw_root = Path::new(
+                job["identity"]["raw_cache"]
+                    .as_str()
+                    .context("原DEMキャッシュなし")?,
+            );
+            for (batch, group) in inputs.chunks(128).enumerate() {
+                group.par_iter().try_for_each(|i| -> Result<()> {
+                    let p = raw_root
+                        .join("14")
+                        .join(i.x.to_string())
+                        .join(format!("{}.png", i.y));
+                    ensure!(
+                        natural_inventory::hash_file(&p)? == i.sha,
+                        "原DEMが変更されています {}/{}",
+                        i.x,
+                        i.y
+                    );
+                    Ok(())
+                })?;
+                if batch % 8 == 0 {
+                    progress(
+                        root,
+                        json!({"stage":"check-raw-dem","done":((batch+1)*128).min(inputs.len()),"total":inputs.len(),"complete":false}),
+                    )?;
+                }
+            }
+        }
         // 初期点準備もPNG原本のSHA256と復号を全件検査する。
         let seeding = mode == "run"
             && !root.join("terrain-shared.sqlite3").exists()
             && state(&s, "seed-global-v1")?.is_none()
             && state(&s, "fit-13")?.is_none();
         if seeding {
-            timed(root, "seed-global", || seed_global(&s, &inputs, &dem, root))?;
+            if fixed_job(&job) {
+                timed(root, "seed-fixed-reference", || {
+                    seed_reference(&s, &job, &inputs, &mut dem, root, &window)
+                })?;
+            } else {
+                timed(root, "seed-global", || seed_global(&s, &inputs, &dem, root))?;
+            }
+        }
+        if fixed_job(&job) && state(&s, "fit-13")?.is_none() {
+            timed(root, "seed-fixed-features", || {
+                seed_fixed_features(&s, &inputs, &mut dem, root)
+            })?;
         }
         // 再開時も原本変更を見逃さない。前回の監査結果だけで入力を信用しない。
         for (n, input) in inputs.iter().enumerate().filter(|_| !seeding) {
@@ -3207,6 +3562,9 @@ pub fn execute(root: &Path, limit: usize, mode: &str, window: Vec<u32>) -> Resul
         timed(root, "certify-13", || {
             certify(&s, 13, &inputs, &mut dem, root)
         })?;
+        timed(root, "fixed-shape-13", || {
+            fixed_shape::certify(&s, 13, &inputs, &mut dem, root)
+        })?;
         for pair in LEVELS.windows(2) {
             let (fine, _) = pair[0];
             let (z, e) = pair[1];
@@ -3215,6 +3573,9 @@ pub fn execute(root: &Path, limit: usize, mode: &str, window: Vec<u32>) -> Resul
             })?;
             timed(root, &format!("certify-{z}"), || {
                 certify(&s, z, &inputs, &mut dem, root)
+            })?;
+            timed(root, &format!("fixed-shape-{z}"), || {
+                fixed_shape::certify(&s, z, &inputs, &mut dem, root)
             })?;
         }
         for &(z, _) in &LEVELS {
@@ -3297,6 +3658,93 @@ mod tests {
             "INSERT INTO inputs VALUES(14502,6400,'cached',?,1)",
             [natural_inventory::hash(&raw)],
         )?;
+        Ok(())
+    }
+    #[test]
+    fn fixed_national_pipeline_uses_smoothed_surface_for_every_level_and_import() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let raw = temp.path().join("raw");
+        fixture(&raw)?;
+        let window = vec![14500, 6400, 14504, 6402];
+        execute(&raw, 131072, "run", window.clone())?;
+        let seed_path = temp.path().join("seed.sqlite3");
+        let mut seed = Connection::open(&seed_path)?;
+        yamamuki_data_sqlite::initialize(&seed)?;
+        yamamuki_terrain::import::import_shared(
+            &mut seed,
+            &raw.join("terrain-shared.sqlite3"),
+            "test-source",
+        )?;
+        drop(seed);
+        // 初期XYが平坦な配置でも、山頂を保護した非平坦な基準へ再適合する。
+        let inventory = Connection::open(raw.join("inputs.sqlite3"))?;
+        for tx in [14500, 14502] {
+            let mut image = Vec::with_capacity(256 * 256 * 3);
+            for y in 0..256 {
+                for x in 0..256 {
+                    let dx = x as f64 - 127.;
+                    let dy = y as f64 - 131.;
+                    let h = 180. * (-(dx * dx + dy * dy) / (2. * 32f64.powi(2))).exp();
+                    let cm = (h * 100.).round() as u32;
+                    image.extend([(cm >> 16) as u8, (cm >> 8) as u8, cm as u8]);
+                }
+            }
+            let mut png = Vec::new();
+            let mut encoder = png::Encoder::new(&mut png, 256, 256);
+            encoder.set_color(png::ColorType::Rgb);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.write_header()?.write_image_data(&image)?;
+            fs::write(raw.join(format!("cache/14/{tx}/6400.png")), &png)?;
+            inventory.execute(
+                "UPDATE inputs SET sha256=?2 WHERE x=?1",
+                params![tx, natural_inventory::hash(&png)],
+            )?;
+        }
+        drop(inventory);
+        let cache = temp.path().join("smooth");
+        crate::national_smoothing::prepare(&raw, &cache)?;
+        let fixed = temp.path().join("fixed");
+        crate::national_smoothing::prepare_fixed(
+            &raw,
+            &cache.join("smoothed-dem.work.sqlite3"),
+            &seed_path,
+            &fixed,
+        )?;
+        execute(&fixed, 131072, "run", window)?;
+        execute(&fixed, 131072, "verify", vec![])?;
+        let target = temp.path().join("fixed.sqlite3");
+        let mut target_db = Connection::open(&target)?;
+        yamamuki_data_sqlite::initialize(&target_db)?;
+        yamamuki_terrain::import::import_shared(
+            &mut target_db,
+            &fixed.join("terrain-shared.sqlite3"),
+            "test-fixed",
+        )?;
+        let settings = target_db
+            .prepare("SELECT z,settings_json FROM terrain_levels ORDER BY z")?
+            .query_map([], |r| Ok((r.get::<_, u32>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert_eq!(
+            settings.iter().map(|v| v.0).collect::<Vec<_>>(),
+            (6..=13).collect::<Vec<_>>()
+        );
+        for (_, raw) in settings {
+            let v: Value = serde_json::from_str(&raw)?;
+            assert_eq!(v["slopeMode"], "local-hermite-v1");
+            assert_eq!(v["errorReference"], "smoothed-dem");
+        }
+        let meta: Value = serde_json::from_str(&target_db.query_row(
+            "SELECT metadata_json FROM datasets",
+            [],
+            |r| r.get::<_, String>(0),
+        )?)?;
+        assert_eq!(meta["generation"]["errorEvaluationMultiplier"], 1);
+        assert_eq!(
+            meta["generation"]["sourceSmoothing"]["mode"],
+            "ridge-preserving-gaussian-v2"
+        );
+        fs::write(raw.join("cache/14/14500/6400.png"), b"changed")?;
+        assert!(execute(&fixed, 131072, "verify", vec![]).is_err());
         Ok(())
     }
     #[test]

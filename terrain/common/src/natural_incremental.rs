@@ -152,6 +152,7 @@ impl Fast {
         self.insert_local_from(q, 0).map(|_| ())
     }
     pub fn insert_local_from(&mut self, q: [f64; 3], hint: usize) -> Result<usize> {
+        self.fixed_gradients.take();
         ensure!(q.iter().all(|v| v.is_finite()), "挿入点が非有限です");
         let (face, _) = self.base.locate(
             [q[0], q[1]],
@@ -263,6 +264,7 @@ impl Fast {
         Ok(first)
     }
     pub fn remove_local(&mut self, id: usize) -> Result<RemovalUndo> {
+        self.fixed_gradients.take();
         ensure!(
             id < self.base.points.len()
                 && !self.base.incident[id].is_empty()
@@ -377,6 +379,7 @@ impl Fast {
         Ok(undo)
     }
     pub fn undo_remove_local(&mut self, undo: RemovalUndo) {
+        self.fixed_gradients.take();
         self.base.topology.triangles.resize(undo.length * 3, 0);
         self.base.topology.halfedges.resize(undo.length * 3, EMPTY);
         self.base.circles.resize(undo.length, [0.; 3]);
@@ -406,6 +409,52 @@ impl Fast {
 mod tests {
     use super::*;
     use crate::natural_regional_surface::Work;
+    #[test]
+    fn fixed_slope_cache_follows_insertion_deletion_and_undo() -> Result<()> {
+        let points = (0..9)
+            .flat_map(|y| {
+                (0..9).map(move |x| {
+                    [
+                        x as f64 * 10.,
+                        y as f64 * 10.,
+                        ((x * 7 + y * 11) % 19) as f64,
+                    ]
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut model = Fast::certified(points)?.with_fixed_slope(true);
+        let check = |m: &Fast| -> Result<()> {
+            let expected = crate::local_slope::Prepared::new(m);
+            for y in 1..8 {
+                for x in 1..8 {
+                    let q = [x as f64 * 10. + 0.3, y as f64 * 10. + 0.7];
+                    assert!(
+                        (m.evaluate(q, &mut Work::default())?
+                            - expected.evaluate(q, None, 1., &mut Work::default())?)
+                        .abs()
+                            < 1e-10
+                    );
+                }
+            }
+            Ok(())
+        };
+        check(&model)?;
+        let index = model.base.points.len();
+        model.insert_local([43., 44., 50.])?;
+        check(&model)?;
+        let undo = model.remove_local(index)?;
+        check(&model)?;
+        model.undo_remove_local(undo);
+        check(&model)?;
+        assert!(model.evaluate_without_vertex(index, [43., 44.])?.is_none());
+        assert!(
+            model
+                .affine_error_bound([30., 30., 50., 50.], std::iter::once(([40., 40.], 0.)))?
+                .is_infinite()
+        );
+        assert!(model.influence_faces(index).len() > model.base.incident[index].len());
+        Ok(())
+    }
     #[test]
     fn local_insertion_and_removal_match_full_rebuild() -> Result<()> {
         let mut points = vec![

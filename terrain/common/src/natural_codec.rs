@@ -96,7 +96,7 @@ fn pack(
     columns: &[Vec<i64>],
 ) -> Result<Vec<u8>> {
     ensure!(
-        n <= 262144 && parents <= 4 && fresh <= n,
+        u32::try_from(n).is_ok() && parents <= 4 && fresh <= n,
         "全国圧縮プロファイルの点数・親数を超過しています"
     );
     let mut out = magic.to_vec();
@@ -145,7 +145,7 @@ pub fn delta(
         match *r {
             Some((slot, index)) => {
                 ensure!(
-                    slot < parents.len() && index < parents[slot].len() && index < (1 << 24),
+                    slot < parents.len() && index < parents[slot].len(),
                     "親参照が範囲外です"
                 );
                 c[0].push(0);
@@ -230,6 +230,10 @@ pub fn decode_global_refs(
     origin: [i32; 2],
     parents: &[&[[i32; 3]]],
 ) -> Result<Vec<[i32; 3]>> {
+    if bytes.starts_with(crate::control_attributes::MAGIC) {
+        let (controls, _) = crate::control_attributes::split(bytes)?;
+        return decode_global_refs(controls, origin, parents);
+    }
     if bytes.starts_with(b"NQZ1") || bytes.starts_with(b"NDZ1") {
         crate::natural_codec_zstd::decode(bytes, origin, parents)
     } else {
@@ -244,4 +248,33 @@ pub(crate) fn decode_global_block_refs(
 ) -> Result<Vec<[i32; 3]>> {
     reader::decode_global_block_refs(bytes, origin, parents, block)
         .map_err(|_| anyhow::anyhow!("全国整数BLOBの復元に失敗しました"))
+}
+
+#[cfg(test)]
+mod unlimited_point_tests {
+    use super::*;
+    #[test]
+    fn more_than_262144_points_roundtrip_through_codec_tile_and_attributes() -> Result<()> {
+        let points = (0..300001i32)
+            .map(|i| [(i % 1000) * 16, (i / 1000) * 16, (i % 29 - 14) * 8])
+            .collect::<Vec<_>>();
+        let controls = independent(&points)?;
+        assert_eq!(decode_global_refs(&controls, [0, 0], &[])?, points);
+        let amounts = vec![127; points.len()];
+        let attributed = crate::control_attributes::attach(&controls, &amounts)?;
+        let (body, restored) = crate::control_attributes::split(&attributed)?;
+        assert_eq!(restored, amounts);
+        assert_eq!(body, controls);
+        let tile = crate::sqlite::Tile {
+            origin: [0, 0],
+            count: points.len(),
+            parents: Vec::new(),
+            hash: crate::sqlite::point_hash(&points),
+            controls,
+        };
+        let decoded = crate::sqlite::Tile::decode(&tile.encode()?)?;
+        assert_eq!(decoded.count, points.len());
+        assert_eq!(decode_global_refs(&decoded.controls, [0, 0], &[])?, points);
+        Ok(())
+    }
 }

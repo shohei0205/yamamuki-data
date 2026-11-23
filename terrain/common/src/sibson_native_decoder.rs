@@ -1,5 +1,6 @@
 //! NQC1/NDC1の境界検査付き整数復号。
-const MAX: usize = 10_000_000;
+// 点数欄の表現幅に合わせ、実在するブロックごとに確保する。
+const MAX: usize = u32::MAX as usize;
 type R<T> = Result<T, ()>;
 struct Reader<'a> {
     bytes: &'a [u8],
@@ -108,11 +109,12 @@ pub(crate) fn stream_block(bytes: &[u8], block: usize) -> R<Vec<i64>> {
     if count > MAX {
         return Err(());
     }
-    let mut out = Vec::with_capacity(count);
+    let mut out = Vec::new();
     while out.len() < count {
         let size = usize::try_from(r.var()?).map_err(|_| ())?;
         let mut b = Reader::new(r.take(size)?);
         let n = (count - out.len()).min(block);
+        out.try_reserve(n).map_err(|_| ())?;
         match b.byte()? {
             0 => {
                 let base = signed(b.var()?);
@@ -266,7 +268,7 @@ fn decode(bytes: &[u8], parents: &[f32], offsets: &[u32], out: &mut [f32]) -> R<
                     }
                     indices[slot] = indices[slot].checked_add(columns[2][ni]).ok_or(())?;
                     let index = usize::try_from(indices[slot]).map_err(|_| ())?;
-                    if index >= (offsets[slot + 1] - offsets[slot]) as usize || index >= 1 << 24 {
+                    if index >= (offsets[slot + 1] - offsets[slot]) as usize {
                         return Err(());
                     }
                     let source = (offsets[slot] as usize + index) * 3;
@@ -324,7 +326,6 @@ pub(crate) fn decode_global_block_refs(
     if r.u32()? != 0.0625f32.to_bits()
         || r.u32()? != 0.125f32.to_bits()
         || n == 0
-        || n > 262144
         || nf > n
         || pc != parents.len()
     {
@@ -342,11 +343,13 @@ pub(crate) fn decode_global_block_refs(
         }
         columns.push(stream_block(b, block)?);
     }
-    let mut out = vec![[0; 3]; n];
+    let mut out = Vec::new();
     if magic == b"NQC1" {
         if pc != 0 || nf != n || columns.len() != 3 || columns.iter().any(|c| c.len() != n) {
             return Err(());
         }
+        out.try_reserve_exact(n).map_err(|_| ())?;
+        out.resize(n, [0; 3]);
         let mut sum = [0i64; 3];
         for i in 0..n {
             for k in 0..3 {
@@ -365,6 +368,8 @@ pub(crate) fn decode_global_block_refs(
         {
             return Err(());
         }
+        out.try_reserve_exact(n).map_err(|_| ())?;
+        out.resize(n, [0; 3]);
         let mut last = vec![0i64; pc];
         let mut sum = [0i64; 3];
         let mut fresh = 0;
@@ -396,7 +401,7 @@ pub(crate) fn decode_global_block_refs(
                     }
                     last[slot] = last[slot].checked_add(columns[2][inherited]).ok_or(())?;
                     let index = usize::try_from(last[slot]).map_err(|_| ())?;
-                    if index >= parents[slot].len() || index >= 1 << 24 {
+                    if index >= parents[slot].len() {
                         return Err(());
                     }
                     out[i] = parents[slot][index];
@@ -552,4 +557,27 @@ pub(crate) fn limited_stream(bytes: &[u8], limit: usize) -> R<Vec<i64>> {
         return Err(());
     }
     stream(bytes)
+}
+
+#[cfg(test)]
+mod uncapped_count_tests {
+    #[test]
+    fn huge_declared_count_with_short_columns_fails_before_point_allocation() {
+        let mut bytes = b"NQC1".to_vec();
+        for v in [
+            u32::MAX,
+            0,
+            u32::MAX,
+            0.0625f32.to_bits(),
+            0.125f32.to_bits(),
+        ] {
+            bytes.extend(v.to_le_bytes());
+        }
+        for _ in 0..3 {
+            let c = crate::natural_codec::stream(&[0, 1, 2]).unwrap();
+            bytes.extend((c.len() as u32).to_le_bytes());
+            bytes.extend(c);
+        }
+        assert!(super::decode_global_block_refs(&bytes, [0, 0], &[], 128).is_err());
+    }
 }

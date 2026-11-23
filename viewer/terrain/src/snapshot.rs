@@ -1,6 +1,9 @@
 //! 描画途中のメッシュ集合も含め、SQLiteから同じ曲面を固定再生する。
 use super::*;
 use serde::{Deserialize, Serialize};
+fn legacy_default_slope() -> f32 {
+    0.25
+}
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -13,6 +16,8 @@ pub struct Snapshot {
     meshes: Vec<Mesh>,
     counts: [usize; 4],
     settings: [f32; 3],
+    #[serde(default = "legacy_default_slope")]
+    default_slope: f32,
     smooth: bool,
     wire: u32,
     borders: bool,
@@ -274,6 +279,7 @@ impl TerrainView {
             counts,
             meshes,
             settings: a.settings,
+            default_slope: a.default_slope,
             smooth: a.smooth,
             wire: a.wire,
             borders: a.borders,
@@ -354,6 +360,7 @@ impl TerrainView {
                 });
         view.app.camera = s.camera;
         view.app.settings = s.settings;
+        view.app.default_slope = s.default_slope;
         view.app.smooth = s.smooth;
         view.app.wire = s.wire;
         view.app.borders = s.borders;

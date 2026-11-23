@@ -4,6 +4,7 @@ pub use yamamuki_terrain::{
     natural_local_gradient, natural_regional_gpu, natural_regional_surface,
 };
 mod catalog_cache;
+pub mod dem_preview;
 mod globe;
 mod gpu_culling;
 mod gpu_planner;
@@ -38,11 +39,12 @@ struct Request {
     resident: HashSet<Key>,
 }
 enum Message {
-    Catalog(HashMap<Key, usize>, String, String, [f64; 8], [f64; 2]),
+    Catalog(HashMap<Key, usize>, String, String, [f64; 8], [f64; 2], f32),
     Packet(u64, Arc<Packet>, bool),
     Selected(u64, Vec<Key>),
     Ready(u64, usize, f64),
     Error(String),
+    Preparing(String),
 }
 fn same_meshes(a: &[Arc<shared_render::Tile>], b: &[Arc<shared_render::Tile>]) -> bool {
     if a.len() != b.len() {
@@ -84,7 +86,17 @@ fn worker(
             db.credits.clone(),
             db.level_errors,
             db.coarse_level_errors,
+            db.default_slope,
         ));
+        db.prepare(&|done, total| {
+            let ok = messages
+                .send(Message::Preparing(format!(
+                    "DEMの広域表示を準備中 {done}/{total}"
+                )))
+                .is_ok();
+            ctx.request_repaint();
+            ok
+        })?;
         let base_level = db.catalog.keys().map(|k| k.0).min().unwrap_or(6);
         let mut roots = db
             .catalog
@@ -114,14 +126,11 @@ fn worker(
             request.camera.coarse_level_errors_m = db.coarse_level_errors;
             let started = Instant::now();
             let keys = selection::select(&db.catalog, &request.camera);
-            if !request.camera.auto
-                && (keys.len() > 256 || keys.iter().map(|k| db.catalog[k]).sum::<usize>() > 500_000)
-            {
+            if !request.camera.auto && keys.len() > 256 {
                 send(Message::Error(format!(
-                    "固定z{}の表示範囲が広すぎます（{}タイル・{}制御点）。拡大するか自動LODを選んでください。",
+                    "固定z{}の表示範囲が広すぎます（{}タイル）。拡大するか自動LODを選んでください。",
                     request.camera.maximum,
-                    keys.len(),
-                    keys.iter().map(|k| db.catalog[k]).sum::<usize>()
+                    keys.len()
                 )));
                 continue;
             }
@@ -342,6 +351,7 @@ struct App {
     last_frame: Instant,
     fps: f32,
     settings: [f32; 3],
+    default_slope: f32,
     smooth: bool,
     wire: u32,
     borders: bool,
@@ -418,6 +428,7 @@ impl App {
             last_frame: Instant::now(),
             fps: 0.,
             settings: [0.25, 1., 0.],
+            default_slope: 0.25,
             smooth: true,
             wire: 0,
             borders: false,
@@ -1095,7 +1106,13 @@ impl eframe::App for App {
                         credits,
                         level_errors,
                         coarse_level_errors,
+                        default_slope,
                     ) => {
+                        self.default_slope = default_slope;
+                        if self.generation.is_empty() && self.frozen_morph.is_none() {
+                            self.settings[0] = default_slope;
+                        }
+
                         self.camera.level_errors_m = level_errors;
                         self.camera.coarse_level_errors_m = coarse_level_errors;
                         self.base_level = catalog.keys().map(|k| k.0).min().unwrap_or(6);
@@ -1179,6 +1196,9 @@ impl eframe::App for App {
                             }
                             scene_changed = true;
                         }
+                    }
+                    Message::Preparing(message) => {
+                        self.status = message;
                     }
                     Message::Error(error) => {
                         self.remembered_until_selection = None;
@@ -1862,17 +1882,23 @@ impl TerrainView {
         state: &eframe::egui_wgpu::RenderState,
         path: PathBuf,
     ) -> Result<Self> {
-        let label = yamamuki_data_sqlite::open(&path)
-            .and_then(|conn| yamamuki_data_sqlite::datasets(&conn))?
-            .into_iter()
-            .find(|d| d.kind == "terrain")
-            .map(|d| d.title)
-            .unwrap_or_else(|| {
-                path.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned()
-            });
+        let dem_label =
+            yamamuki_terrain::dem_cache::is_source(&path)?.then(|| dem_preview::TITLE.to_owned());
+        let label = if let Some(label) = dem_label {
+            label
+        } else {
+            yamamuki_data_sqlite::open(&path)
+                .and_then(|conn| yamamuki_data_sqlite::datasets(&conn))?
+                .into_iter()
+                .find(|d| d.kind == "terrain")
+                .map(|d| d.title)
+                .unwrap_or_else(|| {
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+        };
         let mut app = App::new(ctx, state.clone(), path, None, "national", None);
         app.camera.globe = true;
         Ok(Self {
@@ -2255,7 +2281,7 @@ impl TerrainView {
     }
     /// 表示設定タブだけを戻し、視点・読込データ・固定レベルの選択は維持する。
     pub fn reset_display_settings(&mut self) {
-        self.app.settings = [0.25, 1., 0.];
+        self.app.settings = [self.app.default_slope, 1., 0.];
         self.app.join = true;
         self.app.animate = true;
         self.app.borders = false;
@@ -2440,6 +2466,10 @@ impl TerrainView {
 }
 /// SQLiteの内容で判別する。未知の地形版は別種類として読み替えない。
 pub fn is_terrain(path: &std::path::Path) -> Result<bool> {
+    if yamamuki_terrain::dem_cache::is_source(path)? {
+        return Ok(true);
+    }
+
     let conn = yamamuki_data_sqlite::open(path)?;
     let sets = yamamuki_data_sqlite::datasets(&conn)?;
     if let Some(dataset) = sets.iter().find(|d| d.kind == "terrain") {
@@ -2773,6 +2803,7 @@ mod notification_tests {
                     break;
                 }
                 Message::Error(error) => anyhow::bail!(error),
+                Message::Preparing(_) => {}
             }
         }
         drop(tx);
@@ -3833,3 +3864,6 @@ mod remembered_scene_tests {
         assert!(app.gpu.contains_key(&((13, 7222, 3200), 1)));
     }
 }
+
+#[cfg(test)]
+mod local_slope_gpu_tests;

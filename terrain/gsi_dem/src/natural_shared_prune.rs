@@ -32,9 +32,10 @@ fn circle_hits_point(c: [f64; 3], q: [f64; 2]) -> bool {
     (c[0] - q[0]).powi(2) + (c[1] - q[1]).powi(2) <= c[2] * (1. + 1e-12) + 1e-8
 }
 fn circles(p: &Patch, id: usize) -> Vec<[f64; 3]> {
-    p.model.base.incident[id]
-        .iter()
-        .map(|&f| {
+    p.model
+        .influence_faces(id)
+        .into_iter()
+        .map(|f| {
             let mut c = p.model.base.circles[f];
             c[0] += p.origin[0];
             c[1] += p.origin[1];

@@ -12,3 +12,8 @@ pub mod fixture;
 pub mod select;
 
 pub mod recompress;
+
+pub mod control_attributes;
+pub mod local_slope;
+
+pub mod dem_cache;

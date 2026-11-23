@@ -17,10 +17,13 @@ bytemuck = {version="1",features=["derive"]}
 serde_json = {version="1",features=["float_roundtrip"]}
 serde = {version="1",features=["derive"]}
 png = "0.18"
+rusqlite = { version="0.37", features=["bundled"] }
+zstd = "0.13"
 yamamuki-terrain = {path="../../terrain/common"}
 yamamuki-data-sqlite = {path="../../surface/common"}
 
 [dev-dependencies]
+sha2 = "0.10"
 naga = {version="24",features=["wgsl-in"]}
 pollster = "0.4"
 

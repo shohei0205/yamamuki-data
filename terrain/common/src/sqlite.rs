@@ -36,7 +36,7 @@ impl Tile {
     pub fn encode(&self) -> Result<Vec<u8>> {
         ensure!(
             self.count > 0
-                && self.count <= 262144
+                && u32::try_from(self.count).is_ok()
                 && self.parents.len() <= 4
                 && self.controls.len() <= 16777216,
             "地形タイルの上限超過"
@@ -71,10 +71,7 @@ impl Tile {
         let count = u32_at(12) as usize;
         let parent_count = u32_at(16) as usize;
         ensure!(
-            count > 0
-                && count <= 262144
-                && parent_count <= 4
-                && bytes.len() >= 56 + parent_count * 12,
+            count > 0 && parent_count <= 4 && bytes.len() >= 56 + parent_count * 12,
             "地形タイルの点数・親数が不正です"
         );
         let mut parents = Vec::new();
@@ -95,7 +92,8 @@ impl Tile {
         );
         let controls = bytes[at + 4..].to_vec();
         ensure!(
-            [b"NQC1", b"NDC1", b"NQZ1", b"NDZ1"].contains(&controls[..4].try_into().unwrap()),
+            [b"NQC1", b"NDC1", b"NQZ1", b"NDZ1", b"NPA1"]
+                .contains(&controls[..4].try_into().unwrap()),
             "制御点形式が未対応です"
         );
         ensure!(
@@ -135,7 +133,10 @@ pub struct Database {
     pub catalog: HashMap<Key, usize>,
     /// 元DEMに対する上下の許容誤差の大きい方。表示側のLOD選択に使う。
     pub level_errors: HashMap<u32, f64>,
+    pub automatic_slope_levels: HashSet<u32>,
+    pub fixed_slope_levels: HashSet<u32>,
     cache: HashMap<Key, Arc<Vec<[i32; 3]>>>,
+    slope_cache: HashMap<Key, Arc<Vec<u8>>>,
 }
 impl Database {
     pub fn open(path: &Path) -> Result<Self> {
@@ -168,6 +169,8 @@ impl Database {
         let generation = sets[0].data_version.clone();
         let mut levels = HashMap::new();
         let mut level_errors = HashMap::new();
+        let mut automatic_slope_levels = HashSet::new();
+        let mut fixed_slope_levels = HashSet::new();
         {
             let mut query = connection.prepare(
                 "SELECT z,level_key,settings_json FROM terrain_levels WHERE dataset_key=?1",
@@ -187,6 +190,15 @@ impl Database {
                         encoding == ENCODING,
                         "未対応の地形レベル形式です: {encoding}"
                     );
+                }
+                if let Some(mode) = settings.get("slopeMode") {
+                    if mode == crate::natural_local_gradient::AUTOMATIC_SLOPE_MODE {
+                        automatic_slope_levels.insert(z);
+                    } else if mode == crate::natural_local_gradient::FIXED_SLOPE_MODE {
+                        fixed_slope_levels.insert(z);
+                    } else {
+                        anyhow::bail!("未対応の傾き方式です: {mode}");
+                    }
                 }
                 let up = settings["errorUpMetres"]
                     .as_f64()
@@ -217,8 +229,11 @@ impl Database {
             credits,
             levels,
             level_errors,
+            automatic_slope_levels,
+            fixed_slope_levels,
             catalog,
             cache: HashMap::new(),
+            slope_cache: HashMap::new(),
         })
     }
     fn read_index(connection: &Connection, dataset: i64) -> Result<HashMap<Key, usize>> {
@@ -242,7 +257,7 @@ impl Database {
                     "地形タイル座標が範囲外です"
                 );
                 let count = u32::from_le_bytes(header[12..16].try_into()?) as usize;
-                ensure!(count > 0 && count <= 262144, "制御点数が上限超過です");
+                ensure!(count > 0, "制御点数が上限超過です");
                 ensure!(
                     catalog.insert(key, count).is_none(),
                     "地形ズームが重複しています"
@@ -265,7 +280,7 @@ impl Database {
                     && x < (1u32 << z)
                     && y < (1u32 << z)
                     && points > 0
-                    && points <= 262144,
+                    && u32::try_from(points).is_ok(),
                 "地形索引の値が不正です"
             );
         }
@@ -288,11 +303,11 @@ impl Database {
         // 依存検査で読んだ圧縮BLOBを復号にも使い、同じタイルを二度読まない。
         let mut tiles = HashMap::new();
         self.check_dependencies(key, &mut HashSet::new(), 0, &mut tiles)?;
-        let result = self.restore(key, &mut HashSet::new(), 0, &mut tiles)?;
         if self.cache.values().map(|p| p.len() * 12).sum::<usize>() > 256 * 1024 * 1024 {
             self.cache.retain(|k, _| k.0 == 6);
+            self.slope_cache.retain(|k, _| self.cache.contains_key(k));
         }
-        Ok(result)
+        self.restore(key, &mut HashSet::new(), 0, &mut tiles)
     }
     fn check_dependencies(
         &self,
@@ -339,16 +354,38 @@ impl Database {
             ensure!(parent.0 < key.0, "親タイルは粗いズームでなければなりません");
             parents.push(self.restore(parent, deps, depth + 1, tiles)?);
         }
+        let (controls, amounts) = if tile.controls.starts_with(crate::control_attributes::MAGIC) {
+            ensure!(
+                !self.automatic_slope_levels.contains(&key.0)
+                    && !self.fixed_slope_levels.contains(&key.0),
+                "自動・固定モードでは点別の保存係数を指定できません"
+            );
+            let (base, amounts) = crate::control_attributes::split(&tile.controls)?;
+            (base, Some(amounts))
+        } else {
+            (tile.controls.as_slice(), None)
+        };
         let parent_slices = parents.iter().map(|p| p.as_slice()).collect::<Vec<_>>();
-        let points =
-            natural_codec::decode_global_refs(&tile.controls, tile.origin, &parent_slices)?;
+        let points = natural_codec::decode_global_refs(controls, tile.origin, &parent_slices)?;
         ensure!(
             points.len() == tile.count && point_hash(&points) == tile.hash,
             "地形XYZの点数またはSHA-256が一致しません"
         );
+        if let Some(amounts) = amounts {
+            self.slope_cache.insert(key, Arc::new(amounts));
+        }
         let points = Arc::new(points);
         self.cache.insert(key, points.clone());
         Ok(points)
+    }
+    pub fn slope_adjustments(&mut self, key: Key) -> Result<Option<Arc<Vec<u8>>>> {
+        self.points(key)?;
+        Ok(self.slope_cache.get(&key).cloned())
+    }
+    /// 全国生成で初期点を走査するとき、復号済み全タイルを常駐させない。
+    pub fn clear_decoded_cache(&mut self) {
+        self.cache.clear();
+        self.slope_cache.clear();
     }
     pub fn validate_all(&mut self) -> Result<usize> {
         let mut keys = self.catalog.keys().copied().collect::<Vec<_>>();

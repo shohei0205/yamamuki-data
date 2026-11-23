@@ -18,6 +18,76 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// 完成した全国平滑化キャッシュから固定係数1の生成設定を作る。
+    PrepareFixedTerrain {
+        #[arg(long)]
+        seed_database: PathBuf,
+        #[arg(long)]
+        prepared: PathBuf,
+        #[arg(long)]
+        smoothed: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// 元DEMを保持して、全国の斜面平滑化基準を分割・再開可能に作る。
+    PrepareSmoothedSlopes {
+        #[arg(long)]
+        prepared: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// 地域限定で、保存係数と制御点からの自動係数を同じ独立符号化で比較する。
+    CompareAutomaticSlopes {
+        #[arg(long)]
+        prepared: PathBuf,
+        #[arg(long)]
+        database: PathBuf,
+        #[arg(long)]
+        stored_database: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        data_version: String,
+        #[arg(long, default_value_t = 13)]
+        z: u32,
+        #[arg(long, num_args = 4)]
+        window: Vec<u32>,
+        #[arg(long, default_value_t = usize::MAX)]
+        point_limit: usize,
+        #[arg(long)]
+        fixed: bool,
+        #[arg(long, requires = "fixed")]
+        smooth_slopes: bool,
+    },
+    /// 局所係数を考慮し、倍率1で元DEM誤差を監査して制御点を追加削減する。
+    PruneSlopes {
+        #[arg(long)]
+        prepared: PathBuf,
+        #[arg(long)]
+        database: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        data_version: String,
+        #[arg(long, num_args = 4)]
+        window: Vec<u32>,
+        #[arg(long,default_value_t=usize::MAX)]
+        candidate_limit: usize,
+    },
+    /// 削減済み制御点へ元DEMから局所傾き調整量を付け、全画素で検査する。
+    FitSlopes {
+        #[arg(long)]
+        prepared: PathBuf,
+        #[arg(long)]
+        database: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        data_version: String,
+        #[arg(long, num_args = 4)]
+        window: Vec<u32>,
+    },
+
     /// 完成済みのz6から制御点を削減し、z4・z5を追加する。
     ExtendCoarse {
         #[arg(long)]
@@ -30,7 +100,7 @@ enum Command {
         data_version: String,
         #[arg(long, num_args = 3)]
         pilots: Vec<PathBuf>,
-        #[arg(long, default_value_t = 131072)]
+        #[arg(long, default_value_t = usize::MAX)]
         local_point_limit: usize,
     },
     /// 性能試験用コピーの限定キューだけを削減する。本番DBは拒否する。
@@ -39,7 +109,7 @@ enum Command {
         prepared: PathBuf,
         #[arg(long)]
         z: i64,
-        #[arg(long, default_value_t = 131072)]
+        #[arg(long, default_value_t = usize::MAX)]
         local_point_limit: usize,
     },
     Prepare {
@@ -53,13 +123,13 @@ enum Command {
         prepared: PathBuf,
         #[arg(long, num_args = 4)]
         window: Vec<u32>,
-        #[arg(long, default_value_t = 131072)]
+        #[arg(long, default_value_t = usize::MAX)]
         local_point_limit: usize,
     },
     Verify {
         #[arg(long)]
         prepared: PathBuf,
-        #[arg(long, default_value_t = 131072)]
+        #[arg(long, default_value_t = usize::MAX)]
         local_point_limit: usize,
     },
     Qualify {
@@ -222,6 +292,72 @@ fn qualify(prepared: &Path, pilots: &[PathBuf]) -> Result<()> {
 }
 fn main() -> Result<()> {
     match Args::parse().command {
+        Command::PrepareFixedTerrain {
+            seed_database,
+            prepared,
+            smoothed,
+            output,
+        } => terrain_gsi_dem::national_smoothing::prepare_fixed(
+            &prepared,
+            &smoothed,
+            &seed_database,
+            &output,
+        ),
+        Command::PrepareSmoothedSlopes { prepared, output } => {
+            terrain_gsi_dem::national_smoothing::prepare(&prepared, &output)
+        }
+        Command::CompareAutomaticSlopes {
+            prepared,
+            database,
+            stored_database,
+            output,
+            data_version,
+            z,
+            window,
+            point_limit,
+            fixed,
+            smooth_slopes,
+        } => terrain_gsi_dem::automatic_slope::experiment_with_processing(
+            &prepared,
+            &database,
+            &stored_database,
+            &output,
+            &data_version,
+            z,
+            &window,
+            point_limit,
+            fixed,
+            smooth_slopes,
+        ),
+        Command::PruneSlopes {
+            prepared,
+            database,
+            output,
+            data_version,
+            window,
+            candidate_limit,
+        } => terrain_gsi_dem::local_slope_prune::generate(
+            &prepared,
+            &database,
+            &output,
+            &data_version,
+            &window,
+            candidate_limit,
+        ),
+        Command::FitSlopes {
+            prepared,
+            database,
+            output,
+            data_version,
+            window,
+        } => terrain_gsi_dem::local_slope::generate(
+            &prepared,
+            &database,
+            &output,
+            &data_version,
+            &window,
+        ),
+
         Command::ExtendCoarse {
             prepared,
             database,

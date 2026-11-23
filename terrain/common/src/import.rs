@@ -95,6 +95,27 @@ pub fn import_shared(destination: &mut Connection, path: &Path, identifier: &str
         );
         metadata["generation"]["sourceWindowZ14"] = json!(window);
     }
+    let fixed_generation: Option<serde_json::Value> = source
+        .query_row(
+            "SELECT value FROM metadata WHERE key='fixed_slope_generation'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|s| serde_json::from_str(&s))
+        .transpose()?;
+    if let Some(extra) = &fixed_generation {
+        ensure!(
+            extra["slopeMode"] == "local-hermite-v1" && extra["errorEvaluationMultiplier"] == 1,
+            "未対応の固定曲面設定です"
+        );
+        metadata["generation"]["errorEvaluationMultiplier"] = json!(1);
+        metadata["generation"]["fixedSlopeAdjustment"] = extra["fixedSlopeAdjustment"].clone();
+        metadata["generation"]["sourceSmoothing"] = extra["sourceSmoothing"].clone();
+        metadata["sources"][0]["changes"] = json!(
+            "主要な山頂・稜線を保護して斜面の短周期起伏を平滑化し、固定係数1の局所Hermite曲面を平滑化後DEMへ適合・削減。自由配置制御点と独立・差分圧縮の地形タイルに加工"
+        );
+    }
     let title = if national {
         "日本全国の地形（国土地理院標高）"
     } else {
@@ -104,7 +125,11 @@ pub fn import_shared(destination: &mut Connection, path: &Path, identifier: &str
     tx.execute("INSERT INTO datasets(id,kind,title,data_version,format_version,metadata_json) VALUES('gsi-terrain-japan','terrain',?3,?1,1,?2)",params![identifier,metadata.to_string(),title])?;
     let dataset = tx.last_insert_rowid();
     for (&z, &(down, up)) in &levels {
-        let settings = json!({"encoding":ENCODING,"errorDownMetres":down,"errorUpMetres":up,"anchor":([4,6,9,12].contains(&z)),"interpolation":"sibson","xyStepMetres":0.0625,"heightStepMetres":0.125,"maxParentDepth":2,"maxDependencies":16});
+        let mut settings = json!({"encoding":ENCODING,"errorDownMetres":down,"errorUpMetres":up,"anchor":([4,6,9,12].contains(&z)),"interpolation":"sibson","xyStepMetres":0.0625,"heightStepMetres":0.125,"maxParentDepth":2,"maxDependencies":16});
+        if fixed_generation.is_some() {
+            settings["slopeMode"] = json!("local-hermite-v1");
+            settings["errorReference"] = json!("smoothed-dem");
+        }
         tx.execute(
             "INSERT INTO terrain_levels VALUES(?1,?2,?2,?3)",
             params![dataset, z, settings.to_string()],
