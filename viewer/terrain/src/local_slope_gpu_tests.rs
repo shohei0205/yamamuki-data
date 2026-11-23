@@ -1,6 +1,6 @@
-//! 実機GPUで局所係数付きの標高と勾配をCPUの倍精度計算に照合する。
+//! 実機GPUで固定係数1の標高と勾配をCPUの倍精度計算に照合する。
 use wgpu::util::DeviceExt;
-fn gpu_matches_cpu(automatic: bool, fixed: bool) -> anyhow::Result<()> {
+fn gpu_matches_cpu() -> anyhow::Result<()> {
     use yamamuki_terrain::{
         local_slope::Prepared,
         natural_regional_surface::{Fast, Work},
@@ -25,39 +25,14 @@ fn gpu_matches_cpu(automatic: bool, fixed: bool) -> anyhow::Result<()> {
             })
             .collect(),
     )?;
-    let prepared = if automatic {
-        Prepared::automatic(&model)
-    } else {
-        Prepared::new(&model)
-    };
-    let amounts = (0..model.base.points.len())
-        .map(|i| ((i * 37) % 256) as u8)
-        .collect::<Vec<_>>();
+    let prepared = Prepared::new(&model);
     let bounds = [22., 23., 57., 58.];
-    let (bytes, info) = if fixed {
-        yamamuki_terrain::natural_regional_gpu::packet(
-            &model,
-            &prepared.gradients,
-            bounds,
-            serde_json::json!({}),
-        )?
-    } else if automatic {
-        yamamuki_terrain::natural_regional_gpu::packet_with_factors(
-            &model,
-            &prepared.gradients,
-            bounds,
-            serde_json::json!({}),
-            prepared.automatic_amounts.as_ref().unwrap(),
-        )?
-    } else {
-        yamamuki_terrain::natural_regional_gpu::packet_with_adjustments(
-            &model,
-            &prepared.gradients,
-            bounds,
-            serde_json::json!({}),
-            Some(&amounts),
-        )?
-    };
+    let (bytes, info) = yamamuki_terrain::natural_regional_gpu::packet(
+        &model,
+        &prepared.gradients,
+        bounds,
+        serde_json::json!({}),
+    )?;
     let mut offset = 4 + u32::from_le_bytes(bytes[..4].try_into()?) as usize;
     let mut buffers = Vec::new();
     for name in ["pointBytes", "cellBytes", "nodeBytes", "referenceBytes"] {
@@ -154,15 +129,7 @@ fn gpu_matches_cpu(automatic: bool, fixed: bool) -> anyhow::Result<()> {
                 bounds[1] + (bounds[3] - bounds[1]) * f64::from(y) / f64::from(n),
             ];
             let sample = &output[((y * (n + 1) + x) * 8) as usize..][..8];
-            let pair = prepared.pair(
-                q,
-                model.basis_borrowed(q, &mut work)?,
-                if automatic || fixed {
-                    None
-                } else {
-                    Some(&amounts)
-                },
-            )?;
+            let pair = prepared.pair(q, model.basis_borrowed(q, &mut work)?)?;
             assert!((f64::from(sample[0]) - pair.original).abs() < 0.01);
             assert!(
                 (f64::from(sample[4]) - pair.value(1.)).abs() < 0.01,
@@ -173,25 +140,9 @@ fn gpu_matches_cpu(automatic: bool, fixed: bool) -> anyhow::Result<()> {
                 let (mut a, mut b) = (q, q);
                 a[axis] += 1.;
                 b[axis] -= 1.;
-                let derivative = (prepared.evaluate(
-                    a,
-                    if automatic || fixed {
-                        None
-                    } else {
-                        Some(&amounts)
-                    },
-                    1.,
-                    &mut work,
-                )? - prepared.evaluate(
-                    b,
-                    if automatic || fixed {
-                        None
-                    } else {
-                        Some(&amounts)
-                    },
-                    1.,
-                    &mut work,
-                )?) / 2.;
+                let derivative = (prepared.evaluate(a, 1., &mut work)?
+                    - prepared.evaluate(b, 1., &mut work)?)
+                    / 2.;
                 assert!((f64::from(sample[5 + axis]) - derivative).abs() < 0.01);
             }
         }
@@ -202,18 +153,7 @@ fn gpu_matches_cpu(automatic: bool, fixed: bool) -> anyhow::Result<()> {
 }
 
 #[test]
-#[cfg_attr(not(feature = "gpu-tests"), ignore = "実機GPUによる保存係数の検査")]
-fn local_slope_gpu_matches_cpu() -> anyhow::Result<()> {
-    gpu_matches_cpu(false, false)
-}
-#[test]
-#[cfg_attr(not(feature = "gpu-tests"), ignore = "実機GPUによる自動係数の検査")]
-fn automatic_slope_gpu_matches_cpu() -> anyhow::Result<()> {
-    gpu_matches_cpu(true, false)
-}
-
-#[test]
 #[cfg_attr(not(feature = "gpu-tests"), ignore = "実機GPUによる係数1固定の検査")]
 fn fixed_slope_gpu_matches_cpu() -> anyhow::Result<()> {
-    gpu_matches_cpu(false, true)
+    gpu_matches_cpu()
 }

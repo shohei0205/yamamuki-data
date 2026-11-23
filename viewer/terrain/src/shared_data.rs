@@ -112,11 +112,6 @@ impl Packet {
         let q = [world[0] - self.origin[0], world[1] - self.origin[1]];
         let gradients = natural_local_gradient::local_gradients(&model);
         let basis = model.basis(q, &mut crate::natural_regional_surface::Work::default())?;
-        // 旧スナップショットの未使用w=0を係数0として扱わない。
-        let has_local = self.sections[0]
-            .get(28..32)
-            .is_some_and(|b| u32::from_le_bytes(b.try_into().unwrap()) & 0x80000100 != 0);
-        let mut local_amount = 0.;
         let mut h0 = 0.;
         let mut tangent = 0.;
         let mut den = 0.;
@@ -131,11 +126,6 @@ impl Packet {
             }
             let r = r2.sqrt();
             let inv = w / r;
-            local_amount += w * if has_local {
-                f64::from(self.vertices[i][3])
-            } else {
-                1.
-            };
             h0 += w * p[2];
             den += inv;
             tangent += inv * (p[2] - gradients[i][0] * d[0] - gradients[i][1] * d[1]);
@@ -145,7 +135,7 @@ impl Packet {
         ensure!(den > 0., "選択座標の標高を補間できません");
         alpha /= den;
         let h1 = (alpha * h0 + beta * tangent / den) / (alpha + beta);
-        Ok(h0 + (h1 - h0) * local_amount.clamp(0., 1.) * amount.clamp(0., 1.))
+        Ok(h0 + (h1 - h0) * amount.clamp(0., 1.))
     }
     pub fn bytes(&self) -> usize {
         self.dem_grid.as_ref().map_or(0, |g| g.values.len() * 4)
@@ -157,11 +147,7 @@ impl Packet {
 fn default_slope(metadata: &serde_json::Value) -> f32 {
     metadata["generation"]["errorEvaluationMultiplier"]
         .as_f64()
-        .or_else(|| {
-            metadata["generation"]["automaticSlopeAdjustment"]["certifiedMultiplier"].as_f64()
-        })
         .or_else(|| metadata["generation"]["fixedSlopeAdjustment"]["certifiedMultiplier"].as_f64())
-        .or_else(|| metadata["generation"]["localSlopeAdjustment"]["certifiedMultiplier"].as_f64())
         .filter(|v| (0.0..=1.0).contains(v))
         .map_or(0.25, |v| v as f32)
 }
@@ -268,26 +254,7 @@ impl Database {
                 .as_ref()
                 .unwrap()
                 .tile_size((key.0, key.1 as u32, key.2 as u32))?;
-        let amounts =
-            self.db
-                .as_mut()
-                .unwrap()
-                .slope_adjustments((key.0, key.1 as u32, key.2 as u32))?;
-        let automatic = self
-            .db
-            .as_ref()
-            .unwrap()
-            .automatic_slope_levels
-            .contains(&key.0);
-        let packet = prepare_packet(
-            key,
-            integers,
-            amounts,
-            automatic,
-            compressed_bytes,
-            started,
-            decoded,
-        )?;
+        let packet = prepare_packet(key, integers, compressed_bytes, started, decoded)?;
         self.order.push_back(key);
         self.packets.insert(key, packet.clone());
         self.trim();
@@ -323,39 +290,18 @@ impl Database {
                 .as_ref()
                 .unwrap()
                 .tile_size((key.0, key.1 as u32, key.2 as u32))?;
-            let amounts =
-                self.db
-                    .as_mut()
-                    .unwrap()
-                    .slope_adjustments((key.0, key.1 as u32, key.2 as u32))?;
-            jobs.push((
-                key,
-                points,
-                amounts,
-                self.db
-                    .as_ref()
-                    .unwrap()
-                    .automatic_slope_levels
-                    .contains(&key.0),
-                bytes,
-                started,
-                decoded,
-            ));
+            jobs.push((key, points, bytes, started, decoded));
         }
         let ready = std::thread::scope(|scope| {
             let handles = jobs
                 .into_iter()
-                .map(
-                    |(key, points, amounts, automatic, bytes, started, decoded)| {
-                        scope.spawn(move || {
-                            let packet = prepare_packet(
-                                key, points, amounts, automatic, bytes, started, decoded,
-                            )?;
-                            emit(packet.clone());
-                            Ok::<_, anyhow::Error>((key, packet))
-                        })
-                    },
-                )
+                .map(|(key, points, bytes, started, decoded)| {
+                    scope.spawn(move || {
+                        let packet = prepare_packet(key, points, bytes, started, decoded)?;
+                        emit(packet.clone());
+                        Ok::<_, anyhow::Error>((key, packet))
+                    })
+                })
                 .collect::<Vec<_>>();
             handles
                 .into_iter()
@@ -422,8 +368,6 @@ impl Database {
 fn prepare_packet(
     key: Key,
     integers: Arc<Vec<[i32; 3]>>,
-    amounts: Option<Arc<Vec<u8>>>,
-    automatic: bool,
     compressed_bytes: usize,
     _started: std::time::Instant,
     decoded: std::time::Duration,
@@ -445,24 +389,12 @@ fn prepare_packet(
     let modeled = started.elapsed();
     let gradients = natural_local_gradient::local_gradients(&model);
     let graded = started.elapsed();
-    let factors = automatic.then(|| natural_local_gradient::automatic_amounts(&model, &gradients));
-    let (bytes, info) = if let Some(factors) = &factors {
-        natural_regional_gpu::packet_with_factors(
-            &model,
-            &gradients,
-            [0., 0., side, side],
-            serde_json::json!({}),
-            factors,
-        )?
-    } else {
-        natural_regional_gpu::packet_with_adjustments(
-            &model,
-            &gradients,
-            [0., 0., side, side],
-            serde_json::json!({}),
-            amounts.as_ref().map(|v| v.as_slice()),
-        )?
-    };
+    let (bytes, info) = natural_regional_gpu::packet(
+        &model,
+        &gradients,
+        [0., 0., side, side],
+        serde_json::json!({}),
+    )?;
     let packed = started.elapsed();
     ensure!(
         info["maxCandidates"].as_u64().unwrap_or(257) <= 256,
@@ -510,18 +442,7 @@ fn prepare_packet(
             .base
             .points
             .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                [
-                    p[0] as f32,
-                    p[1] as f32,
-                    p[2] as f32,
-                    factors.as_ref().map_or_else(
-                        || amounts.as_ref().map_or(1., |v| f32::from(v[i]) / 255.),
-                        |v| v[i] as f32,
-                    ),
-                ]
-            })
+            .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32, 1.])
             .collect(),
         triangles: model
             .base
@@ -714,89 +635,6 @@ mod benchmarks {
 mod height_tests {
     use super::*;
     #[test]
-    #[ignore = "実データの比較ディレクトリをYAMAMUKI_AUTO_SLOPE_COMPARISONで指定する"]
-    fn compare_real_automatic_tiles_prepare_correctly() -> Result<()> {
-        let root = std::path::PathBuf::from(std::env::var("YAMAMUKI_AUTO_SLOPE_COMPARISON")?);
-        for name in [
-            "baseline.sqlite3",
-            "stored.sqlite3",
-            if root.join("fixed-pruned.sqlite3").exists() {
-                "fixed-pruned.sqlite3"
-            } else {
-                "automatic-pruned.sqlite3"
-            },
-        ] {
-            let path = root.join(name);
-            let mut db = Database::open(&path)?;
-            let mut reference = yamamuki_terrain::sqlite::Database::open(&path)?;
-            assert_eq!(
-                db.default_slope,
-                if name == "baseline.sqlite3" { 0. } else { 1. }
-            );
-            let mut keys = db.catalog.keys().copied().collect::<Vec<_>>();
-            keys.sort_unstable();
-            let mut milliseconds = 0.;
-            for key in keys {
-                let packet = db.packet(key)?;
-                milliseconds += packet.timings_ms.iter().sum::<f64>();
-                let points = reference.points((key.0, key.1 as u32, key.2 as u32))?;
-                let model = Fast::certified(
-                    points
-                        .iter()
-                        .map(|p| {
-                            [
-                                f64::from(p[0]) / 16. - packet.origin[0],
-                                f64::from(p[1]) / 16. - packet.origin[1],
-                                f64::from(p[2]) / 8.,
-                            ]
-                        })
-                        .collect(),
-                )?;
-                let automatic = name == "automatic-pruned.sqlite3";
-                let surface = if automatic {
-                    yamamuki_terrain::local_slope::Prepared::automatic(&model)
-                } else {
-                    yamamuki_terrain::local_slope::Prepared::new(&model)
-                };
-                let amounts = reference.slope_adjustments((key.0, key.1 as u32, key.2 as u32))?;
-                if automatic {
-                    assert!(
-                        packet.sections[0]
-                            .chunks_exact(32)
-                            .all(|p| u32::from_le_bytes(p[28..32].try_into().unwrap())
-                                & 0x80000000
-                                != 0)
-                    );
-                    assert!(amounts.is_none());
-                }
-                let mut work = crate::natural_regional_surface::Work::default();
-                for t in [0.25, 0.5, 0.75] {
-                    let q = [packet.side * t, packet.side * (1. - t)];
-                    let expected = surface.evaluate(
-                        q,
-                        amounts.as_ref().map(|v| v.as_slice()),
-                        f64::from(db.default_slope),
-                        &mut work,
-                    )?;
-                    let actual = packet.elevation_at(
-                        [q[0] + packet.origin[0], q[1] + packet.origin[1]],
-                        f64::from(db.default_slope),
-                    )?;
-                    assert!(
-                        (expected - actual).abs() < 0.02,
-                        "{name} {key:?} {expected} {actual}"
-                    );
-                }
-            }
-            eprintln!(
-                "{name}: {}タイルの補助情報準備 {:.3}ms",
-                db.catalog.len(),
-                milliseconds
-            );
-        }
-        Ok(())
-    }
-    #[test]
     fn locally_certified_data_starts_at_its_evaluation_multiplier() {
         assert_eq!(default_slope(&serde_json::json!({})), 0.25);
         assert_eq!(
@@ -805,13 +643,7 @@ mod height_tests {
         );
         assert_eq!(
             default_slope(
-                &serde_json::json!({"generation":{"automaticSlopeAdjustment":{"certifiedMultiplier":1}}})
-            ),
-            1.
-        );
-        assert_eq!(
-            default_slope(
-                &serde_json::json!({"generation":{"localSlopeAdjustment":{"certifiedMultiplier":1}}})
+                &serde_json::json!({"generation":{"fixedSlopeAdjustment":{"certifiedMultiplier":1}}})
             ),
             1.
         );
@@ -826,7 +658,7 @@ mod height_tests {
         }
     }
     #[test]
-    fn snapshot_and_local_coefficients_use_the_same_height_rule() -> Result<()> {
+    fn snapshot_and_fixed_surface_use_the_same_height_rule() -> Result<()> {
         let points = (0..9)
             .flat_map(|y| {
                 (0..9).map(move |x| {
@@ -842,7 +674,7 @@ mod height_tests {
         let prepared = yamamuki_terrain::local_slope::Prepared::new(&model);
         let q = [35., 36.];
         let mut work = crate::natural_regional_surface::Work::default();
-        let pair = prepared.pair(q, model.basis_borrowed(q, &mut work)?, None)?;
+        let pair = prepared.pair(q, model.basis_borrowed(q, &mut work)?)?;
         let mut packet = plane(false);
         packet.origin = [0., 0.];
         packet.vertices = points
@@ -850,19 +682,8 @@ mod height_tests {
             .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32, 0.])
             .collect();
         assert!((packet.elevation_at(q, 1.)? - pair.corrected).abs() < 1e-8);
-        packet.sections[0] = vec![0; 32];
-        packet.sections[0][28..32].copy_from_slice(&256u32.to_le_bytes());
         for amount in [0., 0.5, 1.] {
-            for p in &mut packet.vertices {
-                p[3] = amount;
-            }
-            assert!(
-                (packet.elevation_at(q, 0.75)?
-                    - (pair.original
-                        + (pair.corrected - pair.original) * f64::from(amount) * 0.75))
-                    .abs()
-                    < 1e-8
-            );
+            assert!((packet.elevation_at(q, amount)? - pair.value(amount)).abs() < 1e-8);
         }
         Ok(())
     }

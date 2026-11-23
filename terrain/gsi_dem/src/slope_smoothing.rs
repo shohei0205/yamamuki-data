@@ -1,12 +1,11 @@
 //! 山頂・主要な稜線を保護し、斜面の短周期の上下変動を取り除く。
-use crate::local_slope_prune::Raster;
 use anyhow::{Context, Result, ensure};
 use rayon::prelude::*;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::Path;
-use yamamuki_terrain::sqlite::{Key, WORLD};
+use yamamuki_terrain::sqlite::WORLD;
 const STEP: f64 = WORLD / (16384. * 256.);
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -400,25 +399,6 @@ impl Filtered {
         result.profile = json!({"mode":"ridge-preserving-gaussian-v2","targetSha256":crate::natural_inventory::hash(&target_bytes),"config":config,"windowZ14":window,"sourceGenerationId":job["generation_id"],"rawInputManifestSha256":job["input_manifest_sha256"],"validPixels":valid,"rmsChangeMetres":(squared/valid.max(1)as f64).sqrt(),"maximumChangeMetres":maximum,"rawMaximumMetres":max_raw,"smoothedMaximumMetres":max_smooth,"protectedFeaturePixels":protected,"protectedExtrema":peaks_in_window,"slopeRoughnessBefore":(raw_rough/rough_count.max(1)as f64).sqrt(),"slopeRoughnessAfter":(smooth_rough/rough_count.max(1)as f64).sqrt(),"targetQuantizationMetres":0.01});
         Ok(result)
     }
-    pub fn from_metadata(prepared: &Path, metadata: &Value) -> Result<Option<Self>> {
-        let Some(profile) = metadata["generation"].get("sourceSmoothing") else {
-            return Ok(None);
-        };
-        ensure!(
-            profile["mode"] == "ridge-preserving-gaussian-v2",
-            "未対応の斜面平滑化です"
-        );
-        let window = serde_json::from_value::<Vec<u32>>(profile["windowZ14"].clone())?;
-        let config = serde_json::from_value(profile["config"].clone())?;
-        let filtered = Self::load(prepared, &window, config)?;
-        ensure!(
-            filtered.profile["targetSha256"] == profile["targetSha256"]
-                && filtered.profile["sourceGenerationId"] == profile["sourceGenerationId"]
-                && filtered.profile["rawInputManifestSha256"] == profile["rawInputManifestSha256"],
-            "平滑化の元DEMまたは設定が一致しません"
-        );
-        Ok(Some(filtered))
-    }
     fn index(&self, x: i32, y: i32) -> Option<usize> {
         let xx = x - self.x0;
         let yy = y - self.y0;
@@ -450,46 +430,6 @@ impl Filtered {
         self.index(x, y).map_or((f64::NAN, false), |i| {
             (self.values[i], self.protection[i] >= 0.75)
         })
-    }
-    pub fn protects(&self, x: f64, y: f64) -> bool {
-        self.index((x / STEP).floor() as i32, (y / STEP).floor() as i32)
-            .is_some_and(|i| self.protection[i] >= 0.75)
-    }
-    pub fn anchors(&self) -> Vec<[i32; 3]> {
-        self.peaks
-            .iter()
-            .map(|&(i, _)| {
-                [
-                    (((self.x0 + (i % self.width) as i32) as f64 + 0.5) * STEP * 16.).round()
-                        as i32,
-                    (((self.y0 + (i / self.width) as i32) as f64 + 0.5) * STEP * 16.).round()
-                        as i32,
-                    (self.values[i] * 8.).round() as i32,
-                ]
-            })
-            .collect()
-    }
-    pub(super) fn rasters(&self, key: Key) -> Result<Vec<Raster>> {
-        ensure!(key.0 <= 14, "未対応のDEMズームです");
-        let w = 1u32 << (14 - key.0);
-        let mut result = Vec::new();
-        for y in key.2 * w..(key.2 + 1) * w {
-            for x in key.1 * w..(key.1 + 1) * w {
-                let mut values = Vec::with_capacity(65536);
-                for yy in 0..256 {
-                    for xx in 0..256 {
-                        values.push(
-                            self.index((x * 256 + xx) as i32, (y * 256 + yy) as i32)
-                                .map_or(f64::NAN, |i| self.values[i]),
-                        );
-                    }
-                }
-                if values.iter().any(|v| v.is_finite()) {
-                    result.push(Raster { x, y, values });
-                }
-            }
-        }
-        Ok(result)
     }
 }
 #[cfg(test)]

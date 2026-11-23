@@ -230,10 +230,6 @@ pub fn decode_global_refs(
     origin: [i32; 2],
     parents: &[&[[i32; 3]]],
 ) -> Result<Vec<[i32; 3]>> {
-    if bytes.starts_with(crate::control_attributes::MAGIC) {
-        let (controls, _) = crate::control_attributes::split(bytes)?;
-        return decode_global_refs(controls, origin, parents);
-    }
     if bytes.starts_with(b"NQZ1") || bytes.starts_with(b"NDZ1") {
         crate::natural_codec_zstd::decode(bytes, origin, parents)
     } else {
@@ -254,17 +250,12 @@ pub(crate) fn decode_global_block_refs(
 mod unlimited_point_tests {
     use super::*;
     #[test]
-    fn more_than_262144_points_roundtrip_through_codec_tile_and_attributes() -> Result<()> {
+    fn more_than_262144_points_roundtrip_through_codec_tile() -> Result<()> {
         let points = (0..300001i32)
             .map(|i| [(i % 1000) * 16, (i / 1000) * 16, (i % 29 - 14) * 8])
             .collect::<Vec<_>>();
         let controls = independent(&points)?;
         assert_eq!(decode_global_refs(&controls, [0, 0], &[])?, points);
-        let amounts = vec![127; points.len()];
-        let attributed = crate::control_attributes::attach(&controls, &amounts)?;
-        let (body, restored) = crate::control_attributes::split(&attributed)?;
-        assert_eq!(restored, amounts);
-        assert_eq!(body, controls);
         let tile = crate::sqlite::Tile {
             origin: [0, 0],
             count: points.len(),

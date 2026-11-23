@@ -88,11 +88,6 @@ pub fn transcode(bytes: &[u8], block: usize, level: i32) -> Result<Vec<u8>> {
 }
 /// 小さな本文は従来形式を維持する。全候補を比較し、32byte以上小さくなる場合だけ採用。
 pub fn recompress(bytes: &[u8]) -> Result<Vec<u8>> {
-    if bytes.starts_with(crate::control_attributes::MAGIC) {
-        let (controls, amounts) = crate::control_attributes::split(bytes)?;
-        return crate::control_attributes::attach(&recompress(controls)?, &amounts);
-    }
-
     if bytes.starts_with(b"NQZ1") || bytes.starts_with(b"NDZ1") {
         return Ok(bytes.to_vec());
     }
@@ -256,16 +251,6 @@ mod tests {
                     points
                 );
             }
-            let amounts = (0..points.len())
-                .map(|i| (i % 256) as u8)
-                .collect::<Vec<_>>();
-            let attributed = crate::control_attributes::attach(&bytes, &amounts)?;
-            let attributed = recompress(&attributed)?;
-            assert_eq!(crate::control_attributes::split(&attributed)?.1, amounts);
-            assert_eq!(
-                crate::natural_codec::decode_global(&attributed, [0, 0], &parents)?,
-                points
-            );
             let packed = recompress(&bytes)?;
             assert!(packed.len() <= bytes.len());
             assert_eq!(

@@ -454,8 +454,7 @@ impl Fast {
             let gradients = self
                 .fixed_gradients
                 .get_or_init(|| crate::natural_local_gradient::local_gradients(self));
-            return crate::local_slope::Prepared::borrowed(self, gradients)
-                .evaluate(q, None, 1., w);
+            return crate::local_slope::Prepared::borrowed(self, gradients).evaluate(q, 1., w);
         }
         self.fill_basis(q, w)?;
         let value = w

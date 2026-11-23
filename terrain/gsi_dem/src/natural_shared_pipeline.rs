@@ -34,16 +34,23 @@ const LEVELS: [(i64, f64); 8] = {
     }
     levels
 };
-const COARSE_LEVELS: [(i64, f64); 2] = [
-    (5, yamamuki_terrain::sqlite::COARSE_LEVELS[1].1),
-    (4, yamamuki_terrain::sqlite::COARSE_LEVELS[0].1),
-];
-#[path = "natural_coarse_extension.rs"]
-mod coarse_extension;
-pub use coarse_extension::execute as extend_coarse;
 const FINEST_ERROR: f64 = LEVELS[0].1;
 const PROFILE: &str = "sibson-shared-no-lpf-z6-z13-symmetric-v2";
 const FIXED_PROFILE: &str = "local-hermite-smoothed-z6-z13-v1";
+fn fully_inside(key: (u32, u32, u32), window: &[u32]) -> bool {
+    if window.is_empty() {
+        return true;
+    }
+    if key.0 > 14 {
+        return false;
+    }
+    let width = 1u32 << (14 - key.0);
+    key.1 * width >= window[0]
+        && (key.1 + 1) * width <= window[2]
+        && key.2 * width >= window[1]
+        && (key.2 + 1) * width <= window[3]
+}
+
 fn fixed_job(job: &Value) -> bool {
     job["settings"]["profile"] == FIXED_PROFILE
 }
@@ -1013,9 +1020,7 @@ fn seed_reference(
         .catalog
         .keys()
         .copied()
-        .filter(|k| {
-            k.0 == 13 && (window.is_empty() || crate::local_slope::fully_inside(*k, window))
-        })
+        .filter(|k| k.0 == 13 && (window.is_empty() || fully_inside(*k, window)))
         .collect::<Vec<_>>();
     keys.sort_unstable();
     let source = inputs
@@ -2288,12 +2293,7 @@ fn certify(s: &Store, z: i64, inputs: &[Input], dem: &mut Dem, root: &Path) -> R
                                 if minimum_angle(&p, b) <= value + 1e-7 {
                                     return Ok(false);
                                 }
-                                let error = LEVELS
-                                    .iter()
-                                    .chain(COARSE_LEVELS.iter())
-                                    .find(|v| v.0 == z)
-                                    .unwrap()
-                                    .1;
+                                let error = LEVELS.iter().find(|v| v.0 == z).unwrap().1;
                                 for input in &affected {
                                     let range = parallel_prune::sample_range(input, influence);
                                     if range[0] >= range[2] || range[1] >= range[3] {
@@ -2352,12 +2352,7 @@ fn certify(s: &Store, z: i64, inputs: &[Input], dem: &mut Dem, root: &Path) -> R
                             if minimum_angle(after, b) <= value + 1e-7 {
                                 return Ok(false);
                             }
-                            let error = LEVELS
-                                .iter()
-                                .chain(COARSE_LEVELS.iter())
-                                .find(|v| v.0 == z)
-                                .unwrap()
-                                .1;
+                            let error = LEVELS.iter().find(|v| v.0 == z).unwrap().1;
                             audit_affected_cached(
                                 s,
                                 z,
@@ -2552,12 +2547,7 @@ fn certify(s: &Store, z: i64, inputs: &[Input], dem: &mut Dem, root: &Path) -> R
             }
         }
         if changes == 0 {
-            let error = LEVELS
-                .iter()
-                .chain(COARSE_LEVELS.iter())
-                .find(|v| v.0 == z)
-                .unwrap()
-                .1;
+            let error = LEVELS.iter().find(|v| v.0 == z).unwrap().1;
             let (ok, max, valid) = if local_checks && error_proofs.count() < inputs.len() {
                 (false, 0., 0)
             } else {
@@ -2969,7 +2959,7 @@ fn pack_levels(
         }
     }
     if fixed_job(job) {
-        c.execute("INSERT OR REPLACE INTO metadata VALUES('fixed_slope_generation',?1)",[json!({"slopeMode":"local-hermite-v1","errorEvaluationMultiplier":1,"sourceSmoothing":job["source_smoothing"],"fixedSlopeAdjustment":{"mode":"local-hermite-v1","certifiedMultiplier":1,"peakGuardMetres":0.5,"storedCoefficientBytes":0,"featureProtectionFinestOnly":false}}).to_string()])?;
+        c.execute("INSERT OR REPLACE INTO metadata VALUES('fixed_slope_generation',?1)",[json!({"slopeMode":"local-hermite-v1","errorEvaluationMultiplier":1,"sourceSmoothing":job["source_smoothing"],"fixedSlopeAdjustment":{"mode":"local-hermite-v1","certifiedMultiplier":1,"peakGuardMetres":0.5,"storedCoefficientBytes":0}}).to_string()])?;
     }
     for (k, v) in [
         ("format", json!("national-shared-xyz-v1")),
@@ -3405,12 +3395,7 @@ pub fn benchmark_prune(root: &Path, z: i64, limit: usize) -> Result<()> {
         cache: HashMap::new(),
         order: VecDeque::new(),
     };
-    let error = LEVELS
-        .iter()
-        .chain(COARSE_LEVELS.iter())
-        .find(|v| v.0 == z)
-        .unwrap()
-        .1;
+    let error = LEVELS.iter().find(|v| v.0 == z).unwrap().1;
     parallel_prune::run(
         &s,
         z,

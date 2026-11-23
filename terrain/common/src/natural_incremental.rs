@@ -430,7 +430,7 @@ mod tests {
                     let q = [x as f64 * 10. + 0.3, y as f64 * 10. + 0.7];
                     assert!(
                         (m.evaluate(q, &mut Work::default())?
-                            - expected.evaluate(q, None, 1., &mut Work::default())?)
+                            - expected.evaluate(q, 1., &mut Work::default())?)
                         .abs()
                             < 1e-10
                     );

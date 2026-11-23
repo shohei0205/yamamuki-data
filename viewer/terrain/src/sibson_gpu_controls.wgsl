@@ -34,19 +34,18 @@ fn lookup(q:vec2<f32>)->vec2<u32>{
 }
 fn heightPair(q:vec2<f32>)->vec3<f32>{
  let leaf=lookup(q);if(leaf.y==0u||leaf.y>256u){return vec3<f32>(0.);}
- var sum=0.;var value=0.;var den=0.;var tangent=0.;var alphaNum=0.;var betaNum=0.;var origin=0.;var started=false;var localAmount=0.;var hasLocal=false;
+ var sum=0.;var value=0.;var den=0.;var tangent=0.;var alphaNum=0.;var betaNum=0.;var origin=0.;var started=false;
  for(var i=0u;i<leaf.y;i+=1u){let site=sites[refs[leaf.x+i]];let d=site.xy-q;let r2=dot(d,d);
   if(r2<1e-16){return vec3<f32>(site.z,site.z,1.);}
   if(site.count==0u||site.count>128u){return vec3<f32>(0.);}
   let area=clippedArea(site,q);if(area<=0.){continue;}
   if(!started){origin=site.z;started=true;}
-  var factor=1.;if((site.flags&0x80000000u)!=0u){factor=bitcast<f32>(site.flags&0x7fffffffu);}else if((site.flags&256u)!=0u){factor=f32(site.flags&255u)/255.;}localAmount+=area*factor;hasLocal=hasLocal||(site.flags&0x80000100u)!=0u;
   let r=sqrt(r2);let inverse=area/r;sum+=area;value+=area*(site.z-origin);den+=inverse;
   tangent+=inverse*(site.z-origin-dot(site.gradient,d)*params.settings.x);alphaNum+=area*r;betaNum+=area*r2;
  }
  if(sum<=1e-15||den<=0.){return vec3<f32>(0.);}
  let alpha=alphaNum/den;let beta=betaNum/sum;let h0=origin+value/sum;let h1=origin+(alpha*value/sum+beta*tangent/den)/(alpha+beta);
- return vec3<f32>(h0,select(h1,mix(h0,h1,clamp(localAmount/sum,0.,1.)),hasLocal),1.);
+ return vec3<f32>(h0,h1,1.);
 }
 @compute @workgroup_size(8,8)
 fn main(@builtin(global_invocation_id) id:vec3<u32>){

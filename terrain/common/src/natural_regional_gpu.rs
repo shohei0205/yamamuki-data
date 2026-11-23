@@ -353,44 +353,12 @@ impl Tree<'_> {
         Ok(index as u32)
     }
 }
-pub fn packet(m: &Fast, g: &[[f64; 2]], bounds: [f64; 4], info: Value) -> Result<(Vec<u8>, Value)> {
-    packet_with_adjustments(m, g, bounds, info, None)
-}
-pub fn packet_with_factors(
-    m: &Fast,
-    g: &[[f64; 2]],
-    bounds: [f64; 4],
-    info: Value,
-    factors: &[f64],
-) -> Result<(Vec<u8>, Value)> {
-    packet_with_attributes(m, g, bounds, info, None, Some(factors))
-}
-pub fn packet_with_adjustments(
-    m: &Fast,
-    g: &[[f64; 2]],
-    bounds: [f64; 4],
-    info: Value,
-    amounts: Option<&[u8]>,
-) -> Result<(Vec<u8>, Value)> {
-    packet_with_attributes(m, g, bounds, info, amounts, None)
-}
-fn packet_with_attributes(
+pub fn packet(
     m: &Fast,
     g: &[[f64; 2]],
     bounds: [f64; 4],
     mut info: Value,
-    amounts: Option<&[u8]>,
-    factors: Option<&[f64]>,
 ) -> Result<(Vec<u8>, Value)> {
-    ensure!(
-        amounts.is_none_or(|v| v.len() == m.base.points.len()),
-        "傾き調整量と制御点数が一致しません"
-    );
-    ensure!(
-        factors.is_none_or(|v| v.len() == m.base.points.len()
-            && v.iter().all(|a| a.is_finite() && (0.0..=1.0).contains(a))),
-        "自動係数が不正です"
-    );
     let cells = m.closed_cells()?;
     let index_bounds = [
         bounds[0] - 2.,
@@ -426,11 +394,7 @@ fn packet_with_attributes(
             points.extend((v as f32).to_le_bytes());
         }
         points.extend((cells[old].len() as u32).to_le_bytes());
-        let flags = factors.map_or_else(
-            || amounts.map_or(0, |v| 256u32 | u32::from(v[old])),
-            |v| 0x80000000u32 | (v[old] as f32).to_bits(),
-        );
-        points.extend(flags.to_le_bytes());
+        points.extend(0u32.to_le_bytes());
         for c in &cells[old] {
             for &v in c {
                 cellbytes.extend(((v / 1000.) as f32).to_le_bytes());
@@ -469,9 +433,6 @@ fn packet_with_attributes(
         ("noTriangleMesh", json!(true)),
     ] {
         info[k] = v;
-    }
-    if amounts.is_some() || factors.is_some() {
-        info["localSlopeAdjustments"] = json!(true);
     }
     let mut header = serde_json::to_vec(&info)?;
     while header.len() % 4 != 0 {
